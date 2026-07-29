@@ -48,7 +48,7 @@ Phase 0 is complete — see [../data/sources.md](../data/sources.md) for what it
 | ~~0~~ | ~~Spike the endpoint~~ | ✅ Endpoint driven, data validated, spec corrected |
 | ~~1~~ | ~~Scaffold + toolchain~~ | ✅ `make check` green — uv/3.12, pytest, ruff, `btscodec` |
 | ~~2~~ | ~~`fetch.py` — per-year POST loop, viewstate, cache, retries~~ | ✅ `make fetch`; verified live against BTS (see below) |
-| 3 | Invariant tests written **red**, from [../data/invariants.md](../data/invariants.md) | Suite fails for the right reasons |
+| ~~3~~ | ~~Invariant tests, written red~~ | ✅ 156 tests; rules in `invariants.py` + `mainline_map.py`, validated against a real extract |
 | 4 | `normalize.py` — raw → Parquet, quarantine flags, `download_date` | Invariant suite green |
 | 5 | Lookups → dims; `map_mainline_group` as checked-in declarative data | Dims build; map totality asserted |
 | 6 | Reproducibility gate | `make ingest` from empty is byte-identical |

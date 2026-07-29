@@ -106,14 +106,44 @@ aircraft-type grain of the fact tables.
 The classic "double count" warning comes from mixing T-100 Segment with T-100 Market (or
 DB1B), not from Segment itself. v0 uses Segment only — keep it that way.
 
-## `seats = 0` is not the freighter filter
+## `seats = 0` needs BOTH the config and the departure check
 
-Quarantine as a data error **only when `AIRCRAFT_CONFIG IN (1,3,4)`**; otherwise it's just
-a freighter and should be filtered, not flagged.
+Quarantine as a data error only when **`AIRCRAFT_CONFIG IN (1,3,4)` AND
+`DEPARTURES_PERFORMED > 0`**.
 
-Measured on 2024-01: 3,833 rows have zero seats, but **3,576 are genuine freighters
-(`CONFIG != 1`) and only 257 are real anomalies.** Conflating them pollutes the quarantine
-count — which is a UI trust feature and needs to mean something.
+Two separate exclusions, each learned from real data:
+
+**Freighters.** On 2024-01, 3,833 rows have zero seats but **3,576 are genuine freighters
+(`CONFIG != 1`)** and only 257 are candidates. A freighter with no seats is not an anomaly.
+
+**"No service this month".** This one was found by running the rule against a full year.
+Of 2015's 5,717 zero-seat passenger-config rows, **only 4 actually flew**:
+
+```
+zero-seat passenger-config rows : 5,717   (2.03% of kept rows)
+  departures_performed >  0     :     4   <- flew but reported no seats = ANOMALY
+  departures_performed == 0     : 5,713   <- no service filed = ORDINARY
+true anomaly rate               : 0.001%
+```
+
+A row with zero departures, zero seats, and zero passengers is an empty filing that
+contributes nothing to any aggregate. Flagging it reported a **2.03% quarantine rate
+against a true rate of 0.001% — a 1,400× overstatement** of a number the UI presents as a
+trust signal. The rule is worthless if it fires on ordinary data.
+
+## Rows with no carrier identity are quarantined
+
+**158 rows in 2015 have every carrier field blank** — `UNIQUE_CARRIER`, `AIRLINE_ID`,
+`UNIQUE_CARRIER_NAME`, `UNIQUE_CARRIER_ENTITY`, `REGION`, `CARRIER_NAME`,
+`CARRIER_GROUP_NEW` — while still reporting real traffic (158 departures performed, 119
+with passengers aboard).
+
+They cannot be keyed on the operating carrier, which is the grain of the entire product, so
+they must not reach an aggregate. **Quarantine rather than silently drop**: they carry real
+traffic, and the count belongs in the UI where it can be seen.
+
+`missing_carrier` outranks every other reason — an unattributable row is unattributable
+regardless of what else is wrong with it.
 
 ## `load_factor > 1.0` → quarantine, never clamp
 
@@ -159,3 +189,31 @@ so a reappearance fails the build rather than shifting every field silently.
 
 Quarantined rows are **excluded from aggregates but surfaced in the UI** with a count and
 reason. Showing the dirt is a trust feature.
+
+Reasons, in precedence order:
+
+| Reason | Fires when | 2015 volume |
+|---|---|---|
+| `missing_carrier` | no `AIRLINE_ID` | 158 |
+| `zero_seats` | passenger config, departures performed, no seats | 4 |
+| `load_factor_gt_1` | `passengers > seats` | 12 |
+
+**Total 0.06% of passenger rows.** That rate is itself an invariant — the real-data suite
+asserts it stays under 0.1%. A rule that fires on ordinary data makes the whole signal
+worthless, which is exactly what happened before the departures check was added.
+
+---
+
+## Where these are enforced
+
+`pipeline/invariants.py` holds the rules as pure functions, deliberately knowing nothing
+about DuckDB or Parquet so they stay reviewable. `pipeline/mainline_map.py` holds the
+date-ranged rollup, loaded from the checked-in `pipeline/reference/mainline_group.csv`.
+
+Two test layers:
+
+- `test_invariants.py` / `test_mainline_map.py` — the rules in isolation, always run.
+- `test_invariants_against_real_data.py` — the same rules over a real extract, **skipped
+  when `data/raw/` is empty** so CI and fresh clones stay green. Run `make fetch` locally
+  to enable them. This layer is what caught both refinements above; neither was visible
+  from synthetic values.

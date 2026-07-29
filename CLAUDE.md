@@ -41,9 +41,9 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M1, phase 3** (invariant tests, written red). Phases 0–2 done: endpoint validated,
-scaffold up, and `pipeline/fetch.py` verified live against BTS. `make fetch` pulls
-2015→present into `data/raw/`.
+**M1, phase 4** (`normalize.py`: raw → Parquet). Phases 0–3 done: endpoint validated,
+scaffold up, `make fetch` verified live, and the invariants are enforceable code
+(`pipeline/invariants.py`, `pipeline/mainline_map.py`) with 156 tests green.
 
 ## Architecture
 
@@ -134,8 +134,11 @@ Full detail and the measurements behind each: `docs/data/invariants.md`.
   (seaplane) carry real passengers.
 - **`CLASS` has rollup codes** `K`(=F+G), `V`, `Z`. Summing service classes can double-count.
   Assert their absence.
-- **`seats = 0` is not the freighter filter** — quarantine only when config is a passenger
-  config, else it's just a freighter.
+- **`seats = 0` needs both checks** — quarantine only when config is a passenger config
+  **and** departures were performed. 5,713 of 2015's 5,717 zero-seat rows never flew; they
+  are ordinary "no service" filings, not anomalies.
+- **Rows with no `AIRLINE_ID` exist** (158 in 2015, carrying real traffic) → `missing_carrier`
+  quarantine. Unattributable to an operating carrier, so they can't reach an aggregate.
 - **`load_factor > 1.0`** → quarantine, **never clamp.** Quarantined rows are excluded from
   aggregates but surfaced in the UI with count + reason. Showing the dirt is a trust feature.
 - **Zero-padded codes stay strings** — `AIRCRAFT_TYPE` `079` becomes `79` if int-parsed, and
