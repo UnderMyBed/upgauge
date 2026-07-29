@@ -302,19 +302,25 @@ Plus lookups: Master Coordinate (airport lat/lon), Carrier Decode, Aircraft Type
 > to 2026, which is what makes the directory look maintained.) There is no pre-zipped
 > annual T-100 feed. Do not spend a day rediscovering this.
 
-- **Primary (and only) path: POST to `DL_SelectFields.aspx`**, which returns
-  `{jobid}_T_T100D_SEGMENT_US_CARRIER_ONLY.zip`. This is a form-driven job endpoint, not a
-  static file server, which means the fetcher must:
-  - loop per (year, month) rather than pulling annual files;
-  - request **all fields** — the ID columns in §7 are not in the default selection;
-  - cache aggressively on disk so a re-run doesn't re-hit BTS;
-  - back off and retry politely, and fail loudly rather than silently producing a short file.
-- **Budget for this in M1.** It is materially more work than downloading annual zips, and
-  the original milestone did not account for it.
+- **Primary (and only) path: POST to `DL_SelectFields.aspx`** for **`Table_ID = 259`**
+  (T-100 Domestic Segment, U.S. Carriers). Returns
+  `T_T100D_SEGMENT_US_CARRIER_ONLY_<timestamp>.zip`. **Verified working — see
+  `INGEST_NOTES.md` for the exact request shape**, which is where the detail lives.
+  Three things shape the fetcher:
+  - **It's ASP.NET WebForms.** Each download needs a `GET` for cookies +
+    `__VIEWSTATE`/`__EVENTVALIDATION`, then a `POST` carrying them back. Not a `wget` loop.
+  - **Pull per YEAR, not per month** — `cboPeriod=All` works, so the window is 12 requests,
+    not 144. Measured 145 s and 11.7 MB for 2015, so use a long timeout (600 s).
+  - Request **all 45 fields** explicitly; the ID columns §7 depends on are not selected by
+    default. Cache on `(table, year)` — **the response filename is generated per request and
+    is not a stable key.**
+- Fail loudly rather than silently writing a short file. Back off politely.
 - Re-check PREZIP once at ingest time anyway and log what's found. If BTS ever restores a
   current T-100 feed there, it becomes the cheaper path — but never assume it.
-- Known quirk: T-100 CSVs ship a **trailing comma** → phantom empty column (`EMPTYFIELD`).
-  Handle it.
+- ~~Trailing comma / `EMPTYFIELD` phantom column~~ — **does not occur** in what this endpoint
+  serves today (verified 2026-07; header and rows both end on `CLASS`). The quirk is real in
+  older extracts, which is where the folklore comes from. Don't write the workaround; **do**
+  assert the column count so a reappearance fails the build.
 - Land raw zips in `data/raw/`. **Never mutate them** — they are the audit trail.
 
 ### The wider universe (context; all out of scope for v0)
@@ -340,6 +346,7 @@ fct_segment_month     grain: (year_month, op_airline_id, origin_airport_id,
                       freight, mail, distance, air_time, ramp_to_ramp_time,
                       aircraft_config, service_class,
                       origin_airport_seq_id, dest_airport_seq_id,   -- point-in-time attrs
+                      origin_city_market_id, dest_city_market_id,   -- D1: city-market rollup
                       download_date,                                -- amended-filing resolution
                       is_quarantined, quarantine_reason
 
@@ -403,13 +410,16 @@ avg_gauge (seats/departure), block_hours, avg_stage_length, frequency
   IDs; display codes.** Over a 2015→present window with `VX`, `HA`, and reused regional
   codes in play, this is not academic — it is the difference between a correct time series
   and a silently merged one.
-- **Service class + aircraft config.** Scheduled service is `CLASS = 'F'` (*Scheduled
-  Passenger/Cargo* — a composite class; dedicated scheduled all-cargo files as `G`).
-  **`CLASS` alone does not isolate passenger operations** — use `AIRCRAFT_CONFIG` for that.
-  Sources conflict on whether `F` can carry freighter-configured aircraft, so **resolve it
-  empirically**: write a test asserting the observed `CLASS × AIRCRAFT_CONFIG` distribution
-  and verify against the BTS lookup table. Do not assume, and do not resolve it from a blog
-  post.
+- **Service class + aircraft config — RESOLVED empirically, see `INGEST_NOTES.md`.**
+  Scheduled passenger service is `CLASS = 'F'`; dedicated scheduled all-cargo files as `G`.
+  The passenger filter is **`AIRCRAFT_CONFIG IN (1, 3, 4)`** — passenger, combi, and
+  seaplane. **Not `= 1`:** configs 3 and 4 carry real passengers (7,326 such rows in 2015
+  alone), and seaplane service in Alaska is squarely in scope.
+- 🔴 **`CLASS` contains ROLLUP CODES — `K` (= F+G), `V` (= L+N+P+R), and `Z` (= K+V).**
+  Summing across service classes double-counts if any appear. Neither 2015 nor 2024-01
+  contains them, but **assert their absence in every partition and fail the build if one
+  shows up.** Also watch `A`/`C`/`E` (scheduled First/Coach/Mixed passenger) — if a carrier
+  files those instead of `F`, a bare `CLASS = 'F'` filter silently drops real service.
 - **Operating-carrier keying (§2).** Regionals file under their own IDs (Endeavor, SkyWest…).
   Key on the operating carrier — it is the grain and the truth. Summing operators on a route
   does *not* double-count; each physical flight is filed once.
@@ -425,9 +435,15 @@ avg_gauge (seats/departure), block_hours, avg_stage_length, frequency
 - **Do not blend Segment with Market data.** The classic "double count" people warn about
   comes from mixing T-100 Segment with T-100 Market (or DB1B), not from Segment itself.
   v0 uses Segment only — keep it that way.
-- **`seats = 0`** → quarantine as a data error, do not divide. **This is not the freighter
-  filter** — `AIRCRAFT_CONFIG` is. Treating `seats = 0` as "this is a freighter" will
-  quarantine real passenger rows and silently pass cargo ops that report seats.
+- **`seats = 0`** → quarantine as a data error **only when `AIRCRAFT_CONFIG IN (1,3,4)`**;
+  otherwise it's just a freighter and should be filtered, not flagged. **`seats = 0` is not
+  the freighter filter** — measured on 2024-01, 3,833 rows have zero seats, but **3,576 are
+  genuine freighters and only 257 are real anomalies.** Conflating them pollutes the
+  quarantine count, which is a UI trust feature and needs to mean something.
+- **Zero-padded codes stay strings.** `AIRCRAFT_TYPE` (`026`, `079`),
+  `UNIQUE_CARRIER_ENTITY` (`01100`), and the state FIPS fields have leading zeros. Coercing
+  `AIRCRAFT_TYPE` to int turns `079` into `79` and breaks the `dim_aircraft_type` join —
+  *silently*, because codes without leading zeros still match.
 - **`load_factor > 1.0`** → quarantine as a filing error. **Do not silently clamp.**
 - **Route identity.** Store both directional (`PDX→AUS`) and undirected (`AUS-PDX`) keys.
   Undirected key is the two airport IDs sorted, so it's stable regardless of filing order.
@@ -593,7 +609,7 @@ milestone where deferring stops being free.
 
 | # | Decision | Needed by | Notes |
 |---|---|---|---|
-| D1 | **City-market dimension in or out?** T-100 ships `ORIGIN_CITY_MARKET_ID` / `DEST_CITY_MARKET_ID` free. Enables "all NYC airports as one" — a natural cut for this audience. | M3 | Costs almost nothing at ingest; retrofitting it into the Explorer's dimension model later is the expensive path. Decide at M1, not M3. |
+| ~~D1~~ | **RESOLVED — city market is IN.** Carry `ORIGIN_CITY_MARKET_ID` / `DEST_CITY_MARKET_ID` on `fct_segment_month`, and add a `city_market` dimension to the Explorer (§8.1). | — | Two integers per row at ingest vs. an expensive retrofit into the dimension model at M3. Enables "all NYC airports as one" — an aviation-native cut. |
 | D2 | **Which entity pages actually exist, and which get indexed?** §8.2 pitches entity pages for SEO but never bounds them. `(carrier × origin × dest)` is a large set. | M4 | Doubles as the answer to the static-hosting file-count question (`SPEC_REVIEW.md` §hosting). Needs a minimum-traffic threshold and a sitemap/canonical rule. |
 | D3 | **Licensing / attribution line.** All source data is public-domain US Government filings. | M4 | One line on the methodology surface. Trivial, but a public data tool should say it. |
 
