@@ -1,8 +1,9 @@
 # Upgauge — Design Brief
 
-> Handoff for a **design-focused** Claude session. Companion to `PRODUCT.md` (read that
-> first for what the product does). Your job here is the *visual identity and the key
-> screens*, not the data engineering.
+> Handoff for a **design-focused** Claude session. Companion to
+> [`../product/overview.md`](../product/overview.md) (read that first for what the product
+> does). Your job here is the *visual identity and the key screens*, not the data
+> engineering.
 >
 > This is a v0 skateboard. The mandate is **restraint**: clean, credible, distinctive —
 > not elaborate. A lean data tool earns its personality through precision in type,
@@ -26,7 +27,7 @@ trusts, and every screen should be worth screenshotting into a forum.
 
 ---
 
-## Non-negotiable product constraints (these come from `PRODUCT.md`, don't relitigate)
+## Non-negotiable product constraints (these come from `../product/overview.md`, don't relitigate)
 
 Design freely, but within these. They're truths about the data, not style preferences:
 
@@ -75,7 +76,7 @@ Prioritized. If time is short, nail the first three — they define the system.
    the `DATA AS OF` stamp, generated per entity page. This is cheap and it is the highest-
    leverage surface in the product for reach.
 10. **Empty, loading, sparse, and error states.** Not an afterthought here: quarantined rows
-    (`PRODUCT.md` §7), thin routes below the minimum-departures threshold, and a carrier
+    (`../data/invariants.md`), thin routes below the minimum-departures threshold, and a carrier
     that stops filing mid-series are all *normal* in this data. A table that only looks
     right when full is a table that looks broken most of the time. Include the
     "this route has too few departures to score" case explicitly — it's a trust moment, not
@@ -95,7 +96,7 @@ also serves the share mechanic. And there's a natural signature device:
 
 > **A "chart legend" panel** — styled like a real sectional's legend — that explains what
 > the arc weights and dashes mean. It folds the methodology (constraint #6, and §8.1 of
-> `PRODUCT.md`) *into* the product instead of hiding it behind a footer link. The thing
+> `../product/features.md`) *into* the product instead of hiding it behind a footer link. The thing
 > people remember.
 
 If you build toward this, spend the boldness on the arcs and the legend and keep
