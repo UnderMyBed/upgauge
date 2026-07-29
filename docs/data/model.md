@@ -20,7 +20,10 @@ dim_carrier           airline_id, code, name, is_regional, ownership_type,
                       bts_carrier_group   -- BTS's OWN revenue-based reporting class.
                                           -- NOT our rollup. Preserved under a distinct
                                           -- name so the collision is impossible.
-dim_aircraft_type     code, name, manufacturer, family, seats_typical
+dim_aircraft_type     code, name, short_name, manufacturer, ssd_name,
+                      aircraft_group, effective_from, effective_to
+                      -- code stays VARCHAR: '007'/'079' are real type codes
+                      -- deliberately NO seats_typical -- see below
 
 map_mainline_group    airline_id, parent_airline_id, effective_from, effective_to
                       -- DATE-RANGED. Wholly-owned subsidiaries ONLY.
@@ -47,6 +50,30 @@ CARRIER_GROUP_NEW  {'3': 26715, '2': 4555, '5': 3072, '6': 1070, '4': 267, '1': 
 
 Nothing to do with mainline rollup. **Ours is `mainline_group`; theirs is preserved as
 `bts_carrier_group`** so the collision is impossible.
+
+## Dimension sources and one caveat
+
+| Dimension | Source | BTS `Table_ID` |
+|---|---|---|
+| `dim_airport` | Master Coordinate | 288 |
+| `dim_carrier` | Carrier Decode | 304 |
+| `dim_aircraft_type` | AircraftTypes | 300 |
+| `map_mainline_group` | `pipeline/reference/mainline_group.csv` (checked in) | — |
+
+All three live in **DB 595 (Aviation Support Tables)**, which needs a *different subject
+param* from T-100. Getting it wrong does not error — BTS answers 200 with its homepage. The
+param is built by the codec rather than pasted as a literal for exactly that reason.
+
+> ⚠️ **`dim_carrier` holds one row per `airline_id`, carrying the carrier's CURRENT code.**
+> Carrier Decode has several rows per airline with different `CARRIER` values, and v0
+> collapses them. So `carrier_code` is fine for display but is **not** the code that was in
+> use during an arbitrary month — never join on it, and never present it as historical fact.
+> Making the dimension fully date-ranged is a v1 change.
+>
+> The collapse itself has a trap: the source dates arrive as strings like
+> `1/1/1960 12:00:00 AM`. String-sorting them ranks `9/1/1984` above `7/1/2011`, which
+> silently surfaced Horizon as `HOZ` and SkyWest as `SEA`. Dates are parsed and stored as
+> `DATE` so the mistake can't recur.
 
 ## No `is_freighter` on `dim_aircraft_type`
 

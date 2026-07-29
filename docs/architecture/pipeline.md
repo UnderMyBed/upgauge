@@ -50,7 +50,7 @@ Phase 0 is complete — see [../data/sources.md](../data/sources.md) for what it
 | ~~2~~ | ~~`fetch.py` — per-year POST loop, viewstate, cache, retries~~ | ✅ `make fetch`; verified live against BTS (see below) |
 | ~~3~~ | ~~Invariant tests, written red~~ | ✅ 156 tests; rules in `invariants.py` + `mainline_map.py`, validated against a real extract |
 | ~~4~~ | ~~`normalize.py` — raw → Parquet, quarantine flags, `download_date`~~ | ✅ `make ingest`; 2015 → 282,036 rows, 8.6 MB Parquet |
-| 5 | Lookups → dims; `map_mainline_group` as checked-in declarative data | Dims build; map totality asserted |
+| ~~5~~ | ~~Lookups → dims; `map_mainline_group` materialized~~ | ✅ 4 dims build; **zero orphans** joining 282,036 fact rows |
 | 6 | Reproducibility gate | `make ingest` from empty is byte-identical |
 
 **Order rationale:** the spike came first because the acquisition path was the one part of

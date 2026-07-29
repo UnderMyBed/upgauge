@@ -41,9 +41,9 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M1, phase 5** (lookups → dims). Phases 0–4 done: `make ingest` runs end-to-end —
-fetch → raw zips → partitioned Parquet with invariants enforced. 195 tests green.
-Real 2015: 367,360 raw rows → 282,036 scheduled-passenger rows, 8.6 MB Parquet.
+**M1, phase 6** (reproducibility gate — the last one). Phases 0–5 done: facts and all four
+dims build from real data with **zero join orphans** against 282,036 fact rows. 242 tests
+green.
 
 ## Architecture
 
@@ -90,9 +90,15 @@ Enforce structurally: **no `load_factor` column on any fact table.** Same for `a
 `avg_gauge`, `completion_factor`. Can't average what doesn't exist. The #1 bug in every
 homemade T-100 tool.
 
-**Key on `AIRLINE_ID` and `AIRPORT_ID`, never letter codes.** DOT-assigned IDs are stable
-across code/name/ownership changes; IATA-style codes **get reused by different airlines over
-time**. Join on IDs, display codes. `AIRPORT_SEQ_ID` is the point-in-time key.
+**Key on `AIRLINE_ID` and `AIRPORT_ID`, never letter codes.** `CARRIER` (raw IATA) is
+reused — 135 of 1,825 codes map to >1 airline. `UNIQUE_CARRIER` doesn't collide, but only
+because BTS suffixes it (`2T (1)`), so it's a poor display code. Join on IDs, display
+`carrier_code`. `AIRPORT_SEQ_ID` is the point-in-time key.
+
+**`dim_carrier` carries the CURRENT carrier code, not the point-in-time one.** v0 collapses
+Carrier Decode to one row per airline. Never join on `carrier_code`, and don't present it as
+historical fact. Also: BTS dates arrive as strings like `1/1/1960 12:00:00 AM` — **parse
+before sorting**, or Horizon surfaces as `HOZ` and SkyWest as `SEA`.
 
 **Operating carrier is the grain and the truth.** T-100 Segment is filed by whoever operated
 the metal — a Delta-branded regional flown by Endeavor files as `9E`, not `DL`. Summing

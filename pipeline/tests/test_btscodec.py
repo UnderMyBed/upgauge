@@ -76,15 +76,46 @@ def test_digit_case_rule_is_asymmetric():
     assert decode_param("Z1qr_VQ") == "Mode_ID"
 
 
-def test_bts_is_itself_inconsistent_for_table_id():
-    """`gnoyr_VQ` is the Table_ID param, but BTS encoded its `T` with plain ROT13.
+def test_uppercase_letters_lowercase_when_the_rotation_wraps():
+    """The third rule, and the one that made `gnoyr_VQ` look like a BTS bug.
 
-    Documented, not accommodated — the codec stays correct and callers use the literal.
+    Uppercase letters use plain ROT13 (mod 26), NOT the 36-char alphabet — and the result
+    is lowercased when the rotation wraps past Z. So `T` -> `g`, not `6`.
     """
-    assert "gnoyr_VQ" in ANOMALOUS_PARAMS
-    assert ANOMALOUS_PARAMS["gnoyr_VQ"] == "Table_ID"
-    assert decode_param("gnoyr_VQ") == "3able_ID"  # not "Table_ID" — that's the anomaly
-    assert encode_param("Table_ID") == "6noyr_VQ"  # what BTS *should* have emitted
+    assert encode_param("A") == "N"  # no wrap, stays upper
+    assert encode_param("M") == "Z"  # no wrap, stays upper
+    assert encode_param("N") == "a"  # wraps -> lowercased
+    assert encode_param("S") == "f"
+    assert encode_param("T") == "g"
+    assert encode_param("Z") == "m"
+
+
+def test_table_id_param_encodes_exactly():
+    """Previously believed to be a BTS encoder bug. It is not — the rule above explains it."""
+    assert encode_param("Table_ID") == "gnoyr_VQ"
+
+
+def test_the_aviation_support_tables_subject_encodes_exactly():
+    """Load-bearing: without the right subject param BTS bounces to its homepage."""
+    assert encode_param("Aviation Support Tables") == "N8vn6v10 f722146 gnoyr5"
+
+
+def test_there_are_no_known_anomalies_left():
+    """Kept as a tripwire: if BTS ever does emit something the rules can't produce, it
+    belongs here rather than being worked around at the call site."""
+    assert ANOMALOUS_PARAMS == {}
+
+
+def test_decoding_is_ambiguous_for_wrapped_uppercase():
+    """Encoding is exact; decoding is not, and callers must not assume otherwise.
+
+    Lowercase `a`-`m` in an encoded string could have come from lowercase `x`-`z` or from
+    wrapped uppercase `N`-`Z`. `decode_param` resolves toward the lowercase reading, which
+    is right for values (`FIM` -> `259`) but wrong for names like `gnoyr_VQ`. Discovery only
+    — never round-trip through it.
+    """
+    assert decode_param(encode_param("259")) == "259"  # values round-trip
+    assert decode_param("gnoyr_VQ") != "Table_ID"  # names may not
 
 
 # Lookup-table names use a *different* cipher: ordinary ROT13, letters only.

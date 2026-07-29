@@ -8,14 +8,16 @@ confusing them is why `Table_ID=259` isn't findable by guessing:
    is **not** an involution: encoding and decoding are opposite directions. Letters cross
    into digits and back (`o` <-> `1`, `s` <-> `5`, `r` <-> `4`).
 
-   The case rule is asymmetric and was derived empirically:
+   Three rules, derived empirically and exact across every observed pair:
 
-   | Input | Table used | Because |
+   | Input | Rule | Because |
    |---|---|---|
-   | lowercase letter | lower | `o` -> `1`, `v` -> `8` |
-   | **digit** (encoding) | **upper** | `2` -> `F`, `9` -> `M` |
-   | **digit** (decoding) | **lower** | `1` -> `o`, `5` -> `s` |
-   | uppercase letter | upper | `A` -> `N`, `F` -> `2` |
+   | lowercase letter | 36-char alphabet | `o` -> `1`, `v` -> `8` |
+   | digit | 36-char alphabet, UPPER output | `2` -> `F`, `9` -> `M` |
+   | **uppercase** | **plain ROT13, lowercased if it wraps past Z** | `A` -> `N`, `T` -> `g` |
+
+   That third rule is the subtle one. It is why `Table_ID` -> `gnoyr_VQ` and
+   `Aviation Support Tables` -> `N8vn6v10 f722146 gnoyr5`.
 
 2. **Lookup-table names** (`Y_fReiVPR_PYNff`) use ordinary ROT13 over letters only, which
    *is* self-inverse. Case in the encoded form is scrambled, so decoding is
@@ -27,10 +29,13 @@ the difference easy to miss — `QO_VQ` -> `DB_ID` decodes correctly under eithe
 Verified against live pages 2026-07 against 10 observed pairs; see docs/data/sources.md.
 
 .. warning::
-   **BTS is itself inconsistent.** `gnoyr_VQ` is the param name for `Table_ID`, but it
-   decodes to ``3able_ID`` — the `T` was encoded as plain-ROT13 `g` rather than 36-cipher
-   `6`. Every other observed pair follows the rules above. Do not "fix" the codec to
-   accommodate it; use the literal string. See ``ANOMALOUS_PARAMS``.
+   **Encoding is exact; decoding is ambiguous.** Lowercase `a`-`m` in an encoded string
+   could have come from lowercase `x`-`z` or from wrapped uppercase `N`-`Z`.
+   :func:`decode_param` resolves toward the lowercase reading — right for values
+   (``FIM`` -> ``259``) but wrong for names (``gnoyr_VQ`` -> ``3able_ID``, not ``Table_ID``).
+
+   Use :func:`decode_param` for discovery, :func:`encode_param` to build real URLs, and
+   never round-trip a param name through both.
 """
 
 from __future__ import annotations
@@ -41,26 +46,39 @@ _LOWER = string.ascii_lowercase + string.digits  # 36 chars
 _UPPER = string.ascii_uppercase + string.digits  # 36 chars
 _ROT = 13
 
-#: Encoded param names BTS produced inconsistently. Use the literal, don't round-trip it.
-ANOMALOUS_PARAMS = {
-    "gnoyr_VQ": "Table_ID",  # decodes to "3able_ID" under the documented rules
-}
+#: Encoded params the rules below cannot produce. Empty — every observed pair is explained.
+#: If BTS ever emits something anomalous it belongs here, not worked around at a call site.
+ANOMALOUS_PARAMS: dict[str, str] = {}
 
 
 def encode_param(plaintext: str) -> str:
     """Plaintext -> the obfuscated form used in TranStats query strings.
 
+    Exact for every observed pair. Prefer this over hardcoded literals so a table URL can be
+    built from a readable name.
+
     >>> encode_param("259")
     'FIM'
-    >>> encode_param("Aviation")
-    'N8vn6v10'
+    >>> encode_param("Table_ID")
+    'gnoyr_VQ'
+    >>> encode_param("Aviation Support Tables")
+    'N8vn6v10 f722146 gnoyr5'
     """
     out = []
     for ch in plaintext:
         if "a" <= ch <= "z":
+            # 36-char alphabet: lowercase letters cross into digits (o -> 1, s -> 5).
             out.append(_LOWER[(_LOWER.index(ch) + _ROT) % 36])
-        elif "A" <= ch <= "Z" or ch.isdigit():
+        elif ch.isdigit():
+            # Digits rotate into UPPERCASE letters (2 -> F, 9 -> M).
             out.append(_UPPER[(_UPPER.index(ch) + _ROT) % 36])
+        elif "A" <= ch <= "Z":
+            # Uppercase uses plain ROT13 over 26 — NOT the 36-char alphabet — and is
+            # lowercased when the rotation wraps past Z. This is the rule that made
+            # `Table_ID` -> `gnoyr_VQ` look like a BTS bug for a while.
+            rotated = ord(ch) - 65 + _ROT
+            letter = chr(rotated % 26 + 65)
+            out.append(letter.lower() if rotated >= 26 else letter)
         else:
             out.append(ch)
     return "".join(out)

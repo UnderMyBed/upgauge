@@ -11,11 +11,27 @@ rows). See [sources.md](sources.md) for how they were obtained.
 
 ## Key on DOT IDs, never letter codes
 
-T-100 ships `AIRLINE_ID` (DOT-assigned, stable across code / name / holding-company
-changes) alongside `UNIQUE_CARRIER` (an IATA-style code that **gets reused by different
-airlines over time**). Same for airports: `ORIGIN_AIRPORT_ID` is identity,
-`ORIGIN_AIRPORT_SEQ_ID` is the point-in-time key that changes when an airport's attributes
-change, and the 3-letter code is neither.
+T-100 ships `AIRLINE_ID` (DOT-assigned, stable across code / name / holding-company changes)
+alongside two letter codes. Measured against the full 2,886-row Carrier Decode:
+
+| Field | Distinct | Map to >1 `AIRLINE_ID` | |
+|---|---|---|---|
+| `CARRIER` | 1,825 | **135** | the raw IATA code — genuinely reused |
+| `UNIQUE_CARRIER` | 1,776 | **0** | BTS disambiguates with suffixes (`2T (1)`, 119 of them) |
+
+> ⚠️ **Correction.** An earlier version of this section said `UNIQUE_CARRIER` is the reused
+> field. It is the opposite — it is the *disambiguated* one. `CARRIER` is what collides.
+
+So `UNIQUE_CARRIER` is safe as an identifier but poor for display (the suffix is ugly, and
+can shift if BTS re-disambiguates), while `CARRIER` is fine for display but unusable as a key.
+**`AIRLINE_ID` is the key; both codes are carried on `dim_carrier`.**
+
+`CARRIER` also changes over time for a *single* airline — Horizon filed as `HOZ` until 1984
+and `QX` since; SkyWest as `SEA` until 2002 and `OO` since. See the dimension caveat below.
+
+Same story for airports: `ORIGIN_AIRPORT_ID` is identity, `ORIGIN_AIRPORT_SEQ_ID` is the
+point-in-time key that changes when an airport's attributes change, and the 3-letter code is
+neither.
 
 **Join on IDs; display codes.** Over a 2015→present window with `VX`, `HA`, and reused
 regional codes in play, this is the difference between a correct time series and a silently

@@ -29,7 +29,8 @@ from pipeline.invariants import (
     check_no_rollup_classes,
 )
 
-SQL_PATH = Path(__file__).parents[1] / "sql" / "01_staging" / "normalize_t100_segment.sql"
+SQL_DIR = Path(__file__).parents[1] / "sql" / "01_staging"
+SQL_PATH = SQL_DIR / "normalize_t100_segment.sql"
 
 #: Every reason the SQL can emit. Kept in sync by test_every_reason_used_is_a_known_reason.
 QUARANTINE_REASONS = frozenset({"missing_carrier", "zero_seats", "load_factor_gt_1"})
