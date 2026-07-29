@@ -1,0 +1,29 @@
+# Data — never committed. raw/ is the audit trail but lives on disk/R2, not git.
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node (app/, from M3)
+node_modules/
+.next/
+out/
+
+# Build artifacts
+*.duckdb
+*.duckdb.wal
+
+# Env
+.env
+.env.local
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

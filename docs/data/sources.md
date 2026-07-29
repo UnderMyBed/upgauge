@@ -47,15 +47,37 @@ current T-100 feed there it becomes the cheaper path. Never assume it.
 
 ### URL params are obfuscated — with two different ciphers
 
-TranStats encodes query-string names and values with **ROT13 over a 36-char alphabet**
-(`a-z` + `0-9`, case preserved). So `gnoyr_VQ` = `Table_ID`, `QO_VQ` = `DB_ID`,
-`Nv4 Pn44vr45` = `Air Carriers`, `FIM` = `259`.
+Implemented and tested in `pipeline/btscodec.py`; the test file carries all 17 observed
+pairs as its fixtures.
 
-But the **lookup-table links use plain ROT13** (letters only, digits untouched):
-`Y_fReiVPR_PYNff` = `L_SERVICE_CLASS`. Two ciphers on one page.
+**Query params** use **ROT13 over a 36-character alphabet** (`a-z` then `0-9`). Because the
+alphabet is 36 wide, rotating by 13 is **not** an involution — encode and decode are
+opposite directions, unlike ordinary ROT13. Letters cross into digits and back
+(`o`↔`1`, `s`↔`5`, `r`↔`4`). So `QO_VQ` = `DB_ID`, `Nv4 Pn44vr45` = `Air Carriers`,
+`FIM` = `259`.
 
-`pipeline/btscodec.py` must implement both. This is why `Table_ID=259` is not findable by
-guessing — the table list has to be fetched and decoded.
+The case rule is **asymmetric**, and getting it backwards silently breaks the table lookup:
+
+| Input | Table used | Evidence |
+|---|---|---|
+| lowercase letter | lower | `o` → `1`, `v` → `8` |
+| **digit (encoding)** | **upper** | `259` → `FIM` |
+| **digit (decoding)** | **lower** | `Z1qr_VQ` → `Mode_ID` (lowercase `o`) |
+| uppercase letter | upper | `A` → `N`, `F` → `2` |
+
+**Lookup-table links use plain ROT13** (letters only, digits untouched, self-inverse):
+`Y_fReiVPR_PYNff` = `L_SERVICE_CLASS`. Two ciphers on one page. They agree on any letter
+that doesn't cross into the digit range — which is exactly what makes the difference easy to
+miss, since `QO_VQ` → `DB_ID` decodes correctly under either.
+
+> ⚠️ **BTS is itself inconsistent for one param.** `gnoyr_VQ` is the `Table_ID` param, but
+> it decodes to `3able_ID` — its `T` was encoded with plain ROT13 (`g`) instead of the
+> 36-cipher (`6`). Every other observed pair follows the rules above. **Don't "fix" the
+> codec to accommodate it** — use the literal string. Tracked in
+> `btscodec.ANOMALOUS_PARAMS` with a test pinning the behaviour.
+
+This is why `Table_ID=259` is not findable by guessing — the table list has to be fetched
+and decoded.
 
 ### It's ASP.NET WebForms — the POST is stateful
 

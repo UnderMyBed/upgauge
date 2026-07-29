@@ -41,9 +41,9 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-Greenfield — `docs/` only, nothing scaffolded. Current milestone: **M1**, phase 1
-(scaffold). Phase 0 is complete: the BTS endpoint was driven end-to-end and the data
-validated — see `docs/data/sources.md`.
+**M1, phase 2** (the fetcher). Phases 0–1 done: the BTS endpoint was driven end-to-end and
+the data validated (`docs/data/sources.md`), and the scaffold is up with `make check` green.
+`pipeline/btscodec.py` is the only real code so far.
 
 ## Architecture
 
@@ -63,13 +63,16 @@ basemap — tiles are usage-priced).
 
 ## Commands
 
-Not yet scaffolded; targets from `docs/architecture/pipeline.md`.
+`uv` pins Python 3.12 via `.python-version`. Unimplemented targets exit non-zero on purpose.
 
-| Command | Description |
-|---------|-------------|
-| `make ingest` | Fetch → `data/raw/` → `data/parquet/` |
-| `make build` | Run `sql/` in order → `upgauge.duckdb` |
-| `make dev` | Next.js dev server |
+| Command | Description | |
+|---------|-------------|---|
+| `make install` | `uv sync --extra dev` | ✅ |
+| `make check` | **Lint + test. Run before every commit.** | ✅ |
+| `make test` / `make lint` / `make fmt` | pytest / ruff check / ruff format | ✅ |
+| `make ingest` | Fetch → `data/raw/` → `data/parquet/` | M1 p2/p4 |
+| `make build` | Run `sql/` in order → `upgauge.duckdb` | M2 |
+| `make dev` | Next.js dev server (needs node) | M3 |
 
 ## Hard rules
 

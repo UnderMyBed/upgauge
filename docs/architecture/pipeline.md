@@ -46,8 +46,8 @@ Phase 0 is complete — see [../data/sources.md](../data/sources.md) for what it
 | Phase | Work | Done when |
 |---|---|---|
 | ~~0~~ | ~~Spike the endpoint~~ | ✅ Endpoint driven, data validated, spec corrected |
-| 1 | Scaffold + toolchain: Makefile, uv, pytest, directory structure | `make test` runs |
-| 2 | `btscodec.py` + `fetch.py` — per-year POST loop, disk cache, retries | 2015→present raw zips on disk, re-run is a no-op |
+| ~~1~~ | ~~Scaffold + toolchain~~ | ✅ `make check` green — uv/3.12, pytest, ruff, `btscodec` |
+| 2 | `fetch.py` — per-year POST loop, viewstate handling, disk cache, retries | 2015→present raw zips on disk, re-run is a no-op |
 | 3 | Invariant tests written **red**, from [../data/invariants.md](../data/invariants.md) | Suite fails for the right reasons |
 | 4 | `normalize.py` — raw → Parquet, quarantine flags, `download_date` | Invariant suite green |
 | 5 | Lookups → dims; `map_mainline_group` as checked-in declarative data | Dims build; map totality asserted |
@@ -57,6 +57,18 @@ Phase 0 is complete — see [../data/sources.md](../data/sources.md) for what it
 the spec proven *not* as documented. Tests come after the fetcher but before normalize,
 because several invariants had to be resolved empirically — writing them from assumption is
 how you get a green suite that's confidently wrong.
+
+`btscodec` landed in phase 1 rather than 2 because it was already proven by the spike, and
+leaving it in a scratch directory risked losing reverse-engineering work that took real
+effort to recover. It also gives phase 1 something genuine to verify against.
+
+## Toolchain
+
+`uv` pins **Python 3.12** via `.python-version`, independent of whatever the system has.
+`make check` (lint + test) is the pre-commit gate. Unimplemented `make` targets exit
+non-zero rather than succeeding silently, so a half-built pipeline can't look finished.
+
+Node and Docker are not needed until M3 and M6 respectively.
 
 > 🔔 **The cron must fail loudly.** If the monthly ingest breaks, nothing errors — the site
 > keeps serving happily and `DATA AS OF` just quietly stops advancing. For a product whose
