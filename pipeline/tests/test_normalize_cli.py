@@ -11,16 +11,19 @@ from pathlib import Path
 
 import pytest
 
+from pipeline.fetch import T100D_SEGMENT_US, raw_path
 from pipeline.normalize import discover_raw_years, main
 
 FIXTURE = Path(__file__).parent / "fixtures" / "t100d_segment_sample_2015.zip"
 
 
-def _stage(raw_dir: Path, *years: int) -> None:
+def _stage(raw_dir: Path, *years: int, date: str = "2026-07-29") -> None:
+    """Stage raw downloads using the real append-only naming."""
     raw_dir.mkdir(parents=True, exist_ok=True)
     for year in years:
-        shutil.copy(FIXTURE, raw_dir / f"t100d_segment_us_{year}.zip")
-        shutil.copy(FIXTURE.with_suffix(".json"), raw_dir / f"t100d_segment_us_{year}.json")
+        dest = raw_path(raw_dir, T100D_SEGMENT_US, year, date)
+        shutil.copy(FIXTURE, dest)
+        shutil.copy(FIXTURE.with_suffix(".json"), dest.with_suffix(".json"))
 
 
 def test_discovers_years_from_cached_zips(tmp_path):
@@ -32,6 +35,7 @@ def test_discovery_ignores_sidecars_and_other_files(tmp_path):
     _stage(tmp_path, 2015)
     (tmp_path / "notes.txt").write_text("x")
     (tmp_path / "t100d_segment_us_bogus.zip").write_bytes(b"PK")
+    (tmp_path / "t100d_segment_us_2015_notadate.zip").write_bytes(b"PK")
     assert discover_raw_years(tmp_path) == [2015]
 
 
@@ -58,8 +62,9 @@ def test_main_reports_failure_and_still_processes_other_years(tmp_path):
     """One bad year must not abort the rest, and must not exit 0."""
     raw, out = tmp_path / "raw", tmp_path / "parquet"
     _stage(raw, 2015)
-    (raw / "t100d_segment_us_2016.zip").write_bytes(b"PK\x03\x04 not a real zip")
-    (raw / "t100d_segment_us_2016.json").write_text('{"download_date": "2026-07-29"}')
+    bad = raw_path(raw, T100D_SEGMENT_US, 2016, "2026-07-29")
+    bad.write_bytes(b"PK\x03\x04 not a real zip")
+    bad.with_suffix(".json").write_text('{"download_date": "2026-07-29"}')
 
     assert main(["--raw-dir", str(raw), "--out-dir", str(out)]) == 1
     assert (out / "year=2015").exists(), "the good year should still have been written"
@@ -69,8 +74,9 @@ def test_main_reports_failure_and_still_processes_other_years(tmp_path):
 def test_main_names_the_failed_years_in_its_output(tmp_path, caplog):
     raw, out = tmp_path / "raw", tmp_path / "parquet"
     _stage(raw, 2015)
-    (raw / "t100d_segment_us_2016.zip").write_bytes(b"not a zip")
-    (raw / "t100d_segment_us_2016.json").write_text('{"download_date": "2026-07-29"}')
+    bad = raw_path(raw, T100D_SEGMENT_US, 2016, "2026-07-29")
+    bad.write_bytes(b"not a zip")
+    bad.with_suffix(".json").write_text('{"download_date": "2026-07-29"}')
 
     with caplog.at_level("ERROR"):
         main(["--raw-dir", str(raw), "--out-dir", str(out)])
@@ -90,8 +96,12 @@ def test_main_accepts_an_explicit_year_filter(tmp_path, year):
 def test_discovery_agrees_with_the_fetchers_naming(tmp_path):
     """Discovery and the fetcher must not drift — a rename in one would silently orphan
     every cached year for the other."""
-    from pipeline.fetch import T100D_SEGMENT_US, cache_path
+    raw_path(tmp_path, T100D_SEGMENT_US, 2015, "2026-07-29").write_bytes(b"PK")
+    assert discover_raw_years(tmp_path) == [2015]
 
-    written = cache_path(tmp_path, T100D_SEGMENT_US, 2015)
-    written.write_bytes(b"PK")
+
+def test_multiple_downloads_of_one_year_list_that_year_once(tmp_path):
+    """Append-only raw means several files per year. Discovery must not double-process."""
+    for date in ("2026-07-29", "2026-09-01"):
+        raw_path(tmp_path, T100D_SEGMENT_US, 2015, date).write_bytes(b"PK")
     assert discover_raw_years(tmp_path) == [2015]

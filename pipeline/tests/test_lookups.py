@@ -12,6 +12,8 @@ Two different BTS mechanisms, which is why there are two code paths:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -134,3 +136,57 @@ def test_fetch_code_lookup_fails_loudly_on_a_redirect_to_the_homepage():
     client = httpx.Client(transport=httpx.MockTransport(handler))
     with pytest.raises(ValueError, match="not a lookup CSV"):
         fetch_code_lookup("L_AIRCRAFT_CONFIG", client=client)
+
+
+# ------------------------------------------------------- append-only raw
+
+
+def test_support_table_downloads_are_also_date_stamped(tmp_path, monkeypatch):
+    """Reference tables get amended too — `data/raw/` is append-only for them as well."""
+    import datetime as dt
+    import zipfile
+    from io import BytesIO
+
+    from pipeline.fetch import BtsFetcher, find_raw
+    from pipeline.lookups import MASTER_COORDINATE, fetch_support_table
+
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+        z.writestr("T_MASTER_CORD.csv", "x" * 5000)
+    payload = buf.getvalue()
+
+    form = (Path(__file__).parent / "fixtures" / "dl_selectfields_form.html").read_text()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, text=form)
+        return httpx.Response(200, content=payload, headers={"Content-Type": "application/zip"})
+
+    fetcher = BtsFetcher(client=httpx.Client(transport=httpx.MockTransport(handler)))
+
+    class Day1(dt.date):
+        @classmethod
+        def today(cls):
+            return dt.date(2026, 7, 29)
+
+    class Day2(dt.date):
+        @classmethod
+        def today(cls):
+            return dt.date(2026, 9, 1)
+
+    monkeypatch.setattr("pipeline.fetch.dt.date", Day1)
+    first = fetch_support_table(fetcher, MASTER_COORDINATE, tmp_path)
+    assert first.name == "master_coordinate_20260729.zip"
+
+    monkeypatch.setattr("pipeline.fetch.dt.date", Day2)
+    fetch_support_table(fetcher, MASTER_COORDINATE, tmp_path, force=True)
+    assert len(find_raw(tmp_path, MASTER_COORDINATE)) == 2, "prior download destroyed"
+
+
+def test_a_cached_support_table_is_not_refetched(tmp_path):
+    from pipeline.fetch import raw_path
+    from pipeline.lookups import MASTER_COORDINATE, fetch_support_table
+
+    existing = raw_path(tmp_path, MASTER_COORDINATE, None, "2026-07-29")
+    existing.write_bytes(b"PK")
+    assert fetch_support_table(None, MASTER_COORDINATE, tmp_path) == existing

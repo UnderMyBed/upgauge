@@ -197,9 +197,37 @@ def plan_years(
     return list(range(start, end + 1))
 
 
-def cache_path(raw_dir: Path, table: Table, year: int) -> Path:
-    """Cache key is (table, year) — never the served filename, which BTS regenerates."""
-    return Path(raw_dir) / f"{table.slug}_{year}.zip"
+def raw_path(raw_dir: Path, table: Table, year: int | None, download_date: str) -> Path:
+    """Where one download lands: `{slug}[_{year}]_{YYYYMMDD}.zip`.
+
+    The date is in the filename because **`data/raw/` is append-only** — BTS silently amends
+    filings, and a re-fetch must not destroy the download that produced the numbers already
+    published. Without a date here there is nowhere to keep the previous one.
+
+    Never the BTS-served filename: that is regenerated per request, so it would re-download
+    every year forever.
+    """
+    stamp = download_date.replace("-", "")
+    parts = [table.slug, str(year), stamp] if year is not None else [table.slug, stamp]
+    return Path(raw_dir) / f"{'_'.join(parts)}.zip"
+
+
+def find_raw(raw_dir: Path, table: Table, year: int | None = None) -> list[Path]:
+    """Every download for this (table, year), oldest first."""
+    prefix = f"{table.slug}_{year}_" if year is not None else f"{table.slug}_"
+    found = [
+        p
+        for p in Path(raw_dir).glob(f"{prefix}*.zip")
+        if p.stem.rsplit("_", 1)[-1].isdigit() and len(p.stem.rsplit("_", 1)[-1]) == 8
+    ]
+    return sorted(found, key=lambda p: p.stem.rsplit("_", 1)[-1])
+
+
+def latest_raw(raw_dir: Path, table: Table, year: int | None = None) -> Path | None:
+    """The newest download for this (table, year), or None. This is what feeds a mart —
+    older ones are audit-only and are never read."""
+    found = find_raw(raw_dir, table, year)
+    return found[-1] if found else None
 
 
 def fetch_year(
@@ -210,11 +238,13 @@ def fetch_year(
     Writes a `.json` sidecar carrying `download_date`, which drives amended-filing
     resolution — see docs/data/invariants.md.
     """
-    path = cache_path(raw_dir, table, year)
-    if path.exists() and not force:
-        return path
+    existing = latest_raw(raw_dir, table, year)
+    if existing and not force:
+        return existing
 
     body, served = fetcher.download_year(table, year)
+    download_date = dt.date.today().isoformat()
+    path = raw_path(raw_dir, table, year, download_date)
 
     # Only touch the filesystem once the response has been validated, so a failure can't
     # poison the cache and make the next run skip a year it never actually got.
@@ -227,7 +257,7 @@ def fetch_year(
                 "slug": table.slug,
                 "year": year,
                 "served_filename": served,
-                "download_date": dt.date.today().isoformat(),
+                "download_date": download_date,
                 "bytes": len(body),
             },
             indent=2,
@@ -257,9 +287,9 @@ def main(argv: list[str] | None = None) -> int:
     failures: list[tuple[int, Exception]] = []
 
     for year in years:
-        path = cache_path(args.raw_dir, T100D_SEGMENT_US, year)
-        if path.exists() and not args.force:
-            log.info("%s  cached", year)
+        existing = latest_raw(args.raw_dir, T100D_SEGMENT_US, year)
+        if existing and not args.force:
+            log.info("%s  cached (%s)", year, existing.name)
             continue
         try:
             log.info("%s  fetching...", year)

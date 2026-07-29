@@ -195,11 +195,38 @@ the two airport IDs sorted, so it is stable regardless of filing order.
 ## Amended filings: latest `download_date` wins
 
 BTS accepts amended filings and silently overwrites. Stamp every ingest with a
-`download_date` and retain prior Parquet partitions.
+`download_date` and **keep every download**.
+
+> ⚠️ **Correction.** An earlier version said to retain prior *Parquet partitions*. Parquet is
+> a derived artifact — the thing that must be retained is the **raw download**, because that
+> is what cannot be regenerated. `data/raw/` is therefore **append-only**: filenames carry the
+> download date (`t100d_segment_us_2015_20260729.zip`), so a re-fetch adds a file rather than
+> destroying the one that produced already-published numbers. Parquet is rebuilt from the
+> latest raw and freely discardable.
+>
+> This was a real hole, not a wording nit: `--force` previously overwrote `data/raw/` in
+> place, which contradicted "never mutate `data/raw`" and left the resolution rule with
+> nothing to resolve between.
 
 **Resolution rule: latest `download_date` wins per `(year_month, grain key)`; prior
 partitions are audit-only and never feed a mart.** Without this the marts are
 non-deterministic across rebuilds, which breaks the M2 reproducibility guarantee.
+
+## Builds are byte-reproducible
+
+`make verify` builds the whole warehouse twice from identical raw inputs and compares every
+artifact by sha256. It is the M1 exit criterion.
+
+> **DuckDB's parallel Parquet writer is not byte-stable.** At the default 12 threads, two
+> runs over the same 282k-row input produced files differing by a few hundred bytes — and
+> *intermittently*: `SAME, DIFFER, DIFFER` across three identical runs. Row content was always
+> identical; only the encoding drifted. All Parquet writes therefore go through a connection
+> pinned to `threads = 1`. Measured cost: 1.07 s vs 0.41 s per year, ~8 s across the window,
+> on a job that runs monthly.
+>
+> A small fixture cannot catch this — repeating a handful of rows keeps cardinality low enough
+> that the encoder stays deterministic no matter the threading. The regression test uses a
+> real extract and repeats the comparison four times, because one comparison passes by luck.
 
 ## Column count assertion
 

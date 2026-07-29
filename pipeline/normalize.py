@@ -20,7 +20,7 @@ from pathlib import Path
 
 import duckdb
 
-from pipeline.fetch import T100D_SEGMENT_US, cache_path
+from pipeline.fetch import T100D_SEGMENT_US, find_raw, latest_raw
 from pipeline.invariants import (
     PASSENGER_CONFIGS,
     SCHEDULED_PASSENGER_CLASS,
@@ -34,6 +34,25 @@ SQL_PATH = SQL_DIR / "normalize_t100_segment.sql"
 
 #: Every reason the SQL can emit. Kept in sync by test_every_reason_used_is_a_known_reason.
 QUARANTINE_REASONS = frozenset({"missing_carrier", "zero_seats", "load_factor_gt_1"})
+
+
+def _writer_connection() -> duckdb.DuckDBPyConnection:
+    """A connection configured for byte-reproducible Parquet output.
+
+    DuckDB's parallel Parquet writer is not byte-stable: with the default 12 threads, two
+    runs over the same 282k-row input produced files differing by a few hundred bytes, and
+    *intermittently* — SAME, DIFFER, DIFFER across three identical runs. The rows were always
+    identical; only the encoding drifted.
+
+    Content-equality would have been the cheaper guarantee, but byte-equality is what makes a
+    rebuild a verifiable no-op and the artifacts cacheable. Measured cost of `threads = 1`:
+    1.07s vs 0.41s per year — about 8 extra seconds across the whole window, on a job that
+    runs monthly.
+    """
+    con = duckdb.connect()
+    con.execute("SET threads TO 1")
+    con.execute("SET preserve_insertion_order TO true")
+    return con
 
 
 class NormalizeError(InvariantError):
@@ -111,7 +130,7 @@ def normalize_year(zip_path: Path, out_dir: Path, year: int) -> Path:
     """
     zip_path, out_dir = Path(zip_path), Path(out_dir)
     partition = parquet_partition(out_dir, year)
-    con = duckdb.connect()
+    con = _writer_connection()
 
     with _extracted_csv(zip_path) as csv_path:
         _preflight(con, csv_path)
@@ -141,12 +160,13 @@ def normalize_year(zip_path: Path, out_dir: Path, year: int) -> Path:
 
 
 def discover_raw_years(raw_dir: Path) -> list[int]:
-    """The years present in `raw_dir`, sorted. Ignores sidecars and unparseable names."""
-    years = []
-    for path in Path(raw_dir).glob(f"{T100D_SEGMENT_US.slug}_*.zip"):
-        stem = path.stem.rsplit("_", 1)[-1]
-        if stem.isdigit():
-            years.append(int(stem))
+    """The years present in `raw_dir`, sorted, each listed once however many downloads
+    exist for it. Ignores sidecars and unparseable names."""
+    years = set()
+    for path in find_raw(raw_dir, T100D_SEGMENT_US):
+        parts = path.stem.split("_")
+        if len(parts) >= 2 and parts[-2].isdigit() and len(parts[-2]) == 4:
+            years.add(int(parts[-2]))
     return sorted(years)
 
 
@@ -176,8 +196,10 @@ def main(argv: list[str] | None = None) -> int:
 
     failures: list[int] = []
     for year in years:
-        zip_path = cache_path(args.raw_dir, T100D_SEGMENT_US, year)
+        zip_path = latest_raw(args.raw_dir, T100D_SEGMENT_US, year)
         try:
+            if zip_path is None:
+                raise NormalizeError(f"no raw download for {year}")
             normalize_year(zip_path, args.out_dir, year)
             log.info("%s  ok", year)
         except Exception as exc:  # noqa: BLE001 — report every year, fail at the end

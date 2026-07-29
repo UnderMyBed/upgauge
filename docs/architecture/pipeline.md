@@ -51,7 +51,7 @@ Phase 0 is complete — see [../data/sources.md](../data/sources.md) for what it
 | ~~3~~ | ~~Invariant tests, written red~~ | ✅ 156 tests; rules in `invariants.py` + `mainline_map.py`, validated against a real extract |
 | ~~4~~ | ~~`normalize.py` — raw → Parquet, quarantine flags, `download_date`~~ | ✅ `make ingest`; 2015 → 282,036 rows, 8.6 MB Parquet |
 | ~~5~~ | ~~Lookups → dims; `map_mainline_group` materialized~~ | ✅ 4 dims build; **zero orphans** joining 282,036 fact rows |
-| 6 | Reproducibility gate | `make ingest` from empty is byte-identical |
+| ~~6~~ | ~~Reproducibility gate~~ | ✅ `make verify` — 7 artifacts byte-identical across two builds |
 
 **Order rationale:** the spike came first because the acquisition path was the one part of
 the spec proven *not* as documented. Tests come after the fetcher but before normalize,
@@ -99,6 +99,20 @@ completing in 0.01 s with no network.
 **Verified on real 2015 data:** 367,360 raw rows → **282,036** scheduled-passenger rows,
 12 months, only `CLASS='F'` and configs 1/3/4, **16 quarantined (0.006%)**, zero route-key
 ordering violations, 8.6 MB Parquet from a 94 MB CSV.
+
+### Reproducibility
+
+`make verify` is the M1 exit criterion: `build_all` twice from identical raw inputs, sha256
+every artifact, report any that differ by name. It reports rather than raises, so a drifting
+build names the offending file.
+
+Two things make it hold:
+
+- **`data/raw/` is append-only.** Filenames carry the download date, so a re-fetch adds a
+  file instead of overwriting the one that produced published numbers. `latest_raw` feeds the
+  build; superseded downloads are audit-only and never read.
+- **Parquet writes are pinned to `threads = 1`.** DuckDB's parallel writer is not byte-stable
+  (see [../data/invariants.md](../data/invariants.md)). ~8 s cost across the window.
 
 ## Toolchain
 

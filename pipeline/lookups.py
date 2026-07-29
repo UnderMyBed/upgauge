@@ -24,7 +24,7 @@ from pathlib import Path
 import httpx
 
 from pipeline.btscodec import encode_lookup, encode_param
-from pipeline.fetch import USER_AGENT, Table
+from pipeline.fetch import USER_AGENT, Table, latest_raw, raw_path
 
 LOOKUP_URL = "https://www.transtats.bts.gov/Download_Lookup.asp"
 
@@ -109,14 +109,17 @@ def fetch_code_lookup(name: str, client: httpx.Client | None = None) -> dict[str
 def fetch_support_table(fetcher, table: Table, raw_dir: Path, *, force: bool = False) -> Path:
     """Download one support table into `raw_dir` unless cached. Returns the zip path.
 
-    Support tables have no time dimension, so the cache key is the slug alone. The form
-    still carries year/period selects; they are sent as `All` and BTS ignores them.
+    No year in the name — support tables have no time dimension — but still date-stamped,
+    because reference data gets amended too and `data/raw/` is append-only. The form carries
+    year/period selects; they are sent as `All` and BTS ignores them.
     """
-    path = Path(raw_dir) / f"{table.slug}.zip"
-    if path.exists() and not force:
-        return path
+    existing = latest_raw(raw_dir, table)
+    if existing and not force:
+        return existing
 
     body, served = fetcher.download_year(table, "All")
+    download_date = dt.date.today().isoformat()
+    path = raw_path(raw_dir, table, None, download_date)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(body)
     path.with_suffix(".json").write_text(
@@ -125,7 +128,7 @@ def fetch_support_table(fetcher, table: Table, raw_dir: Path, *, force: bool = F
                 "table_id": table.table_id,
                 "slug": table.slug,
                 "served_filename": served,
-                "download_date": dt.date.today().isoformat(),
+                "download_date": download_date,
                 "bytes": len(body),
             },
             indent=2,
@@ -133,3 +136,40 @@ def fetch_support_table(fetcher, table: Table, raw_dir: Path, *, force: bool = F
         + "\n"
     )
     return path
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`make fetch-reference`: download the support tables into data/raw/."""
+    import argparse
+    import logging
+
+    from pipeline.fetch import BtsFetcher
+
+    parser = argparse.ArgumentParser(description="Fetch BTS reference/support tables.")
+    parser.add_argument("--raw-dir", type=Path, default=Path("data/raw"))
+    parser.add_argument("--force", action="store_true", help="re-download even if cached")
+    args = parser.parse_args(argv)
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    log = logging.getLogger("lookups")
+
+    fetcher = BtsFetcher()
+    failures: list[str] = []
+    for table in SUPPORT_TABLES:
+        try:
+            path = fetch_support_table(fetcher, table, args.raw_dir, force=args.force)
+            log.info("%-20s %s", table.slug, path.name)
+        except Exception as exc:  # noqa: BLE001 — report all, fail at the end
+            log.error("%-20s FAILED: %s", table.slug, exc)
+            failures.append(table.slug)
+
+    if failures:
+        log.error(
+            "%d of %d reference tables failed: %s", len(failures), len(SUPPORT_TABLES), failures
+        )
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

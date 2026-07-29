@@ -13,10 +13,19 @@ install:  ## Create the venv and install pipeline deps (Python 3.12)
 fetch:  ## Fetch BTS T-100 zips -> data/raw/ (skips cached years)
 	$(UV) run python -m pipeline.fetch $(ARGS)
 
+fetch-reference:  ## Fetch the BTS support tables -> data/raw/
+	$(UV) run python -m pipeline.lookups $(ARGS)
+
 normalize:  ## Raw zips -> data/parquet/t100_segment/year=YYYY/
 	$(UV) run python -m pipeline.normalize $(ARGS)
 
-ingest: fetch normalize  ## Fetch + normalize. The full M1 pipeline.
+warehouse:  ## Build facts + all dims from data/raw/ -> data/parquet/
+	$(UV) run python -m pipeline.build $(ARGS)
+
+verify:  ## M1 GATE: build twice, prove every artifact is byte-identical
+	$(UV) run python -m pipeline.build --verify
+
+ingest: fetch fetch-reference warehouse  ## Fetch + build everything. The full M1 pipeline.
 
 build:  ## Run sql/ in order -> upgauge.duckdb              [M2]
 	@echo "not implemented — M2"

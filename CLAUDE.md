@@ -41,9 +41,11 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M1, phase 6** (reproducibility gate — the last one). Phases 0–5 done: facts and all four
-dims build from real data with **zero join orphans** against 282,036 fact rows. 242 tests
-green.
+**M1 COMPLETE.** `make ingest` fetches and builds facts + 4 dims from BTS; `make verify`
+proves 7 artifacts byte-identical across two builds. 253 tests green, zero join orphans.
+`data/raw/` currently holds 2015–2017; run `make fetch` for the full window.
+
+Next: **M2** — marts built by SQL in `sql/02_marts/`, reproducible via `make build`.
 
 ## Architecture
 
@@ -71,8 +73,11 @@ basemap — tiles are usage-priced).
 | `make check` | **Lint + test. Run before every commit.** | ✅ |
 | `make test` / `make lint` / `make fmt` | pytest / ruff check / ruff format | ✅ |
 | `make fetch` | BTS T-100 zips → `data/raw/` (skips cached years) | ✅ |
+| `make fetch-reference` | BTS support tables → `data/raw/` | ✅ |
 | `make normalize` | Raw zips → `data/parquet/t100_segment/year=YYYY/` | ✅ |
-| `make ingest` | `fetch` + `normalize`. The full M1 pipeline. | ✅ |
+| `make warehouse` | Facts + all 4 dims from `data/raw/` | ✅ |
+| **`make verify`** | **M1 gate: build twice, prove byte-identical** | ✅ |
+| `make ingest` | `fetch` + `fetch-reference` + `warehouse` | ✅ |
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | M2 |
 | `make dev` | Next.js dev server (needs node) | M3 |
 
@@ -122,9 +127,14 @@ possible.
 
 **Segment only.** Never blend T-100 Segment with Market or DB1B.
 
-**Never mutate `data/raw/`.** Raw zips are the audit trail. BTS accepts amended filings and
-silently overwrites — latest `download_date` wins per `(year_month, grain key)`; prior
-partitions are audit-only.
+**`data/raw/` is APPEND-ONLY.** Filenames carry the download date
+(`t100d_segment_us_2015_20260729.zip`), so a re-fetch adds a file rather than destroying the
+one that produced published numbers. `latest_raw()` feeds the build; superseded downloads are
+audit-only. Parquet is derived and freely rebuilt.
+
+**All Parquet writes go through `_writer_connection()` (`threads = 1`).** DuckDB's parallel
+writer is not byte-stable — it drifts *intermittently*, which is worse than consistently.
+Never call `duckdb.connect()` directly for a write.
 
 **Stay portable.** `docker run` against the same `.duckdb` file must behave identically.
 Docker + Parquet + env vars only. **No provider-specific runtimes** (Workers, D1, KV) —

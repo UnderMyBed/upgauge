@@ -11,10 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import duckdb
-
 from pipeline.mainline_map import load_mainline_map
-from pipeline.normalize import SQL_DIR, NormalizeError, _extracted_csv
+from pipeline.normalize import SQL_DIR, NormalizeError, _extracted_csv, _writer_connection
 
 
 def _build(zip_path: Path, out_dir: Path, sql_name: str, out_name: str) -> Path:
@@ -24,7 +22,7 @@ def _build(zip_path: Path, out_dir: Path, sql_name: str, out_name: str) -> Path:
     target = out_dir / f"{out_name}.parquet"
     sql = (SQL_DIR / sql_name).read_text()
 
-    con = duckdb.connect()
+    con = _writer_connection()
     with _extracted_csv(Path(zip_path)) as csv_path:
         staging = out_dir / f".{out_name}.incoming.parquet"
         con.execute(f"COPY ({sql}) TO '{staging}' (FORMAT PARQUET)", {"csv_path": str(csv_path)})
@@ -76,7 +74,7 @@ def build_mainline_map(out_dir: Path, csv_path: Path | None = None) -> Path:
         )
         for e in mapping.entries
     ]
-    con = duckdb.connect()
+    con = _writer_connection()
     con.execute(
         """
         CREATE TABLE m (
