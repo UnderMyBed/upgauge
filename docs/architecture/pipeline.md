@@ -49,7 +49,7 @@ Phase 0 is complete — see [../data/sources.md](../data/sources.md) for what it
 | ~~1~~ | ~~Scaffold + toolchain~~ | ✅ `make check` green — uv/3.12, pytest, ruff, `btscodec` |
 | ~~2~~ | ~~`fetch.py` — per-year POST loop, viewstate, cache, retries~~ | ✅ `make fetch`; verified live against BTS (see below) |
 | ~~3~~ | ~~Invariant tests, written red~~ | ✅ 156 tests; rules in `invariants.py` + `mainline_map.py`, validated against a real extract |
-| 4 | `normalize.py` — raw → Parquet, quarantine flags, `download_date` | Invariant suite green |
+| ~~4~~ | ~~`normalize.py` — raw → Parquet, quarantine flags, `download_date`~~ | ✅ `make ingest`; 2015 → 282,036 rows, 8.6 MB Parquet |
 | 5 | Lookups → dims; `map_mainline_group` as checked-in declarative data | Dims build; map totality asserted |
 | 6 | Reproducibility gate | `make ingest` from empty is byte-identical |
 
@@ -79,6 +79,26 @@ effort to recover. It also gives phase 1 something genuine to verify against.
 **Verified live 2026-07-29** against the real endpoint — 11,730,135 bytes / 367,360 rows /
 45 columns for 2015, byte-identical to the phase-0 manual download, and a cached re-run
 completing in 0.01 s with no network.
+
+### Normalize design notes
+
+- **The transform is SQL, in `sql/01_staging/normalize_t100_segment.sql`**, with bound
+  parameters rather than interpolation. That is what lets the server reuse the definition.
+- **Read the CSV as all-VARCHAR and cast explicitly.** Letting DuckDB's sniffer pick types
+  turns `AIRCRAFT_TYPE` `079` into `79` and breaks the dim join silently.
+- **Pre-flight checks run on the raw extract, before filtering.** The rollup-class check has
+  to see a `K` row, and the service filter would already have dropped it.
+- **Write to a staging dir and swap**, so a failure mid-write can't leave a half-written
+  partition that later reads treat as complete. Replaces rather than appends, so a re-run
+  cannot double every row.
+- **A missing fetch sidecar is an error, not a default.** A guessed `download_date` would
+  silently corrupt amended-filing resolution.
+- **Nothing derived is stored** — no `load_factor`/`asm`/`rpm`/`avg_gauge` column exists, so
+  nothing downstream can `AVG()` one.
+
+**Verified on real 2015 data:** 367,360 raw rows → **282,036** scheduled-passenger rows,
+12 months, only `CLASS='F'` and configs 1/3/4, **16 quarantined (0.006%)**, zero route-key
+ordering violations, 8.6 MB Parquet from a 94 MB CSV.
 
 ## Toolchain
 

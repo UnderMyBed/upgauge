@@ -41,9 +41,9 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M1, phase 4** (`normalize.py`: raw → Parquet). Phases 0–3 done: endpoint validated,
-scaffold up, `make fetch` verified live, and the invariants are enforceable code
-(`pipeline/invariants.py`, `pipeline/mainline_map.py`) with 156 tests green.
+**M1, phase 5** (lookups → dims). Phases 0–4 done: `make ingest` runs end-to-end —
+fetch → raw zips → partitioned Parquet with invariants enforced. 195 tests green.
+Real 2015: 367,360 raw rows → 282,036 scheduled-passenger rows, 8.6 MB Parquet.
 
 ## Architecture
 
@@ -71,7 +71,8 @@ basemap — tiles are usage-priced).
 | `make check` | **Lint + test. Run before every commit.** | ✅ |
 | `make test` / `make lint` / `make fmt` | pytest / ruff check / ruff format | ✅ |
 | `make fetch` | BTS T-100 zips → `data/raw/` (skips cached years) | ✅ |
-| `make ingest` | `fetch` + normalize → `data/parquet/` | M1 p4 |
+| `make normalize` | Raw zips → `data/parquet/t100_segment/year=YYYY/` | ✅ |
+| `make ingest` | `fetch` + `normalize`. The full M1 pipeline. | ✅ |
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | M2 |
 | `make dev` | Next.js dev server (needs node) | M3 |
 
@@ -137,8 +138,9 @@ Full detail and the measurements behind each: `docs/data/invariants.md`.
 - **`seats = 0` needs both checks** — quarantine only when config is a passenger config
   **and** departures were performed. 5,713 of 2015's 5,717 zero-seat rows never flew; they
   are ordinary "no service" filings, not anomalies.
-- **Rows with no `AIRLINE_ID` exist** (158 in 2015, carrying real traffic) → `missing_carrier`
-  quarantine. Unattributable to an operating carrier, so they can't reach an aggregate.
+- **Rows with no `AIRLINE_ID` exist** (158 in 2015, carrying real traffic) — but all are
+  `CLASS='L'` charter, so the service filter removes them. `missing_carrier` is a
+  **defensive** rule, not routine handling.
 - **`load_factor > 1.0`** → quarantine, **never clamp.** Quarantined rows are excluded from
   aggregates but surfaced in the UI with count + reason. Showing the dirt is a trust feature.
 - **Zero-padded codes stay strings** — `AIRCRAFT_TYPE` `079` becomes `79` if int-parsed, and

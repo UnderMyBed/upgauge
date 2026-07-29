@@ -131,16 +131,24 @@ contributes nothing to any aggregate. Flagging it reported a **2.03% quarantine 
 against a true rate of 0.001% — a 1,400× overstatement** of a number the UI presents as a
 trust signal. The rule is worthless if it fires on ordinary data.
 
-## Rows with no carrier identity are quarantined
+## Rows with no carrier identity — a defensive rule
 
 **158 rows in 2015 have every carrier field blank** — `UNIQUE_CARRIER`, `AIRLINE_ID`,
 `UNIQUE_CARRIER_NAME`, `UNIQUE_CARRIER_ENTITY`, `REGION`, `CARRIER_NAME`,
 `CARRIER_GROUP_NEW` — while still reporting real traffic (158 departures performed, 119
-with passengers aboard).
+with passengers aboard). They cannot be keyed on the operating carrier, which is the grain
+of the entire product.
 
-They cannot be keyed on the operating carrier, which is the grain of the entire product, so
-they must not reach an aggregate. **Quarantine rather than silently drop**: they carry real
-traffic, and the count belongs in the UI where it can be seen.
+> ⚠️ **Correction.** An earlier version of this section said these rows are quarantined.
+> They are not, on the data v0 ingests: **all 158 are `CLASS = 'L'` (non-scheduled charter),
+> zero are in scheduled passenger service.** The service filter removes them before
+> quarantine applies. That also means the quarantine rate stated here was ~10x too high.
+
+The `missing_carrier` rule therefore exists as **defense, not routine handling** — if BTS
+ever emits a carrier-less *scheduled* row, it gets quarantined rather than silently
+aggregated under a null carrier. Two tests hold the line: one asserts no carrier-less rows
+reach the ingested subset today (so we notice if that changes), and one constructs such a
+row and proves it would be caught.
 
 `missing_carrier` outranks every other reason — an unattributable row is unattributable
 regardless of what else is wrong with it.
@@ -190,17 +198,19 @@ so a reappearance fails the build rather than shifting every field silently.
 Quarantined rows are **excluded from aggregates but surfaced in the UI** with a count and
 reason. Showing the dirt is a trust feature.
 
-Reasons, in precedence order:
+Reasons, in precedence order. Volumes are measured on the **ingested** 2015 subset —
+282,036 scheduled-passenger rows out of 367,360 raw:
 
 | Reason | Fires when | 2015 volume |
 |---|---|---|
-| `missing_carrier` | no `AIRLINE_ID` | 158 |
+| `missing_carrier` | no `AIRLINE_ID` | **0** — defensive; see above |
 | `zero_seats` | passenger config, departures performed, no seats | 4 |
 | `load_factor_gt_1` | `passengers > seats` | 12 |
 
-**Total 0.06% of passenger rows.** That rate is itself an invariant — the real-data suite
-asserts it stays under 0.1%. A rule that fires on ordinary data makes the whole signal
-worthless, which is exactly what happened before the departures check was added.
+**Total 16 rows = 0.006% of ingested passenger rows.** That rate is itself an invariant —
+the real-data suite asserts it stays under 0.1%. A rule that fires on ordinary data makes the
+whole signal worthless, which is exactly what happened before the departures check was
+added.
 
 ---
 
