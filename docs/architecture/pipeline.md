@@ -47,7 +47,7 @@ Phase 0 is complete — see [../data/sources.md](../data/sources.md) for what it
 |---|---|---|
 | ~~0~~ | ~~Spike the endpoint~~ | ✅ Endpoint driven, data validated, spec corrected |
 | ~~1~~ | ~~Scaffold + toolchain~~ | ✅ `make check` green — uv/3.12, pytest, ruff, `btscodec` |
-| 2 | `fetch.py` — per-year POST loop, viewstate handling, disk cache, retries | 2015→present raw zips on disk, re-run is a no-op |
+| ~~2~~ | ~~`fetch.py` — per-year POST loop, viewstate, cache, retries~~ | ✅ `make fetch`; verified live against BTS (see below) |
 | 3 | Invariant tests written **red**, from [../data/invariants.md](../data/invariants.md) | Suite fails for the right reasons |
 | 4 | `normalize.py` — raw → Parquet, quarantine flags, `download_date` | Invariant suite green |
 | 5 | Lookups → dims; `map_mainline_group` as checked-in declarative data | Dims build; map totality asserted |
@@ -61,6 +61,24 @@ how you get a green suite that's confidently wrong.
 `btscodec` landed in phase 1 rather than 2 because it was already proven by the spike, and
 leaving it in a scratch directory risked losing reverse-engineering work that took real
 effort to recover. It also gives phase 1 something genuine to verify against.
+
+### Fetcher design notes
+
+- **Cache key is `(table, year)`**, never the served filename — BTS regenerates that per
+  request, so using it would re-download every year forever.
+- **Re-GET the form on every retry attempt.** Cookies and `__VIEWSTATE` must come from the
+  same request; a retry that reuses a stale viewstate is rejected.
+- **The response is validated before anything touches disk**, so a failure can't leave a
+  partial file that makes the next run skip a year it never actually got.
+- **Encode the POST body by hand.** `httpx`'s `data=` takes a mapping, but the payload is an
+  ordered sequence of pairs — passing a list of tuples silently becomes raw content.
+- **A partial ingest must never look like success.** The CLI reports every year, names the
+  failures, and exits non-zero.
+- `--start` below 2015 is rejected: widening the window is a product decision, not a flag.
+
+**Verified live 2026-07-29** against the real endpoint — 11,730,135 bytes / 367,360 rows /
+45 columns for 2015, byte-identical to the phase-0 manual download, and a cached re-run
+completing in 0.01 s with no network.
 
 ## Toolchain
 

@@ -10,8 +10,11 @@ help:  ## Show this help
 install:  ## Create the venv and install pipeline deps (Python 3.12)
 	$(UV) sync --extra dev
 
-ingest:  ## Fetch BTS T-100 -> data/raw/ -> data/parquet/   [M1 phase 2/4]
-	@echo "not implemented — M1 phase 2 (fetch) and phase 4 (normalize)"
+fetch:  ## Fetch BTS T-100 zips -> data/raw/ (skips cached years)
+	$(UV) run python -m pipeline.fetch $(ARGS)
+
+ingest: fetch  ## Fetch + normalize -> data/parquet/          [normalize is M1 phase 4]
+	@echo "normalize not implemented — M1 phase 4"
 	@exit 1
 
 build:  ## Run sql/ in order -> upgauge.duckdb              [M2]

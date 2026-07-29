@@ -41,9 +41,9 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M1, phase 2** (the fetcher). Phases 0–1 done: the BTS endpoint was driven end-to-end and
-the data validated (`docs/data/sources.md`), and the scaffold is up with `make check` green.
-`pipeline/btscodec.py` is the only real code so far.
+**M1, phase 3** (invariant tests, written red). Phases 0–2 done: endpoint validated,
+scaffold up, and `pipeline/fetch.py` verified live against BTS. `make fetch` pulls
+2015→present into `data/raw/`.
 
 ## Architecture
 
@@ -70,7 +70,8 @@ basemap — tiles are usage-priced).
 | `make install` | `uv sync --extra dev` | ✅ |
 | `make check` | **Lint + test. Run before every commit.** | ✅ |
 | `make test` / `make lint` / `make fmt` | pytest / ruff check / ruff format | ✅ |
-| `make ingest` | Fetch → `data/raw/` → `data/parquet/` | M1 p2/p4 |
+| `make fetch` | BTS T-100 zips → `data/raw/` (skips cached years) | ✅ |
+| `make ingest` | `fetch` + normalize → `data/parquet/` | M1 p4 |
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | M2 |
 | `make dev` | Next.js dev server (needs node) | M3 |
 
