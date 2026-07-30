@@ -49,7 +49,7 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M2 COMPLETE.** `make ingest` fetches and builds facts + 4 dims from BTS; `make build` runs
+**M2 COMPLETE.** `make ingest` fetches and builds facts + 5 dims from BTS; `make build` runs
 `sql/02_marts/` into `upgauge.duckdb` (6 catalog views + `fct_route_month` +
 `mart_route_health`); `make verify` proves both the Parquet layer and the database layer
 reproducible across two from-scratch builds — `parquet: 8 artifacts byte-identical`,
@@ -86,7 +86,7 @@ basemap — tiles are usage-priced).
 | `make fetch` | BTS T-100 zips → `data/raw/` (skips cached years) | ✅ |
 | `make fetch-reference` | BTS support tables → `data/raw/` | ✅ |
 | `make normalize` | Raw zips → `data/parquet/t100_segment/year=YYYY/` | ✅ |
-| `make warehouse` | Facts + all 4 dims from `data/raw/` | ✅ |
+| `make warehouse` | Facts + all 5 dims from `data/raw/` | ✅ |
 | **`make verify`** | **M2 gate: build twice, prove Parquet + database byte-identical** | ✅ |
 | `make ingest` | `fetch` + `fetch-reference` + `warehouse` | ✅ |
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |

@@ -1,5 +1,5 @@
 # Data — never committed. raw/ is the audit trail but lives on disk/R2, not git.
-data/
+/data/
 
 # Python
 __pycache__/

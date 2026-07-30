@@ -146,6 +146,9 @@ def main(argv: list[str] | None = None) -> int:
             log.info("  %s", path)
         return 0
 
+    # Short-circuit on purpose: the database gate's marts are views/tables built FROM this
+    # Parquet, so a drifting artifact here makes any database-gate result meaningless — it
+    # would just be re-reporting the same drift one layer up. Only run it once Parquet holds.
     report = verify_reproducible(args.raw_dir)
     if not report.reproducible:
         log.error("NOT reproducible — %d Parquet artifact(s) differ:", len(report.differing))

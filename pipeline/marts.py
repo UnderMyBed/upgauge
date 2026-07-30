@@ -1,10 +1,14 @@
-"""Run sql/02_marts/ in order -> upgauge.duckdb.
+"""Run sql/02_marts/ in order -> upgauge.duckdb, and prove that database reproducible.
 
 Each .sql file declares its own object name and materialization in a header directive, so the
 directory is self-describing and there is no manifest to fall out of sync with it.
 
 The only SQL in this module is the DDL wrapper. Query logic stays in .sql, same as
 normalize.py's COPY wrapper.
+
+This module also hosts the M2 reproducibility gate (`_digest_object`, `DatabaseReport`,
+`verify_database`) that `make verify` runs against the database this module builds --
+mirroring how build.py pairs `build_all` with its own `verify_reproducible`.
 """
 
 from __future__ import annotations
