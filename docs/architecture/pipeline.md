@@ -281,7 +281,7 @@ M3 is split, because its two halves have different blockers.
 |---|---|---|
 | ~~**M3a**~~ | ~~The pivot query contract: templates, the allowlist, the URL codec, golden fixtures~~ ✅ Complete — see [Task 7 below](#task-7--golden-fixtures-and-make-goldens-m3a-complete). |
 | ~~**design session**~~ | ~~[../design/brief.md](../design/brief.md) — tokens, the data table, the chart, the signature element~~ ✅ Complete — the answer is [../design/system.md](../design/system.md), mockups in [../design/mockups/](../design/mockups/). |
-| **M3b** | The Next.js app: route handlers, the table, URL wiring | **Node** — no longer the design session |
+| ~~**M3b**~~ | ~~The Next.js app: route handlers, the table, URL wiring~~ ✅ Complete — see [Task 10 below](#task-10--explore-wired-to-the-url-m3b-complete). |
 
 **Why the split.** `docs/design/brief.md` makes the data table deliverable #1 and says "most of
 the product is this table in different clothes. Get it right and everything else follows." M3
@@ -536,6 +536,57 @@ toggle on both real acquisition boundaries (Task 5), the URL state codec (Task 6
 the golden fixtures that let M3b's TypeScript be *verified* against this contract instead of
 re-implementing its validation semantics from scratch (Task 7) — is done. Next up: the design
 session (`docs/design/brief.md`), then M3b.
+
+### Task 10 — `/explore` wired to the URL, M3b complete
+
+✅ **Built.** `app/src/app/explore/page.tsx` is the task that makes the milestone
+demonstrable: a permalink like
+`/explore?v=1&k=seg&d=op_airline_id&m=seats,load_factor,avg_gauge&t=2025-05:2026-04&s=-seats&n=25&g=op`
+now server-renders a real table against `upgauge.duckdb` — the `UPGAUGE` wordmark, a
+`DATA AS OF` badge in `--signal`, a stat/meta strip (grain, grouping, window, row count,
+quarantined-on-page count), the Task 9 `DataTable` (reused, not rebuilt), and the permalink
+re-encoded and displayed underneath the table.
+
+**The error path is the product feature, not a fallback.** Only `decode()` is wrapped in a
+try/catch — it is the one step that validates untrusted request input against the allowlist,
+and its documented failure mode is `UrlStateError`. An unknown key, an off-allowlist
+dimension, a malformed time range: all render a full-page named error (e.g. `unknown
+dimension 'nope'`) with no table and no default query underneath it, per
+[`docs/design/system.md`](../design/system.md)'s "Invalid permalink" state — never a silent
+fallback, because a permalink that quietly renders a different query than it encodes would
+still screenshot as authoritative.
+
+**`serverExternalPackages` was the one real build-blocker, and it was invisible until the
+production build.** `make app-check` (typecheck + Vitest, both against the real DuckDB file)
+was green the whole time `db.ts` existed (Task 8), but `next build` failed the first time
+anything ran it — `@duckdb/node-bindings` resolves its native binding with a runtime
+`require(`@duckdb/node-bindings-${platform}-${arch}`)` switch, one branch per platform/arch,
+and only one platform's optional-dependency package is ever actually installed. Left to
+Next's default Server Components bundling, the bundler statically resolves *every* branch of
+that switch and fails the build on whichever platform packages aren't present on the machine
+doing the build. Fixed in `app/next.config.ts` with
+`serverExternalPackages: ["@duckdb/node-api", "@duckdb/node-bindings"]`, which routes both
+packages through plain Node `require` at request time instead of bundling them — exactly the
+documented purpose of that option ("dependencies using Node.js specific features"). Nothing
+in `make app-check` would ever have caught this: Vitest never runs `next build`'s bundler, so
+the gap is real and worth naming for whoever adds the CI job this doc's Toolchain section
+already flags as missing.
+
+**Verified against a running production server, not just the test suite.** `make app-build`
+succeeded, then `mise exec -- npx next start app` was started from the repo root (the
+`file_search_path`/cwd contract `db.ts` and `render.ts` document) and hit with `curl`: the
+permalink above returned HTTP 200 with real carrier rows (`op_airline_id` values, summed
+`seats`/`load_factor`/`avg_gauge`, the gauge rail, the below-floor gutter) and the `DATA AS
+OF` badge; `d=nope` in place of a real dimension also returned HTTP 200 — not a 500 — with
+the named error and zero `<table>`/`<tr>` elements in the response body.
+
+**M3b complete.** The route handler (Task 8), the data table with its gauge rail and
+reason-code gutter (Task 9), and now `/explore` itself (Task 10) close out the app side of
+the pivot contract M3a shipped. 103 app tests green (`make app-check`), 424 Python tests
+green (`make check`), `make app-build` produces a working production build. Not built in
+M3b: the time-series and fleet-mix charts, the arc map, entity pages, `/watch`, the
+seasonality heatmap, and OG cards — all specified in
+[`../design/system.md`](../design/system.md) and left to M4/M5.
 
 ## Toolchain
 

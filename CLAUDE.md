@@ -49,21 +49,33 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M3a COMPLETE.** The Explorer's pivot query contract — templates
+**M3a and M3b COMPLETE.** M3a's Explorer pivot query contract — templates
 (`sql/03_queries/pivot_segment.sql` / `pivot_route.sql`), the allowlist as catalog objects
 (`meta_pivot_dimensions` / `meta_pivot_measures`), the CI-only Python reference
 implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`), the mainline-grouping toggle,
-and the URL state codec — is done, plus the golden fixtures
-(`sql/03_queries/goldens/{pivot,urlstate}.json`, `make goldens`) that M3b's TypeScript must
-reproduce byte-for-byte rather than re-deriving the validator semantics. `make build` runs
+the URL state codec, and the golden fixtures
+(`sql/03_queries/goldens/{pivot,urlstate}.json`, `make goldens`) — is done. `make build` runs
 `sql/02_marts/` into `upgauge.duckdb` (6 catalog views + `fct_route_month` +
 `mart_route_health` + the 2 pivot-vocabulary catalog views); `make verify` proves both the
 Parquet layer and the database layer reproducible across two from-scratch builds —
-`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 420 tests green,
-zero join orphans. `data/raw/` holds the full 2015–2026 window.
+`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 424 Python tests
+green, zero join orphans. `data/raw/` holds the full 2015–2026 window.
 
-Next: **the design session** (`docs/design/brief.md`), then **M3b** — the Next.js app: route
-handlers, the table, URL wiring, verified against the M3a goldens.
+M3b ported that contract into the Next.js app and wired it end to end: the TypeScript pivot
+renderer and URL codec (`app/src/lib/pivot/`), the read-only DuckDB query layer
+(`app/src/lib/db.ts`), the `/api/pivot` route handler, the `DataTable` / `GaugeRail` /
+`ReasonCode` components implementing the gauge rail and reason-code gutter, and
+`/explore?<permalink>` (`app/src/app/explore/page.tsx`) — a server-rendered page that
+decodes the URL, runs the pivot, and renders a real table with the `DATA AS OF` badge, a
+stat/meta strip, and the permalink displayed. An invalid permalink renders a named error
+(e.g. `unknown dimension 'nope'`), never a silent fallback to a default view. 103 app tests
+green (`make app-check`); `make app-build` produces a working production build.
+
+Not in M3b: the time-series and fleet-mix charts, the arc map, entity pages (`/route`,
+`/airport`, `/carrier`, `/aircraft`), `/watch`, the seasonality heatmap, and OG cards — all
+specified in `docs/design/system.md` and left to M4/M5.
+
+Next: **M4** — entity pages and charts.
 
 ## Architecture
 

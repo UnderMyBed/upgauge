@@ -157,3 +157,130 @@ body { background: var(--panel); color: var(--ink); }
   width: 1px;
   background: var(--ink-3);
 }
+
+/* ---------- page chrome (docs/design/mockups/table.html: .top / .mark / .asof) ---------- */
+.wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 20px 50px;
+}
+.top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 11px 0 10px;
+  border-bottom: 1px solid var(--ink);
+}
+.mark {
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.mark .accent {
+  color: var(--signal);
+}
+.asof {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  color: var(--signal);
+  border: 1px solid var(--signal);
+  padding: 3px 7px;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+/* ---------- stat / meta strip (docs/design/system.md "Stat strip") ---------- */
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  margin: 15px 0 16px;
+  padding: 7px 0;
+  border-top: 1px solid var(--rule-2);
+  border-bottom: 1px solid var(--rule-2);
+}
+.stat .k {
+  font-size: 9.5px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.stat .v {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+/* Derived measures carry a dotted underline on their label -- the honest-labelling
+   constraint made visual, same rule as the table header's [data-derived="true"]. */
+.deriv {
+  border-bottom: 1px dotted var(--ink-3);
+}
+
+/* ---------- permalink bar (docs/design/system.md "The Explorer") ---------- */
+.permalink {
+  border: 1px solid var(--signal);
+  background: var(--field);
+  padding: 6px 9px;
+  margin-top: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.permalink .label {
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 9.5px;
+  color: var(--ink-2);
+  margin-right: 8px;
+}
+.permalink code {
+  color: var(--ink);
+}
+
+.foot {
+  margin-top: 16px;
+  padding-top: 9px;
+  border-top: 1px solid var(--rule);
+  font-size: 11px;
+  color: var(--ink-2);
+  max-width: 660px;
+}
+
+/* ---------- invalid-permalink error state (docs/design/system.md "States") ---------- */
+/* An invalid permalink is a failed invariant on the request, the same class of thing
+   --limit already marks on data rows (quarantined, zero-pax) -- so it borrows the same
+   token rather than inventing a new one. */
+.error-page {
+  max-width: 640px;
+  padding-top: 16px;
+}
+.error-page h1 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 10px;
+}
+.error-page p[role="alert"] {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--limit);
+  border: 1px solid var(--limit);
+  padding: 9px 11px;
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+.error-page p {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.error-page a {
+  color: var(--signal);
+}
