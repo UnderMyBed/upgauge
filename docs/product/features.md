@@ -16,16 +16,33 @@ aircraft type · aircraft group · distance group
    **The encoding is a frozen public contract from the first shipped link.** Once permalinks are
    in forum posts, changing the format breaks them, and nobody will report it. So:
 
-   - **Short, stable keys** — `v` version, `d` dimensions, `m` measures, `f` filters, `t` time
-     range, `s` sort, `g` grouping mode (operating vs mainline-group). Not a base64 JSON blob:
-     that is opaque in a forum, unreadable at a glance, and impossible to hand-edit — and
-     hand-editing a permalink is exactly what this audience does.
+   - **Short, stable keys**, frozen from the first shipped link. Not a base64 JSON blob: that
+     is opaque in a forum, unreadable at a glance, and impossible to hand-edit — and
+     hand-editing a permalink is exactly what this audience does. Reference implementation:
+     `pipeline/urlstate.py` (`encode`/`decode`); M3b's TypeScript port must match it exactly.
+
+     | Key | Meaning | Example |
+     |---|---|---|
+     | `v` | version | `v=1` |
+     | `k` | grain | `k=seg` / `k=route` |
+     | `d` | dimensions, comma-separated | `d=year_month,op_airline_id` |
+     | `m` | measures, comma-separated | `m=seats,load_factor` |
+     | `t` | time range | `t=2024-01:2024-12` |
+     | `f` | filter, repeatable | `f=origin_airport_id:14771,13487` |
+     | `s` | sort, `-` prefix = descending | `s=-seats` |
+     | `n` | limit | `n=50` |
+     | `g` | grouping | `g=op` / `g=ml` |
+
    - **Versioned** (`v=1`), so a future incompatible change can migrate rather than silently
      misread an old link.
    - **Decode is total.** An unknown key, or a dimension not on the allowlist, is a rejection
      with a message — never a silent drop to a default. A permalink that quietly renders a
      *different* query than it encodes is worse than one that errors, because the screenshot
-     still looks authoritative.
+     still looks authoritative. Identifier/structural validation (unknown dimension, measure,
+     sort key, grain, grouping, empty lists, non-positive limit) is reused as-is from
+     `pipeline.pivot.render_pivot` — one allowlist, not two. URL syntax that `render_pivot`
+     can't see (`v` itself, unknown query-string keys, the shape of `t` and `f`, `n` as an
+     integer) is validated in the codec.
    - Round-trip tested both directions: `state → url → state` and `url → state → url`.
 2. **CSV / Parquet export of any result.** Nerds want the data, not just the picture.
 3. **Compare mode.** Pin 2–5 entities (routes, carriers, airports, *aircraft types*) and
