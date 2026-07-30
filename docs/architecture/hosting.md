@@ -132,3 +132,18 @@ not build on provider-specific runtimes** (Workers, D1, KV). This must stay a no
 
 > This constraint earned its keep: swapping the original Fly pick for Hetzner was a one-line
 > change precisely because nothing depended on the provider.
+
+## Environment variables
+
+The server (`app/src/lib/db.ts`) reads two. Both are optional — production sets neither and
+gets the defaults below, which are what the Portability test and the WORKDIR contract
+assume.
+
+| Var | Default | What it's for | What breaks if it's wrong |
+|---|---|---|---|
+| `UPGAUGE_ROOT` | `process.cwd()` | The directory containing `data/` and `sql/` — anchors both `upgauge.duckdb`'s default location and every `.sql` file read (`sql/03_queries/*.sql`). Also passed to DuckDB as `file_search_path`, so the catalog's relative Parquet globs (`read_parquet('data/parquet/...')`) resolve against it regardless of the process's actual OS working directory. | Set to the wrong directory: every `.sql` file read fails with ENOENT, and every query against a Parquet-backed view fails with `IO Error: No files found that match the pattern "data/parquet/..."` — the exact failure the Portability test section above describes, just triggered by a bad env var instead of a bad `WORKDIR`. |
+| `UPGAUGE_DB` | `${UPGAUGE_ROOT}/upgauge.duckdb` | Overrides the `.duckdb` file path directly, independent of `UPGAUGE_ROOT` — for a deploy that keeps the database file somewhere other than the repo-root default (e.g. a mounted volume). | Set to a path that doesn't exist or isn't a valid DuckDB file: `DuckDBInstance.create()` rejects and every route handler 500s. Note this does NOT relocate `data/parquet/` — that's still resolved via `UPGAUGE_ROOT`'s `file_search_path`, so pointing `UPGAUGE_DB` at a database file whose Parquet tree lives elsewhere still needs `UPGAUGE_ROOT` set to match. |
+
+Neither is a substitute for the WORKDIR contract — they exist so the default (WORKDIR ==
+repo root, both vars unset) needs no configuration, while still giving an operator an escape
+hatch if a deploy's directory layout genuinely can't match it.

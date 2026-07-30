@@ -11,28 +11,48 @@ import type { PivotQuery } from "@/lib/pivot/types";
 // chdir-ing there from the repo root -- see render.ts's header comment for the full story.
 // __dirname is NOT usable here for the same reason it isn't there: Turbopack inlines this
 // module into a chunk under .next/server/ in production, where __dirname resolves to "/".
+//
+// Env-var contract: UPGAUGE_ROOT and UPGAUGE_DB, documented in
+// docs/architecture/hosting.md alongside the rest of the deploy's env vars.
 const ROOT = process.env.UPGAUGE_ROOT ?? process.cwd();
-
-// docs/architecture/hosting.md, "Portability test": the catalog is views over paths
-// RELATIVE to the repo root, e.g. read_parquet('data/parquet/t100_segment/**/*.parquet').
-// That resolution happens inside DuckDB's C layer against the process's actual OS working
-// directory -- not anything JS-level, and NOT relative to the .duckdb file's own location.
-// So an absolute DB_PATH alone does not fix a wrong cwd: opening upgauge.duckdb by absolute
-// path from app/ still leaves every view's relative glob resolved against app/, and every
-// query against a Parquet-backed view fails with `IO Error: No files found that match the
-// pattern "data/parquet/...`" (confirmed by running exactly that repro while building this
-// file). Production's cwd is already the repo root, so this is a no-op there; under Vitest
-// it corrects the one process-wide fact DuckDB actually depends on, done once here at the
-// single place the instance is opened, rather than pushed onto every caller.
-if (process.cwd() !== ROOT) process.chdir(ROOT);
 
 const DB_PATH = process.env.UPGAUGE_DB ?? path.join(ROOT, "upgauge.duckdb");
 const QUERIES_DIR = path.join(ROOT, "sql", "03_queries");
 
 // This product never writes -- opened READ_ONLY always, no exceptions.
+//
+// docs/architecture/hosting.md, "Portability test": the catalog is views over paths
+// RELATIVE to the repo root, e.g. read_parquet('data/parquet/t100_segment/**/*.parquet').
+// That resolution happens inside DuckDB's C layer against a search path, and by default
+// that search path IS the process's actual OS working directory -- not anything JS-level,
+// and NOT relative to the .duckdb file's own location. An absolute DB_PATH alone does not
+// fix a wrong cwd: opening upgauge.duckdb by absolute path from app/ still leaves every
+// view's relative glob resolved against app/, and every query against a Parquet-backed view
+// fails with `IO Error: No files found that match the pattern "data/parquet/..."` (confirmed
+// by running exactly that repro while building this file). `process.chdir()` was tried and
+// rejected: it is dead code whenever production's contract (UPGAUGE_ROOT unset) holds, it
+// would silently repoint the whole Next server process's relative-path resolution the moment
+// an operator DOES set UPGAUGE_ROOT, and it throws ERR_WORKER_UNSUPPORTED_OPERATION inside a
+// Node worker thread -- latent today (Next 16 defaults experimental.workerThreads: false)
+// but a module-load crash waiting for that flag to flip. `file_search_path` is DuckDB's own,
+// additive answer to the same problem -- createConfig() forwards any option name straight to
+// duckdb_set_config, so this is a config value, not a SQL string, and it does not touch
+// process.cwd() at all: confirmed empirically (see task-7-report.md) that a query against a
+// Parquet-backed view succeeds with cwd left at app/ once file_search_path: ROOT is set.
+// Vitest gets a belt-and-braces process.chdir() of its own in vitest.config.ts's
+// setupFiles -- safe there only because Vitest 4's default pool is forks (main thread).
 let instance: Promise<DuckDBInstance> | null = null;
 function getInstance(): Promise<DuckDBInstance> {
-  instance ??= DuckDBInstance.create(DB_PATH, { access_mode: "READ_ONLY" });
+  instance ??= DuckDBInstance.create(DB_PATH, {
+    access_mode: "READ_ONLY",
+    file_search_path: ROOT,
+  }).catch((e: unknown) => {
+    // Memoizing a REJECTED promise would replay a transient open failure (volume not yet
+    // mounted, mid-rebuild EIO) for the rest of the process's life on an always-on box that
+    // otherwise has no restart trigger. Clear it so the next call retries from scratch.
+    instance = null;
+    throw e;
+  });
   return instance;
 }
 
@@ -42,8 +62,12 @@ function getInstance(): Promise<DuckDBInstance> {
  * `.close()` this layer is responsible for calling, and nothing here holds a connection
  * across requests for a leak to accumulate into. The DuckDBInstance itself IS memoized
  * (above): re-opening the database file per call, rather than per process, is what the
- * instance cache exists to avoid. */
-async function connect(): Promise<DuckDBConnection> {
+ * instance cache exists to avoid.
+ *
+ * Exported (only) so db.test.ts can pin the read-only invariant -- that this specific
+ * connection setup rejects a write -- without db.ts growing a route-handler-facing "give me
+ * a raw connection" API. loadAllowlist/dataAsOf/runPivot remain the surface Task 8 uses. */
+export async function connect(): Promise<DuckDBConnection> {
   return (await getInstance()).connect();
 }
 
@@ -63,17 +87,38 @@ function sql(name: string): string {
  * ratio, which is already DOUBLE by construction -- come back as ordinary JS `number`.
  * `JSON.stringify` throws on `bigint`, which would break Task 8's `Response.json()`, so
  * every bigint is downcast to `number` here, the one place raw driver rows meet the rest of
- * the app. Safe at this dataset's scale: nowhere near Number.MAX_SAFE_INTEGER (2^53). */
-function demoteBigInts(row: Record<string, unknown>): Record<string, unknown> {
+ * the app. Safe at this dataset's scale -- current values are nowhere near
+ * Number.MAX_SAFE_INTEGER (2^53) -- but this function is deliberately generic (any future
+ * BIGINT/HUGEINT-typed column goes through it too), so the scale argument isn't a proof.
+ * Throw instead of silently losing precision above the safe-integer bound. Exported for a
+ * direct unit test of the overflow guard -- runPivot() only ever hits it through real query
+ * results, which don't reach 2^53 at this dataset's scale, so the guard itself needs a
+ * synthetic row to exercise. */
+export function demoteBigInts(row: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(row)) {
-    out[key] = typeof value === "bigint" ? Number(value) : value;
+    if (typeof value === "bigint") {
+      if (value > BigInt(Number.MAX_SAFE_INTEGER) || value < BigInt(Number.MIN_SAFE_INTEGER)) {
+        throw new Error(
+          `column '${key}' value ${value} exceeds Number.MAX_SAFE_INTEGER; ` +
+            "downcasting bigint -> number would silently lose precision",
+        );
+      }
+      out[key] = Number(value);
+    } else {
+      out[key] = value;
+    }
   }
   return out;
 }
 
-/** Read fresh on every call, never cached: a module-level cache would let a stale allowlist
- * survive a database rebuilt mid-process -- exactly what `make verify` does. */
+/** Read fresh on every call, never cached at the module level: avoids an in-process cache
+ * disagreeing with what `getInstance()` currently has open. This does NOT make a rebuilt
+ * `upgauge.duckdb` visible mid-process -- `getInstance()`'s DuckDBInstance is memoized, so a
+ * rebuild that replaces the file (unlink + create) leaves this process holding the old inode
+ * and every fresh read (allowlist or otherwise) keeps returning data from it. Picking up a
+ * replaced database requires a process restart, which this project's container-rebake
+ * deploy model provides on every release. */
 export async function loadAllowlist(): Promise<Allowlist> {
   const con = await connect();
   const dimRows = await (await con.run(sql("catalog_dimensions"))).getRowObjects();
@@ -111,13 +156,27 @@ export async function loadAllowlist(): Promise<Allowlist> {
 export async function dataAsOf(): Promise<string> {
   const con = await connect();
   const rows = await (await con.run(sql("data_as_of"))).getRowObjects();
-  return String(rows[0].data_as_of);
+  // `max(year_month)` over an empty fct_segment_month returns one NULL row, not zero rows,
+  // so `rows[0]` always exists -- the failure mode is `data_as_of` being null. Fail loudly
+  // and specifically: this is the freshness stamp the project explicitly wants a silent
+  // failure to never hide behind (CLAUDE.md: "the cron must fail loudly").
+  const value = rows[0]?.data_as_of;
+  if (value === null || value === undefined) {
+    throw new Error(
+      "dataAsOf(): fct_segment_month has no rows -- max(year_month) is NULL, so the " +
+        "freshness stamp cannot be computed. Is upgauge.duckdb built from an empty dataset?",
+    );
+  }
+  return String(value);
 }
 
 export interface PivotResult {
   columns: string[];
   rows: Record<string, unknown>[];
-  quarantinedRows: number;
+  /** Quarantined rows within the returned page only -- rows past `LIMIT $limit` are not
+   * counted, so this under-reports whenever the result is truncated. A query-scope total
+   * would need its own aggregate query (no LIMIT); this layer does not run one. */
+  quarantinedRowsOnPage: number;
 }
 
 export async function runPivot(q: PivotQuery): Promise<PivotResult> {
@@ -139,6 +198,6 @@ export async function runPivot(q: PivotQuery): Promise<PivotResult> {
   return {
     columns: result.columnNames(),
     rows: converted,
-    quarantinedRows: converted.reduce((a, r) => a + Number(r.quarantined_rows ?? 0), 0),
+    quarantinedRowsOnPage: converted.reduce((a, r) => a + Number(r.quarantined_rows ?? 0), 0),
   };
 }
