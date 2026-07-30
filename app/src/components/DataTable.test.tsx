@@ -47,4 +47,48 @@ describe("DataTable", () => {
     const { container } = render(<DataTable columns={COLUMNS} rows={ROWS} />);
     expect(container.querySelectorAll("td.num").length).toBe(3 * 4);
   });
+
+  // Fix round 1, CRITICAL 1: the gutter glyph and the below-floor row treatment used to be
+  // gated on the same collapsed `reason` value, so a row that was both below-floor and
+  // zero-pax lost its below-floor treatment entirely (measured: 97.7% of zero-pax rows are
+  // also below floor -- see docs/design/system.md). They must now be independent.
+  it("applies below-floor row treatment even when the gutter shows a different, more severe glyph", () => {
+    const OVERLAP_ROW = {
+      route: "PDX–BOI",
+      seats: 800,
+      load_factor: 0,
+      avg_gauge: 78.4,
+      departures_performed: 5, // below the 30-departure floor AND zero-pax
+    };
+    const { container } = render(<DataTable columns={COLUMNS} rows={[OVERLAP_ROW]} />);
+    const row = container.querySelector("tbody tr");
+    expect(row?.getAttribute("data-below-floor")).toBe("true");
+    expect(row?.querySelector("td.gut abbr")?.textContent).toBe("⌀"); // zero-pax outranks "n"
+    expect(row?.querySelector(".rail .tick")?.getAttribute("data-muted")).toBe("true");
+  });
+
+  // Fix round 1, IMPORTANT 2: nothing previously inspected data-limit, so an inverted
+  // palette (--limit on "n", or missing it on "⌀"/"Q") would have passed every test.
+  it("gutter: `n` never carries --limit; `⌀` and `Q` always do", () => {
+    const GUTTER_ROWS = [
+      { route: "PDX–SEA", seats: 501089, load_factor: 0.7782, avg_gauge: 73.58, departures_performed: 6810 }, // no reason
+      { route: "PDX–AUS", seats: 190, load_factor: 0.9789, avg_gauge: 190, departures_performed: 1 }, // belowFloor -> "n"
+      { route: "PDX–PDX", seats: 2780, load_factor: 0, avg_gauge: 73.2, departures_performed: 38 }, // zeroPax -> "⌀"
+      { route: "PDX–ZZZ", seats: 100, load_factor: 0.5, avg_gauge: 100, departures_performed: 50, quarantined_rows: 2 }, // -> "Q"
+    ];
+    const { container } = render(<DataTable columns={COLUMNS} rows={GUTTER_ROWS} />);
+    const gutCells = container.querySelectorAll("tbody td.gut");
+
+    expect(gutCells[0].getAttribute("data-limit")).toBeNull();
+    expect(gutCells[0].querySelector("abbr")).toBeNull();
+
+    expect(gutCells[1].querySelector("abbr")?.textContent).toBe("n");
+    expect(gutCells[1].getAttribute("data-limit")).toBeNull();
+
+    expect(gutCells[2].querySelector("abbr")?.textContent).toBe("⌀");
+    expect(gutCells[2].getAttribute("data-limit")).toBe("true");
+
+    expect(gutCells[3].querySelector("abbr")?.textContent).toBe("Q");
+    expect(gutCells[3].getAttribute("data-limit")).toBe("true");
+  });
 });

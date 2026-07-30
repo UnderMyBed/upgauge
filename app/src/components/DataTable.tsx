@@ -30,12 +30,32 @@ function format(kind: ColumnSpec["kind"], v: unknown): string {
   }
 }
 
-/** Rows are reported, never hidden. Below-floor rows are marked and excluded from ranking,
- * not from sight -- a table that only looks right when full looks broken most of the time. */
+function isQuarantined(row: Record<string, unknown>): boolean {
+  return (num(row.quarantined_rows) ?? 0) > 0;
+}
+
+function isZeroPax(row: Record<string, unknown>): boolean {
+  return num(row.load_factor) === 0 && (num(row.departures_performed) ?? 0) > 0;
+}
+
+function isBelowFloor(row: Record<string, unknown>): boolean {
+  return (num(row.departures_performed) ?? 0) < DEPARTURE_FLOOR;
+}
+
+/** The gutter glyph and the below-floor row treatment are independent signals, not one
+ * collapsed state. Measured over the trailing 12 months at route grain: 21,569 rows total,
+ * 13,470 below floor, 3,278 zero-pax, and 3,202 of those are BOTH -- 97.7% of every zero-pax
+ * row is also below floor. A single `reason` used to gate row treatment made that 14.8% of
+ * all rows (the near-entirety of the zero-pax class) render as ordinary scored rows, which
+ * silently dropped the below-floor signal from exactly the rows the design system calls the
+ * trust moment. The gutter still shows one glyph, chosen by severity (`Q` > `⌀` > `n`,
+ * `reasonFor`); the row treatment (`data-below-floor`, dashed rule, muted text, muted gauge
+ * tick) is driven by `isBelowFloor()` directly and applies whenever the row is below floor,
+ * regardless of which glyph won. See docs/design/system.md, "reason-code gutter". */
 function reasonFor(row: Record<string, unknown>): Reason {
-  if (num(row.quarantined_rows) ?? 0) return "quarantined";
-  if (num(row.load_factor) === 0 && (num(row.departures_performed) ?? 0) > 0) return "zeroPax";
-  if ((num(row.departures_performed) ?? 0) < DEPARTURE_FLOOR) return "belowFloor";
+  if (isQuarantined(row)) return "quarantined";
+  if (isZeroPax(row)) return "zeroPax";
+  if (isBelowFloor(row)) return "belowFloor";
   return null;
 }
 
@@ -50,7 +70,7 @@ export function DataTable({
     <table className="data-table">
       <thead>
         <tr>
-          <th className="gut" />
+          <th className="gut" scope="col" />
           {columns.map((c) => (
             <th
               key={c.key}
@@ -61,13 +81,13 @@ export function DataTable({
               {c.label}
             </th>
           ))}
-          <th>Gauge, seats per departure</th>
+          <th scope="col">Gauge, seats per departure</th>
         </tr>
       </thead>
       <tbody>
         {rows.map((row, i) => {
           const reason = reasonFor(row);
-          const belowFloor = reason === "belowFloor";
+          const belowFloor = isBelowFloor(row);
           return (
             <tr key={i} data-below-floor={belowFloor ? "true" : undefined}>
               <ReasonCode reason={reason} />

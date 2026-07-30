@@ -142,6 +142,16 @@ A 22px left column carrying one mono glyph per row, in `--limit`:
 **The caveat is a column, not a tooltip.** Given how much of this data is edge cases, the
 apparatus has to survive a screenshot.
 
+**The gutter glyph and the below-floor row treatment (dashed rule, `--ink-2` text, muted
+gauge tick) are independent signals, not one collapsed state.** A row can be below floor
+*and* zero-pax at once — measured over the trailing 12 months at route grain: 21,569 rows
+total, 13,470 below floor, 3,278 zero-pax, and 3,202 of those are both, i.e. **97.7% of every
+zero-pax row is also below floor.** The gutter still shows exactly one glyph, chosen by
+severity — `Q` > `⌀` > `n` — but the below-floor row treatment applies whenever the row is
+below floor, regardless of which glyph won. Gating row treatment on the glyph instead of on
+the floor check directly is the bug this note exists to prevent: it silently drops the
+below-floor signal from nearly the entire zero-pax class.
+
 ### The legend rail — signature, 3 of 3
 
 A sticky `--field` panel with an `--ink` header bar, present on **every data view**. Groups:

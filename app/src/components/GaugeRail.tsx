@@ -4,7 +4,7 @@ const GMAX = 260;
 const TICKS = [50, 100, 150, 200, 250];
 
 export function GaugeRail({ gauge, muted }: { gauge: number | null; muted?: boolean }) {
-  if (gauge === null) return <div className="rail" />;
+  if (gauge === null) return <div className="rail" aria-hidden="true" />;
   const pct = (v: number) => `${(v / GMAX) * 100}%`;
   return (
     <div className="rail" role="img" aria-label={`${gauge.toFixed(1)} seats per departure`}>
