@@ -1,13 +1,19 @@
 .DEFAULT_GOAL := help
 .PHONY: help install ingest build goldens dev test lint fmt check clean
 
-UV ?= uv
+# Every runtime comes from mise (mise.toml pins python, node and uv). Going through
+# `mise exec` means the documented commands work in a shell that has NOT run
+# `mise activate` -- including a fresh clone, a cron, and this repo's own tooling.
+# Set MISE= to bypass when the tools are already on PATH, e.g. inside the Docker image.
+MISE ?= mise exec --
+UV ?= $(MISE) uv
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 		| awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-install:  ## Create the venv and install pipeline deps (Python 3.12)
+install:  ## Install the pinned runtimes (mise) + the pipeline deps
+	mise install
 	$(UV) sync --extra dev
 
 fetch:  ## Fetch BTS T-100 zips -> data/raw/ (skips cached years)

@@ -1,0 +1,17 @@
+# One tool pins every runtime this repo needs. `mise install` bootstraps a clone.
+#
+# Versions are EXACT, not floating. The reproducibility gate (`make verify`) proves the
+# Parquet layer and the database byte-identical across two from-scratch builds, and that
+# proof is only as good as the interpreter it was produced with -- a floating "3.12" would
+# silently move to 3.12.13 and quietly invalidate it. Bumping is a deliberate commit that
+# re-runs `make verify`, not something that happens while someone's shell resolves a version.
+[tools]
+python = "3.12.12"   # the exact CPython every reproducibility proof to date was produced on
+node = "24.13.0"     # LTS since 2025-10; Next.js 15 needs >= 18.18
+uv = "0.12.0"        # resolves and locks the Python deps; a floating uv can change resolution
+
+[env]
+# mise owns the interpreter, so uv must not quietly download and use a different one.
+# `only-system` makes uv use what is on PATH -- which mise put there -- and fail loudly if
+# it is absent, instead of helpfully installing a second 3.12 that no one pinned.
+UV_PYTHON_PREFERENCE = "only-system"

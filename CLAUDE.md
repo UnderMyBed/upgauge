@@ -83,11 +83,13 @@ basemap — tiles are usage-priced).
 
 ## Commands
 
-`uv` pins Python 3.12 via `.python-version`. Unimplemented targets exit non-zero on purpose.
+**`mise.toml` pins every runtime — Python 3.12.12, Node 24.13.0, uv 0.12.0 — at exact
+versions.** `make` shells through `mise exec`, so the commands below work without
+`mise activate`. Unimplemented targets exit non-zero on purpose.
 
 | Command | Description | |
 |---------|-------------|---|
-| `make install` | `uv sync --extra dev` | ✅ |
+| `make install` | `mise install` + `uv sync --extra dev` | ✅ |
 | `make check` | **Lint + test. Run before every commit.** | ✅ |
 | `make test` / `make lint` / `make fmt` | pytest / ruff check / ruff format | ✅ |
 | `make fetch` | BTS T-100 zips → `data/raw/` (skips cached years) | ✅ |
