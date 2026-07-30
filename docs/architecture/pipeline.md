@@ -34,7 +34,7 @@ upgauge/
 | | |
 |---|---|
 | **M1** | Ingest: `DL_SelectFields` POST loop → raw → Parquet, 2015→present. **Invariant tests passing.** |
-| **M2** | Marts built by SQL, fully reproducible from scratch via `make`. |
+| ~~**M2**~~ | ~~Marts built by SQL, fully reproducible from scratch via `make`.~~ ✅ See [the M2 section](#m2--the-marts-layer). |
 | **M3** | Explorer: pivot query + URL state + table. The foundation — get it right. |
 | **M4** | Entity pages: route, airport, carrier, aircraft. Charts. Design system applied. |
 | **M5** | Maps (airport + carrier + aircraft), then `/watch` presets. |
@@ -52,7 +52,7 @@ Phase 0 is complete — see [../data/sources.md](../data/sources.md) for what it
 | ~~3~~ | ~~Invariant tests, written red~~ | ✅ 156 tests; rules in `invariants.py` + `mainline_map.py`, validated against a real extract |
 | ~~4~~ | ~~`normalize.py` — raw → Parquet, quarantine flags, `download_date`~~ | ✅ `make ingest`; 2015 → 282,036 rows, 8.6 MB Parquet |
 | ~~5~~ | ~~Lookups → dims; `map_mainline_group` materialized~~ | ✅ 5 dims build; **zero orphans** joining 282,036 fact rows |
-| ~~6~~ | ~~Reproducibility gate~~ | ✅ `make verify` — 7 artifacts byte-identical across two builds |
+| ~~6~~ | ~~Reproducibility gate~~ | ✅ `make verify` — 7 artifacts byte-identical across two builds (the count **at M1**; M2 added `dim_city_market`, so it prints 8 today) |
 
 **Order rationale:** the spike came first because the acquisition path was the one part of
 the spec proven *not* as documented. Tests come after the fetcher but before normalize,

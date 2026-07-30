@@ -161,6 +161,11 @@ column appears inside a `SUM(`/`AVG(`/`MEAN(`/`MEDIAN(` anywhere in `sql/`;
 directly rather than inferred); and `mart_route_health` is the only object materialized as
 a table.
 
+Two other files assert the no-derived-columns-on-`fct_*` rule too —
+`pipeline/tests/test_marts.py` and `pipeline/tests/test_route_month.py` — each scoped to the
+object it builds. The guard above subsumes both. Harmless, but a rename of any derived
+measure touches three places; collapse them if you are already editing that rule.
+
 The `SUM(`/`AVG(` scan matches whitespace-collapsed source text (so a hand-wrapped
 `SUM(\n  lf_delta\n)` split across lines is still caught), not a parsed SQL AST. A derived
 column name reused as an unrelated identifier, or one aggregate's closing paren landing
@@ -263,6 +268,32 @@ baseline to compare against."
 > `lf_delta`-only version of this test would therefore still pass on CI today; only a run
 > against the full warehouse (`data/parquet/` built from `make fetch` + `make warehouse`, not
 > the checked-in fixture) exercises the distinction the stronger test exists to catch.
+>
+> **The limitation is not confined to that one test.** The single-year fixture yields a mart of
+> exactly **one row**, with `lf_delta` and `health_score` both `NULL`, so five tests in
+> `test_route_health.py` currently assert over zero or one rows and cannot fail on anything a
+> populated mart would expose:
+>
+> | Test | Why it is near-vacuous on the fixture |
+> |---|---|
+> | `test_grain_is_undirected_and_unique` | one row cannot collide with another |
+> | `test_lf_delta_equals_the_difference_of_the_two_ratios` | every `lf_delta` is `NULL`, so the identity is never evaluated |
+> | `test_completion_factor_is_performed_over_scheduled` | same — filtered to non-`NULL` rows, of which there are none |
+> | `test_load_factors_are_in_range` | as above |
+> | `test_health_score_is_null_exactly_when_a_component_is_unknown` | both sides `NULL` by coincidence, per the paragraph above |
+> | `test_windows_are_global_and_do_not_overlap` | half-vacuous *structurally*, on any data: the `windows` CTE has no `GROUP BY`, so `SELECT DISTINCT` over it can only ever return one tuple. Only the `p12_start < p12_end < t12_start <= t12_end` ordering half is a real check. |
+>
+> All six were verified against the real warehouse instead, and the mart's behaviour is
+> correct — but a regression in any of them would ship green.
+>
+> **The fix is a second fixture year**, and it is the highest-leverage test investment
+> outstanding in this project. Fixture warehouse setup measures 0.16 s, so the cost is
+> negligible; adding real BTS rows for a second year to
+> `pipeline/tests/fixtures/t100d_segment_sample_2015.zip` (or a sibling 2016 fixture) would
+> populate a `p12` window and light up the entire delta and score surface at once. Take real
+> rows from `data/raw/`, never fabricated ones — see the CGQ precedent in
+> [`sql/01_staging/dim_city_market.sql`](../../sql/01_staging/dim_city_market.sql) and the
+> two-aircraft-type rows added for `test_distance_is_not_summed`.
 
 ### `distance` is not additive
 

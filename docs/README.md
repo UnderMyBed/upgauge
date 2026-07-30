@@ -19,7 +19,7 @@ bite you.
 | [data/invariants.md](data/invariants.md) | The rules that gate the pipeline, each with its evidence |
 | [data/carrier-model.md](data/carrier-model.md) | Operating-carrier grain, the date-ranged mainline map |
 | [architecture/hosting.md](architecture/hosting.md) | Deployment shape, cost, the hosting survey, portability test |
-| [architecture/pipeline.md](architecture/pipeline.md) | Repo layout, milestones, M1 phase order |
+| [architecture/pipeline.md](architecture/pipeline.md) | Repo layout, milestones, M1 phase order, **the M2 marts layer and the load-bearing CWD constraint** |
 | [design/brief.md](design/brief.md) | Visual identity handoff |
 
 ## How these docs work
