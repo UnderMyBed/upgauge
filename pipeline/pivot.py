@@ -133,11 +133,11 @@ def load_allowlist(
         r[0]: dict(
             zip(("key", "label", "column_expr", "grain", "join_dim", "join_key"), r, strict=True)
         )
-        for r in con.execute("SELECT * FROM meta_pivot_dimensions").fetchall()
+        for r in con.execute((QUERIES_DIR / "catalog_dimensions.sql").read_text()).fetchall()
     }
     meas = {
         r[0]: dict(zip(("key", "label", "is_additive", "expr"), r, strict=True))
-        for r in con.execute("SELECT * FROM meta_pivot_measures").fetchall()
+        for r in con.execute((QUERIES_DIR / "catalog_measures.sql").read_text()).fetchall()
     }
     return dims, meas
 
@@ -519,6 +519,18 @@ _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
             filters=(
                 ("origin_airport_id", ("14,771", "13&487", "9%5", "12:34", "a=b", "a+b", "a b")),
             ),
+        ),
+    ),
+    (
+        "filter_value_encodeuricomponent_divergence",
+        "Filter values containing ! * ' ( ) -- the characters JS encodeURIComponent leaves "
+        "literal but Python quote(safe='') percent-encodes. Real data: 119 "
+        "unique_carrier_code values carry BTS's '(1)' suffix, 163 airport names an "
+        "apostrophe. Pins the encoding for M3b's TypeScript port.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12",
+            filters=(("op_airline_id", ("2T (1)", "O'Hare", "a!b", "c*d")),),
         ),
     ),
 ]

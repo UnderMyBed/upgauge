@@ -1,0 +1,12 @@
+-- The Explorer's dimension allowlist, as catalog rows.
+--
+-- Read by BOTH pipeline/pivot.py's load_allowlist() and the server's TypeScript. That is
+-- the point: one definition, two runtimes, no chance of the validator's vocabulary drifting
+-- between them. No parameters -- the whole allowlist is always loaded.
+-- Columns are named, never `SELECT *`. pipeline/pivot.py consumes these rows POSITIONALLY
+-- (zip(("key","label",...), r, strict=True)) while app/src/lib/db.ts consumes them BY NAME.
+-- Under `SELECT *` those two disagree the moment the view's column order changes: Python
+-- would silently mislabel every field while TS stayed correct, and a rename would give TS
+-- `String(undefined) === "undefined"` for column_expr -- a query-time SQL error rather than a
+-- clear one. Naming them here makes this file the contract both readers actually share.
+SELECT key, label, column_expr, grain, join_dim, join_key FROM meta_pivot_dimensions

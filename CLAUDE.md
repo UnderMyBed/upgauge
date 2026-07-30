@@ -49,21 +49,58 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M3a COMPLETE.** The Explorer's pivot query contract — templates
+**M3a and M3b COMPLETE.** M3a's Explorer pivot query contract — templates
 (`sql/03_queries/pivot_segment.sql` / `pivot_route.sql`), the allowlist as catalog objects
 (`meta_pivot_dimensions` / `meta_pivot_measures`), the CI-only Python reference
 implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`), the mainline-grouping toggle,
-and the URL state codec — is done, plus the golden fixtures
-(`sql/03_queries/goldens/{pivot,urlstate}.json`, `make goldens`) that M3b's TypeScript must
-reproduce byte-for-byte rather than re-deriving the validator semantics. `make build` runs
+the URL state codec, and the golden fixtures
+(`sql/03_queries/goldens/{pivot,urlstate}.json`, `make goldens`) — is done. `make build` runs
 `sql/02_marts/` into `upgauge.duckdb` (6 catalog views + `fct_route_month` +
 `mart_route_health` + the 2 pivot-vocabulary catalog views); `make verify` proves both the
 Parquet layer and the database layer reproducible across two from-scratch builds —
-`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 420 tests green,
-zero join orphans. `data/raw/` holds the full 2015–2026 window.
+`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 424 Python tests
+green, zero join orphans. `data/raw/` holds the full 2015–2026 window.
 
-Next: **the design session** (`docs/design/brief.md`), then **M3b** — the Next.js app: route
-handlers, the table, URL wiring, verified against the M3a goldens.
+M3b ported that contract into the Next.js app and wired it end to end: the TypeScript pivot
+renderer and URL codec (`app/src/lib/pivot/`), the read-only DuckDB query layer
+(`app/src/lib/db.ts`), the `/api/pivot` route handler, the `DataTable` / `GaugeRail` /
+`ReasonCode` / `LegendRail` components implementing the gauge rail, reason-code gutter and
+methodology rail, and `/explore?<permalink>` (`app/src/app/explore/page.tsx`) — a
+server-rendered page that decodes the URL, runs the pivot, and renders a real table with the
+`DATA AS OF` badge, a stat/meta strip, the legend rail, and the permalink displayed. An
+invalid permalink renders a named error (e.g. `unknown dimension 'nope'`), never a silent
+fallback to a default view; a valid permalink matching zero rows states the query in words
+and offers the widened-to-2015 permalink, never a blank panel. 127 app tests green
+(`make app-check`); `make app-build` produces a working production build; `make app-smoke`
+builds, serves and curls 12 real URLs.
+
+**`app/src/proxy.ts` + `skipProxyUrlNormalize` are load-bearing, not an optimisation.** Next
+form-encodes the query string before any page or route handler sees it, which turns the
+format's structural `:` into `%3A` and collapses `k:a%2Cb,c` into `k%3Aa%2Cb%2Cc` — a data
+comma becomes indistinguishable from a separator. Without them **every** filtered query fails
+on **both** `/explore` and `/api/pivot`, reserved characters or not. Both entry points read
+the raw string from one header and nothing else; a page can never use `searchParams` for this.
+Full detail and the measurements: `docs/architecture/hosting.md`.
+
+**No unit test can catch that class.** Five bugs on this branch had the shape "green tests,
+broken production" — `__dirname` under Turbopack, `decodeURIComponent` throwing,
+`process.chdir`, the DuckDB platform-switch `require`, and the query normalization above.
+Every one was found by building and serving, never by the suite. That is what `make app-smoke`
+is for; run it before merging anything that touches routing, config, or the query layer.
+
+**Known gap, not yet fixed:** dimension columns in the Explorer table render the raw
+`AIRLINE_ID` / `AIRPORT_ID` the catalog is keyed on (e.g. `19393`), not a display code —
+`meta_pivot_dimensions`'s `join_dim`/`join_key` columns exist for exactly this resolution
+(`op_airline_id` → `dim_carrier.airline_id`) but nothing in `db.ts` or `render.ts` reads
+them yet. This does not satisfy this file's own "Join on IDs, display `carrier_code`" rule
+(see Hard rules, below) — it is deferred to M4, which is query-layer work (joining
+`dim_carrier`/`dim_airport` per dimension), not a page-rendering fix.
+
+Not in M3b: the time-series and fleet-mix charts, the arc map, entity pages (`/route`,
+`/airport`, `/carrier`, `/aircraft`), `/watch`, the seasonality heatmap, and OG cards — all
+specified in `docs/design/system.md` and left to M4/M5.
+
+Next: **M4** — entity pages and charts.
 
 ## Architecture
 
@@ -74,7 +111,7 @@ aggregation wants RAM, and a cold start lands on the first click of every shared
 ```
 pipeline/    Python 3.12 + uv. CI only, never runs in prod.
 sql/         01_staging/ 02_marts/ 03_queries/ — shared by pipeline AND server
-app/         Next.js 15 App Router, TS, Tailwind, shadcn/ui
+app/         Next.js 16 App Router, TS, Tailwind v4
 data/        gitignored. raw/ is the audit trail
 ```
 
@@ -100,7 +137,10 @@ versions.** `make` shells through `mise exec`, so the commands below work withou
 | `make ingest` | `fetch` + `fetch-reference` + `warehouse` | ✅ |
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |
 | `make goldens` | Regenerate the Explorer contract fixtures (`sql/03_queries/goldens/`) from `pipeline/pivot.py` | ✅ |
-| `make dev` | Next.js dev server (needs node) | M3b |
+| `make dev` | Next.js dev server (needs node) | ✅ |
+| `make app-check` | Typecheck + lint + test the app (`app/`) | ✅ |
+| `make app-build` | Production build of the app | ✅ |
+| **`make app-smoke`** | **Build, serve, curl. The only gate that catches production-only bugs.** | ✅ |
 
 ## Hard rules
 

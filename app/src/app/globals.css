@@ -1,0 +1,384 @@
+@import "tailwindcss";
+
+:root {
+  --panel: #F0F2F1;
+  --panel-2: #E5E8E6;
+  --field: #FAFBFA;
+  --ink: #15181A;
+  --ink-2: #5C6367;
+  --ink-3: #666E71;
+  --rule: #D6DAD8;
+  --rule-2: #828A8B;
+  --signal: #0B6E63;
+  --limit: #A8322A;
+  /* fleet ramp, ordered by seats per departure -- an upgauge darkens the stack */
+  --g0: #E3E7E6; --g1: #C8D3D1; --g2: #A6B7B4;
+  --g3: #7E9793; --g4: #4F736E; --g5: #21514A;
+}
+
+@theme inline {
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-field: var(--field);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-rule: var(--rule);
+  --color-rule-2: var(--rule-2);
+  --color-signal: var(--signal);
+  --color-limit: var(--limit);
+  --color-g0: var(--g0);
+  --color-g1: var(--g1);
+  --color-g2: var(--g2);
+  --color-g3: var(--g3);
+  --color-g4: var(--g4);
+  --color-g5: var(--g5);
+  --font-sans: var(--font-plex-sans);
+  --font-mono: var(--font-plex-mono);
+}
+
+body { background: var(--panel); color: var(--ink); }
+
+/* Every numeric cell. Non-negotiable: a data product with proportional numerals
+   is not serious. */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  text-align: right;
+  white-space: nowrap;
+}
+
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
+
+/* ---------- the data table (docs/design/mockups/table.html) ---------- */
+/* Column order is fixed: gutter, identifiers, additive measures, derived measures, counts,
+   gauge rail. Identifiers left, everything numeric right. No card containers, no rounded
+   corners, no drop shadows -- see docs/design/system.md "Layout and density". */
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.data-table thead th {
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  font-weight: 500;
+  text-align: left;
+  padding: 0 10px 5px 0;
+  border-bottom: 1px solid var(--ink);
+  vertical-align: bottom;
+}
+.data-table thead th.r {
+  text-align: right;
+}
+/* Derived measures carry a dotted underline on their label -- the honest-labelling
+   constraint made visual (docs/design/system.md "Stat strip"). */
+.data-table thead th[data-derived="true"] {
+  text-decoration: underline dotted var(--ink-3);
+  text-underline-offset: 3px;
+}
+.data-table tbody td {
+  padding: 0 10px 0 0;
+  border-bottom: 1px solid var(--rule);
+  height: 22px;
+  font-size: 12.5px;
+}
+.data-table tbody tr:hover td {
+  background: var(--panel-2);
+}
+/* Identifiers (route pairs, carrier/airport codes) are always mono. */
+.data-table td.id {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+/* Rows below the 30-departure floor are rendered, never hidden: dashed rule, --ink-2 text.
+   Sorted to the bottom and excluded from ranking, not from sight. */
+.data-table tr[data-below-floor="true"] td {
+  color: var(--ink-2);
+  border-bottom: 1px dashed var(--rule-2);
+}
+.data-table tr[data-below-floor="true"] td.id {
+  font-weight: 400;
+}
+
+/* ---------- the reason-code gutter -- signature, 2 of 3 ---------- */
+/* The caveat is a column, not a tooltip. `n` (below-floor) is a data-availability state and
+   stays --ink; only out-of-limit codes (zero-pax `⌀`, quarantined `Q`) get --limit. */
+.data-table th.gut,
+.data-table td.gut {
+  width: 22px;
+  padding-right: 6px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.data-table td.gut[data-limit="true"] {
+  color: var(--limit);
+}
+.data-table td.gut abbr {
+  text-decoration: none;
+}
+
+/* ---------- the gauge rail -- signature, 1 of 3 ---------- */
+/* Fixed 0-260 seats-per-departure axis. Position encodes the value; hue never does. */
+.rail {
+  position: relative;
+  height: 22px;
+}
+.rail .band {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  background: var(--panel-2);
+}
+.rail .grid {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  width: 1px;
+  background: var(--rule);
+}
+.rail .tick {
+  position: absolute;
+  top: 4px;
+  height: 14px;
+  width: 2px;
+  background: var(--ink);
+  transform: translateX(-1px);
+}
+/* Below-floor rows mute the tick to --ink-3 and thin it -- still position-only, never hue. */
+.rail .tick[data-muted="true"] {
+  width: 1px;
+  background: var(--ink-3);
+}
+
+/* ---------- page chrome (docs/design/mockups/table.html: .top / .mark / .asof) ---------- */
+.wrap {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 20px 50px;
+}
+.top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 11px 0 10px;
+  border-bottom: 1px solid var(--ink);
+}
+.mark {
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: 0.17em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.mark .accent {
+  color: var(--signal);
+}
+.asof {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  color: var(--signal);
+  border: 1px solid var(--signal);
+  padding: 3px 7px;
+  white-space: nowrap;
+  margin-left: auto;
+}
+
+/* ---------- stat / meta strip (docs/design/system.md "Stat strip") ---------- */
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  margin: 15px 0 16px;
+  padding: 7px 0;
+  border-top: 1px solid var(--rule-2);
+  border-bottom: 1px solid var(--rule-2);
+}
+.stat .k {
+  font-size: 9.5px;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+.stat .v {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 20px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+/* Derived measures carry a dotted underline on their label -- the honest-labelling
+   constraint made visual, same rule as the table header's [data-derived="true"]. */
+.deriv {
+  border-bottom: 1px dotted var(--ink-3);
+}
+
+/* ---------- permalink bar (docs/design/system.md "The Explorer") ---------- */
+.permalink {
+  border: 1px solid var(--signal);
+  background: var(--field);
+  padding: 6px 9px;
+  margin-top: 16px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+.permalink .label {
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 9.5px;
+  color: var(--ink-2);
+  margin-right: 8px;
+}
+.permalink code {
+  color: var(--ink);
+}
+
+.foot {
+  margin-top: 16px;
+  padding-top: 9px;
+  border-top: 1px solid var(--rule);
+  font-size: 11px;
+  color: var(--ink-2);
+  max-width: 660px;
+}
+
+/* ---------- invalid-permalink error state (docs/design/system.md "States") ---------- */
+/* An invalid permalink is a failed invariant on the request, the same class of thing
+   --limit already marks on data rows (quarantined, zero-pax) -- so it borrows the same
+   token rather than inventing a new one. */
+.error-page {
+  max-width: 640px;
+  padding-top: 16px;
+}
+.error-page h1 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 10px;
+}
+.error-page p[role="alert"] {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--limit);
+  border: 1px solid var(--limit);
+  padding: 9px 11px;
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
+.error-page p {
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.error-page a {
+  color: var(--signal);
+}
+
+/* ---------- body layout: content + legend rail (docs/design/system.md "Layout and
+   density": "Main grid: minmax(0,1fr) 214px with a 24px gap ... The rail collapses below
+   920px.") ---------- */
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 214px;
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 920px) {
+  .body {
+    grid-template-columns: 1fr;
+  }
+  .legend {
+    position: static !important;
+  }
+}
+
+/* ---------- the legend rail -- signature, 3 of 3 ---------- */
+/* The methodology surface, present on every data view so there is no separate how-to-read
+   page to go stale (docs/design/system.md "The legend rail"). Ported from
+   docs/design/mockups/table.html's <aside class="legend">, minus the arc-rendering group --
+   this page has no map yet. */
+.legend {
+  border: 1px solid var(--ink);
+  background: var(--field);
+  position: sticky;
+  top: 10px;
+}
+.legend h4 {
+  margin: 0;
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  background: var(--ink);
+  color: var(--panel);
+  padding: 4px 9px;
+  font-weight: 500;
+}
+.legend .grp {
+  padding: 8px 9px 6px;
+  border-bottom: 1px solid var(--rule);
+}
+.legend .grp:last-child {
+  border-bottom: 0;
+}
+.legend .gt {
+  font-size: 9px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 5px;
+}
+.lrow {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 4px;
+  font-size: 11px;
+  color: var(--ink-2);
+}
+.lrow .g {
+  flex: 0 0 40px;
+  text-align: center;
+  font-size: 9px;
+}
+/* The row-mark glyph: --limit for out-of-limit codes (`⌀`/`Q`), --ink for the
+   data-availability code (`n`, via .k) -- same split as the gutter itself. */
+.lrow b {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--limit);
+  flex: 0 0 40px;
+  text-align: center;
+}
+.lrow b.k {
+  color: var(--ink);
+}
+
+/* ---------- the empty-result state (docs/design/system.md "States") ---------- */
+/* A valid query with no matching rows is rendered, not hidden behind a blank panel: the
+   query is stated in words and a widened-window permalink is offered alongside it. */
+.empty-state {
+  padding: 30px 18px;
+  border: 1px dashed var(--rule-2);
+  color: var(--ink-2);
+  font-size: 13px;
+}
+.empty-state p {
+  margin: 0 0 10px;
+}
+.empty-state p:last-child {
+  margin-bottom: 0;
+}
+.empty-state a {
+  color: var(--signal);
+}

@@ -18,9 +18,11 @@ upgauge/
 │   ├── 01_staging/             shared by pipeline AND server. Never inline SQL.
 │   ├── 02_marts/
 │   └── 03_queries/             the Explorer's parameterized queries
-├── app/                        Next.js 15, App Router, TS, Tailwind, shadcn/ui
-│   ├── api/                    route handlers → @duckdb/node-api → sql/03_queries/
-│   └── (routes)/               explorer, route, airport, carrier, aircraft, watch
+├── app/                        Next.js 16, App Router, TS, Tailwind v4
+│   ├── src/proxy.ts            hands both entry points the RAW query string (load-bearing)
+│   └── src/app/
+│       ├── api/pivot/          route handler → @duckdb/node-api → sql/03_queries/
+│       └── explore/            the Explorer. route/airport/carrier/aircraft/watch are M4/M5
 └── data/                       gitignored
 ```
 
@@ -281,7 +283,7 @@ M3 is split, because its two halves have different blockers.
 |---|---|---|
 | ~~**M3a**~~ | ~~The pivot query contract: templates, the allowlist, the URL codec, golden fixtures~~ ✅ Complete — see [Task 7 below](#task-7--golden-fixtures-and-make-goldens-m3a-complete). |
 | ~~**design session**~~ | ~~[../design/brief.md](../design/brief.md) — tokens, the data table, the chart, the signature element~~ ✅ Complete — the answer is [../design/system.md](../design/system.md), mockups in [../design/mockups/](../design/mockups/). |
-| **M3b** | The Next.js app: route handlers, the table, URL wiring | **Node** — no longer the design session |
+| ~~**M3b**~~ | ~~The Next.js app: route handlers, the table, URL wiring~~ ✅ Complete — see [Task 10 below](#task-10--explore-wired-to-the-url-m3b-complete). |
 
 **Why the split.** `docs/design/brief.md` makes the data table deliverable #1 and says "most of
 the product is this table in different clothes. Get it right and everything else follows." M3
@@ -302,8 +304,9 @@ M3a therefore ships a **contract plus golden fixtures**, not a query layer:
 |---|---|---|
 | `sql/03_queries/pivot_segment.sql`, `pivot_route.sql` | The templates. `{{TOKENS}}` for identifiers, `$params` for values. | ✅ Task 3 |
 | `sql/02_marts/300_meta_pivot_dimensions.sql`, `301_meta_pivot_measures.sql` | The allowlist, **as catalog objects** — the server already opens the database, so there is no extra artifact to ship and `make build` regenerates it. | ✅ Task 2 |
+| `sql/03_queries/catalog_dimensions.sql`, `catalog_measures.sql`, `data_as_of.sql` | The reads of those catalog objects (and the freshness stamp), **as `.sql` files** rather than string literals in `load_allowlist` — `pipeline/pivot.py:132,140` inlined `SELECT * FROM meta_pivot_…` until M3b prep Task 1 extracted them, so the server's TypeScript can read the identical files instead of copying the inline violation into a second language. `data_as_of.sql` has no Python caller yet; it exists so M3b has no excuse to inline one either. | ✅ M3b prep Task 1 |
 | `sql/03_queries/goldens/pivot.json` | Golden fixtures: query state → expected SQL/params. M3b's TypeScript must reproduce them byte-for-byte. One validator semantics, two runtimes, proven to agree. | ✅ Task 7 |
-| `sql/03_queries/goldens/urlstate.json` | Golden fixtures: URL round-trips. The permalink contract, settled before any component reads state. | ✅ Task 7 |
+| `sql/03_queries/goldens/urlstate.json` | Golden fixtures: URL round-trips. The permalink contract, settled before any component reads state. Task 1 of M3b prep added an eighth case, `filter_value_encodeuricomponent_divergence`, pinning that Python's `quote(v, safe="")` percent-encodes `! * ' ( )` while JS's `encodeURIComponent` does not — a naive TS port using the JS default would have passed all seven prior goldens and still diverged (119 `unique_carrier_code` values carry BTS's `(1)` suffix; 163 airport names carry an apostrophe). | ✅ Task 7, extended M3b prep Task 1 |
 | Python reference implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`) | Legitimately in `pipeline/`: it *generates and verifies* the goldens in CI and never serves a request. | ✅ Tasks 3, 6 |
 
 The allowlist is **curated, not introspected** — which dimensions we offer is a product
@@ -536,6 +539,109 @@ the golden fixtures that let M3b's TypeScript be *verified* against this contrac
 re-implementing its validation semantics from scratch (Task 7) — is done. Next up: the design
 session (`docs/design/brief.md`), then M3b.
 
+### Task 10 — `/explore` wired to the URL, M3b complete
+
+✅ **Built.** `app/src/app/explore/page.tsx` is the task that makes the milestone
+demonstrable: a permalink like
+`/explore?v=1&k=seg&d=op_airline_id&m=seats,load_factor,avg_gauge&t=2025-05:2026-04&s=-seats&n=25&g=op`
+now server-renders a real table against `upgauge.duckdb` — the `UPGAUGE` wordmark, a
+`DATA AS OF` badge in `--signal`, a stat/meta strip (grain, grouping, window, row count,
+quarantined-on-page count), the Task 9 `DataTable` (reused, not rebuilt), the legend rail
+(added in fix round 1, below), and the permalink re-encoded and displayed underneath the
+table.
+
+**Known gap: dimension columns render raw IDs, not display codes.** The `op_airline_id`
+column shows the bare `AIRLINE_ID` (e.g. `19393`), not a carrier code — `db.ts`/`render.ts`
+never read `meta_pivot_dimensions`' `join_dim`/`join_key` columns, which exist for exactly
+this resolution. This does not satisfy `CLAUDE.md`'s "Join on IDs, display `carrier_code`"
+rule. Deliberately not fixed here: resolving every dimension's join is query-layer work
+(joining `dim_carrier`/`dim_airport` per dimension key, decided per dimension since not all
+of them join to a display-label table), genuinely M4-shaped rather than a page-template
+change, and out of this task's scope. Recorded here rather than left implicit, per the
+fix-round-1 review that caught the docs marking M3b complete without saying so.
+
+**The error path is the product feature, not a fallback.** Only `decode()` is wrapped in a
+try/catch — it is the one step that validates untrusted request input against the allowlist,
+and its documented failure mode is `UrlStateError`. An unknown key, an off-allowlist
+dimension, a malformed time range: all render a full-page named error (e.g. `unknown
+dimension 'nope'`) with no table and no default query underneath it, per
+[`docs/design/system.md`](../design/system.md)'s "Invalid permalink" state — never a silent
+fallback, because a permalink that quietly renders a different query than it encodes would
+still screenshot as authoritative.
+
+**`serverExternalPackages` was the one real build-blocker, and it was invisible until the
+production build.** `make app-check` (typecheck + Vitest, both against the real DuckDB file)
+was green the whole time `db.ts` existed (Task 8), but `next build` failed the first time
+anything ran it — `@duckdb/node-bindings` resolves its native binding with a runtime
+`require(`@duckdb/node-bindings-${platform}-${arch}`)` switch, one branch per platform/arch,
+and only one platform's optional-dependency package is ever actually installed. Left to
+Next's default Server Components bundling, the bundler statically resolves *every* branch of
+that switch and fails the build on whichever platform packages aren't present on the machine
+doing the build. Fixed in `app/next.config.ts` with
+`serverExternalPackages: ["@duckdb/node-api", "@duckdb/node-bindings"]`, which routes both
+packages through plain Node `require` at request time instead of bundling them — exactly the
+documented purpose of that option ("dependencies using Node.js specific features"). Nothing
+in `make app-check` would ever have caught this: Vitest never runs `next build`'s bundler, so
+the gap is real and worth naming for whoever adds the CI job this doc's Toolchain section
+already flags as missing.
+
+**Verified against a running production server, not just the test suite.** `make app-build`
+succeeded, then `mise exec -- npx next start app` was started from the repo root (the
+`file_search_path`/cwd contract `db.ts` and `render.ts` document) and hit with `curl`: the
+permalink above returned HTTP 200 with real carrier rows (`op_airline_id` values, summed
+`seats`/`load_factor`/`avg_gauge`, the gauge rail, the below-floor gutter) and the `DATA AS
+OF` badge; `d=nope` in place of a real dimension also returned HTTP 200 — not a 500 — with
+the named error and zero `<table>`/`<tr>` elements in the response body.
+
+**Fix round 1** (review of the initial Task 10 commit) found three gaps between the shipped
+page and `docs/design/system.md`'s States table, plus one instance of the vocabulary
+duplication this whole milestone exists to avoid:
+
+- **Empty-result state was unhandled.** A valid query matching zero rows (a real filter
+  value, e.g. `f=op_airline_id:999999999`, on a real dimension) rendered `DataTable` with a
+  header and an empty `<tbody>` — no message, no offer of a broader window, and the design
+  doc requires both ("Keep the header, stat strip and legend rail. State the query in words
+  and offer the nearest broader window. Never a blank panel."). Fixed: `EmptyState` in
+  `page.tsx` states the query in words via `describeQuery()` (grain, every dimension label,
+  the window, every filter with its dimension's catalog label) and links to the same query
+  widened to `2015-01` — the start of the window `data/raw/` holds — via `widerWindowHref()`,
+  which returns `null` (no link) when the query already starts there.
+- **The legend rail — signature element 3 of 3 — was entirely missing.** `system.md` calls
+  it "the methodology surface... folded into the product\[,] present on every data view," so
+  there is no separate how-to-read page to go stale; `/explore` rendered the gauge rail and
+  reason-code gutter with nothing on screen explaining either. Fixed:
+  `app/src/components/LegendRail.tsx`, ported from
+  [`../design/mockups/table.html`](../design/mockups/table.html)'s `<aside class="legend">`
+  — the gauge-rail groups (fixed 0–260 axis, `<110` regional, `>210` widebody), the row
+  marks (`⌀`/`n`/`Q`, plus the dotted-underline "computed measure" convention), and the
+  operating-carrier "reading this" note — minus the mockup's "Arc rendering (maps)" group,
+  since this page has no map. Placed in a new `.body` grid (`minmax(0,1fr) 214px`, 24px gap,
+  sticky, collapsing below 920px per `system.md`'s layout rule) alongside the table.
+- **Dimension values render raw IDs, and the docs didn't say so** — see the "Known gap"
+  paragraph above, added in this round.
+- **`DERIVED`, a hand-copied `Set` of measure keys mirroring `is_additive: FALSE` in
+  `meta_pivot_measures`, was deleted.** `allowlist.meas.get(c)?.isAdditive` already carries
+  the same fact and was already loaded on the page; a derived measure added to the catalog
+  now picks up its dotted "computed" underline automatically instead of silently missing it
+  until a second hand-copied list is remembered.
+
+Re-verified end to end against a running `next start` server after the fix: the demo
+permalink's HTML now contains `Chart legend` and the row-mark glyph text; the invalid
+permalink still renders the named error with zero table/row elements; a genuinely empty
+query (the `op_airline_id:999999999` filter above) renders the "No rows match..." message
+and the widened-window link, with the stat strip, `DATA AS OF` badge and legend rail all
+still present.
+
+**M3b complete**, with the one known, documented gap above. The route handler (Task 8), the
+data table with its gauge rail and reason-code gutter (Task 9), and `/explore` itself
+including the legend rail and empty-result state (Task 10 and its fix round 1) close out the
+app side of the pivot contract M3a shipped. 109 app tests green (`make app-check`), 424
+Python tests green (`make check`), `make app-build` produces a working production build. Not
+built in M3b: display-code resolution for dimension values (see above, deferred to M4), the
+time-series and fleet-mix charts, the arc map, entity pages, `/watch`, the seasonality
+heatmap, and OG cards — all specified in [`../design/system.md`](../design/system.md) and
+left to M4/M5.
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command
@@ -583,9 +689,18 @@ everywhere except a machine holding the full 2015–2026 window — today, exact
 here, and nothing in the output says so. Standing up CI is M6-shaped; see
 [data/invariants.md](../data/invariants.md#where-these-are-enforced).
 
-**Node is pinned at 24.13.0 in `mise.toml`** — LTS since 2025-10, and Next.js 15 needs
-≥ 18.18. This supersedes the earlier plan to add a `.nvmrc`: a second pinning mechanism
-alongside `.python-version` was the thing worth avoiding, and mise removes both.
+**Node is pinned at 24.13.0 in `mise.toml`** — LTS since 2025-10, and the Next.js scaffolded
+in M3b Task 2 is v16, which needs ≥ 20.9. This supersedes the earlier plan to add a
+`.nvmrc`: a second pinning mechanism alongside `.python-version` was the thing worth
+avoiding, and mise removes both.
+
+**`make app-check` (typecheck + `vitest run`) is the app's gate, the way `make check` is
+`pipeline/`'s.** M3b Task 2 scaffolded `app/` — Next.js 16 (App Router, TS, Tailwind v4,
+ESLint), `@duckdb/node-api` for the route handlers, Vitest for tests — via `create-next-app`
+under the pinned Node, with `NPM ?= $(MISE) npm --prefix app` following the same `mise exec`
+indirection as `UV`. No application code yet: `make app-check` at scaffold time typechecks
+clean and Vitest correctly reports "no test files found" — a real failure until the first
+test lands (M3b Task 4), not a broken gate.
 
 Docker is not needed until M6. When it arrives, the image installs the same pinned versions
 and sets `MISE=` so `make` calls the tools directly rather than shelling through mise.

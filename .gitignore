@@ -13,6 +13,8 @@ __pycache__/
 node_modules/
 .next/
 out/
+app/node_modules/
+app/.next/
 
 # Build artifacts
 *.duckdb
