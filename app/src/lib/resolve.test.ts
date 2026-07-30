@@ -1,6 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { resolveRows, resolutionKey } from "@/lib/resolve";
+import { collectIds, resolveRows, resolutionKey } from "@/lib/resolve";
 import { loadAllowlist } from "@/lib/db";
+
+describe("collectIds", () => {
+  // Pure, no connect() -- these defend properties resolveRows's own tests can't: "dedup"
+  // asserted only via post-query map.size can't tell "bound once" from "bound N times with
+  // the same value" (IN (...) would return one row either way), and "no query issued"
+  // asserted the same way can't tell "no query ran" from "a query ran and matched nothing".
+  it("deduplicates repeated ids into a single-element set", async () => {
+    const allowlist = await loadAllowlist();
+    const rows = [{ op_airline_id: 19790 }, { op_airline_id: 19790 }, { op_airline_id: 19790 }];
+    const wanted = collectIds(rows, allowlist);
+    expect(wanted.get("op_airline_id")?.ids.size).toBe(1);
+  });
+
+  it("yields an empty map for a row with no resolvable dimension", async () => {
+    const allowlist = await loadAllowlist();
+    const wanted = collectIds([{ year_month: "2025-05", seats: 10 }], allowlist);
+    expect(wanted.size).toBe(0);
+  });
+});
 
 describe("resolveRows", () => {
   it("resolves a carrier id to its current code and name", async () => {
