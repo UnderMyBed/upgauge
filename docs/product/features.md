@@ -102,8 +102,7 @@ Measured on the real 2015–2017 warehouse: 767 of 7,336 routes are new in exact
 **Show the components in the UI, not just the score.** The components are the insight; the
 score is a sort key. Label it plainly as a heuristic. Do not over-engineer this.
 
-### `health_score` is `NULL` for three reasons — a route unrankable for lack of a filed
-### schedule must not render as unhealthy
+### `health_score` is `NULL` for three reasons — a route unrankable for lack of a filed schedule must not render as unhealthy
 
 Measured on the real 2015–2017 warehouse, **1,348 of 7,336 routes** have `health_score IS
 NULL`, for three distinct reasons (SQL-level accounting and evidence:

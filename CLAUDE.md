@@ -153,9 +153,11 @@ audit-only. Parquet is derived and freely rebuilt.
 writer is not byte-stable — it drifts *intermittently*, which is worse than consistently.
 Never call `duckdb.connect()` directly for a write.
 
-**Stay portable.** `docker run` against the same `.duckdb` file must behave identically.
-Docker + Parquet + env vars only. **No provider-specific runtimes** (Workers, D1, KV) —
-Cloudflare is CDN and rate limiting, nothing more.
+**Stay portable.** `docker run` against the same `.duckdb` file **plus its `data/parquet/`
+tree** (the catalog is views over relative Parquet paths, so `WORKDIR` must be the
+directory containing `data/` — see `docs/architecture/hosting.md`) must behave
+identically. Docker + Parquet + env vars only. **No provider-specific runtimes** (Workers,
+D1, KV) — Cloudflare is CDN and rate limiting, nothing more.
 
 ## Data gotchas
 

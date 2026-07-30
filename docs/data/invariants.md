@@ -212,7 +212,9 @@ File Filters                  (none)                 (year = 2017)
 
 Fixed in M2 fix wave 1 by moving `year`, `quarter`, `month` out of `any_value()` and into
 both the `SELECT` list and the `GROUP BY` — each is a pure function of `year_month` (0 of
-494,508 `year_month` groups have more than one distinct value of any of the three), so the
+494,508 route-month groups — distinct `(year_month, op_airline_id, origin_airport_id,
+dest_airport_id)` combos, not the 36 distinct `year_month` values themselves — have more
+than one distinct value of any of the three), so the
 grain is unchanged: `fct_route_month` stayed 494,508 rows and `mart_route_health` stayed
 7,336 rows before and after. Guarded structurally (not by a runtime EXPLAIN assertion,
 which is brittle — see the `hive_partitioning` pruning pair in

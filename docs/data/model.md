@@ -180,6 +180,12 @@ The `<30 departures` floor applies to `t12_departures_performed` — **performed
 scheduled** — same reasoning as the fact-table quarantine rules: a route with a big schedule
 that mostly didn't fly should not count as "active."
 
+**`p12_months_present` (like `t12_months_present`) is a 0–12 *count* of distinct months
+present in the window, not a boolean** — `count(DISTINCT r.year_month) FILTER (...)` in
+`sql/02_marts/200_mart_route_health.sql`. Only `= 0` ("no prior window at all") and `>= 1`
+("some prior window") are the meaningful boundaries; `= 1` means "exactly one month," a
+much narrower and mostly incidental condition.
+
 **A route absent from the prior 12 months gets `NULL` deltas, never a huge positive number.**
 A new route is not a route that improved infinitely. Enforced by `CASE WHEN
 p12_months_present = 0 THEN NULL ELSE ... END` on every `p12_*`-derived ratio and every
@@ -194,7 +200,8 @@ deltas are unknown.
 
 Measured on the real 2015–2017 warehouse: of 7,336 surviving routes, **767** have no
 prior-window data (`p12_months_present = 0`, `new_routes`) and are correctly `NULL`-delta
-rows. The other **6,569** have `p12_months_present = 1`, but one of those 6,569 —
+rows. The other **6,569** have `p12_months_present >= 1` (i.e. at least one month present —
+only 203 of them have *exactly* one), but one of those 6,569 —
 `op_airline_id=20378`, route `12266-12951` — filed `p12_seats = 0` and
 `p12_departures_performed = 0`, so `lf_p12` / `gauge_p12` are `NULL` via the `nullif` on
 their denominators even though the prior window is technically "present." So `lf_delta IS

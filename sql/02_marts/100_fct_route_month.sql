@@ -16,9 +16,11 @@
 -- No derived measure is stored. load_factor / asm / rpm / avg_gauge are computed by the
 -- consumer from these sums.
 --
--- year/quarter/month are pure functions of year_month (0 of 494,508 year_month groups have
--- more than one distinct value of any of the three, over the full 2015-2017 warehouse), so
--- they are carried in GROUP BY rather than any_value(). That is not cosmetic: any_value()
+-- year/quarter/month are pure functions of year_month (0 of 494,508 route-month groups --
+-- distinct (year_month, op_airline_id, origin_airport_id, dest_airport_id) combos, not the
+-- 36 distinct year_month values themselves -- have more than one distinct value of any of
+-- the three, over the full 2015-2017 warehouse), so they are carried in GROUP BY rather
+-- than any_value(). That is not cosmetic: any_value()
 -- output is an opaque aggregate result to the optimizer, so a `WHERE year = 2017` on this
 -- view could not be pushed into the underlying fct_segment_month scan and its Hive
 -- partition pruning -- measured "Total Files Read: 3" (no File Filters) through

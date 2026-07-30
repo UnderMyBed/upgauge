@@ -146,9 +146,6 @@ def main(argv: list[str] | None = None) -> int:
             log.info("  %s", path)
         return 0
 
-    import shutil
-    import tempfile
-
     # A caller-owned work_dir so build-a survives the call: verify_reproducible only
     # deletes a work_dir it created itself (owned = work_dir is None), so passing our own
     # lets us compare its build-a against --out-dir below without rebuilding.
