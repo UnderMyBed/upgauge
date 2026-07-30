@@ -11,7 +11,8 @@ upgauge/
 │   ├── btscodec.py             the two TranStats ROT13 variants (data/sources.md)
 │   ├── fetch.py                DL_SelectFields POST loop + cache → data/raw/
 │   ├── normalize.py            raw → data/parquet/t100_segment/year=YYYY/
-│   ├── build.py                runs sql/ in order → upgauge.duckdb
+│   ├── build.py                facts + dims from data/raw/ (M1); also `make verify`
+│   ├── marts.py                runs sql/02_marts/ in order → upgauge.duckdb (M2)
 │   └── tests/                  the data invariants. These gate the pipeline.
 ├── sql/
 │   ├── 01_staging/             shared by pipeline AND server. Never inline SQL.
@@ -50,7 +51,7 @@ Phase 0 is complete — see [../data/sources.md](../data/sources.md) for what it
 | ~~2~~ | ~~`fetch.py` — per-year POST loop, viewstate, cache, retries~~ | ✅ `make fetch`; verified live against BTS (see below) |
 | ~~3~~ | ~~Invariant tests, written red~~ | ✅ 156 tests; rules in `invariants.py` + `mainline_map.py`, validated against a real extract |
 | ~~4~~ | ~~`normalize.py` — raw → Parquet, quarantine flags, `download_date`~~ | ✅ `make ingest`; 2015 → 282,036 rows, 8.6 MB Parquet |
-| ~~5~~ | ~~Lookups → dims; `map_mainline_group` materialized~~ | ✅ 4 dims build; **zero orphans** joining 282,036 fact rows |
+| ~~5~~ | ~~Lookups → dims; `map_mainline_group` materialized~~ | ✅ 5 dims build; **zero orphans** joining 282,036 fact rows |
 | ~~6~~ | ~~Reproducibility gate~~ | ✅ `make verify` — 7 artifacts byte-identical across two builds |
 
 **Order rationale:** the spike came first because the acquisition path was the one part of
@@ -128,7 +129,8 @@ yet. Building them now means guessing the presets twice.
 
 ### The runner
 
-`pipeline/marts.py` executes `sql/02_marts/*.sql` in filename order. Each file declares its own
+✅ **Built.** `pipeline/marts.py` executes `sql/02_marts/*.sql` in filename order — `make
+build` un-stubbed, 20 tests in `pipeline/tests/test_marts.py`. Each file declares its own
 materialization in a header directive, so the runner needs no separate manifest to drift:
 
 ```sql
@@ -141,6 +143,33 @@ The runner wraps the body in `CREATE OR REPLACE VIEW <object> AS <body>` or
 `CREATE TABLE <object> AS <body>`. That DDL wrapper is the only SQL in Python, and it is the
 same shape as `normalize.py`'s already-accepted `COPY (<sql file>) TO ...` — the hard rule is
 about *query logic*, which stays in `.sql`.
+
+### The catalog views
+
+✅ **Built.** `sql/02_marts/010_fct_segment_month.sql` and the five
+`02x_dim_*.sql` / `024_map_mainline_group.sql` files turn the Parquet tree into `make build`'s
+six database objects — `fct_segment_month`, `dim_airport`, `dim_city_market`, `dim_carrier`,
+`dim_aircraft_type`, `map_mainline_group`. All six are plain `SELECT * FROM read_parquet(...)`
+views, nothing materialized: the fact view adds `hive_partitioning = true`, and every dim view
+is a single-file read. No derived measure column
+(`load_factor`/`asm`/`rpm`/`avg_gauge`/`completion_factor`) exists on `fct_segment_month`, and
+quarantined rows are retained with their flag rather than dropped — the view is the fact
+table, so this is the last point at which dropping them would be reversible.
+
+**`year` is a content column AND a Hive partition key — `hive_partitioning = true` is for
+pruning, not schema.** `normalize_t100_segment.sql` already casts `raw.YEAR` into the Parquet
+content, independent of the `year=YYYY` directory it lands in, so `year` shows up in
+`fct_segment_month` either way — flipping the flag to `false` does not drop the column.
+Measured against the real 3-year warehouse in `data/parquet/` (`EXPLAIN ANALYZE`, JSON
+profiling, DuckDB 1.5.5): `WHERE year = 2015` reports `Total Files Read: 1` (of 3) with the
+flag on, versus `Total Files Read: 3` with it off — same result (705,332,563 passengers)
+either way, so the flag buys I/O, not correctness. Separately, a scratch experiment (two
+partition dirs whose content `year` column deliberately disagreed with the directory name)
+showed DuckDB does not error or duplicate the column when the two conflict: there is still
+exactly one `year` column, and the partition-derived value silently wins over the file's own
+content value. Real builds never hit this — the partition directory name and the content
+column are written from the same `year` argument in `normalize_year` — but it is a real,
+previously-undocumented property of this view.
 
 ### Views cannot take bound parameters — so CWD is load-bearing
 
@@ -158,17 +187,66 @@ against the **process CWD, not the database file's directory**, which forces a c
 A test asserts no absolute path appears in any view definition, because that failure is
 invisible until deploy.
 
+**Confirmed empirically, not just by assertion.** With `upgauge.duckdb` built from the repo
+root (views referencing `data/parquet/...`), opening that same file from `/tmp` — a foreign
+CWD, the way the M6 container would if `WORKDIR` were wrong — and querying `fct_segment_month`
+raises `duckdb.IOException`: `IO Error: No files found that match the pattern
+"data/parquet/t100_segment/**/*.parquet"`. The database opens fine; only the read fails. That
+is the exact failure shape to expect if M6's Dockerfile ever ships without `WORKDIR /app`.
+
 ### The M2 gate
 
-`make verify` keeps sha256-ing Parquet, and adds: **export every database object back out
-through M1's `threads = 1` writer and sha256 that.** Reusing a writer already proven byte-stable
-beats inventing new hashing semantics, and it makes the mart's reproducibility the same kind of
-claim as the facts'.
+✅ **Built.** `make verify` runs three checks in sequence and fails if any fails:
 
-Whether the `.duckdb` file is *itself* byte-stable is unknown and is measured before the gate is
-written — free-space metadata makes it doubtful, but "doubtful" is what produced the retracted
-BTS-encoder-bug claim in M1, so it gets measured rather than assumed. Result recorded in
-[../data/invariants.md](../data/invariants.md).
+1. **Parquet reproducibility** (M1, unchanged): `build_all` twice into throwaway temp
+   dirs from identical raw inputs, sha256 every artifact. **8 artifacts** on the current
+   2015–2017 window — 3 fact-year partitions + 5 dims.
+2. **Parquet freshness** (M2 fix wave 1, new): the two throwaway builds above only prove
+   they agree *with each other* — neither is `--out-dir`, the Parquet that `make build`
+   and the database gate below actually read. So `_digest_tree` on one of the throwaway
+   builds is compared against `_digest_tree(--out-dir)`, and any difference is named. This
+   is what catches `make fetch` adding a year that `make warehouse` never picked up: the
+   database gate's object *count* doesn't change when a fact-year partition goes stale,
+   because it counts objects, not files, so without this check that staleness is
+   invisible to `make verify` and only shows up later as `DATA AS OF` silently failing to
+   advance.
+3. **Database** (M2): `pipeline.marts.verify_database` builds `upgauge.duckdb` twice
+   from the same Parquet and, for every catalog object, exports it through a
+   `COPY (SELECT * FROM <object>) TO ... (FORMAT PARQUET)` on a connection with
+   `SET threads TO 1` — the same writer setting M1 already proved byte-stable — then
+   sha256s that export. **8 objects**: the 6 views over Parquet
+   (`fct_segment_month`, `dim_airport`, `dim_city_market`, `dim_carrier`,
+   `dim_aircraft_type`, `map_mainline_group`) plus the two derived views/tables
+   (`fct_route_month`, `mart_route_health`).
+
+Both counts are measured, not asserted from the file layout — if `sql/02_marts/` ever grows
+or shrinks, the counts printed by `make verify` are what to trust over this paragraph.
+
+**The `.duckdb` file itself is never hashed.** Measured before this gate was written (see
+[../data/invariants.md](../data/invariants.md)): three identical builds of the same content
+produced three different `.duckdb` digests, reproducibly. So `verify_database` compares
+*exported content*, the same way the Parquet gate compares row content rather than raw
+catalog bytes. `_digest_object` runs the export on the connection that already holds the
+built objects — it cannot go through `pipeline.normalize._writer_connection()` like every
+other Parquet write, because that helper opens a fresh connection with nothing in it. It
+applies the identical `SET threads TO 1` itself; the docstring flags this as a deliberate,
+sanctioned exception to "all Parquet writes go through `_writer_connection()`", because if
+that `SET` is ever dropped the gate starts reporting false failures rather than silently
+passing.
+
+Real run, 2015–2017 warehouse:
+
+```
+$ make warehouse && make verify
+parquet: 8 artifacts byte-identical across two builds
+parquet: comparing data/parquet (on disk) against a fresh build from data/raw
+parquet: data/parquet matches a fresh build from data/raw (8 artifacts)
+database: 8 objects identical across two builds
+```
+
+**M2 complete.** `make build` produces `upgauge.duckdb` from `sql/02_marts/`, and
+`make verify` proves both the Parquet artifacts and every database object byte-identical
+across two from-scratch builds.
 
 ## Toolchain
 

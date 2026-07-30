@@ -49,11 +49,14 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M1 COMPLETE.** `make ingest` fetches and builds facts + 4 dims from BTS; `make verify`
-proves 7 artifacts byte-identical across two builds. 253 tests green, zero join orphans.
-`data/raw/` currently holds 2015–2017; run `make fetch` for the full window.
+**M2 COMPLETE.** `make ingest` fetches and builds facts + 5 dims from BTS; `make build` runs
+`sql/02_marts/` into `upgauge.duckdb` (6 catalog views + `fct_route_month` +
+`mart_route_health`); `make verify` proves both the Parquet layer and the database layer
+reproducible across two from-scratch builds — `parquet: 8 artifacts byte-identical`,
+`database: 8 objects identical`. 307 tests green, zero join orphans. `data/raw/` currently
+holds 2015–2017; run `make fetch` for the full window.
 
-Next: **M2** — marts built by SQL in `sql/02_marts/`, reproducible via `make build`.
+Next: **M3** — Explorer: pivot query + URL state + table.
 
 ## Architecture
 
@@ -83,10 +86,10 @@ basemap — tiles are usage-priced).
 | `make fetch` | BTS T-100 zips → `data/raw/` (skips cached years) | ✅ |
 | `make fetch-reference` | BTS support tables → `data/raw/` | ✅ |
 | `make normalize` | Raw zips → `data/parquet/t100_segment/year=YYYY/` | ✅ |
-| `make warehouse` | Facts + all 4 dims from `data/raw/` | ✅ |
-| **`make verify`** | **M1 gate: build twice, prove byte-identical** | ✅ |
+| `make warehouse` | Facts + all 5 dims from `data/raw/` | ✅ |
+| **`make verify`** | **M2 gate: build twice, prove Parquet + database byte-identical** | ✅ |
 | `make ingest` | `fetch` + `fetch-reference` + `warehouse` | ✅ |
-| `make build` | Run `sql/` in order → `upgauge.duckdb` | M2 |
+| `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |
 | `make dev` | Next.js dev server (needs node) | M3 |
 
 ## Hard rules
@@ -99,9 +102,15 @@ AVG(load_factor)                                  -- WRONG. Plausible-looking ga
 SUM(passengers)::DOUBLE / NULLIF(SUM(seats), 0)   -- RIGHT. Always.
 ```
 
-Enforce structurally: **no `load_factor` column on any fact table.** Same for `asm`, `rpm`,
-`avg_gauge`, `completion_factor`. Can't average what doesn't exist. The #1 bug in every
-homemade T-100 tool.
+Enforce structurally: **no `load_factor` column on any `fct_*` table.** Same for `asm`,
+`rpm`, `avg_gauge`, `completion_factor`. Can't average what doesn't exist. The #1 bug in
+every homemade T-100 tool.
+
+**The one exception: `mart_route_health`.** It stores ten derived columns (`lf_t12` ...
+`health_score`), licensed only because it has no time grain — one row per (carrier,
+undirected route) is already the finest and coarsest it gets, so there is no `GROUP BY` of
+it for an `AVG()` to corrupt. If it ever gains a time grain, the derived columns must come
+back out. Full justification and the tests that guard it: `docs/data/model.md`.
 
 **Key on `AIRLINE_ID` and `AIRPORT_ID`, never letter codes.** `CARRIER` (raw IATA) is
 reused — 135 of 1,825 codes map to >1 airline. `UNIQUE_CARRIER` doesn't collide, but only
@@ -144,9 +153,11 @@ audit-only. Parquet is derived and freely rebuilt.
 writer is not byte-stable — it drifts *intermittently*, which is worse than consistently.
 Never call `duckdb.connect()` directly for a write.
 
-**Stay portable.** `docker run` against the same `.duckdb` file must behave identically.
-Docker + Parquet + env vars only. **No provider-specific runtimes** (Workers, D1, KV) —
-Cloudflare is CDN and rate limiting, nothing more.
+**Stay portable.** `docker run` against the same `.duckdb` file **plus its `data/parquet/`
+tree** (the catalog is views over relative Parquet paths, so `WORKDIR` must be the
+directory containing `data/` — see `docs/architecture/hosting.md`) must behave
+identically. Docker + Parquet + env vars only. **No provider-specific runtimes** (Workers,
+D1, KV) — Cloudflare is CDN and rate limiting, nothing more.
 
 ## Data gotchas
 

@@ -22,14 +22,13 @@ normalize:  ## Raw zips -> data/parquet/t100_segment/year=YYYY/
 warehouse:  ## Build facts + all dims from data/raw/ -> data/parquet/
 	$(UV) run python -m pipeline.build $(ARGS)
 
-verify:  ## M1 GATE: build twice, prove every artifact is byte-identical
+verify:  ## M2 GATE: build twice, prove every Parquet artifact AND database object is byte-identical
 	$(UV) run python -m pipeline.build --verify
 
 ingest: fetch fetch-reference warehouse  ## Fetch + build everything. The full M1 pipeline.
 
-build:  ## Run sql/ in order -> upgauge.duckdb              [M2]
-	@echo "not implemented — M2"
-	@exit 1
+build:  ## Run sql/02_marts/ in order -> upgauge.duckdb
+	$(UV) run python -m pipeline.marts $(ARGS)
 
 dev:  ## Next.js dev server                                 [M3, needs node]
 	@echo "not implemented — M3"
@@ -48,4 +47,4 @@ check: lint test  ## Lint + test. Run this before every commit.
 
 clean:  ## Remove build artifacts and caches (NOT data/raw — that's the audit trail)
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ *.egg-info
-	rm -f upguage.duckdb upguage.duckdb.wal
+	rm -f upgauge.duckdb upgauge.duckdb.wal

@@ -12,14 +12,17 @@ GitHub Actions (monthly cron)
   └─ Python ingest ──→ Parquet ──→ build upgauge.duckdb
                                       │
                                       ├─→ Cloudflare R2 (artifact storage)
-                                      └─→ baked into container image
-                                              │
+                                      └─→ upgauge.duckdb + data/parquet/, both baked
+                                              │            into the container image
                                       Next.js app (single deployable)
                                         - route handlers query DuckDB via @duckdb/node-api
                                         - all query logic lives in .sql files
                                               │
                                       Hetzner  ←  Cloudflare CDN (free tier)
 ```
+
+> The `.duckdb` file is a thin catalog of views over *relative* `data/parquet/` paths, not
+> a database that carries its own data — see [Portability test](#portability-test) below.
 
 **Single Next.js deployable.** No separate API service — one container, one box, one deploy.
 Python exists only in the ingest pipeline, which runs in CI, never in prod.
@@ -57,7 +60,7 @@ Surveyed 2026-07:
 | Option | Cost | Resources | Assessment |
 |---|---|---|---|
 | **Hetzner CX22 / CX23** | **~€3.79–4.59/mo** | 2 vCPU / 4GB / 40GB NVMe / 20TB | **Chosen.** Best RAM-per-euro from a reputable host. Always-on, no cold start. |
-| **Google Cloud Run** | **$0** at this traffic | container, scale-to-zero | **Strongest $0 option.** Free tier: 2M req + 180k vCPU-s + 360k GiB-s/mo. Container-based, so it *passes* the portability test. Cold start is the risk — a baked-in DuckDB file makes a fat image. Free tier is per-*account*, not per-project; `us-central1/east1/west1` only. |
+| **Google Cloud Run** | **$0** at this traffic | container, scale-to-zero | **Strongest $0 option.** Free tier: 2M req + 180k vCPU-s + 360k GiB-s/mo. Container-based, so it *passes* the portability test. Cold start is the risk — a baked-in image is fat, and as of the M2 catalog-over-Parquet shape it's `data/parquet/` (26 MB and growing every year, not the thin `.duckdb` catalog file) driving that image size. Free tier is per-*account*, not per-project; `us-central1/east1/west1` only. |
 | **Self-host + Cloudflare Tunnel** | **$0** | whatever you own | Underrated: `cloudflared` is free and unlimited, needs no open ports or static IP, and the domain is already required to be on Cloudflare, so it composes. Trades cash for home uptime/power/ISP risk. |
 | Contabo VPS 10 | ~€4.50/mo | 8GB | Most RAM per euro found. Weaker reliability reputation — the tradeoff is real. |
 | Oracle Cloud Always Free | $0 | ARM Ampere A1 | Free-tier A1 cut to 2 OCPU / 12GB in June 2026; reclamation risk. Fine as a $0 mirror, not the only copy. |
@@ -113,9 +116,18 @@ With Cloudflare's free tier in front, near-zero repeat traffic touches the box.
 
 ## Portability test
 
-`docker run` it locally against the same `.duckdb` file and it must behave identically.
-Everything is Docker + Parquet + env vars. R2 is S3-compatible. **Do not build on
-provider-specific runtimes** (Workers, D1, KV). This must stay a normal app.
+**The deployable artifact is `upgauge.duckdb` *plus* `data/parquet/` (26 MB at the current
+2015–2017 window), not the `.duckdb` file alone.** As built, the catalog is views over
+*relative* Parquet paths — it carries almost no data itself — so it behaves identically
+under `docker run` only if `data/parquet/` is co-located with it and `WORKDIR` is the
+directory containing `data/`. Get that wrong and the container still starts and the file
+still opens; every query then fails with a "no files found" read error. Full detail,
+including a confirmed repro of that exact failure: [pipeline.md § Views cannot take bound
+parameters](pipeline.md#views-cannot-take-bound-parameters--so-cwd-is-load-bearing).
+
+`docker run` it locally against the same `.duckdb` file + `data/parquet/` and it must
+behave identically. Everything is Docker + Parquet + env vars. R2 is S3-compatible. **Do
+not build on provider-specific runtimes** (Workers, D1, KV). This must stay a normal app.
 
 > This constraint earned its keep: swapping the original Fly pick for Hetzner was a one-line
 > change precisely because nothing depended on the provider.

@@ -239,6 +239,52 @@ def test_a_rebuild_over_an_existing_partition_is_byte_identical(tmp_path):
 REAL_EXTRACT = next(iter(sorted(Path("data/raw").glob("t100d_segment_us_*_*.zip"))), None)
 
 
+def test_database_is_reproducible(tmp_path):
+    """The M2 gate. Every object is exported through the threads=1 writer and hashed --
+    reusing a writer already proven byte-stable rather than inventing new hashing."""
+    from pipeline.marts import verify_database
+    from pipeline.tests.test_marts import _warehouse
+
+    parquet = _warehouse(tmp_path)
+    report = verify_database(parquet, tmp_path / "work")
+    assert report.reproducible, report.differing
+    assert report.objects >= 8
+
+
+def test_database_gate_reports_a_mismatch_rather_than_raising(tmp_path, monkeypatch):
+    """A drifting mart must name the offending object, not just fail.
+
+    CORRECTED from the task brief's literal draft: the draft kept a single global counter
+    (`calls["n"]`) shared across every object of both builds. `mart_route_health` is the
+    LAST object `verify_database` digests each build (filename order puts `200_...` last),
+    so by the time it's reached even in build "a" the global counter is already well past 1
+    -- meaning build "a" and build "b" both got the "-drift" suffix appended to the same
+    real digest, producing two EQUAL altered strings and no mismatch at all. That version
+    of the test passed the `not report.reproducible` assertion only if you didn't run it --
+    it actually fails (see task report for the RED transcript). Counting per-object-NAME
+    instead makes only the *second* build's `mart_route_health` call drift, which is what
+    "a drifting mart" is supposed to mean.
+    """
+    import pipeline.marts as marts
+    from pipeline.tests.test_marts import _warehouse
+
+    parquet = _warehouse(tmp_path)
+    calls: dict[str, int] = {}
+    real = marts._digest_object
+
+    def drifting(con, name, out_dir):
+        calls[name] = calls.get(name, 0) + 1
+        digest = real(con, name, out_dir)
+        if name == "mart_route_health" and calls[name] > 1:
+            return digest + "-drift"
+        return digest
+
+    monkeypatch.setattr(marts, "_digest_object", drifting)
+    report = marts.verify_database(parquet, tmp_path / "work")
+    assert not report.reproducible
+    assert any("mart_route_health" in n for n in report.differing)
+
+
 @pytest.mark.skipif(
     REAL_EXTRACT is None, reason="no real extract in data/raw — run `make fetch --end 2015`"
 )

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from pipeline.build import build_all, verify_reproducible
+from pipeline.build import build_all, main, verify_reproducible
 from pipeline.fetch import T100D_SEGMENT_US, raw_path
 from pipeline.lookups import AIRCRAFT_TYPES, CARRIER_DECODE, MASTER_COORDINATE
 
@@ -44,6 +44,7 @@ def test_build_all_produces_facts_and_every_dim(raw, tmp_path):
     written = build_all(raw, out)
     names = {p.name for p in written}
     assert "dim_airport.parquet" in names
+    assert "dim_city_market.parquet" in names
     assert "dim_carrier.parquet" in names
     assert "dim_aircraft_type.parquet" in names
     assert "map_mainline_group.parquet" in names
@@ -73,9 +74,9 @@ def test_verify_reproducible_passes_on_a_clean_build(raw, tmp_path):
 
 
 def test_verify_reproducible_checks_every_artifact(raw, tmp_path):
-    """Facts plus four dims — a gate that only checked one file would prove little."""
+    """Facts plus five dims — a gate that only checked one file would prove little."""
     report = verify_reproducible(raw, tmp_path / "work")
-    assert report.artifacts >= 5
+    assert report.artifacts >= 6
 
 
 def test_verify_reproducible_reports_a_mismatch_rather_than_raising(raw, tmp_path, monkeypatch):
@@ -96,3 +97,37 @@ def test_verify_reproducible_reports_a_mismatch_rather_than_raising(raw, tmp_pat
     report = verify_reproducible(raw, tmp_path / "work")
     assert not report.reproducible
     assert any("map_mainline_group" in name for name in report.differing)
+
+
+def test_verify_command_fails_when_out_dir_disagrees_with_a_fresh_build_from_raw(
+    raw, tmp_path, caplog
+):
+    """The two `make verify` gates must be linked: the Parquet gate proves two THROWAWAY
+    builds from raw agree with each other, but that says nothing about whether the
+    Parquet actually sitting at `--out-dir` (what `make build` and the database gate
+    read) matches raw at all. A stale or fabricated `--out-dir` -- e.g. `make fetch`
+    added a year and `make warehouse` was never re-run -- must fail the command, not
+    report green.
+
+    Demonstrated here with a fabricated extra partition that exists in no raw download:
+    the two throwaway builds still agree with each other (they're both built fresh from
+    the same raw), so without a link to `--out-dir` this would report green.
+    """
+    out_dir = tmp_path / "out"
+    build_all(raw, out_dir)
+
+    # Fabricate a partition present in out_dir but backed by no raw download. Schema must
+    # stay compatible with the real fact partitions, or the database gate errors on the
+    # read rather than silently passing -- copying a real partition's bytes under a new
+    # partition directory is the cleanest way to get that, and mirrors how the reviewer
+    # demonstrated the hole.
+    real_partition = out_dir / "t100_segment" / "year=2015" / "part.parquet"
+    fake_dir = out_dir / "t100_segment" / "year=2099"
+    fake_dir.mkdir(parents=True)
+    shutil.copy(real_partition, fake_dir / "part.parquet")
+
+    with caplog.at_level("INFO"):
+        rc = main(["--raw-dir", str(raw), "--out-dir", str(out_dir), "--verify"])
+
+    assert rc != 0, "a fabricated out_dir partition must fail the gate, not pass it"
+    assert "year=2099" in caplog.text

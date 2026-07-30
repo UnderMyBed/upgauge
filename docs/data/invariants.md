@@ -192,6 +192,63 @@ join — *silently*, because codes without leading zeros still match.
 Store both directional (`PDX→AUS`) and undirected (`AUS-PDX`) keys. The undirected key is
 the two airport IDs sorted, so it is stable regardless of filing order.
 
+## `fct_route_month` must carry `year`/`quarter`/`month` as GROUP BY keys, not `any_value()`
+
+`any_value()` output is opaque to DuckDB's optimizer: a `WHERE year = 2017` on top of the
+view cannot be pushed down through an `any_value(year)` aggregate into
+`fct_segment_month`'s Hive-partitioned scan, so every partition file gets opened and
+filtered by content instead of pruned by name — silently, since the row count and every
+other result is identical either way.
+
+**Measured against the real 2015–2017 warehouse** (`EXPLAIN ANALYZE`, DuckDB 1.5.5),
+`SELECT count(*) FROM fct_route_month WHERE year = 2017`:
+
+```
+                        any_value(year)     year as GROUP BY key
+Total Files Read              3                      1
+Scanning Files                (not reported)         1/3
+File Filters                  (none)                 (year = 2017)
+```
+
+Fixed in M2 fix wave 1 by moving `year`, `quarter`, `month` out of `any_value()` and into
+both the `SELECT` list and the `GROUP BY` — each is a pure function of `year_month` (0 of
+494,508 route-month groups — distinct `(year_month, op_airline_id, origin_airport_id,
+dest_airport_id)` combos, not the 36 distinct `year_month` values themselves — have more
+than one distinct value of any of the three), so the
+grain is unchanged: `fct_route_month` stayed 494,508 rows and `mart_route_health` stayed
+7,336 rows before and after. Guarded structurally (not by a runtime EXPLAIN assertion,
+which is brittle — see the `hive_partitioning` pruning pair in
+[`pipeline/tests/test_marts.py`](../../pipeline/tests/test_marts.py)) by
+`pipeline/tests/test_route_month.py::test_fct_route_month_carries_year_quarter_month_as_group_by_keys_not_any_value`,
+which pins the compiled view SQL rather than the fixture's own I/O — the committed CI
+fixture has only one fact year, so there is nothing in it to prune.
+
+## City market ids are constant within the route-month grain
+
+`fct_route_month` collapses `fct_segment_month`'s `origin_city_market_id` /
+`dest_city_market_id` with `any_value()` — safe ONLY if they don't vary within
+`(year_month, op_airline_id, origin_airport_id, dest_airport_id)`. Unlike `year` / `quarter`
+/ `month` / `route_key_low` / `route_key_high` (each a pure function of columns the grain
+already fixes), city market ids are copied per filed row from `raw.ORIGIN_CITY_MARKET_ID` /
+`raw.DEST_CITY_MARKET_ID` — a data assumption, not a structural guarantee, since an airport
+genuinely can be reassigned between city markets over time.
+
+**Measured in M2**, over the full `data/parquet/t100_segment/` warehouse (years 2015–2017,
+494,451 non-quarantined `(year_month, op_airline_id, origin_airport_id, dest_airport_id)`
+route-months):
+
+```
+route_months                      494,451
+groups w/ >1 origin_city_market_id      0
+groups w/ >1 dest_city_market_id        0
+```
+
+Zero groups vary in either direction. `any_value()` is kept, backed by a test
+(`pipeline/tests/test_route_month.py::test_city_market_ids_are_constant_within_the_route_month_grain`)
+that asserts the constancy on every build rather than assuming it silently — a future
+violation (e.g. a genuine mid-month market reassignment) surfaces as a failing test instead
+of an arbitrarily-picked value with no signal.
+
 ## Amended filings: latest `download_date` wins
 
 BTS accepts amended filings and silently overwrites. Stamp every ingest with a
@@ -227,6 +284,40 @@ artifact by sha256. It is the M1 exit criterion.
 > A small fixture cannot catch this — repeating a handful of rows keeps cardinality low enough
 > that the encoder stays deterministic no matter the threading. The regression test uses a
 > real extract and repeats the comparison four times, because one comparison passes by luck.
+
+> **The `.duckdb` catalog file itself is also not byte-stable — measured in M2.** A 200,000-row
+> `CREATE TABLE ... AS SELECT` with `threads = 1`, built three times in a row (`a.duckdb`,
+> `b.duckdb`, `c.duckdb`) from identical logic, produced three different sha256 digests every
+> time:
+>
+> ```
+> a.duckdb  908505c5ccd19fb50dba3eac2efed7fe0ff60c86101111322cd619d0e9418654
+> b.duckdb  3636e3f666cdcc2f8a5803183472cd5bce4e1b2b910314b03037a6de5def641e
+> c.duckdb  cc06f9e9df1a84ff329367c44cd1fe0296bc0640e78001e3b4c19dbf211ac2eb
+> ```
+>
+> The whole script was run three separate times (nine builds total, to rule out the kind of
+> intermittent SAME/DIFFER/DIFFER seen on the Parquet writer above) — **all three invocations
+> produced these exact same three digests, in the same a/b/c positions.** So this is not
+> flakiness: it is deterministic, reproducible byte-*instability* between files built from
+> identical content within the same process. Cause not further isolated (suspect a
+> per-connection creation counter or similar metadata in the DuckDB storage header); not needed
+> to act on the finding.
+>
+> **Consequence for M2 (Task 8): `make verify`'s gate must never sha256 the `.duckdb` file
+> itself.** The gate has to be content-based — compare query results / table checksums issued
+> against the built catalog, the same way the Parquet gate compares row content rather than
+> raw bytes.
+>
+> **Built.** `pipeline.marts.verify_database` (`make verify`'s second gate) is why this
+> instability does not matter: it never touches the `.duckdb` file's bytes. It builds the
+> database twice and, for each of the 8 catalog objects, exports it through
+> `COPY (SELECT * FROM <object>) TO ... (FORMAT PARQUET)` on a connection pinned to
+> `SET threads TO 1` — the same setting that makes the Parquet writer above byte-stable —
+> then sha256s that export and compares across the two builds. Real run on the 2015–2017
+> warehouse: `database: 8 objects identical across two builds`. The catalog file's own
+> non-determinism is real and permanent, but it is invisible to the gate because the gate
+> never looks at the catalog file's bytes, only at what querying each object produces.
 
 ## Column count assertion
 

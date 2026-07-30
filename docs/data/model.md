@@ -30,16 +30,23 @@ dim_aircraft_type     code, name, short_name, manufacturer, ssd_name,
 
 dim_city_market       city_market_id, name
                       -- from T_MASTER_CORD's CITY_MARKET_ID / DISPLAY_CITY_MARKET_NAME_FULL
-                      -- 6,177 markets. Collapsed to one row per city_market_id: the source
-                      -- is keyed by the point-in-time CITY_MARKET_SEQ_ID, exactly like
-                      -- AIRPORT_SEQ_ID. Collapse by PARSED date -- see the dim_carrier
-                      -- caveat below; a string sort reproduces the HOZ/SEA bug.
+                      -- 6,177 distinct city_market_ids (master_coordinate_20260729), of
+                      -- which 257 have more than one DISPLAY_CITY_MARKET_NAME_FULL across
+                      -- all history -- mostly geopolitical renames ('Aachen, West Germany'
+                      -- -> 'Aachen, Germany'; 'Adler/Sochi, U.S.S.R.' -> 'Adler/Sochi,
+                      -- Russia'). Restricting to AIRPORT_IS_LATEST = '1' leaves exactly ONE
+                      -- ambiguous market: 30973 (CGQ), seq 3097301 'Changchun, China' vs
+                      -- seq 3097302 'Changchun\Jilin City, China'. The max(seq_id) tiebreak
+                      -- is load-bearing, not cosmetic: a nondeterministic pick would drift
+                      -- between builds and break the byte-identical Parquet gate.
 
 map_mainline_group    airline_id, parent_airline_id, effective_from, effective_to
                       -- DATE-RANGED. Wholly-owned subsidiaries ONLY.
 
 mart_route_health     one row per (op_airline_id, route_key_low, route_key_high)
                       UNDIRECTED, and the only materialized TABLE in the database.
+                      Global trailing-12 / prior-12 windows, <30 performed-departures floor,
+                      NULL (not huge-positive) deltas when the prior window is empty.
 mart_leaderboards     precomputed JSON, built at pipeline time                    [M5]
 ```
 
@@ -129,9 +136,12 @@ freight, mail, air_time, ramp_to_ramp_time
 
 ### The one exception: `mart_route_health`
 
-`mart_route_health` **does** store derived columns — `lf_t12`, `lf_delta`, `gauge_delta`,
-`capacity_delta`, `frequency_delta`, `completion_factor`, `health_score`. The rule therefore
-reads: *no derived columns on `fct_*` tables.* Marts may carry them.
+`mart_route_health` **does** store derived columns — all ten of `lf_t12`, `lf_p12`,
+`lf_delta`, `gauge_t12`, `gauge_p12`, `gauge_delta`, `capacity_delta`, `frequency_delta`,
+`completion_factor`, `health_score`. This list and
+[`MART_DERIVED_COLUMNS`](../../pipeline/tests/test_derived_measure_rules.py) must not
+diverge; the test is authoritative if they ever do. The rule therefore reads: *no derived
+columns on `fct_*` tables.* Marts may carry them.
 
 What makes that safe is not a convention, it is the grain: **`mart_route_health` has no time
 dimension and no partial grain.** One row per (carrier, undirected route) is already the
@@ -143,13 +153,151 @@ It also stores the additive `t12_*` / `p12_*` sums alongside them, because
 [../product/features.md](../product/features.md) requires the *components* be shown and not
 just the score, and because they let any consumer recompute a ratio itself.
 
-Backed by two tests: no `fct_*` object carries a column from the derived list, and no
-`mart_route_health` derived column appears inside a `SUM(` or `AVG(` anywhere in `sql/`.
+Backed by four tests in
+[`pipeline/tests/test_derived_measure_rules.py`](../../pipeline/tests/test_derived_measure_rules.py):
+no `fct_*` object carries a column from the derived list; no `mart_route_health` derived
+column appears inside a `SUM(`/`AVG(`/`MEAN(`/`MEDIAN(` anywhere in `sql/`;
+`mart_route_health` still has no time grain (the exception's own justification, asserted
+directly rather than inferred); and `mart_route_health` is the only object materialized as
+a table.
+
+The `SUM(`/`AVG(` scan matches whitespace-collapsed source text (so a hand-wrapped
+`SUM(\n  lf_delta\n)` split across lines is still caught), not a parsed SQL AST. A derived
+column name reused as an unrelated identifier, or one aggregate's closing paren landing
+immediately before an unrelated bare reference of the same name, could in principle still
+slip past it — no such case exists in `sql/` today. This residual gap, not the four tests
+themselves, is the thing to revisit if `sql/03_queries/` grows a query that trips it.
+
+#### Window rule, floor, and the NULL-prior-window trap
+
+Windows are **global, not per-route**: `t12_start_month..t12_end_month` is the latest 12
+calendar months present anywhere in `fct_route_month`; `p12_start_month..p12_end_month` is
+the 12 immediately before that. `'YYYY-MM'` strings compare correctly with `BETWEEN`, so no
+per-row date parsing is needed. Measured on the real 2015–2017 warehouse: `2017-01..2017-12`
+vs. `2016-01..2016-12`.
+
+The `<30 departures` floor applies to `t12_departures_performed` — **performed, not
+scheduled** — same reasoning as the fact-table quarantine rules: a route with a big schedule
+that mostly didn't fly should not count as "active."
+
+**`p12_months_present` (like `t12_months_present`) is a 0–12 *count* of distinct months
+present in the window, not a boolean** — `count(DISTINCT r.year_month) FILTER (...)` in
+`sql/02_marts/200_mart_route_health.sql`. Only `= 0` ("no prior window at all") and `>= 1`
+("some prior window") are the meaningful boundaries; `= 1` means "exactly one month," a
+much narrower and mostly incidental condition.
+
+**A route absent from the prior 12 months gets `NULL` deltas, never a huge positive number.**
+A new route is not a route that improved infinitely. Enforced by `CASE WHEN
+p12_months_present = 0 THEN NULL ELSE ... END` on every `p12_*`-derived ratio and every
+`*_delta` column. This `CASE` is a documentation aid, not the load-bearing guard — deleting
+all four is a provable no-op today (identical byte-for-byte 7,336-row mart), because a
+`SUM(...) FILTER (WHERE <no rows match>)` already returns `NULL`, not `0`, in DuckDB, and
+`nullif` on each denominator propagates that `NULL` through. The real guard is the
+`nullif`s: deleting *those* is what a test catches. Keep the `CASE` anyway — it is correct
+defence against a future `coalesce` on the p12 sums, just not what "enforces" the rule
+today. The row itself still exists (it is the Route Birth Tracker's input); only its
+deltas are unknown.
+
+Measured on the real 2015–2017 warehouse: of 7,336 surviving routes, **767** have no
+prior-window data (`p12_months_present = 0`, `new_routes`) and are correctly `NULL`-delta
+rows. The other **6,569** have `p12_months_present >= 1` (i.e. at least one month present —
+only 203 of them have *exactly* one), but one of those 6,569 —
+`op_airline_id=20378`, route `12266-12951` — filed `p12_seats = 0` and
+`p12_departures_performed = 0`, so `lf_p12` / `gauge_p12` are `NULL` via the `nullif` on
+their denominators even though the prior window is technically "present." So `lf_delta IS
+NULL` for **768** routes, not 767 — the extra one is a zero-measure prior window, not a
+missing one, and the two must not be conflated: **767 + 1 = 768**, and only the 767 are
+`new_routes` in the Route Birth Tracker sense.
+
+`health_score` is an **equal-0.20-weighted** z-score composite of `lf_delta`, `gauge_delta`,
+`capacity_delta`, `frequency_delta`, and `completion_factor`, all oriented so **higher is
+healthier** — including `gauge_delta`, computed as `gauge_t12 - gauge_p12` (the same as-is
+shape as `lf_delta`, **no negation**): a positive `gauge_delta` already means the mean
+seats-per-departure went up, i.e. an upgauge, which is the healthy direction, so the raw sign
+is correct as computed and nothing needs flipping. Equal weights, not a fitted or eyeballed
+weighting, because [../product/features.md](../product/features.md) says this is v0 and
+*deliberately dumb* — any other weighting would be a number invented in this task with no
+basis.
+
+Measured on the real warehouse: `health_score` ranges from **-2.686 to 17.329** —
+single/double-digit z-composites, not `1e17`-scale blowups, confirming no near-zero
+`stddev_samp` slipped past its `nullif`. The +17.329 max is real, not an artifact: traced to
+`op_airline_id=20452`, route `11298-12953`, where `p12_departures_performed = 1` (the route was
+essentially dormant the prior year) and `t12_departures_performed = 3414` (fully active this
+year). A dormant-to-active jump like that sends `capacity_delta` and `frequency_delta` into the
+thousands — dividing by a p12 base of 1 — and the equal-weighted sum lets those two components
+dominate the score. That is a real, expected consequence of "deliberately dumb, do not
+over-engineer" v0 scoring, not a bug: a leaderboard's top row being a near-dead route waking up
+is exactly the kind of finding the product should surface, but the UI must show the raw
+`p12_departures_performed` alongside the score so a viewer isn't misled into reading "+17.3" as
+"this route tripled its traffic" when the real story is "this route had almost no prior-year
+baseline to compare against."
+
+> ⚠️ **`health_score` is `NULL` for three distinct reasons, not one — 1,348 of 7,336 routes
+> total.** The product-facing writeup (what the UI must do about each) lives in
+> [../product/features.md § Route Health score](../product/features.md#route-health-score-v0--deliberately-dumb);
+> this is the SQL-level accounting behind it.
+>
+> | Reason | Count | Why |
+> |---|---|---|
+> | No prior window | 767 | `p12_months_present = 0` — a genuinely new route. |
+> | Zero-measure prior window | 1 | `p12_months_present = 1` but `p12_seats = 0` and `p12_departures_performed = 0` (`op_airline_id=20378`, route `12266-12951`) — `nullif` makes `lf_p12`/`gauge_p12` NULL despite the window being "present." |
+> | Zero scheduled departures | 580 | `t12_departures_scheduled = 0` despite real `t12_departures_performed` (all on-demand/charter-style operators) — `completion_factor = t12_departures_performed / nullif(t12_departures_scheduled, 0)` is computed from `t12_*` sums alone and has nothing to do with `p12_months_present`. |
+>
+> `767 + 1 + 580 = 1,348`, the real `health_score IS NULL` count. A test that infers
+> "`health_score` is null exactly when `lf_delta` is null" asserts a narrower invariant than
+> the real one ("null exactly when *any* of the five components is null") — true on the M2
+> test fixture (too small to have a `p12`-populated, `t12_departures_scheduled = 0` route at
+> all), false against the full 2015–2017 warehouse.
+>
+> **Fixed in Task 6:**
+> `test_health_score_is_null_exactly_when_a_component_is_unknown`
+> ([`pipeline/tests/test_route_health.py`](../../pipeline/tests/test_route_health.py)) checks
+> parity against all five components, not `lf_delta` alone. **A known, permanent limitation of
+> that fix, otherwise recorded only in a gitignored report:** the corrected guard discriminates
+> only against the real 2015–2017 warehouse. It cannot discriminate against the single-year CI
+> fixture, because a one-year fixture structurally cannot populate a `p12` (prior-12-month)
+> window at all — every row's prior window is empty, so every row's `health_score` is already
+> `NULL` for the `p12_months_present = 0` reason, and the fixture never reaches a row where the
+> prior window is populated but `completion_factor` alone is `NULL`. The narrower,
+> `lf_delta`-only version of this test would therefore still pass on CI today; only a run
+> against the full warehouse (`data/parquet/` built from `make fetch` + `make warehouse`, not
+> the checked-in fixture) exercises the distinction the stronger test exists to catch.
 
 ### `distance` is not additive
 
 `DISTANCE` is per-segment miles, so `SUM(distance)` across aircraft types on a route is
 meaningless. Whether `fct_route_month` may carry it as a route *attribute* depends on whether
-it is constant per (origin, dest) within a month — **measured in M2, recorded here.** If it
-varies, `SUM(seats) * distance` is quietly wrong and the ASM path needs a `seat_miles` sum
-computed at segment grain instead.
+it is constant per (origin, dest) within a month.
+
+**Measured in M2**, over all of `data/parquet/t100_segment/` (years 2015–2017, 274,824
+non-quarantined `(year_month, origin_airport_id, dest_airport_id)` route-months):
+
+```
+route_months     274,824
+varying                0
+pct_varying         0.0%
+max_spread_miles      0.0
+```
+
+Zero route-months show more than one distinct `DISTANCE` value. **`DISTANCE` is constant per
+(origin, dest) within a month across the full measured window** — this is the *constant*
+branch: `fct_route_month` carries `distance` as an attribute via `max(distance)`, and ASM
+computes downstream as `SUM(seats) * distance`. A `seat_miles = SUM(seats * distance)` column
+is not needed; Task 5's SQL should use the plain attribute + downstream multiplication.
+
+Guarded by `pipeline/tests/test_route_month.py::test_distance_is_not_summed`, which asserts
+`count(DISTINCT distance) = 1` per route-month, not only `distance <= max(segment distance)`
+— the latter is satisfied by construction (`max()` always equals the max) and so cannot
+catch a route-month where distance genuinely disagrees across rows, the same gap the
+city-market-id test next to it was written to avoid.
+
+### `origin_city_market_id` / `dest_city_market_id` are collapsed with `any_value()`
+
+Same shape of question as `distance`, different answer path: these are carried through
+`fct_route_month` via `any_value()` rather than a `GROUP BY` column, which is safe only if
+they don't vary within the route-month grain. **Measured 0 of 494,451 non-quarantined
+route-months varying**, over the full 2015–2017 warehouse — see the "City market ids are
+constant within the route-month grain" section of
+[invariants.md](invariants.md#city-market-ids-are-constant-within-the-route-month-grain) for
+the full measurement and the test that guards it.

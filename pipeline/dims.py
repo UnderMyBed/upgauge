@@ -40,6 +40,14 @@ def build_carrier_dim(zip_path: Path, out_dir: Path) -> Path:
     return _build(zip_path, out_dir, "dim_carrier.sql", "dim_carrier")
 
 
+def build_city_market_dim(zip_path: Path, out_dir: Path) -> Path:
+    """Master Coordinate -> dim_city_market, one row per city_market_id.
+
+    Same zip as dim_airport, so this costs no extra fetch.
+    """
+    return _build(zip_path, out_dir, "dim_city_market.sql", "dim_city_market")
+
+
 def build_aircraft_type_dim(zip_path: Path, out_dir: Path) -> Path:
     """AircraftTypes -> dim_aircraft_type. Codes stay strings."""
     return _build(zip_path, out_dir, "dim_aircraft_type.sql", "dim_aircraft_type")
