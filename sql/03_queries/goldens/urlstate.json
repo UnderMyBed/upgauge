@@ -89,7 +89,7 @@
     },
     {
       "name": "no_sort_key_ignores_sort_desc",
-      "description": "PivotQuery(sort=None, sort_desc=False) has no representation in this format -- a direction is only ever emitted alongside a sort key -- so PivotQuery.__post_init__ normalizes sort_desc back to True at construction time. Pins that the URL this case encodes to has no 's=' key at all (identical to the default), so a regression that removed the normalization would surface as a changed golden here, not merely as a round-trip assertion during `make goldens` itself.",
+      "description": "PivotQuery(sort=None, sort_desc=False) has no representation in this format -- a direction is only ever emitted alongside a sort key -- so PivotQuery.__post_init__ normalizes sort_desc back to True at construction time. That normalization itself is guarded by pipeline/tests/test_pivot.py's test_sort_desc_normalizes_to_true_when_sort_is_none and pipeline/tests/test_urlstate.py's test_sort_none_and_sort_desc_false_round_trips, both mutation-verified. This golden pins only the ENCODED FORM the normalized query produces (no 's=' key, identical to the default) -- since query_from_jsonable reconstructs an already-normalized PivotQuery from the stored 'sort_desc: true', a regression that removed the normalization would NOT fail this or any other golden test; it would only show up as a diff in the next `make goldens` regeneration, which no test runs automatically.",
       "query": {
         "grain": "segment",
         "dimensions": [

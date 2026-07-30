@@ -59,7 +59,7 @@ reproduce byte-for-byte rather than re-deriving the validator semantics. `make b
 `sql/02_marts/` into `upgauge.duckdb` (6 catalog views + `fct_route_month` +
 `mart_route_health` + the 2 pivot-vocabulary catalog views); `make verify` proves both the
 Parquet layer and the database layer reproducible across two from-scratch builds —
-`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 409 tests green,
+`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 420 tests green,
 zero join orphans. `data/raw/` holds the full 2015–2026 window.
 
 Next: **the design session** (`docs/design/brief.md`), then **M3b** — the Next.js app: route
