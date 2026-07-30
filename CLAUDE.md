@@ -49,11 +49,14 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M1 COMPLETE.** `make ingest` fetches and builds facts + 4 dims from BTS; `make verify`
-proves 7 artifacts byte-identical across two builds. 253 tests green, zero join orphans.
-`data/raw/` currently holds 2015–2017; run `make fetch` for the full window.
+**M2 COMPLETE.** `make ingest` fetches and builds facts + 4 dims from BTS; `make build` runs
+`sql/02_marts/` into `upgauge.duckdb` (6 catalog views + `fct_route_month` +
+`mart_route_health`); `make verify` proves both the Parquet layer and the database layer
+reproducible across two from-scratch builds — `parquet: 8 artifacts byte-identical`,
+`database: 8 objects identical`. 307 tests green, zero join orphans. `data/raw/` currently
+holds 2015–2017; run `make fetch` for the full window.
 
-Next: **M2** — marts built by SQL in `sql/02_marts/`, reproducible via `make build`.
+Next: **M3** — Explorer: pivot query + URL state + table.
 
 ## Architecture
 
@@ -84,9 +87,9 @@ basemap — tiles are usage-priced).
 | `make fetch-reference` | BTS support tables → `data/raw/` | ✅ |
 | `make normalize` | Raw zips → `data/parquet/t100_segment/year=YYYY/` | ✅ |
 | `make warehouse` | Facts + all 4 dims from `data/raw/` | ✅ |
-| **`make verify`** | **M1 gate: build twice, prove byte-identical** | ✅ |
+| **`make verify`** | **M2 gate: build twice, prove Parquet + database byte-identical** | ✅ |
 | `make ingest` | `fetch` + `fetch-reference` + `warehouse` | ✅ |
-| `make build` | Run `sql/` in order → `upgauge.duckdb` | M2 |
+| `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |
 | `make dev` | Next.js dev server (needs node) | M3 |
 
 ## Hard rules

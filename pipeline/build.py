@@ -147,13 +147,23 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     report = verify_reproducible(args.raw_dir)
-    if report.reproducible:
-        log.info("reproducible — %d artifacts byte-identical across two builds", report.artifacts)
-        return 0
-    log.error("NOT reproducible — %d artifact(s) differ:", len(report.differing))
-    for name in report.differing:
-        log.error("    %s", name)
-    return 1
+    if not report.reproducible:
+        log.error("NOT reproducible — %d Parquet artifact(s) differ:", len(report.differing))
+        for name in report.differing:
+            log.error("    %s", name)
+        return 1
+    log.info("parquet: %d artifacts byte-identical across two builds", report.artifacts)
+
+    from pipeline.marts import verify_database
+
+    db_report = verify_database(args.out_dir)
+    if not db_report.reproducible:
+        log.error("NOT reproducible — %d database object(s) differ:", len(db_report.differing))
+        for name in db_report.differing:
+            log.error("    %s", name)
+        return 1
+    log.info("database: %d objects identical across two builds", db_report.objects)
+    return 0
 
 
 if __name__ == "__main__":

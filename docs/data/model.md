@@ -221,12 +221,25 @@ baseline to compare against."
 > `t12_departures_scheduled = 0` despite dozens of real `t12_departures_performed` — BTS lets
 > a carrier file performed flights against no filed schedule. For those routes,
 > `completion_factor` is `NULL` and so is `health_score`, even though `lf_delta` and the other
-> three deltas are known (the prior window is fully populated). Any test that infers
-> "`health_score` is null exactly when `lf_delta` is null" is asserting a narrower invariant
-> than the real one ("null exactly when *any* of the five components is null") — true on the
-> M2 test fixture (too small to have a `p12`-populated, `t12_departures_scheduled = 0` route
-> at all), false against the full 2015–2017 warehouse. Any future strengthening of this test
-> must check all five components, not use `lf_delta` as a stand-in for the rest.
+> three deltas are known (the prior window is fully populated). A test that infers
+> "`health_score` is null exactly when `lf_delta` is null" asserts a narrower invariant than
+> the real one ("null exactly when *any* of the five components is null") — true on the M2
+> test fixture (too small to have a `p12`-populated, `t12_departures_scheduled = 0` route at
+> all), false against the full 2015–2017 warehouse.
+>
+> **Fixed in Task 6:**
+> `test_health_score_is_null_exactly_when_a_component_is_unknown`
+> ([`pipeline/tests/test_route_health.py`](../../pipeline/tests/test_route_health.py)) checks
+> parity against all five components, not `lf_delta` alone. **A known, permanent limitation of
+> that fix, otherwise recorded only in a gitignored report:** the corrected guard discriminates
+> only against the real 2015–2017 warehouse. It cannot discriminate against the single-year CI
+> fixture, because a one-year fixture structurally cannot populate a `p12` (prior-12-month)
+> window at all — every row's prior window is empty, so every row's `health_score` is already
+> `NULL` for the `p12_months_present = 0` reason, and the fixture never reaches a row where the
+> prior window is populated but `completion_factor` alone is `NULL`. The narrower,
+> `lf_delta`-only version of this test would therefore still pass on CI today; only a run
+> against the full warehouse (`data/parquet/` built from `make fetch` + `make warehouse`, not
+> the checked-in fixture) exercises the distinction the stronger test exists to catch.
 
 ### `distance` is not additive
 

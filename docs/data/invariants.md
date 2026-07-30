@@ -277,6 +277,16 @@ artifact by sha256. It is the M1 exit criterion.
 > itself.** The gate has to be content-based — compare query results / table checksums issued
 > against the built catalog, the same way the Parquet gate compares row content rather than
 > raw bytes.
+>
+> **Built.** `pipeline.marts.verify_database` (`make verify`'s second gate) is why this
+> instability does not matter: it never touches the `.duckdb` file's bytes. It builds the
+> database twice and, for each of the 8 catalog objects, exports it through
+> `COPY (SELECT * FROM <object>) TO ... (FORMAT PARQUET)` on a connection pinned to
+> `SET threads TO 1` — the same setting that makes the Parquet writer above byte-stable —
+> then sha256s that export and compares across the two builds. Real run on the 2015–2017
+> warehouse: `database: 8 objects identical across two builds`. The catalog file's own
+> non-determinism is real and permanent, but it is invisible to the gate because the gate
+> never looks at the catalog file's bytes, only at what querying each object produces.
 
 ## Column count assertion
 

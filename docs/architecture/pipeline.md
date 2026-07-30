@@ -196,15 +196,46 @@ is the exact failure shape to expect if M6's Dockerfile ever ships without `WORK
 
 ### The M2 gate
 
-`make verify` keeps sha256-ing Parquet, and adds: **export every database object back out
-through M1's `threads = 1` writer and sha256 that.** Reusing a writer already proven byte-stable
-beats inventing new hashing semantics, and it makes the mart's reproducibility the same kind of
-claim as the facts'.
+✅ **Built.** `make verify` runs two gates in sequence and fails if either fails:
 
-Whether the `.duckdb` file is *itself* byte-stable is unknown and is measured before the gate is
-written — free-space metadata makes it doubtful, but "doubtful" is what produced the retracted
-BTS-encoder-bug claim in M1, so it gets measured rather than assumed. Result recorded in
-[../data/invariants.md](../data/invariants.md).
+1. **Parquet** (M1, unchanged): `build_all` twice from identical raw inputs, sha256 every
+   artifact. **8 artifacts** on the current 2015–2017 window — 3 fact-year partitions +
+   5 dims.
+2. **Database** (M2, new): `pipeline.marts.verify_database` builds `upgauge.duckdb` twice
+   from the same Parquet and, for every catalog object, exports it through a
+   `COPY (SELECT * FROM <object>) TO ... (FORMAT PARQUET)` on a connection with
+   `SET threads TO 1` — the same writer setting M1 already proved byte-stable — then
+   sha256s that export. **8 objects**: the 6 views over Parquet
+   (`fct_segment_month`, `dim_airport`, `dim_city_market`, `dim_carrier`,
+   `dim_aircraft_type`, `map_mainline_group`) plus the two derived views/tables
+   (`fct_route_month`, `mart_route_health`).
+
+Both counts are measured, not asserted from the file layout — if `sql/02_marts/` ever grows
+or shrinks, the counts printed by `make verify` are what to trust over this paragraph.
+
+**The `.duckdb` file itself is never hashed.** Measured before this gate was written (see
+[../data/invariants.md](../data/invariants.md)): three identical builds of the same content
+produced three different `.duckdb` digests, reproducibly. So `verify_database` compares
+*exported content*, the same way the Parquet gate compares row content rather than raw
+catalog bytes. `_digest_object` runs the export on the connection that already holds the
+built objects — it cannot go through `pipeline.normalize._writer_connection()` like every
+other Parquet write, because that helper opens a fresh connection with nothing in it. It
+applies the identical `SET threads TO 1` itself; the docstring flags this as a deliberate,
+sanctioned exception to "all Parquet writes go through `_writer_connection()`", because if
+that `SET` is ever dropped the gate starts reporting false failures rather than silently
+passing.
+
+Real run, 2015–2017 warehouse:
+
+```
+$ make warehouse && make verify
+parquet: 8 artifacts byte-identical across two builds
+database: 8 objects identical across two builds
+```
+
+**M2 complete.** `make build` produces `upgauge.duckdb` from `sql/02_marts/`, and
+`make verify` proves both the Parquet artifacts and every database object byte-identical
+across two from-scratch builds.
 
 ## Toolchain
 

@@ -22,7 +22,7 @@ normalize:  ## Raw zips -> data/parquet/t100_segment/year=YYYY/
 warehouse:  ## Build facts + all dims from data/raw/ -> data/parquet/
 	$(UV) run python -m pipeline.build $(ARGS)
 
-verify:  ## M1 GATE: build twice, prove every artifact is byte-identical
+verify:  ## M2 GATE: build twice, prove every Parquet artifact AND database object is byte-identical
 	$(UV) run python -m pipeline.build --verify
 
 ingest: fetch fetch-reference warehouse  ## Fetch + build everything. The full M1 pipeline.

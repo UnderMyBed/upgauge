@@ -10,7 +10,7 @@ normalize.py's COPY wrapper.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import duckdb
@@ -120,6 +120,70 @@ def build_database(parquet_dir: Path, db_path: Path, marts_dir: Path = MARTS_DIR
     Path(str(db_path) + ".wal").unlink(missing_ok=True)
     staging.replace(db_path)
     return created
+
+
+def _digest_object(con: duckdb.DuckDBPyConnection, name: str, out_dir: Path) -> str:
+    """sha256 of one object, exported with the same threads = 1 setting the writer uses.
+
+    The .duckdb file itself is NEVER hashed. Measured in Task 1: it is not byte-stable even
+    single-threaded -- three identical builds produced three different digests, reproducibly.
+    Exporting each object through a Parquet write that IS byte-stable is the only content
+    guarantee available. See docs/data/invariants.md.
+
+    Deliberate exception to "all Parquet writes go through _writer_connection()": the export
+    has to run on the connection that holds the objects, so it cannot use a fresh connection.
+    It applies the same `SET threads TO 1` that makes _writer_connection byte-stable -- the
+    caller sets it. If that SET is ever dropped, this gate reports false failures.
+    """
+    import hashlib
+
+    target = Path(out_dir) / f"{name}.parquet"
+    con.execute(f"COPY (SELECT * FROM {name}) TO '{target}' (FORMAT PARQUET)")
+    return hashlib.sha256(target.read_bytes()).hexdigest()
+
+
+@dataclass
+class DatabaseReport:
+    objects: int = 0
+    differing: list[str] = field(default_factory=list)
+
+    @property
+    def reproducible(self) -> bool:
+        return not self.differing
+
+
+def verify_database(parquet_dir: Path, work_dir: Path | None = None) -> DatabaseReport:
+    """Build upgauge.duckdb twice and compare every object's contents.
+
+    Reports rather than raises, so a drifting object is named.
+    """
+    import shutil
+    import tempfile
+
+    owned = work_dir is None
+    work_dir = Path(work_dir or tempfile.mkdtemp(prefix="upguage-verify-db-"))
+    work_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        digests: list[dict[str, str]] = []
+        for run in ("a", "b"):
+            out = work_dir / run
+            if out.exists():
+                shutil.rmtree(out)
+            out.mkdir(parents=True)
+            names = build_database(parquet_dir, out / "upgauge.duckdb")
+            con = duckdb.connect(str(out / "upgauge.duckdb"))
+            con.execute("SET threads TO 1")
+            try:
+                digests.append({n: _digest_object(con, n, out) for n in names})
+            finally:
+                con.close()
+
+        a, b = digests
+        differing = sorted(set(a) ^ set(b) | {n for n in set(a) & set(b) if a[n] != b[n]})
+        return DatabaseReport(objects=len(a), differing=differing)
+    finally:
+        if owned:
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 
 def main(argv: list[str] | None = None) -> int:
