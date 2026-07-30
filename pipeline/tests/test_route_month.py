@@ -65,15 +65,28 @@ def test_no_derived_measure_columns(con):
 def test_distance_is_not_summed(con):
     """SUM(distance) across aircraft types is meaningless. Whatever branch Task 1's
     measurement chose, the rollup's distance must never exceed the segment maximum for
-    that route-month."""
+    that route-month -- and `max()` is only a safe way to carry it as a route attribute if
+    distance doesn't actually vary within the grain in the first place. A `<= max` check
+    alone is satisfied by construction (max() always equals the max), so it cannot catch a
+    route-month where distance genuinely disagrees across rows -- e.g. 100.0 and 500.0 --
+    it would just silently carry 500.0 with zero offences reported. The
+    `count(DISTINCT distance) > 1` check below is what actually guards the assumption,
+    same shape as `test_city_market_ids_are_constant_within_the_route_month_grain` below,
+    which polices the structurally identical question for city market ids. Measured 0 of
+    274,824 non-quarantined route-months varying, over the full 2015-2017 warehouse -- see
+    the `distance is not additive` section of docs/data/model.md.
+    """
     bad = con.execute("""
         WITH seg AS (
-            SELECT year_month, origin_airport_id, dest_airport_id, max(distance) AS d
+            SELECT year_month, origin_airport_id, dest_airport_id,
+                   max(distance) AS d,
+                   count(DISTINCT distance) AS n_distinct
             FROM fct_segment_month WHERE NOT is_quarantined GROUP BY 1, 2, 3
         )
         SELECT count(*) FROM fct_route_month r
         JOIN seg USING (year_month, origin_airport_id, dest_airport_id)
         WHERE r.distance > seg.d + 0.001
+           OR seg.n_distinct > 1
     """).fetchone()[0]
     assert bad == 0
 
@@ -114,6 +127,42 @@ def test_fully_quarantined_route_month_has_null_measures_not_zero(con):
         assert seats is None
         assert passengers is None
         assert quarantined_rows > 0
+
+
+def test_fct_route_month_carries_year_quarter_month_as_group_by_keys_not_any_value(con):
+    """`year`/`quarter`/`month` must be real GROUP BY keys, not `any_value()` aggregate
+    output, or DuckDB's optimizer cannot push a `WHERE year = ...` predicate through this
+    view into fct_segment_month's Hive-partitioned scan -- `any_value()` output is opaque
+    to predicate pushdown, GROUP BY key output is not. Measured against the real
+    2015-2017 warehouse (docs/data/invariants.md): `WHERE year = 2017` through this view
+    read `Total Files Read: 3` with no `File Filters` when year/quarter/month were
+    any_value()'d, versus `Scanning Files: 1/3` with `File Filters: (year = 2017)` once
+    they became GROUP BY keys -- same 494,508-row `fct_route_month` and 7,336-row
+    `mart_route_health` either way.
+
+    This does NOT itself prove pruning happens at runtime -- same honest-style pair as
+    `test_fct_segment_month_view_sets_hive_partitioning_for_pruning` in test_marts.py. The
+    committed CI fixture has only one fact year, so there is nothing to prune, and
+    EXPLAIN ANALYZE's `File Filters`/`Scanning Files` text is a debug rendering, not a
+    stable public API. This only pins the structural precondition: the compiled view text
+    groups by year/quarter/month directly rather than collapsing them with any_value().
+    The actual I/O measurement lives in docs/data/invariants.md, against the real
+    warehouse, not the fixture.
+    """
+    sql = con.execute(
+        "SELECT sql FROM duckdb_views() WHERE view_name = 'fct_route_month'"
+    ).fetchone()[0]
+    flat = sql.replace('"', "")
+    assert "any_value(year)" not in flat
+    assert "any_value(quarter)" not in flat
+    assert "any_value(month)" not in flat
+    group_by_clause = flat.split("GROUP BY", 1)[1]
+    assert group_by_clause.split(",")[:4] == [
+        " year_month",
+        " year",
+        " quarter",
+        " month",
+    ]
 
 
 def test_city_market_ids_are_constant_within_the_route_month_grain(con):

@@ -96,7 +96,35 @@ that. Excludes routes with **<30 departures *performed*** (not scheduled) in the
 
 **A route with no prior-12mo data gets `NULL` deltas and a `NULL` score, never an enormous
 "improvement."** It still appears as a row — that row is the Route Birth Tracker's input.
-Measured on the real 2015–2017 warehouse: 768 of 7,336 routes are new in exactly this sense.
+Measured on the real 2015–2017 warehouse: 767 of 7,336 routes are new in exactly this sense
+(`p12_months_present = 0`).
 
 **Show the components in the UI, not just the score.** The components are the insight; the
 score is a sort key. Label it plainly as a heuristic. Do not over-engineer this.
+
+### `health_score` is `NULL` for three reasons — a route unrankable for lack of a filed
+### schedule must not render as unhealthy
+
+Measured on the real 2015–2017 warehouse, **1,348 of 7,336 routes** have `health_score IS
+NULL`, for three distinct reasons (SQL-level accounting and evidence:
+[../data/model.md § Window rule, floor, and the NULL-prior-window trap](../data/model.md#window-rule-floor-and-the-null-prior-window-trap)):
+
+1. **767 — no prior window.** A genuinely new route (`p12_months_present = 0`). Correctly
+   has no deltas to show.
+2. **1 — zero-measure prior window.** The prior window is technically "present" but filed
+   zero seats and zero departures, so the ratio is undefined the same way division by zero
+   is.
+3. **580 — zero scheduled departures, the larger group.** `completion_factor` is undefined
+   when `t12_departures_scheduled = 0`, which BTS allows for on-demand/charter-style
+   operators that file real performed flights against no filed schedule at all. Unlike the
+   other two, this route usually has known `lf_delta`, `gauge_delta`, `capacity_delta`, and
+   `frequency_delta` — only `completion_factor` (and therefore the composite score) is
+   unknown.
+
+**UI requirement: a `NULL` `health_score` must never render as "unhealthy."** All three
+groups are `NULL` for a data-availability reason, not a low-score reason — sorting or
+filtering that silently treats `NULL` as the bottom of the range would misrepresent 580
+routes (the largest of the three groups) as failing on completion when the real story is
+"no schedule was ever filed to complete." Render these rows with an explicit "insufficient
+data" state, distinguishable from a genuinely low score, and — for the 580-route group —
+still show the four known components even though the composite can't be computed.

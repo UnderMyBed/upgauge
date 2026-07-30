@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from pipeline.fetch import T100D_SEGMENT_US, latest_raw
 from pipeline.invariants import (
     check_columns,
     check_no_rollup_classes,
@@ -27,11 +28,15 @@ from pipeline.invariants import (
 )
 
 RAW_DIR = Path("data/raw")
-EXTRACT = RAW_DIR / "t100d_segment_us_2015.zip"
+# Append-only: filenames carry the download date (t100d_segment_us_2015_20260729.zip), so
+# there is no fixed name to check for existence. latest_raw finds the newest download for
+# this (table, year) the same way build_all does -- see test_reproducibility.py, which
+# already got this right.
+EXTRACT = latest_raw(RAW_DIR, T100D_SEGMENT_US, 2015)
 
 pytestmark = pytest.mark.skipif(
-    not EXTRACT.exists(),
-    reason=f"no extract at {EXTRACT} — run `make fetch --start 2015 --end 2015`",
+    EXTRACT is None,
+    reason="no 2015 extract under data/raw — run `make fetch --start 2015 --end 2015`",
 )
 
 

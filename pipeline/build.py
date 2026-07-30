@@ -146,27 +146,74 @@ def main(argv: list[str] | None = None) -> int:
             log.info("  %s", path)
         return 0
 
-    # Short-circuit on purpose: the database gate's marts are views/tables built FROM this
-    # Parquet, so a drifting artifact here makes any database-gate result meaningless — it
-    # would just be re-reporting the same drift one layer up. Only run it once Parquet holds.
-    report = verify_reproducible(args.raw_dir)
-    if not report.reproducible:
-        log.error("NOT reproducible — %d Parquet artifact(s) differ:", len(report.differing))
-        for name in report.differing:
-            log.error("    %s", name)
-        return 1
-    log.info("parquet: %d artifacts byte-identical across two builds", report.artifacts)
+    import shutil
+    import tempfile
 
-    from pipeline.marts import verify_database
+    # A caller-owned work_dir so build-a survives the call: verify_reproducible only
+    # deletes a work_dir it created itself (owned = work_dir is None), so passing our own
+    # lets us compare its build-a against --out-dir below without rebuilding.
+    work_dir = Path(tempfile.mkdtemp(prefix="upguage-verify-"))
+    try:
+        report = verify_reproducible(args.raw_dir, work_dir=work_dir)
+        if not report.reproducible:
+            log.error("NOT reproducible — %d Parquet artifact(s) differ:", len(report.differing))
+            for name in report.differing:
+                log.error("    %s", name)
+            return 1
+        log.info("parquet: %d artifacts byte-identical across two builds", report.artifacts)
 
-    db_report = verify_database(args.out_dir)
-    if not db_report.reproducible:
-        log.error("NOT reproducible — %d database object(s) differ:", len(db_report.differing))
-        for name in db_report.differing:
-            log.error("    %s", name)
-        return 1
-    log.info("database: %d objects identical across two builds", db_report.objects)
-    return 0
+        # The two throwaway builds above agree with each other, but that says nothing
+        # about whether --out-dir (what `make build` and the database gate below actually
+        # read) matches raw at all -- e.g. `make fetch` added a year and `make warehouse`
+        # was never re-run. Link the gates: compare a fresh build from raw-dir against
+        # what is actually sitting at out-dir, and name what differs.
+        log.info(
+            "parquet: comparing %s (on disk) against a fresh build from %s",
+            args.out_dir,
+            args.raw_dir,
+        )
+        fresh = _digest_tree(work_dir / "build-a")
+        on_disk = _digest_tree(args.out_dir)
+        stale = sorted(
+            set(fresh) ^ set(on_disk)
+            | {name for name in set(fresh) & set(on_disk) if fresh[name] != on_disk[name]}
+        )
+        if stale:
+            log.error(
+                "NOT reproducible — %d Parquet artifact(s) at %s differ from a fresh "
+                "build of %s:",
+                len(stale),
+                args.out_dir,
+                args.raw_dir,
+            )
+            for name in stale:
+                log.error("    %s", name)
+            return 1
+        log.info(
+            "parquet: %s matches a fresh build from %s (%d artifacts)",
+            args.out_dir,
+            args.raw_dir,
+            len(on_disk),
+        )
+
+        # Short-circuit on purpose: the database gate's marts are views/tables built FROM
+        # this Parquet, so a drifting artifact here makes any database-gate result
+        # meaningless — it would just be re-reporting the same drift one layer up. Only
+        # run it once Parquet is proven reproducible AND proven to match --out-dir.
+        from pipeline.marts import verify_database
+
+        db_report = verify_database(args.out_dir)
+        if not db_report.reproducible:
+            log.error(
+                "NOT reproducible — %d database object(s) differ:", len(db_report.differing)
+            )
+            for name in db_report.differing:
+                log.error("    %s", name)
+            return 1
+        log.info("database: %d objects identical across two builds", db_report.objects)
+        return 0
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

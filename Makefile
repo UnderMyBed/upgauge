@@ -47,4 +47,4 @@ check: lint test  ## Lint + test. Run this before every commit.
 
 clean:  ## Remove build artifacts and caches (NOT data/raw — that's the audit trail)
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ *.egg-info
-	rm -f upguage.duckdb upguage.duckdb.wal
+	rm -f upgauge.duckdb upgauge.duckdb.wal

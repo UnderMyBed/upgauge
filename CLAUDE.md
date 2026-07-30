@@ -102,9 +102,15 @@ AVG(load_factor)                                  -- WRONG. Plausible-looking ga
 SUM(passengers)::DOUBLE / NULLIF(SUM(seats), 0)   -- RIGHT. Always.
 ```
 
-Enforce structurally: **no `load_factor` column on any fact table.** Same for `asm`, `rpm`,
-`avg_gauge`, `completion_factor`. Can't average what doesn't exist. The #1 bug in every
-homemade T-100 tool.
+Enforce structurally: **no `load_factor` column on any `fct_*` table.** Same for `asm`,
+`rpm`, `avg_gauge`, `completion_factor`. Can't average what doesn't exist. The #1 bug in
+every homemade T-100 tool.
+
+**The one exception: `mart_route_health`.** It stores ten derived columns (`lf_t12` ...
+`health_score`), licensed only because it has no time grain — one row per (carrier,
+undirected route) is already the finest and coarsest it gets, so there is no `GROUP BY` of
+it for an `AVG()` to corrupt. If it ever gains a time grain, the derived columns must come
+back out. Full justification and the tests that guard it: `docs/data/model.md`.
 
 **Key on `AIRLINE_ID` and `AIRPORT_ID`, never letter codes.** `CARRIER` (raw IATA) is
 reused — 135 of 1,825 codes map to >1 airline. `UNIQUE_CARRIER` doesn't collide, but only

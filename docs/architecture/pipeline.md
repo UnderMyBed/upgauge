@@ -196,12 +196,21 @@ is the exact failure shape to expect if M6's Dockerfile ever ships without `WORK
 
 ### The M2 gate
 
-✅ **Built.** `make verify` runs two gates in sequence and fails if either fails:
+✅ **Built.** `make verify` runs three checks in sequence and fails if any fails:
 
-1. **Parquet** (M1, unchanged): `build_all` twice from identical raw inputs, sha256 every
-   artifact. **8 artifacts** on the current 2015–2017 window — 3 fact-year partitions +
-   5 dims.
-2. **Database** (M2, new): `pipeline.marts.verify_database` builds `upgauge.duckdb` twice
+1. **Parquet reproducibility** (M1, unchanged): `build_all` twice into throwaway temp
+   dirs from identical raw inputs, sha256 every artifact. **8 artifacts** on the current
+   2015–2017 window — 3 fact-year partitions + 5 dims.
+2. **Parquet freshness** (M2 fix wave 1, new): the two throwaway builds above only prove
+   they agree *with each other* — neither is `--out-dir`, the Parquet that `make build`
+   and the database gate below actually read. So `_digest_tree` on one of the throwaway
+   builds is compared against `_digest_tree(--out-dir)`, and any difference is named. This
+   is what catches `make fetch` adding a year that `make warehouse` never picked up: the
+   database gate's object *count* doesn't change when a fact-year partition goes stale,
+   because it counts objects, not files, so without this check that staleness is
+   invisible to `make verify` and only shows up later as `DATA AS OF` silently failing to
+   advance.
+3. **Database** (M2): `pipeline.marts.verify_database` builds `upgauge.duckdb` twice
    from the same Parquet and, for every catalog object, exports it through a
    `COPY (SELECT * FROM <object>) TO ... (FORMAT PARQUET)` on a connection with
    `SET threads TO 1` — the same writer setting M1 already proved byte-stable — then
@@ -230,6 +239,8 @@ Real run, 2015–2017 warehouse:
 ```
 $ make warehouse && make verify
 parquet: 8 artifacts byte-identical across two builds
+parquet: comparing data/parquet (on disk) against a fresh build from data/raw
+parquet: data/parquet matches a fresh build from data/raw (8 artifacts)
 database: 8 objects identical across two builds
 ```
 

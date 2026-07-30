@@ -54,10 +54,13 @@ agg AS (
              w.t12_start_month, w.t12_end_month, w.p12_start_month, w.p12_end_month
 ),
 -- Every ratio below comes from SUMMED numerator and denominator. Never an averaged ratio.
--- A route absent from the prior window yields NULL, not an enormous improvement: the
--- `CASE WHEN p12_months_present = 0 THEN NULL ... END` guard on every p12_*-derived ratio
--- and every *_delta column below is what enforces that, so it must not be removed as
--- "redundant".
+-- A route absent from the prior window yields NULL, not an enormous improvement. The real
+-- guard is the nullif() on every p12_* denominator: SUM(...) FILTER (WHERE <no rows>)
+-- already returns NULL, not 0, in DuckDB, so nullif's NULL-in/NULL-out propagates on its
+-- own. The `CASE WHEN p12_months_present = 0 THEN NULL ... END` below is documentation,
+-- not the load-bearing mechanism -- deleting all four is a proven no-op today (identical
+-- byte-for-byte mart). Keep it anyway: it is correct defence against a future coalesce()
+-- on the p12 sums, which WOULD change behaviour. See docs/data/model.md.
 derived AS (
     SELECT
         *,

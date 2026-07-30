@@ -192,6 +192,35 @@ join — *silently*, because codes without leading zeros still match.
 Store both directional (`PDX→AUS`) and undirected (`AUS-PDX`) keys. The undirected key is
 the two airport IDs sorted, so it is stable regardless of filing order.
 
+## `fct_route_month` must carry `year`/`quarter`/`month` as GROUP BY keys, not `any_value()`
+
+`any_value()` output is opaque to DuckDB's optimizer: a `WHERE year = 2017` on top of the
+view cannot be pushed down through an `any_value(year)` aggregate into
+`fct_segment_month`'s Hive-partitioned scan, so every partition file gets opened and
+filtered by content instead of pruned by name — silently, since the row count and every
+other result is identical either way.
+
+**Measured against the real 2015–2017 warehouse** (`EXPLAIN ANALYZE`, DuckDB 1.5.5),
+`SELECT count(*) FROM fct_route_month WHERE year = 2017`:
+
+```
+                        any_value(year)     year as GROUP BY key
+Total Files Read              3                      1
+Scanning Files                (not reported)         1/3
+File Filters                  (none)                 (year = 2017)
+```
+
+Fixed in M2 fix wave 1 by moving `year`, `quarter`, `month` out of `any_value()` and into
+both the `SELECT` list and the `GROUP BY` — each is a pure function of `year_month` (0 of
+494,508 `year_month` groups have more than one distinct value of any of the three), so the
+grain is unchanged: `fct_route_month` stayed 494,508 rows and `mart_route_health` stayed
+7,336 rows before and after. Guarded structurally (not by a runtime EXPLAIN assertion,
+which is brittle — see the `hive_partitioning` pruning pair in
+[`pipeline/tests/test_marts.py`](../../pipeline/tests/test_marts.py)) by
+`pipeline/tests/test_route_month.py::test_fct_route_month_carries_year_quarter_month_as_group_by_keys_not_any_value`,
+which pins the compiled view SQL rather than the fixture's own I/O — the committed CI
+fixture has only one fact year, so there is nothing in it to prune.
+
 ## City market ids are constant within the route-month grain
 
 `fct_route_month` collapses `fct_segment_month`'s `origin_city_market_id` /

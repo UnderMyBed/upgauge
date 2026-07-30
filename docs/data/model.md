@@ -183,12 +183,24 @@ that mostly didn't fly should not count as "active."
 **A route absent from the prior 12 months gets `NULL` deltas, never a huge positive number.**
 A new route is not a route that improved infinitely. Enforced by `CASE WHEN
 p12_months_present = 0 THEN NULL ELSE ... END` on every `p12_*`-derived ratio and every
-`*_delta` column — belt-and-suspenders alongside the `nullif` on each denominator, since a
-`SUM(...) FILTER (WHERE <no rows match>)` already returns `NULL`, not `0`, in DuckDB. The row
-itself still exists (it is the Route Birth Tracker's input); only its deltas are unknown.
-Measured on the real 2015–2017 warehouse: of 7,336 surviving routes, 768 have no prior-window
-data (`new_routes`) and are correctly `NULL`-delta rows; the other 6,568 have both windows
-populated.
+`*_delta` column. This `CASE` is a documentation aid, not the load-bearing guard — deleting
+all four is a provable no-op today (identical byte-for-byte 7,336-row mart), because a
+`SUM(...) FILTER (WHERE <no rows match>)` already returns `NULL`, not `0`, in DuckDB, and
+`nullif` on each denominator propagates that `NULL` through. The real guard is the
+`nullif`s: deleting *those* is what a test catches. Keep the `CASE` anyway — it is correct
+defence against a future `coalesce` on the p12 sums, just not what "enforces" the rule
+today. The row itself still exists (it is the Route Birth Tracker's input); only its
+deltas are unknown.
+
+Measured on the real 2015–2017 warehouse: of 7,336 surviving routes, **767** have no
+prior-window data (`p12_months_present = 0`, `new_routes`) and are correctly `NULL`-delta
+rows. The other **6,569** have `p12_months_present = 1`, but one of those 6,569 —
+`op_airline_id=20378`, route `12266-12951` — filed `p12_seats = 0` and
+`p12_departures_performed = 0`, so `lf_p12` / `gauge_p12` are `NULL` via the `nullif` on
+their denominators even though the prior window is technically "present." So `lf_delta IS
+NULL` for **768** routes, not 767 — the extra one is a zero-measure prior window, not a
+missing one, and the two must not be conflated: **767 + 1 = 768**, and only the 767 are
+`new_routes` in the Route Birth Tracker sense.
 
 `health_score` is an **equal-0.20-weighted** z-score composite of `lf_delta`, `gauge_delta`,
 `capacity_delta`, `frequency_delta`, and `completion_factor`, all oriented so **higher is
@@ -214,14 +226,18 @@ is exactly the kind of finding the product should surface, but the UI must show 
 "this route tripled its traffic" when the real story is "this route had almost no prior-year
 baseline to compare against."
 
-> ⚠️ **`health_score` can be `NULL` for a reason *other than* a missing prior window.**
-> `completion_factor = t12_departures_performed / nullif(t12_departures_scheduled, 0)` is
-> computed from `t12_*` sums alone and has nothing to do with `p12_months_present`. Measured
-> on the real warehouse: **580 of 7,336 routes** (all on-demand/charter-style operators) have
-> `t12_departures_scheduled = 0` despite dozens of real `t12_departures_performed` — BTS lets
-> a carrier file performed flights against no filed schedule. For those routes,
-> `completion_factor` is `NULL` and so is `health_score`, even though `lf_delta` and the other
-> three deltas are known (the prior window is fully populated). A test that infers
+> ⚠️ **`health_score` is `NULL` for three distinct reasons, not one — 1,348 of 7,336 routes
+> total.** The product-facing writeup (what the UI must do about each) lives in
+> [../product/features.md § Route Health score](../product/features.md#route-health-score-v0--deliberately-dumb);
+> this is the SQL-level accounting behind it.
+>
+> | Reason | Count | Why |
+> |---|---|---|
+> | No prior window | 767 | `p12_months_present = 0` — a genuinely new route. |
+> | Zero-measure prior window | 1 | `p12_months_present = 1` but `p12_seats = 0` and `p12_departures_performed = 0` (`op_airline_id=20378`, route `12266-12951`) — `nullif` makes `lf_p12`/`gauge_p12` NULL despite the window being "present." |
+> | Zero scheduled departures | 580 | `t12_departures_scheduled = 0` despite real `t12_departures_performed` (all on-demand/charter-style operators) — `completion_factor = t12_departures_performed / nullif(t12_departures_scheduled, 0)` is computed from `t12_*` sums alone and has nothing to do with `p12_months_present`. |
+>
+> `767 + 1 + 580 = 1,348`, the real `health_score IS NULL` count. A test that infers
 > "`health_score` is null exactly when `lf_delta` is null" asserts a narrower invariant than
 > the real one ("null exactly when *any* of the five components is null") — true on the M2
 > test fixture (too small to have a `p12`-populated, `t12_departures_scheduled = 0` route at
@@ -262,6 +278,12 @@ Zero route-months show more than one distinct `DISTANCE` value. **`DISTANCE` is 
 branch: `fct_route_month` carries `distance` as an attribute via `max(distance)`, and ASM
 computes downstream as `SUM(seats) * distance`. A `seat_miles = SUM(seats * distance)` column
 is not needed; Task 5's SQL should use the plain attribute + downstream multiplication.
+
+Guarded by `pipeline/tests/test_route_month.py::test_distance_is_not_summed`, which asserts
+`count(DISTINCT distance) = 1` per route-month, not only `distance <= max(segment distance)`
+— the latter is satisfied by construction (`max()` always equals the max) and so cannot
+catch a route-month where distance genuinely disagrees across rows, the same gap the
+city-market-id test next to it was written to avoid.
 
 ### `origin_city_market_id` / `dest_city_market_id` are collapsed with `any_value()`
 
