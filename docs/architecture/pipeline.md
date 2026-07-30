@@ -544,8 +544,19 @@ demonstrable: a permalink like
 `/explore?v=1&k=seg&d=op_airline_id&m=seats,load_factor,avg_gauge&t=2025-05:2026-04&s=-seats&n=25&g=op`
 now server-renders a real table against `upgauge.duckdb` — the `UPGAUGE` wordmark, a
 `DATA AS OF` badge in `--signal`, a stat/meta strip (grain, grouping, window, row count,
-quarantined-on-page count), the Task 9 `DataTable` (reused, not rebuilt), and the permalink
-re-encoded and displayed underneath the table.
+quarantined-on-page count), the Task 9 `DataTable` (reused, not rebuilt), the legend rail
+(added in fix round 1, below), and the permalink re-encoded and displayed underneath the
+table.
+
+**Known gap: dimension columns render raw IDs, not display codes.** The `op_airline_id`
+column shows the bare `AIRLINE_ID` (e.g. `19393`), not a carrier code — `db.ts`/`render.ts`
+never read `meta_pivot_dimensions`' `join_dim`/`join_key` columns, which exist for exactly
+this resolution. This does not satisfy `CLAUDE.md`'s "Join on IDs, display `carrier_code`"
+rule. Deliberately not fixed here: resolving every dimension's join is query-layer work
+(joining `dim_carrier`/`dim_airport` per dimension key, decided per dimension since not all
+of them join to a display-label table), genuinely M4-shaped rather than a page-template
+change, and out of this task's scope. Recorded here rather than left implicit, per the
+fix-round-1 review that caught the docs marking M3b complete without saying so.
 
 **The error path is the product feature, not a fallback.** Only `decode()` is wrapped in a
 try/catch — it is the one step that validates untrusted request input against the allowlist,
@@ -580,13 +591,54 @@ permalink above returned HTTP 200 with real carrier rows (`op_airline_id` values
 OF` badge; `d=nope` in place of a real dimension also returned HTTP 200 — not a 500 — with
 the named error and zero `<table>`/`<tr>` elements in the response body.
 
-**M3b complete.** The route handler (Task 8), the data table with its gauge rail and
-reason-code gutter (Task 9), and now `/explore` itself (Task 10) close out the app side of
-the pivot contract M3a shipped. 103 app tests green (`make app-check`), 424 Python tests
-green (`make check`), `make app-build` produces a working production build. Not built in
-M3b: the time-series and fleet-mix charts, the arc map, entity pages, `/watch`, the
-seasonality heatmap, and OG cards — all specified in
-[`../design/system.md`](../design/system.md) and left to M4/M5.
+**Fix round 1** (review of the initial Task 10 commit) found three gaps between the shipped
+page and `docs/design/system.md`'s States table, plus one instance of the vocabulary
+duplication this whole milestone exists to avoid:
+
+- **Empty-result state was unhandled.** A valid query matching zero rows (a real filter
+  value, e.g. `f=op_airline_id:999999999`, on a real dimension) rendered `DataTable` with a
+  header and an empty `<tbody>` — no message, no offer of a broader window, and the design
+  doc requires both ("Keep the header, stat strip and legend rail. State the query in words
+  and offer the nearest broader window. Never a blank panel."). Fixed: `EmptyState` in
+  `page.tsx` states the query in words via `describeQuery()` (grain, every dimension label,
+  the window, every filter with its dimension's catalog label) and links to the same query
+  widened to `2015-01` — the start of the window `data/raw/` holds — via `widerWindowHref()`,
+  which returns `null` (no link) when the query already starts there.
+- **The legend rail — signature element 3 of 3 — was entirely missing.** `system.md` calls
+  it "the methodology surface... folded into the product\[,] present on every data view," so
+  there is no separate how-to-read page to go stale; `/explore` rendered the gauge rail and
+  reason-code gutter with nothing on screen explaining either. Fixed:
+  `app/src/components/LegendRail.tsx`, ported from
+  [`../design/mockups/table.html`](../design/mockups/table.html)'s `<aside class="legend">`
+  — the gauge-rail groups (fixed 0–260 axis, `<110` regional, `>210` widebody), the row
+  marks (`⌀`/`n`/`Q`, plus the dotted-underline "computed measure" convention), and the
+  operating-carrier "reading this" note — minus the mockup's "Arc rendering (maps)" group,
+  since this page has no map. Placed in a new `.body` grid (`minmax(0,1fr) 214px`, 24px gap,
+  sticky, collapsing below 920px per `system.md`'s layout rule) alongside the table.
+- **Dimension values render raw IDs, and the docs didn't say so** — see the "Known gap"
+  paragraph above, added in this round.
+- **`DERIVED`, a hand-copied `Set` of measure keys mirroring `is_additive: FALSE` in
+  `meta_pivot_measures`, was deleted.** `allowlist.meas.get(c)?.isAdditive` already carries
+  the same fact and was already loaded on the page; a derived measure added to the catalog
+  now picks up its dotted "computed" underline automatically instead of silently missing it
+  until a second hand-copied list is remembered.
+
+Re-verified end to end against a running `next start` server after the fix: the demo
+permalink's HTML now contains `Chart legend` and the row-mark glyph text; the invalid
+permalink still renders the named error with zero table/row elements; a genuinely empty
+query (the `op_airline_id:999999999` filter above) renders the "No rows match..." message
+and the widened-window link, with the stat strip, `DATA AS OF` badge and legend rail all
+still present.
+
+**M3b complete**, with the one known, documented gap above. The route handler (Task 8), the
+data table with its gauge rail and reason-code gutter (Task 9), and `/explore` itself
+including the legend rail and empty-result state (Task 10 and its fix round 1) close out the
+app side of the pivot contract M3a shipped. 109 app tests green (`make app-check`), 424
+Python tests green (`make check`), `make app-build` produces a working production build. Not
+built in M3b: display-code resolution for dimension values (see above, deferred to M4), the
+time-series and fleet-mix charts, the arc map, entity pages, `/watch`, the seasonality
+heatmap, and OG cards — all specified in [`../design/system.md`](../design/system.md) and
+left to M4/M5.
 
 ## Toolchain
 

@@ -64,12 +64,22 @@ green, zero join orphans. `data/raw/` holds the full 2015–2026 window.
 M3b ported that contract into the Next.js app and wired it end to end: the TypeScript pivot
 renderer and URL codec (`app/src/lib/pivot/`), the read-only DuckDB query layer
 (`app/src/lib/db.ts`), the `/api/pivot` route handler, the `DataTable` / `GaugeRail` /
-`ReasonCode` components implementing the gauge rail and reason-code gutter, and
-`/explore?<permalink>` (`app/src/app/explore/page.tsx`) — a server-rendered page that
-decodes the URL, runs the pivot, and renders a real table with the `DATA AS OF` badge, a
-stat/meta strip, and the permalink displayed. An invalid permalink renders a named error
-(e.g. `unknown dimension 'nope'`), never a silent fallback to a default view. 103 app tests
-green (`make app-check`); `make app-build` produces a working production build.
+`ReasonCode` / `LegendRail` components implementing the gauge rail, reason-code gutter and
+methodology rail, and `/explore?<permalink>` (`app/src/app/explore/page.tsx`) — a
+server-rendered page that decodes the URL, runs the pivot, and renders a real table with the
+`DATA AS OF` badge, a stat/meta strip, the legend rail, and the permalink displayed. An
+invalid permalink renders a named error (e.g. `unknown dimension 'nope'`), never a silent
+fallback to a default view; a valid permalink matching zero rows states the query in words
+and offers the widened-to-2015 permalink, never a blank panel. 109 app tests green
+(`make app-check`); `make app-build` produces a working production build.
+
+**Known gap, not yet fixed:** dimension columns in the Explorer table render the raw
+`AIRLINE_ID` / `AIRPORT_ID` the catalog is keyed on (e.g. `19393`), not a display code —
+`meta_pivot_dimensions`'s `join_dim`/`join_key` columns exist for exactly this resolution
+(`op_airline_id` → `dim_carrier.airline_id`) but nothing in `db.ts` or `render.ts` reads
+them yet. This does not satisfy this file's own "Join on IDs, display `carrier_code`" rule
+(see Hard rules, below) — it is deferred to M4, which is query-layer work (joining
+`dim_carrier`/`dim_airport` per dimension), not a page-rendering fix.
 
 Not in M3b: the time-series and fleet-mix charts, the arc map, entity pages (`/route`,
 `/airport`, `/carrier`, `/aircraft`), `/watch`, the seasonality heatmap, and OG cards — all
