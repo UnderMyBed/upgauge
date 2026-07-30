@@ -133,6 +133,66 @@ not build on provider-specific runtimes** (Workers, D1, KV). This must stay a no
 > This constraint earned its keep: swapping the original Fly pick for Hetzner was a one-line
 > change precisely because nothing depended on the provider.
 
+## `proxy.ts` is load-bearing — both query entry points break without it
+
+**`app/src/proxy.ts` and `next.config.ts`'s `skipProxyUrlNormalize: true` are one mechanism,
+and neither works alone.** They are a deploy requirement, not an optimisation: without them
+*every* filtered query fails on both `/explore` and `/api/pivot`.
+
+Next normalizes the incoming request URL by round-tripping the query string through
+form-encoding before either a page or a route handler sees it. Measured directly:
+
+| Source | `f=k:a%2Cb,c` becomes |
+|---|---|
+| `new URL(raw).search` | `f=k:a%2Cb,c` — correct |
+| `URLSearchParams.toString()` (what Next applies) | `f=k%3Aa%2Cb%2Cc` |
+
+The structural `:` becomes `%3A`, and — the fatal part — the **structural comma and the
+percent-encoded data comma collapse into the same bytes**, so a value that legally contains a
+`,` becomes indistinguishable from two values. This is unrecoverable after the fact; no
+amount of re-decoding downstream can undo it.
+
+Measured against a running production server before the fix: every filtered query returned
+`malformed filter 'origin_state%3AOR'` — including ones with **no reserved characters at
+all**. `/api/pivot` was affected exactly as much as `/explore`; its
+`new URL(request.url).search` is normalized too.
+
+The fix: `skipProxyUrlNormalize` keeps `request.url` untouched inside `proxy.ts`, which copies
+it into the `x-upgauge-raw-query` request header (`app/src/lib/rawQuery.ts`); both entry
+points read that header and nothing else. A page can never use `searchParams` for this — Next
+has already percent-decoded those, which loses the same distinction.
+
+Portability is unaffected, and in fact improved: Next 16 deprecated `middleware` in favour of
+`proxy`, and its docs are explicit that **"the `edge` runtime is NOT supported in `proxy`. The
+`proxy` runtime is `nodejs`, and it cannot be configured"** — so this cannot pull in a
+provider-specific edge runtime, and the platform-support table lists a plain Node.js server as
+supported. It is ordinary Node code in the container.
+
+If the header is absent the app **fails loudly** rather than guessing: `/api/pivot` returns a
+generic 500 (the message never reaches the client) and `/explore` throws
+`MissingRawQueryError`, naming the header and the file to check. There is deliberately no
+fallback to reconstructing the string from `searchParams` — that path is exact for most inputs
+and silently wrong for the rest, which is the failure mode this project refuses everywhere
+else.
+
+**No unit test can catch a regression here.** The tests never construct a `NextRequest` and
+never cross Next's normalization; both times this bug appeared it was found only by building,
+serving, and curling. See [pipeline.md](pipeline.md) on the missing `app-smoke` gate.
+
+## If the Dockerfile ever adopts `output: "standalone"`
+
+Next's standalone output traces the module graph and copies only what it finds. **`sql/` is
+not in that graph** — `render.ts` and `db.ts` read `sql/03_queries/*.sql` with `readFileSync`
+at request time, and file reads are invisible to a bundler's tracer. A standalone image would
+build and start cleanly and then fail every query with ENOENT on the first request.
+
+The same applies to `upgauge.duckdb` and `data/parquet/`, for the same reason plus the
+relative-path contract above. If standalone is adopted, `outputFileTracingIncludes` has to
+name `sql/**` explicitly, and the data still has to be copied in by the Dockerfile.
+
+Recorded here rather than in the branch's working notes because those are untracked and would
+have taken this with them.
+
 ## Environment variables
 
 The server (`app/src/lib/db.ts`) reads two. Both are optional — production sets neither and

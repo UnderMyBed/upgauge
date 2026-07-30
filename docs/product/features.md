@@ -49,7 +49,13 @@ aircraft type · aircraft group · distance group
      shape of `t` and `f`, `n`/`v` as integers) is validated in the codec.
    - **Filter values are percent-encoded individually**, because they are the one piece of
      free text in the format and can legally contain the delimiters (`,`, `:`, `&`, `=`) the
-     format itself uses. Every other key carries plain allowlisted-identifier text and needs
+     format itself uses. This is what makes the raw query string load-bearing: once a web
+     framework decodes or re-encodes the query, a data `,` and a structural `,` are the same
+     byte and the distinction is gone for good. Both server entry points therefore read the
+     untouched request line via `proxy.ts`, never `searchParams` and never a normalized
+     `request.url` — see
+     [hosting.md § `proxy.ts` is load-bearing](../architecture/hosting.md#proxyts-is-load-bearing--both-query-entry-points-break-without-it),
+     which records the measured failure this caused on both `/explore` and `/api/pivot`. Every other key carries plain allowlisted-identifier text and needs
      no escaping. Decoding never uses `urllib.parse.parse_qsl` — see the "Escaping" section
      of `pipeline/urlstate.py`'s module docstring for why an eager, whole-string unquote
      would silently corrupt a percent-encoded structural comma.

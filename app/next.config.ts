@@ -14,6 +14,13 @@ const nextConfig: NextConfig = {
   // DuckDB) and matches serverExternalPackages' documented purpose -- "Dependencies used
   // inside Server Components and Route Handlers ... using Node.js specific features".
   serverExternalPackages: ["@duckdb/node-api", "@duckdb/node-bindings"],
+
+  // EXPERIMENT (see the investigation this commit records): does disabling Next's URL
+  // normalization preserve the raw query string? The permalink format uses literal `:` and
+  // `,` as structural delimiters with data occurrences percent-encoded, and normalization
+  // form-encodes the query -- turning `k:a%2Cb,c` into `k%3Aa%2Cb%2Cc`, which collapses the
+  // structural and data commas into the same bytes.
+  skipProxyUrlNormalize: true,
 };
 
 export default nextConfig;

@@ -70,8 +70,23 @@ server-rendered page that decodes the URL, runs the pivot, and renders a real ta
 `DATA AS OF` badge, a stat/meta strip, the legend rail, and the permalink displayed. An
 invalid permalink renders a named error (e.g. `unknown dimension 'nope'`), never a silent
 fallback to a default view; a valid permalink matching zero rows states the query in words
-and offers the widened-to-2015 permalink, never a blank panel. 109 app tests green
-(`make app-check`); `make app-build` produces a working production build.
+and offers the widened-to-2015 permalink, never a blank panel. 127 app tests green
+(`make app-check`); `make app-build` produces a working production build; `make app-smoke`
+builds, serves and curls 12 real URLs.
+
+**`app/src/proxy.ts` + `skipProxyUrlNormalize` are load-bearing, not an optimisation.** Next
+form-encodes the query string before any page or route handler sees it, which turns the
+format's structural `:` into `%3A` and collapses `k:a%2Cb,c` into `k%3Aa%2Cb%2Cc` — a data
+comma becomes indistinguishable from a separator. Without them **every** filtered query fails
+on **both** `/explore` and `/api/pivot`, reserved characters or not. Both entry points read
+the raw string from one header and nothing else; a page can never use `searchParams` for this.
+Full detail and the measurements: `docs/architecture/hosting.md`.
+
+**No unit test can catch that class.** Five bugs on this branch had the shape "green tests,
+broken production" — `__dirname` under Turbopack, `decodeURIComponent` throwing,
+`process.chdir`, the DuckDB platform-switch `require`, and the query normalization above.
+Every one was found by building and serving, never by the suite. That is what `make app-smoke`
+is for; run it before merging anything that touches routing, config, or the query layer.
 
 **Known gap, not yet fixed:** dimension columns in the Explorer table render the raw
 `AIRLINE_ID` / `AIRPORT_ID` the catalog is keyed on (e.g. `19393`), not a display code —
@@ -96,7 +111,7 @@ aggregation wants RAM, and a cold start lands on the first click of every shared
 ```
 pipeline/    Python 3.12 + uv. CI only, never runs in prod.
 sql/         01_staging/ 02_marts/ 03_queries/ — shared by pipeline AND server
-app/         Next.js 16 App Router, TS, Tailwind v4, shadcn/ui
+app/         Next.js 16 App Router, TS, Tailwind v4
 data/        gitignored. raw/ is the audit trail
 ```
 
@@ -123,8 +138,9 @@ versions.** `make` shells through `mise exec`, so the commands below work withou
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |
 | `make goldens` | Regenerate the Explorer contract fixtures (`sql/03_queries/goldens/`) from `pipeline/pivot.py` | ✅ |
 | `make dev` | Next.js dev server (needs node) | ✅ |
-| `make app-check` | Typecheck + test the app (`app/`) | ✅ |
+| `make app-check` | Typecheck + lint + test the app (`app/`) | ✅ |
 | `make app-build` | Production build of the app | ✅ |
+| **`make app-smoke`** | **Build, serve, curl. The only gate that catches production-only bugs.** | ✅ |
 
 ## Hard rules
 

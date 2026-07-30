@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { connect, dataAsOf, demoteBigInts, loadAllowlist, runPivot } from "@/lib/db";
+import { FIXTURE } from "@/lib/pivot/allowlist.fixture";
 
 describe("the query layer runs against the real database", () => {
   it("loads the allowlist from the catalog views", async () => {
@@ -89,5 +90,28 @@ describe("demoteBigInts", () => {
   it("throws instead of silently losing precision above Number.MAX_SAFE_INTEGER", () => {
     const tooBig = BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1);
     expect(() => demoteBigInts({ quarantined_rows: tooBig })).toThrow(/MAX_SAFE_INTEGER/);
+  });
+});
+
+// Whole-branch review, IMPORTANT 2: allowlist.fixture.ts hand-transcribes the catalog and
+// claims "if it drifts from the catalog, the golden tests fail -- which is the point". That
+// was only ever true for the golden-covered subset: the goldens exercise 4 of 14 dimensions
+// and 3 of 12 measures, so a change to (say) meta_pivot_measures.expr for `asm` would leave
+// every app test green while the TS suite asserted against a fiction and production ran the
+// real catalog. This test closes the loop -- db.test.ts already opens the real database, so
+// pinning the whole fixture against it costs one query and covers all 26 entries.
+describe("allowlist.fixture.ts stays in sync with the real catalog", () => {
+  it("matches meta_pivot_dimensions and meta_pivot_measures exactly", async () => {
+    const live = await loadAllowlist();
+    expect(Object.fromEntries(live.dims)).toEqual(Object.fromEntries(FIXTURE.dims));
+    expect(Object.fromEntries(live.meas)).toEqual(Object.fromEntries(FIXTURE.meas));
+  });
+
+  it("covers every catalog entry, so the comparison above cannot pass vacuously", async () => {
+    const live = await loadAllowlist();
+    expect(live.dims.size).toBeGreaterThan(0);
+    expect(live.meas.size).toBeGreaterThan(0);
+    expect(FIXTURE.dims.size).toBe(live.dims.size);
+    expect(FIXTURE.meas.size).toBe(live.meas.size);
   });
 });

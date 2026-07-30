@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install ingest build goldens dev app-check app-build test lint fmt check clean
+.PHONY: help install ingest build goldens dev app-check app-build app-smoke test lint fmt check clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -43,12 +43,16 @@ goldens:  ## Regenerate the Explorer contract fixtures from the reference implem
 dev:  ## Next.js dev server
 	$(NPM) run dev
 
-app-check:  ## Typecheck + test the app
+app-check:  ## Typecheck + lint + test the app
 	$(NPM) run typecheck
+	$(NPM) run lint
 	$(NPM) test
 
 app-build:  ## Production build
 	$(NPM) run build
+
+app-smoke:  ## Build, serve, and curl real URLs. Catches production-only bugs no unit test can.
+	./app/smoke.sh
 
 test:  ## Run the pipeline test suite
 	$(UV) run pytest

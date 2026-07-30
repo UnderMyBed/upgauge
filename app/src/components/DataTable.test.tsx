@@ -91,4 +91,29 @@ describe("DataTable", () => {
     expect(gutCells[3].querySelector("abbr")?.textContent).toBe("Q");
     expect(gutCells[3].getAttribute("data-limit")).toBe("true");
   });
+
+  // Whole-branch review, CRITICAL 2: the pivot templates emit only the measures the query
+  // asked for (sql/03_queries/pivot_segment.sql), so `departures_performed` is absent from
+  // every row of any permalink that did not select it -- including the error page's own
+  // "a known-valid query" link (m=seats). `(num(...) ?? 0) < 30` read that absence as 0 and
+  // marked 100% of rows below floor. Absence is not a measurement of zero (lib/format.ts:1);
+  // a row whose departure count was never queried makes no claim about the floor at all.
+  const NO_DEP_COLUMNS: ColumnSpec[] = [
+    { key: "route", label: "Route", kind: "identifier" },
+    { key: "seats", label: "Seats", kind: "seats" },
+  ];
+  const NO_DEP_ROWS = [
+    { route: "PDX–SEA", seats: 501089 },
+    { route: "PDX–AUS", seats: 190 },
+  ];
+
+  it("claims nothing about the floor when departures_performed was not selected", () => {
+    const { container } = render(<DataTable columns={NO_DEP_COLUMNS} rows={NO_DEP_ROWS} />);
+    expect(container.querySelectorAll("tr[data-below-floor='true']").length).toBe(0);
+  });
+
+  it("shows no gutter glyph when departures_performed was not selected", () => {
+    const { container } = render(<DataTable columns={NO_DEP_COLUMNS} rows={NO_DEP_ROWS} />);
+    expect(container.querySelectorAll("tbody td.gut abbr").length).toBe(0);
+  });
 });

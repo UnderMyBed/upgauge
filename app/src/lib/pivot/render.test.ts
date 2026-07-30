@@ -10,6 +10,15 @@ const goldens = JSON.parse(
   readFileSync(path.join(REPO, "sql/03_queries/goldens/pivot.json"), "utf8"),
 );
 
+// The symmetric guard to urlstate.test.ts's. Without it this file's `for (const c of
+// goldens.cases)` emits zero tests -- and therefore passes -- if pivot.json is ever truncated
+// or reshaped. A suite that cannot fail is worse than no suite: it reports green.
+describe("golden fixture sanity", () => {
+  it("has exactly 9 cases -- a reshaped fixture must not silently emit zero tests", () => {
+    expect(goldens.cases).toHaveLength(9);
+  });
+});
+
 describe("renderPivot reproduces every pinned golden byte-for-byte", () => {
   for (const c of goldens.cases) {
     it(c.name, () => {

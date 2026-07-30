@@ -11,12 +11,18 @@ const GLYPH: Record<Exclude<Reason, null>, { mark: string; label: string; limit:
   quarantined: { mark: "Q", label: "Quarantined — failed an invariant", limit: true },
 };
 
-export function ReasonCode({ reason }: { reason: Reason }) {
+/** `detail` carries the row's own `quarantine_reasons` where the fact table has one (segment
+ * grain does; pivot_route.sql has no such column, so it is optional). CLAUDE.md requires
+ * quarantined rows be "surfaced in the UI with count + reason" -- the count is in the foot
+ * text, and this is the reason. Showing the dirt is the trust feature; a static "failed an
+ * invariant" was the count without the reason. */
+export function ReasonCode({ reason, detail }: { reason: Reason; detail?: string | null }) {
   if (reason === null) return <td className="gut" />;
   const g = GLYPH[reason];
+  const title = reason === "quarantined" && detail ? `${g.label}: ${detail}` : g.label;
   return (
     <td className="gut" data-limit={g.limit ? "true" : undefined}>
-      <abbr title={g.label}>{g.mark}</abbr>
+      <abbr title={title}>{g.mark}</abbr>
     </td>
   );
 }

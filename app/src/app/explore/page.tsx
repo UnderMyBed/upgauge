@@ -1,6 +1,9 @@
+import { headers } from "next/headers";
 import { decode, encode, UrlStateError } from "@/lib/pivot/urlstate";
+import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
+import { formatCount } from "@/lib/format";
 import { LegendRail } from "@/components/LegendRail";
 import type { PivotQuery } from "@/lib/pivot/types";
 import type { Allowlist } from "@/lib/pivot/allowlist";
@@ -37,13 +40,14 @@ const NON_DISPLAY_COLUMNS = new Set(["quarantined_rows", "quarantine_reasons"]);
 // nearest broader window" (docs/design/system.md, empty-result state) widens to.
 const EARLIEST_MONTH = "2015-01";
 
-function toQueryString(sp: Record<string, string | string[] | undefined>): string {
-  const parts: string[] = [];
-  for (const [k, v] of Object.entries(sp)) {
-    if (v === undefined) continue;
-    for (const one of Array.isArray(v) ? v : [v]) parts.push(`${k}=${one}`);
-  }
-  return parts.join("&");
+/** A measure the KIND override map does not name still has to render as a numeric. Additive
+ * measures are whole counts; non-additive ones are the computed ratios, which `gauge` and
+ * `loadFactor` both format to fixed decimals -- `gauge` is the safe general choice since it
+ * does not assume a 0-1 range the way a percentage would. */
+function defaultKind(allowlist: Allowlist, key: string): ColumnSpec["kind"] {
+  const measure = allowlist.meas.get(key);
+  if (measure === undefined) return "identifier";
+  return measure.isAdditive ? "count" : "gauge";
 }
 
 function capitalize(s: string): string {
@@ -122,12 +126,12 @@ function EmptyState({ query, allowlist }: { query: PivotQuery; allowlist: Allowl
   );
 }
 
-export default async function ExplorePage({
-  searchParams,
-}: {
-  searchParams: Promise<Record<string, string | string[] | undefined>>;
-}) {
-  const qs = toQueryString(await searchParams);
+/** The page's whole render, taking the RAW query string as its only input. Split out from the
+ * default export so that (a) nothing here can reach `searchParams`, whose decoded values
+ * cannot reconstruct this format's filter values, and (b) the tests exercise the real
+ * permalink boundary with a real raw string instead of mocking `headers()`. */
+export async function ExploreView({ rawQuery }: { rawQuery: string }) {
+  const qs = rawQuery;
   const allowlist = await loadAllowlist();
   const asOf = await dataAsOf();
 
@@ -171,7 +175,13 @@ export default async function ExplorePage({
     .map((c) => ({
       key: c,
       label: allowlist.meas.get(c)?.label ?? allowlist.dims.get(c)?.label ?? c,
-      kind: KIND[c] ?? "identifier",
+      // KIND is an OVERRIDE map, not the source of truth. Anything the catalog knows is a
+      // measure gets a numeric kind by default -- additive counts render as counts, derived
+      // ratios as gauges -- so a measure added to meta_pivot_measures can never silently
+      // fall through to "identifier" and render left-aligned, non-monospaced and unformatted,
+      // which would break CLAUDE.md's "all numerics mono, tabular, right-aligned, fixed
+      // decimals" rule without any test noticing. Only true dimensions reach "identifier".
+      kind: KIND[c] ?? defaultKind(allowlist, c),
       // Derived from the catalog's own is_additive flag, not a second hand-copied list of
       // measure keys -- a measure added to meta_pivot_measures picks up its dotted
       // "computed" underline automatically instead of silently missing it until someone
@@ -189,11 +199,8 @@ export default async function ExplorePage({
           <Stat label="Grain" value={capitalize(query.grain)} />
           <Stat label="Grouping" value={capitalize(query.grouping)} />
           <Stat label="Window" value={`${query.timeFrom} → ${query.timeTo}`} />
-          <Stat label="Rows" value={result.rows.length.toLocaleString("en-US")} />
-          <Stat
-            label="Quarantined"
-            value={result.quarantinedRowsOnPage.toLocaleString("en-US")}
-          />
+          <Stat label="Rows" value={formatCount(result.rows.length)} />
+          <Stat label="Quarantined" value={formatCount(result.quarantinedRowsOnPage)} />
         </div>
         <div className="body">
           <div>
@@ -219,4 +226,13 @@ export default async function ExplorePage({
       </main>
     </div>
   );
+}
+
+/** Thin wrapper: the ONLY job here is getting the raw query string. It deliberately does not
+ * accept `searchParams` -- Next has already percent-decoded those by the time a page sees
+ * them, and this format's filter values can contain the delimiters that decoding makes
+ * ambiguous (lib/rawQuery.ts). proxy.ts supplies the raw string via a request header. */
+export default async function ExplorePage() {
+  const requestHeaders = await headers();
+  return <ExploreView rawQuery={rawQueryFromHeaders(requestHeaders)} />;
 }

@@ -18,9 +18,11 @@ upgauge/
 │   ├── 01_staging/             shared by pipeline AND server. Never inline SQL.
 │   ├── 02_marts/
 │   └── 03_queries/             the Explorer's parameterized queries
-├── app/                        Next.js 16, App Router, TS, Tailwind v4, shadcn/ui
-│   ├── api/                    route handlers → @duckdb/node-api → sql/03_queries/
-│   └── (routes)/               explorer, route, airport, carrier, aircraft, watch
+├── app/                        Next.js 16, App Router, TS, Tailwind v4
+│   ├── src/proxy.ts            hands both entry points the RAW query string (load-bearing)
+│   └── src/app/
+│       ├── api/pivot/          route handler → @duckdb/node-api → sql/03_queries/
+│       └── explore/            the Explorer. route/airport/carrier/aircraft/watch are M4/M5
 └── data/                       gitignored
 ```
 

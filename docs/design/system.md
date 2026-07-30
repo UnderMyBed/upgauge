@@ -118,6 +118,16 @@ Rows below the 30-departure floor are **rendered, never hidden**: dashed bottom 
 never scored or ranked."* They sort to the bottom and are excluded from ranking, not from
 sight.
 
+**The floor treatment requires a departure count to have been queried. Absence is not zero.**
+The pivot templates emit only the measures a query selected, so `departures_performed` is
+missing entirely from any permalink that did not ask for it — including the invalid-permalink
+page's own "known-valid query" link (`m=seats`). Reading that absence as `0` marked **100% of
+rows** below floor: every row dashed and muted, an `n` in every gutter cell, and the muted
+gauge tick throughout — a false claim about the data on the surface this system calls the
+trust moment, and a direct violation of the rule `app/src/lib/format.ts` opens with (*"Null is
+absence, zero is a measurement. Never render one as the other."*). A row whose departure count
+was never queried makes no claim about the floor in either direction.
+
 ### The gauge rail — signature, 1 of 3
 
 A fixed **0–260 seats-per-departure** axis rendered in every row, with grid lines at 50s and

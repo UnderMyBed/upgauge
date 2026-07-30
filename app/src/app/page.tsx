@@ -1,64 +1,41 @@
-import Image from "next/image";
+import { dataAsOf } from "@/lib/db";
 
-export default function Home() {
+// The front door reads its freshness from the data like every other view -- CLAUDE.md makes
+// `DATA AS OF` a first-class element on every data view, and the lag is the credibility.
+// Reading it is a request-time database call, so this page is dynamic for the same reason
+// /explore is. It replaced the create-next-app scaffold, which shipped a Vercel logo, a
+// "Deploy Now" link, utm_campaign=create-next-app URLs, and `dark:`/`bg-foreground` utility
+// classes that stopped resolving when Task 3 deleted the dark block from globals.css.
+export const dynamic = "force-dynamic";
+
+// One real query, not a placeholder: the same permalink /explore's error page offers as its
+// known-valid starting point, so the two can never drift into recommending different things.
+const SAMPLE =
+  "/explore?v=1&k=seg&d=op_airline_id&m=seats,departures_performed,load_factor,avg_gauge" +
+  "&t=2025-05:2026-04&s=-seats&n=25&g=op";
+
+export default async function Home() {
+  const asOf = await dataAsOf();
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+    <div className="wrap">
+      <div className="top">
+        <span className="mark">
+          UP<span className="accent">GAUGE</span>
+        </span>
+        <span className="asof">DATA AS OF {asOf}</span>
+      </div>
+      <main className="error-page">
+        <h1>Is this route healthy, and what is the airline about to do to it?</h1>
+        <p>
+          A structural intelligence layer over US DOT / BTS T-100 Segment data. Not a flight
+          search tool, not a fare tracker, not real-time &mdash; every number here is filed by
+          the carrier that actually operated the metal, and every derived measure is computed
+          at query time from summed numerators and denominators, never averaged.
+        </p>
+        <p>
+          <a href={SAMPLE}>Open the Explorer</a> &mdash; the top 25 carriers by seats over the
+          trailing 12 months, with the gauge rail and the reason-code gutter.
+        </p>
       </main>
     </div>
   );

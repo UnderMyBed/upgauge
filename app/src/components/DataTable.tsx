@@ -38,8 +38,16 @@ function isZeroPax(row: Record<string, unknown>): boolean {
   return num(row.load_factor) === 0 && (num(row.departures_performed) ?? 0) > 0;
 }
 
+/** Absence is not a measurement of zero (see lib/format.ts's opening rule). The pivot
+ * templates emit only the measures the query selected, so `departures_performed` is missing
+ * from every row of any permalink that did not ask for it -- including the error page's own
+ * "known-valid query" link. Reading that absence as 0 marked 100% of those rows below floor:
+ * a dashed, muted row and an `n` glyph in every gutter cell, asserting something false about
+ * the data on the surface the design system calls the trust moment. A row whose departure
+ * count was never queried makes no claim about the floor either way. */
 function isBelowFloor(row: Record<string, unknown>): boolean {
-  return (num(row.departures_performed) ?? 0) < DEPARTURE_FLOOR;
+  const departures = num(row.departures_performed);
+  return departures !== null && departures < DEPARTURE_FLOOR;
 }
 
 /** The gutter glyph and the below-floor row treatment are independent signals, not one
@@ -90,7 +98,12 @@ export function DataTable({
           const belowFloor = isBelowFloor(row);
           return (
             <tr key={i} data-below-floor={belowFloor ? "true" : undefined}>
-              <ReasonCode reason={reason} />
+              <ReasonCode
+                reason={reason}
+                detail={
+                  typeof row.quarantine_reasons === "string" ? row.quarantine_reasons : null
+                }
+              />
               {columns.map((c) => (
                 <td key={c.key} className={c.kind === "identifier" ? "id" : "num"}>
                   {format(c.kind, row[c.key])}

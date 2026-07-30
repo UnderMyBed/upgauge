@@ -15,9 +15,18 @@ import { loadAllowlist } from "@/lib/db";
 
 const OK = "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=5&g=op";
 
+/** In production the raw query reaches this handler as a header set by proxy.ts, never from
+ * request.url -- Next normalizes that, form-encoding the format's structural delimiters. The
+ * URL here is only for realism; the header is what the handler reads. */
+function req(rawQuery: string): Request {
+  return new Request(`http://localhost/api/pivot?${rawQuery}`, {
+    headers: { "x-upgauge-raw-query": rawQuery },
+  });
+}
+
 describe("GET /api/pivot", () => {
   it("returns rows and the canonical permalink for a valid query", async () => {
-    const res = await GET(new Request(`http://localhost/api/pivot?${OK}`));
+    const res = await GET(req(OK));
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.rows.length).toBeGreaterThan(0);
@@ -28,7 +37,7 @@ describe("GET /api/pivot", () => {
   });
 
   it("sets the caching header on success", async () => {
-    const res = await GET(new Request(`http://localhost/api/pivot?${OK}`));
+    const res = await GET(req(OK));
     expect(res.headers.get("Cache-Control")).toBe(
       "public, s-maxage=2592000, stale-while-revalidate=86400",
     );
@@ -36,16 +45,14 @@ describe("GET /api/pivot", () => {
 
   it("rejects an off-allowlist dimension with 400 and a message, never a default", async () => {
     const res = await GET(
-      new Request(
-        "http://localhost/api/pivot?v=1&k=seg&d=nope&m=seats&t=2025-05:2026-04&n=5&g=op",
-      ),
+      req("v=1&k=seg&d=nope&m=seats&t=2025-05:2026-04&n=5&g=op"),
     );
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/unknown dimension/i);
   });
 
   it("does not cache an error response", async () => {
-    const res = await GET(new Request("http://localhost/api/pivot?v=1&bogus=1"));
+    const res = await GET(req("v=1&bogus=1"));
     expect(res.status).toBe(400);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
@@ -58,11 +65,54 @@ describe("GET /api/pivot", () => {
     vi.mocked(loadAllowlist).mockRejectedValueOnce(
       new Error("duckdb: IO Error: /home/ci/secret/upgauge.duckdb not found"),
     );
-    const res = await GET(new Request(`http://localhost/api/pivot?${OK}`));
+    const res = await GET(req(OK));
     expect(res.status).toBe(500);
     const body = await res.json();
     expect(body.error).toBe("internal error");
     expect(JSON.stringify(body)).not.toMatch(/duckdb|secret|\.duckdb|IO Error/i);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+});
+
+// Whole-branch review follow-up: `new URL(request.url).search` is NOT raw. Next normalizes
+// the request URL by round-tripping the query through form-encoding, which turns the format's
+// structural `:` into `%3A` and -- worse -- collapses `k:a%2Cb,c` into `k%3Aa%2Cb%2Cc`, making
+// a data comma indistinguishable from a separator. Measured against a running production
+// server: EVERY filtered query returned `malformed filter 'origin_state%3AOR'`, including
+// ones with no reserved characters at all. proxy.ts (with skipProxyUrlNormalize) supplies the
+// untouched string, exactly as it does for /explore, so both entry points now agree.
+describe("GET /api/pivot raw query fidelity", () => {
+  const RESERVED = "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=origin_state:14%2C771,13%26487&n=5&g=op";
+
+  it("reads the raw query from the proxy header, not the normalized request URL", async () => {
+    // The URL carries the NORMALIZED form Next would hand a route handler; the header carries
+    // what the client actually sent. Only the header can parse, so a handler still reading
+    // request.url fails this.
+    const res = await GET(
+      new Request(`http://localhost/api/pivot?v=1&k=seg&d=op_airline_id&m=seats&t=2015-01%3A2015-12&f=origin_state%3AOR&n=5&g=op`, {
+        headers: { "x-upgauge-raw-query": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=origin_state:OR&n=5&g=op" },
+      }),
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("keeps a filter value's encoded comma as one value", async () => {
+    const res = await GET(
+      new Request("http://localhost/api/pivot?ignored=1", { headers: { "x-upgauge-raw-query": RESERVED } }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // Round-trips back out re-encoded: proof it stayed "14,771" rather than becoming 14 and 771.
+    expect(body.url).toContain("origin_state:14%2C771,13%26487");
+  });
+
+  it("returns a generic 500, not an uncaught throw, when proxy.ts did not run", async () => {
+    // A misconfigured deploy must not escape the catch-all: an uncaught MissingRawQueryError
+    // would surface a Next stack trace carrying QUERIES_DIR and DB_PATH to the client.
+    const res = await GET(new Request("http://localhost/api/pivot?v=1&k=seg"));
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toBe("internal error");
+    expect(JSON.stringify(body)).not.toMatch(/x-upgauge-raw-query|proxy\.ts|\/home\//);
   });
 });

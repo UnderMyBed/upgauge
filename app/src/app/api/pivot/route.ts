@@ -1,5 +1,6 @@
 import { decode, encode, UrlStateError } from "@/lib/pivot/urlstate";
 import { loadAllowlist, runPivot } from "@/lib/db";
+import { rawQueryFromHeaders } from "@/lib/rawQuery";
 
 const CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 
@@ -17,8 +18,19 @@ const CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
  * anyway if the catalog changed between them. Left as a known, documented duplicate read
  * rather than reached for out-of-scope surgery on db.ts. */
 export async function GET(request: Request): Promise<Response> {
-  const qs = new URL(request.url).search.replace(/^\?/, "");
+  // NOT `new URL(request.url).search`: Next normalizes the request URL by round-tripping the
+  // query through form-encoding, which turns this format's structural `:` into `%3A` and
+  // collapses `k:a%2Cb,c` into `k%3Aa%2Cb%2Cc` -- a data comma becomes indistinguishable from
+  // a separator. Measured against a running production server before this change: EVERY
+  // filtered query returned `malformed filter 'origin_state%3AOR'`, including ones with no
+  // reserved characters. proxy.ts supplies the untouched string (next.config.ts's
+  // skipProxyUrlNormalize is what keeps it untouched); /explore reads the same header.
   try {
+    // Inside the try on purpose: rawQueryFromHeaders throws when proxy.ts did not run, and
+    // this handler's whole contract is that nothing escapes uncaught (an uncaught throw here
+    // would leak a Next stack trace with real filesystem paths). A misconfigured deploy is
+    // exactly the catch-all's generic 500.
+    const qs = rawQueryFromHeaders(request.headers);
     const allowlist = await loadAllowlist();
     const query = decode(qs, allowlist);
     const result = await runPivot(query);
