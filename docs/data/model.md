@@ -150,6 +150,20 @@ Backed by two tests: no `fct_*` object carries a column from the derived list, a
 
 `DISTANCE` is per-segment miles, so `SUM(distance)` across aircraft types on a route is
 meaningless. Whether `fct_route_month` may carry it as a route *attribute* depends on whether
-it is constant per (origin, dest) within a month — **measured in M2, recorded here.** If it
-varies, `SUM(seats) * distance` is quietly wrong and the ASM path needs a `seat_miles` sum
-computed at segment grain instead.
+it is constant per (origin, dest) within a month.
+
+**Measured in M2**, over all of `data/parquet/t100_segment/` (years 2015–2017, 274,824
+non-quarantined `(year_month, origin_airport_id, dest_airport_id)` route-months):
+
+```
+route_months     274,824
+varying                0
+pct_varying         0.0%
+max_spread_miles      0.0
+```
+
+Zero route-months show more than one distinct `DISTANCE` value. **`DISTANCE` is constant per
+(origin, dest) within a month across the full measured window** — this is the *constant*
+branch: `fct_route_month` carries `distance` as an attribute via `max(distance)`, and ASM
+computes downstream as `SUM(seats) * distance`. A `seat_miles = SUM(seats * distance)` column
+is not needed; Task 5's SQL should use the plain attribute + downstream multiplication.

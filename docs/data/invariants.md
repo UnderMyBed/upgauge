@@ -228,6 +228,30 @@ artifact by sha256. It is the M1 exit criterion.
 > that the encoder stays deterministic no matter the threading. The regression test uses a
 > real extract and repeats the comparison four times, because one comparison passes by luck.
 
+> **The `.duckdb` catalog file itself is also not byte-stable — measured in M2.** A 200,000-row
+> `CREATE TABLE ... AS SELECT` with `threads = 1`, built three times in a row (`a.duckdb`,
+> `b.duckdb`, `c.duckdb`) from identical logic, produced three different sha256 digests every
+> time:
+>
+> ```
+> a.duckdb  908505c5ccd19fb50dba3eac2efed7fe0ff60c86101111322cd619d0e9418654
+> b.duckdb  3636e3f666cdcc2f8a5803183472cd5bce4e1b2b910314b03037a6de5def641e
+> c.duckdb  cc06f9e9df1a84ff329367c44cd1fe0296bc0640e78001e3b4c19dbf211ac2eb
+> ```
+>
+> The whole script was run three separate times (nine builds total, to rule out the kind of
+> intermittent SAME/DIFFER/DIFFER seen on the Parquet writer above) — **all three invocations
+> produced these exact same three digests, in the same a/b/c positions.** So this is not
+> flakiness: it is deterministic, reproducible byte-*instability* between files built from
+> identical content within the same process. Cause not further isolated (suspect a
+> per-connection creation counter or similar metadata in the DuckDB storage header); not needed
+> to act on the finding.
+>
+> **Consequence for M2 (Task 8): `make verify`'s gate must never sha256 the `.duckdb` file
+> itself.** The gate has to be content-based — compare query results / table checksums issued
+> against the built catalog, the same way the Parquet gate compares row content rather than
+> raw bytes.
+
 ## Column count assertion
 
 The trailing-comma / `EMPTYFIELD` phantom column **does not occur** in what BTS serves
