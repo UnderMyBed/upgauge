@@ -27,9 +27,8 @@ verify:  ## M1 GATE: build twice, prove every artifact is byte-identical
 
 ingest: fetch fetch-reference warehouse  ## Fetch + build everything. The full M1 pipeline.
 
-build:  ## Run sql/ in order -> upgauge.duckdb              [M2]
-	@echo "not implemented — M2"
-	@exit 1
+build:  ## Run sql/02_marts/ in order -> upgauge.duckdb
+	$(UV) run python -m pipeline.marts $(ARGS)
 
 dev:  ## Next.js dev server                                 [M3, needs node]
 	@echo "not implemented — M3"

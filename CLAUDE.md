@@ -86,7 +86,7 @@ basemap — tiles are usage-priced).
 | `make warehouse` | Facts + all 4 dims from `data/raw/` | ✅ |
 | **`make verify`** | **M1 gate: build twice, prove byte-identical** | ✅ |
 | `make ingest` | `fetch` + `fetch-reference` + `warehouse` | ✅ |
-| `make build` | Run `sql/` in order → `upgauge.duckdb` | M2 |
+| `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |
 | `make dev` | Next.js dev server (needs node) | M3 |
 
 ## Hard rules

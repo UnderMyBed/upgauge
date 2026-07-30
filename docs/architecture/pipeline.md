@@ -11,7 +11,8 @@ upgauge/
 │   ├── btscodec.py             the two TranStats ROT13 variants (data/sources.md)
 │   ├── fetch.py                DL_SelectFields POST loop + cache → data/raw/
 │   ├── normalize.py            raw → data/parquet/t100_segment/year=YYYY/
-│   ├── build.py                runs sql/ in order → upgauge.duckdb
+│   ├── build.py                facts + dims from data/raw/ (M1); also `make verify`
+│   ├── marts.py                runs sql/02_marts/ in order → upgauge.duckdb (M2)
 │   └── tests/                  the data invariants. These gate the pipeline.
 ├── sql/
 │   ├── 01_staging/             shared by pipeline AND server. Never inline SQL.
@@ -128,7 +129,10 @@ yet. Building them now means guessing the presets twice.
 
 ### The runner
 
-`pipeline/marts.py` executes `sql/02_marts/*.sql` in filename order. Each file declares its own
+✅ **Built.** `pipeline/marts.py` executes `sql/02_marts/*.sql` in filename order — `make
+build` un-stubbed, 10 tests in `pipeline/tests/test_marts.py`. `sql/02_marts/` itself is still
+empty (Task 4 adds the view files), so today's `make build` produces a database with zero
+objects and exits 0; that is expected, not a bug. Each file declares its own
 materialization in a header directive, so the runner needs no separate manifest to drift:
 
 ```sql
