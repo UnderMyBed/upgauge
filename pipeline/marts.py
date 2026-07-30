@@ -19,7 +19,7 @@ MARTS_DIR = Path(__file__).parents[1] / "sql" / "02_marts"
 PARQUET_ROOT_TOKEN = "{{PARQUET_ROOT}}"
 MATERIALIZATIONS = frozenset({"view", "table"})
 
-_DIRECTIVE = re.compile(r"^--\s*(upgauge|object)\s*:\s*(\S+)\s*$", re.MULTILINE)
+_DIRECTIVE = re.compile(r"^--\s*(upgauge|object)\s*:\s*(\S+)\s*$")  # note: no MULTILINE
 
 
 class MartError(Exception):
@@ -35,9 +35,28 @@ class MartFile:
 
 
 def parse_mart_file(path: Path) -> MartFile:
+    """Parse one mart file's header directives.
+
+    Directives are read ONLY from the leading comment block, and a repeated directive is
+    an error. Scanning the whole file would let a stray `-- object:` line in the SQL body
+    -- a leftover from copy-pasting a template -- silently win and rename the object,
+    which is the same class of silent-wrong-answer this module's loud failures exist to
+    prevent.
+    """
     path = Path(path)
     text = path.read_text()
-    found = {k: v for k, v in _DIRECTIVE.findall(text)}
+
+    found: dict[str, str] = {}
+    for line in text.splitlines():
+        if not line.lstrip().startswith("--"):
+            break  # header block ends at the first non-comment line
+        match = _DIRECTIVE.match(line.strip())
+        if match is None:
+            continue
+        key, value = match.group(1), match.group(2)
+        if key in found:
+            raise MartError(f"{path.name}: duplicate `-- {key}:` directive in the header")
+        found[key] = value
 
     if "object" not in found:
         raise MartError(f"{path.name}: no `-- object:` directive")
@@ -62,12 +81,19 @@ def build_database(parquet_dir: Path, db_path: Path, marts_dir: Path = MARTS_DIR
     `parquet_dir` is substituted verbatim and deliberately NOT resolved: DuckDB resolves
     relative paths against the process CWD, so a relative root works in CI and in Docker
     while an absolute one silently fails every read inside the container.
+
+    Builds into a staging file and renames on success, mirroring `normalize_year`. DuckDB
+    DDL auto-commits, so building in place would mean a failure on mart 3 of 5 leaves a
+    database that opens fine and silently contains only marts 1-2 -- after having already
+    deleted the working one. In M6 that is the monthly cron clobbering a good database with
+    a partial one while the site keeps serving.
     """
     db_path = Path(db_path)
-    db_path.unlink(missing_ok=True)
-    Path(str(db_path) + ".wal").unlink(missing_ok=True)
+    staging = db_path.with_name(db_path.name + ".incoming")
+    for p in (staging, Path(str(staging) + ".wal")):
+        p.unlink(missing_ok=True)
 
-    con = duckdb.connect(str(db_path))
+    con = duckdb.connect(str(staging))
     con.execute("SET threads TO 1")
 
     created: list[str] = []
@@ -80,8 +106,16 @@ def build_database(parquet_dir: Path, db_path: Path, marts_dir: Path = MARTS_DIR
             except Exception as exc:
                 raise MartError(f"{mart.path.name}: {exc}") from exc
             created.append(mart.object_name)
-    finally:
+    except Exception:
         con.close()
+        staging.unlink(missing_ok=True)
+        Path(str(staging) + ".wal").unlink(missing_ok=True)
+        raise
+    con.close()
+
+    # Only now is the old database expendable.
+    Path(str(db_path) + ".wal").unlink(missing_ok=True)
+    staging.replace(db_path)
     return created
 
 
