@@ -248,13 +248,95 @@ database: 8 objects identical across two builds
 `make verify` proves both the Parquet artifacts and every database object byte-identical
 across two from-scratch builds.
 
+## M3 — the Explorer, split into M3a and M3b
+
+M3 is split, because its two halves have different blockers.
+
+| | Scope | Blocked on |
+|---|---|---|
+| **M3a** | The pivot query contract: templates, the allowlist, the URL codec, golden fixtures | nothing — no Node required |
+| **design session** | [../design/brief.md](../design/brief.md) — tokens, the data table, the chart, the signature element | never been run |
+| **M3b** | The Next.js app: route handlers, the table, URL wiring | Node, and the design session |
+
+**Why the split.** `docs/design/brief.md` makes the data table deliverable #1 and says "most of
+the product is this table in different clothes. Get it right and everything else follows." M3
+builds that table, so the visual system gets decided at M3 whether or not it is planned for.
+Building it against invented styling and retrofitting real tokens later is the expensive kind
+of rework, and the brief's constraints — mono tabular numerals, density over whitespace, the
+`DATA AS OF` badge — are structural, not cosmetic.
+
+### `pipeline/` is CI-only, which dictates M3a's shape
+
+The Explorer's validator runs **per request, in the server** — TypeScript. `pipeline/` never
+runs in prod. So M3a must not write the validator in Python: M3b would reimplement a
+security-relevant validator in TS and we would have two, drifting.
+
+M3a therefore ships a **contract plus golden fixtures**, not a query layer:
+
+| Artifact | Purpose |
+|---|---|
+| `sql/03_queries/pivot_segment.sql`, `pivot_route.sql` | The templates. `{{TOKENS}}` for identifiers, `$params` for values. |
+| `sql/02_marts/300_meta_pivot_dimensions.sql` | The allowlist, **as a catalog object** — the server already opens the database, so there is no extra artifact to ship and `make build` regenerates it. |
+| Golden fixtures: query state → expected SQL | M3b's TypeScript must reproduce them byte-for-byte. One validator semantics, two runtimes, proven to agree. |
+| Golden fixtures: URL round-trips | The permalink contract, settled before any component reads state. |
+| Python reference implementation | Legitimately in `pipeline/`: it *generates and verifies* the goldens in CI and never serves a request. |
+
+The allowlist is **curated, not introspected** — which dimensions we offer is a product
+decision, not a schema fact. A test cross-checks it against `duckdb_columns()` so a renamed
+column fails loudly instead of silently dropping a dimension.
+
+Consequence to accept knowingly: `make verify` now covers a product decision (the Explorer's
+vocabulary), not only data. That is the price of the allowlist being un-driftable.
+
+### Only identifiers are substituted, and only after allowlist validation
+
+Values are always bound `$params`. Identifiers — the dimension list, the `GROUP BY`, the sort
+column — are substituted, and only ever from the validated allowlist, never from request input.
+Same shape as M2's `{{PARQUET_ROOT}}`.
+
+The alternative considered and rejected was a fully static template with no substitution at
+all, `CASE WHEN $by_carrier THEN op_airline_id END` per dimension. It makes injection
+structurally impossible and needs no allowlist, which is philosophically closer to "can't
+average what doesn't exist" — but it defeats the partition pruning M2 fought to restore, and
+dynamic sort and Top-N each need their own contortion. Rejected on those grounds, not on
+readability.
+
+### Every guard gets its breaking change observed
+
+Across M2's eight tasks, **the single most common review finding was a test that passed for a
+reason other than the one it named.** Concretely, and all recorded in the M2 commit messages:
+
+- `test_distance_is_not_summed` stayed green when `max(distance)` was swapped to `sum(distance)`
+  — no fixture route-month had two aircraft types.
+- The partition test stayed green with `hive_partitioning` disabled — `year` was already a
+  Parquet content column, so the flag was never what exposed it.
+- A tiebreak test was guarded by `if row is not None` against a fixture missing that row.
+- A guard-rail assertion was unreachable: `parse_mart_file` raised before the assert ran.
+- The `make verify` mismatch test used a global counter, so both builds drifted identically and
+  the drift it existed to detect was masked.
+- All 12 real-data invariant tests had never executed since M1 — the module looked for an
+  undated filename the append-only scheme makes impossible.
+
+Every one was found by mutating production code and watching what stayed green. None was
+visible from reading the diff.
+
+So in M3a this is a required step, not an aspiration: for each guard, make the change it exists
+to catch, observe the failure, revert, and record the output. A guard never observed failing is
+not a guard.
+
 ## Toolchain
 
 `uv` pins **Python 3.12** via `.python-version`, independent of whatever the system has.
 `make check` (lint + test) is the pre-commit gate. Unimplemented `make` targets exit
 non-zero rather than succeeding silently, so a half-built pipeline can't look finished.
 
-Node and Docker are not needed until M3 and M6 respectively.
+**Node is pinned by a checked-in `.nvmrc`**, mirroring the `.python-version` precedent: the
+Dockerfile reads the same file and CI installs from it, so the version lives in one place. The
+alternative — a distro package — drifts independently of whatever the Dockerfile pins, which is
+the class of problem `uv` exists to prevent for Python. Nothing before M3b needs Node installed;
+the decision is recorded here so the commit that scaffolds `app/` does not have to relitigate it.
+
+Docker is not needed until M6.
 
 > 🔔 **The cron must fail loudly.** If the monthly ingest breaks, nothing errors — the site
 > keeps serving happily and `DATA AS OF` just quietly stops advancing. For a product whose

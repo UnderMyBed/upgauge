@@ -12,11 +12,29 @@ aircraft type · aircraft group · distance group
 
 1. **URL-encoded query state.** Every view is a permalink. The entire growth mechanic for a
    nerd tool — people paste links into forums and Discords. Don't skip it.
+
+   **The encoding is a frozen public contract from the first shipped link.** Once permalinks are
+   in forum posts, changing the format breaks them, and nobody will report it. So:
+
+   - **Short, stable keys** — `v` version, `d` dimensions, `m` measures, `f` filters, `t` time
+     range, `s` sort, `g` grouping mode (operating vs mainline-group). Not a base64 JSON blob:
+     that is opaque in a forum, unreadable at a glance, and impossible to hand-edit — and
+     hand-editing a permalink is exactly what this audience does.
+   - **Versioned** (`v=1`), so a future incompatible change can migrate rather than silently
+     misread an old link.
+   - **Decode is total.** An unknown key, or a dimension not on the allowlist, is a rejection
+     with a message — never a silent drop to a default. A permalink that quietly renders a
+     *different* query than it encodes is worse than one that errors, because the screenshot
+     still looks authoritative.
+   - Round-trip tested both directions: `state → url → state` and `url → state → url`.
 2. **CSV / Parquet export of any result.** Nerds want the data, not just the picture.
 3. **Compare mode.** Pin 2–5 entities (routes, carriers, airports, *aircraft types*) and
    overlay on one chart. Most-requested feature in every data explorer ever built.
 4. **Rolling-12 toggle.** Month / quarter / rolling-12. Rolling-12 kills seasonality and
-   makes trends legible. Skipping it gives unreadable sawtooth charts.
+   makes trends legible. Skipping it gives unreadable sawtooth charts. **Deferred to M3b**: it
+   is a window over the pre-aggregate rather than a plain `GROUP BY`, so it is a different query
+   shape, and its only consumer is the time-series chart. Building it before the chart exists
+   means guessing what the chart needs.
 5. **Seasonality heatmap.** Year × month grid per route. Cheap, satisfying, and the *honest*
    way to present an "empty plane" claim.
 6. **Generic Top-N builder.** "Top N `<dimension>` by `<measure>` in `<period>`." The

@@ -121,6 +121,50 @@ freight, mail, air_time, ramp_to_ramp_time
 **Derived (compute at query time):** load_factor, asm, rpm, completion_factor, avg_gauge
 (seats/departure), block_hours, avg_stage_length, frequency
 
+### The exact query-time forms (M3 pivot contract)
+
+```sql
+SUM(passengers)::DOUBLE / NULLIF(SUM(seats), 0)               -- load_factor
+SUM(seats)::DOUBLE / NULLIF(SUM(departures_performed), 0)     -- avg_gauge
+SUM(departures_performed)::DOUBLE
+  / NULLIF(SUM(departures_scheduled), 0)                      -- completion_factor
+SUM(seats * distance)                                         -- asm
+SUM(passengers * distance)                                    -- rpm
+```
+
+> 🔴 **`asm` and `rpm` multiply PER ROW, then sum.** `SUM(seats) * distance` is correct only
+> within a single route and is silently wrong across any pivot that groups more than one — which
+> is most of them.
+>
+> This is a trap M2 set up. The measurement that `distance` is constant per (origin, dest) per
+> month (0 of 274,824 route-months vary) licenses `max(distance)` as a route *attribute* on
+> `fct_route_month`. It does **not** license `distance` as an ASM multiplier outside a single
+> route, because different routes have genuinely different distances. Same number, two
+> conclusions, only one of them valid. Guarded by a test that asserts the two forms diverge on a
+> multi-route group.
+
+### Every pivot response carries the quarantine count
+
+Aggregates exclude quarantined rows, but the response must carry `quarantined_rows` and the
+distinct reasons for the grouped set, because the UI is required to surface count and reason —
+showing the dirt is a trust feature ([invariants.md](invariants.md)). A pivot that returns only
+clean sums, with no way to tell whether 3 rows or 30,000 were dropped, cannot satisfy that.
+
+### The mainline-group toggle is a DATE-RANGED join
+
+```sql
+LEFT JOIN map_mainline_group m
+       ON m.airline_id = f.op_airline_id
+      AND f.year_month >= m.effective_from
+      AND (m.effective_to IS NULL OR f.year_month < m.effective_to)
+GROUP BY coalesce(m.parent_airline_id, f.op_airline_id)
+```
+
+`>= effective_from` and `< effective_to`. Hawaiian must roll up from 2024-09 and **not** from
+2024-08; Virgin America from 2016-12 and not 2016-11. Both boundaries get a real-data test.
+Shared regionals (`OO`, `YX`, `YV`) cannot leak in because the map contains only wholly-owned
+carriers — structural, not a filter. See [carrier-model.md](carrier-model.md).
+
 > 🔴 **Derived measures are computed from summed numerators and denominators — never
 > averaged.**
 >
