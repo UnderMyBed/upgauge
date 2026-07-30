@@ -31,10 +31,18 @@ Invoke the applicable skill before starting a unit of work, and say which one:
 | Situation | Skill |
 |---|---|
 | Any creative/design work, new feature | `superpowers:brainstorming` **first** |
+| A spec or requirements → multi-step work | `superpowers:writing-plans` |
+| **A written plan → doing the work** | **`superpowers:subagent-driven-development`** |
 | Implementing a feature or bugfix | `superpowers:test-driven-development` |
 | A bug, test failure, unexpected behavior | `superpowers:systematic-debugging` |
 | Before claiming anything works/passes | `superpowers:verification-before-completion` |
-| A spec or requirements → multi-step work | `superpowers:writing-plans` |
+
+**A milestone is never hand-walked phase by phase in the main conversation.** M1 was, and it
+cost real quality: the phase-1 "BTS encoder bug" claim survived four phases before phase 5
+disproved it, and `zero_seats`, the `CARRIER`/`UNIQUE_CARRIER` direction, and the
+append-only raw rule each shipped wrong and got corrected two phases later. A plan file with
+one task per unit of work, each dispatched to a subagent that reports back, is what catches
+that at the task boundary instead of three commits downstream. Plan → tasks → subagents.
 
 TDD matters most here: the data invariants are written as **failing tests before** the
 pipeline that satisfies them. That is both this project's rule and the skill's shape.

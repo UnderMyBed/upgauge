@@ -114,6 +114,62 @@ Two things make it hold:
 - **Parquet writes are pinned to `threads = 1`.** DuckDB's parallel writer is not byte-stable
   (see [../data/invariants.md](../data/invariants.md)). ~8 s cost across the window.
 
+## M2 — the marts layer
+
+`upgauge.duckdb` is a **hybrid**: facts and dims are views over the Parquet tree, and
+`mart_route_health` is the only materialized table. Views keep M1's byte-identical Parquet gate
+covering everything derived-free, and the mart materializes because trailing-12 windowing over
+the full window is the one genuinely expensive thing in the layer.
+
+Scope is `fct_route_month`, `dim_city_market`, and `mart_route_health`.
+`mart_leaderboards` is deferred to M5: which leaderboards exist is an editorial `/watch`
+decision, and they are all saved instances of a generic Top-N builder that M3 has not built
+yet. Building them now means guessing the presets twice.
+
+### The runner
+
+`pipeline/marts.py` executes `sql/02_marts/*.sql` in filename order. Each file declares its own
+materialization in a header directive, so the runner needs no separate manifest to drift:
+
+```sql
+-- upgauge: view          (or: table)
+-- object: fct_route_month
+SELECT ...
+```
+
+The runner wraps the body in `CREATE OR REPLACE VIEW <object> AS <body>` or
+`CREATE TABLE <object> AS <body>`. That DDL wrapper is the only SQL in Python, and it is the
+same shape as `normalize.py`'s already-accepted `COPY (<sql file>) TO ...` — the hard rule is
+about *query logic*, which stays in `.sql`.
+
+### Views cannot take bound parameters — so CWD is load-bearing
+
+`CREATE VIEW` captures literal SQL text, so the Parquet root cannot be a `$param` the way every
+other path in the pipeline is; it is interpolated at build time. DuckDB resolves relative paths
+against the **process CWD, not the database file's directory**, which forces a choice:
+
+- An *absolute* path works in CI and breaks in Docker, because the build machine's
+  `/home/runner/...` does not exist in the image. Silently — the file opens fine and every
+  query fails on read.
+- A *relative* path works anywhere, provided CWD is fixed. So views reference
+  `data/parquet/**` relatively, the container sets `WORKDIR /app` with data at `/app/data`, and
+  CI builds from the repo root.
+
+A test asserts no absolute path appears in any view definition, because that failure is
+invisible until deploy.
+
+### The M2 gate
+
+`make verify` keeps sha256-ing Parquet, and adds: **export every database object back out
+through M1's `threads = 1` writer and sha256 that.** Reusing a writer already proven byte-stable
+beats inventing new hashing semantics, and it makes the mart's reproducibility the same kind of
+claim as the facts'.
+
+Whether the `.duckdb` file is *itself* byte-stable is unknown and is measured before the gate is
+written — free-space metadata makes it doubtful, but "doubtful" is what produced the retracted
+BTS-encoder-bug claim in M1, so it gets measured rather than assumed. Result recorded in
+[../data/invariants.md](../data/invariants.md).
+
 ## Toolchain
 
 `uv` pins **Python 3.12** via `.python-version`, independent of whatever the system has.
