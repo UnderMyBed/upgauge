@@ -155,8 +155,23 @@ def test_windows_are_global_and_do_not_overlap(con):
 
 
 def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
+    """Fix round 1: the original version of this test checked parity against `lf_delta`
+    alone, which is FALSE on real data -- 580 of 7,336 real routes have a fully-populated
+    prior window (so lf_delta, gauge_delta, capacity_delta, frequency_delta are all known)
+    but `completion_factor` is NULL anyway, because they filed zero scheduled departures
+    against real performed ones (on-demand/charter carriers). `lf_delta`-only parity holds
+    on the small fixture purely because its single surviving row happens to have every
+    component NULL at once -- it can't produce a route with a populated prior window AND
+    completion_factor NULL. Checking parity against ALL FIVE components is the invariant
+    that is actually true everywhere: health_score is NULL exactly when any one of them is
+    unknown, per features.md's "components are the insight, score is only a sort key" --
+    synthesising a partial score from four of five would be exactly the over-engineering
+    that forbids."""
     bad = con.execute("""
         SELECT count(*) FROM mart_route_health
-        WHERE (health_score IS NULL) <> (lf_delta IS NULL)
+        WHERE (health_score IS NULL) <> (
+            lf_delta IS NULL OR gauge_delta IS NULL OR capacity_delta IS NULL
+            OR frequency_delta IS NULL OR completion_factor IS NULL
+        )
     """).fetchone()[0]
     assert bad == 0

@@ -54,8 +54,10 @@ agg AS (
              w.t12_start_month, w.t12_end_month, w.p12_start_month, w.p12_end_month
 ),
 -- Every ratio below comes from SUMMED numerator and denominator. Never an averaged ratio.
--- A route absent from the prior window yields NULL, not an enormous improvement: nullif on
--- p12_months_present is what enforces that, so it must not be removed as "redundant".
+-- A route absent from the prior window yields NULL, not an enormous improvement: the
+-- `CASE WHEN p12_months_present = 0 THEN NULL ... END` guard on every p12_*-derived ratio
+-- and every *_delta column below is what enforces that, so it must not be removed as
+-- "redundant".
 derived AS (
     SELECT
         *,

@@ -177,13 +177,27 @@ populated.
 
 `health_score` is an **equal-0.20-weighted** z-score composite of `lf_delta`, `gauge_delta`,
 `capacity_delta`, `frequency_delta`, and `completion_factor`, all oriented so **higher is
-healthier** (including `gauge_delta` — a downgauge is the warning sign, so it is *negated*
-relative to the raw gauge change). Equal weights, not a fitted or eyeballed weighting, because
-[../product/features.md](../product/features.md) says this is v0 and *deliberately dumb* —
-any other weighting would be a number invented in this task with no basis. Measured on the
-real warehouse: `health_score` ranges from **-2.686 to 17.329** — single/double-digit
-z-composites, not `1e17`-scale blowups, confirming no near-zero `stddev_samp` slipped past its
-`nullif`.
+healthier** — including `gauge_delta`, computed as `gauge_t12 - gauge_p12` (the same as-is
+shape as `lf_delta`, **no negation**): a positive `gauge_delta` already means the mean
+seats-per-departure went up, i.e. an upgauge, which is the healthy direction, so the raw sign
+is correct as computed and nothing needs flipping. Equal weights, not a fitted or eyeballed
+weighting, because [../product/features.md](../product/features.md) says this is v0 and
+*deliberately dumb* — any other weighting would be a number invented in this task with no
+basis.
+
+Measured on the real warehouse: `health_score` ranges from **-2.686 to 17.329** —
+single/double-digit z-composites, not `1e17`-scale blowups, confirming no near-zero
+`stddev_samp` slipped past its `nullif`. The +17.329 max is real, not an artifact: traced to
+`op_airline_id=20452`, route `11298-12953`, where `p12_departures_performed = 1` (the route was
+essentially dormant the prior year) and `t12_departures_performed = 3414` (fully active this
+year). A dormant-to-active jump like that sends `capacity_delta` and `frequency_delta` into the
+thousands — dividing by a p12 base of 1 — and the equal-weighted sum lets those two components
+dominate the score. That is a real, expected consequence of "deliberately dumb, do not
+over-engineer" v0 scoring, not a bug: a leaderboard's top row being a near-dead route waking up
+is exactly the kind of finding the product should surface, but the UI must show the raw
+`p12_departures_performed` alongside the score so a viewer isn't misled into reading "+17.3" as
+"this route tripled its traffic" when the real story is "this route had almost no prior-year
+baseline to compare against."
 
 > ⚠️ **`health_score` can be `NULL` for a reason *other than* a missing prior window.**
 > `completion_factor = t12_departures_performed / nullif(t12_departures_scheduled, 0)` is
