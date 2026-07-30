@@ -33,9 +33,14 @@ describe("queryFromJsonable reads the goldens' snake_case shape", () => {
       sort: "seats", sort_desc: true, limit: 25, grouping: "mainline",
     });
     expect(q.grain).toBe("route");
+    expect(q.dimensions).toEqual(["route"]);
+    expect(q.measures).toEqual(["seats"]);
     expect(q.timeFrom).toBe("2015-01");
+    expect(q.timeTo).toBe("2015-12");
     expect(q.filters).toEqual([["origin_airport_id", ["14057"]]]);
+    expect(q.sort).toBe("seats");
     expect(q.sortDesc).toBe(true);
+    expect(q.limit).toBe(25);
     expect(q.grouping).toBe("mainline");
   });
 });
