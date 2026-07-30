@@ -4,8 +4,12 @@
 -- fan out. The code is current identity, NOT the code filed in the month being displayed --
 -- docs/design/system.md's legend rail states that where the user can read it.
 --
--- {{IDS}} is a parenthesised list of BOUND parameter names, e.g. ($id0, $id1). Never
--- interpolate values; this mirrors render.ts's {{TOKEN}}/$param split.
+-- The placeholder in the WHERE clause below is substituted with a parenthesised list of
+-- BOUND parameter names, e.g. ($id0, $id1) -- never with values. This mirrors render.ts's
+-- token/$param split. The token must appear exactly ONCE per file, including in comments:
+-- the substitution replaces only the first occurrence, so a second mention here would
+-- consume the substitution and leave the real clause holding a raw token -- a syntax error
+-- at execution. That is why this comment describes the placeholder instead of naming it.
 SELECT
     airline_id   AS id,
     carrier_code AS code,
