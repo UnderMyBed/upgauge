@@ -1,7 +1,9 @@
 """fct_route_month -- the directed route rollup.
 
-Two things make this more than a GROUP BY: quarantined rows must leave the aggregate but
-stay countable, and `distance` is not additive.
+Three things make this more than a GROUP BY: quarantined rows must leave the aggregate but
+stay countable (and their absence must yield NULL, never a coalesced 0), `distance` is not
+additive, and the any_value() picks for origin/dest city market id rest on a measured -- not
+assumed -- constancy within the grain.
 """
 
 from __future__ import annotations
@@ -92,3 +94,56 @@ def test_load_factor_computed_from_the_rollup_is_sane(con):
         "SELECT SUM(passengers)::DOUBLE / NULLIF(SUM(seats), 0) FROM fct_route_month"
     ).fetchone()[0]
     assert 0.0 < lf <= 1.0
+
+
+def test_fully_quarantined_route_month_has_null_measures_not_zero(con):
+    """A route-month whose every contributing row is quarantined must yield NULL measures,
+    not a coalesced 0 -- a real 0 (the route filed, and genuinely carried nothing) and an
+    untrustworthy 0 (the route filed nothing WE TRUST) must stay distinguishable. The
+    fixture already contains such route-months naturally (e.g. seaplane/charter legs whose
+    sole contributing row trips `load_factor_gt_1`), so this is measuring the real behaviour,
+    not a constructed edge case."""
+    rows = con.execute("""
+        SELECT seats, passengers, quarantined_rows
+        FROM fct_route_month
+        WHERE quarantined_rows > 0
+    """).fetchall()
+    fully_quarantined = [r for r in rows if r[0] is None]
+    assert fully_quarantined, "fixture should contain at least one fully-quarantined route-month"
+    for seats, passengers, quarantined_rows in fully_quarantined:
+        assert seats is None
+        assert passengers is None
+        assert quarantined_rows > 0
+
+
+def test_city_market_ids_are_constant_within_the_route_month_grain(con):
+    """`any_value(origin_city_market_id)` / `any_value(dest_city_market_id)` are safe ONLY
+    because these ids are constant within the route-month grain -- unlike year/quarter/month
+    or route_key_low/high, they are not a pure function of columns the grain already fixes:
+    they are copied per filed row from raw.ORIGIN_CITY_MARKET_ID / DEST_CITY_MARKET_ID, and
+    an airport genuinely can be reassigned between city markets over time. Measured 0 of
+    494,451 non-quarantined (year_month, op_airline_id, origin_airport_id, dest_airport_id)
+    groups varying, over the full 2015-2017 warehouse -- see docs/data/invariants.md.
+
+    This also pins fct_route_month's any_value() picks to the segment fact's actual values,
+    so a column swap (origin/dest) or a dropped join key surfaces here too.
+    """
+    bad = con.execute("""
+        WITH seg AS (
+            SELECT
+                year_month, op_airline_id, origin_airport_id, dest_airport_id,
+                count(DISTINCT origin_city_market_id) AS n_origin,
+                count(DISTINCT dest_city_market_id)   AS n_dest,
+                any_value(origin_city_market_id)       AS origin_cm,
+                any_value(dest_city_market_id)         AS dest_cm
+            FROM fct_segment_month
+            WHERE NOT is_quarantined
+            GROUP BY 1, 2, 3, 4
+        )
+        SELECT count(*) FROM fct_route_month r
+        JOIN seg USING (year_month, op_airline_id, origin_airport_id, dest_airport_id)
+        WHERE seg.n_origin > 1 OR seg.n_dest > 1
+           OR r.origin_city_market_id IS DISTINCT FROM seg.origin_cm
+           OR r.dest_city_market_id   IS DISTINCT FROM seg.dest_cm
+    """).fetchone()[0]
+    assert bad == 0

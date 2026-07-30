@@ -1,9 +1,11 @@
 """Tests for raw zip -> partitioned Parquet.
 
-The fixture is 106 *real* rows pulled from the 2015 extract, curated so every edge case the
+The fixture is 108 *real* rows pulled from the 2015 extract, curated so every edge case the
 invariants care about is present: carrier-less rows, flown-but-seatless legs, load factor
-over 1, no-service filings, combi, seaplane, freighters, zero-padded type codes, and the
-carriers whose rollup behaviour differs.
+over 1, no-service filings, combi, seaplane, freighters, zero-padded type codes, the
+carriers whose rollup behaviour differs, and (added in M2 fix round 1, Task 5) a
+route-month with two distinct AIRCRAFT_TYPE rows so fct_route_month's SUM-vs-MAX(distance)
+choice is actually exercised.
 
 Assertions go through DuckDB against the written Parquet rather than through a DataFrame —
 the Parquet schema is the artifact that matters, and pandas' nullable-int coercion would

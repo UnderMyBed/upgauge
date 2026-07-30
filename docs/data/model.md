@@ -172,3 +172,13 @@ Zero route-months show more than one distinct `DISTANCE` value. **`DISTANCE` is 
 branch: `fct_route_month` carries `distance` as an attribute via `max(distance)`, and ASM
 computes downstream as `SUM(seats) * distance`. A `seat_miles = SUM(seats * distance)` column
 is not needed; Task 5's SQL should use the plain attribute + downstream multiplication.
+
+### `origin_city_market_id` / `dest_city_market_id` are collapsed with `any_value()`
+
+Same shape of question as `distance`, different answer path: these are carried through
+`fct_route_month` via `any_value()` rather than a `GROUP BY` column, which is safe only if
+they don't vary within the route-month grain. **Measured 0 of 494,451 non-quarantined
+route-months varying**, over the full 2015–2017 warehouse — see the "City market ids are
+constant within the route-month grain" section of
+[invariants.md](invariants.md#city-market-ids-are-constant-within-the-route-month-grain) for
+the full measurement and the test that guards it.

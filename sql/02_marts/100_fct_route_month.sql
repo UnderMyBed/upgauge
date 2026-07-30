@@ -24,6 +24,12 @@ SELECT
     op_airline_id,
     origin_airport_id,
     dest_airport_id,
+    -- Unlike year/quarter/month/route_key_*, these are NOT a pure function of the grain --
+    -- they are copied per filed row from raw.ORIGIN_CITY_MARKET_ID / DEST_CITY_MARKET_ID,
+    -- and an airport genuinely can be reassigned between city markets over time. any_value()
+    -- is safe here only because measurement shows it constant within the grain: 0 of 494,451
+    -- non-quarantined route-months vary, over the full 2015-2017 warehouse. See
+    -- docs/data/invariants.md.
     any_value(origin_city_market_id) AS origin_city_market_id,
     any_value(dest_city_market_id)   AS dest_city_market_id,
 
@@ -35,6 +41,11 @@ SELECT
     -- remove quarantined rows before count(*) FILTER could see them, making
     -- quarantined_rows always 0 -- which is exactly the "silently hides the dirt" failure
     -- this column exists to prevent.
+    --
+    -- A route-month whose every row is quarantined therefore yields NULL here, not 0 -- do
+    -- NOT wrap these in COALESCE(..., 0). A real 0 (the route filed, and genuinely carried
+    -- nothing) and an untrustworthy 0 (nothing filed here can be trusted) must stay
+    -- distinguishable; coalescing collapses that distinction silently.
     sum(departures_scheduled) FILTER (WHERE NOT is_quarantined) AS departures_scheduled,
     sum(departures_performed) FILTER (WHERE NOT is_quarantined) AS departures_performed,
     sum(seats)                FILTER (WHERE NOT is_quarantined) AS seats,

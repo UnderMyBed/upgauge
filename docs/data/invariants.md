@@ -192,6 +192,32 @@ join — *silently*, because codes without leading zeros still match.
 Store both directional (`PDX→AUS`) and undirected (`AUS-PDX`) keys. The undirected key is
 the two airport IDs sorted, so it is stable regardless of filing order.
 
+## City market ids are constant within the route-month grain
+
+`fct_route_month` collapses `fct_segment_month`'s `origin_city_market_id` /
+`dest_city_market_id` with `any_value()` — safe ONLY if they don't vary within
+`(year_month, op_airline_id, origin_airport_id, dest_airport_id)`. Unlike `year` / `quarter`
+/ `month` / `route_key_low` / `route_key_high` (each a pure function of columns the grain
+already fixes), city market ids are copied per filed row from `raw.ORIGIN_CITY_MARKET_ID` /
+`raw.DEST_CITY_MARKET_ID` — a data assumption, not a structural guarantee, since an airport
+genuinely can be reassigned between city markets over time.
+
+**Measured in M2**, over the full `data/parquet/t100_segment/` warehouse (years 2015–2017,
+494,451 non-quarantined `(year_month, op_airline_id, origin_airport_id, dest_airport_id)`
+route-months):
+
+```
+route_months                      494,451
+groups w/ >1 origin_city_market_id      0
+groups w/ >1 dest_city_market_id        0
+```
+
+Zero groups vary in either direction. `any_value()` is kept, backed by a test
+(`pipeline/tests/test_route_month.py::test_city_market_ids_are_constant_within_the_route_month_grain`)
+that asserts the constancy on every build rather than assuming it silently — a future
+violation (e.g. a genuine mid-month market reassignment) surfaces as a failing test instead
+of an arbitrarily-picked value with no signal.
+
 ## Amended filings: latest `download_date` wins
 
 BTS accepts amended filings and silently overwrites. Stamp every ingest with a
