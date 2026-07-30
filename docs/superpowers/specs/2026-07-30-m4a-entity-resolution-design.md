@@ -30,7 +30,15 @@ therefore not cosmetic — it is the capability the rest of M4 is built on.
 
 The M3b gap note names only `AIRLINE_ID` and `AIRPORT_ID`. Measured against the built
 database, `aircraft_type` is worse: the fact table stores `'612'`, a zero-padded string code
-that is meaningless to a reader, and `/explore` renders it verbatim. The aircraft-type-mix
+that is meaningless to a reader, and `/explore` renders it verbatim.
+
+**Correction, found during implementation.** Earlier drafts of this spec said `'612'` resolves
+to `A321`. It does not — `612` is `BOEING 737-700/700LR/MAX 7`; the A321 is `699`. More
+importantly the error exposed a design flaw: `dim_aircraft_type.code` *is* `'612'`, so a rule
+of "display the code" would have rendered the exact value this milestone exists to remove.
+`aircraft_type` therefore displays **`short_name`** (`B737-7`, `ERJ-175`, `A321/LR`) in the
+role `carrier_code` plays for carriers, with the full `name` as the tooltip. Measured:
+`short_name` is non-null and non-empty for all 450 rows and all 112 in-window types. The aircraft-type-mix
 chart is this product's stated differentiator (CLAUDE.md; `features.md`), and it is
 unreadable without this resolution.
 
@@ -46,7 +54,7 @@ the design; a single generic "join the dim" abstraction does not fit.
 | `op_airline_id` | `19790` | `DL` (+ `Delta Air Lines Inc.`) | id → code + name |
 | `origin_airport_id`, `dest_airport_id` | `14747` | `SEA` (+ `Seattle/Tacoma Intl`) | id → code + name |
 | `origin_city_market_id`, `dest_city_market_id` | `30559` | `Seattle, WA` | id → **name only** |
-| `aircraft_type` | `'612'` | `A321` | **code → name** |
+| `aircraft_type` | `'612'` | `B737-7` (+ `BOEING 737-700/700LR/MAX 7`) | **code → short name + name** |
 
 `dim_city_market` has columns `city_market_id` and `name` only — there is no code to display,
 so the market dimensions render a name and nothing else. `aircraft_type` inverts the usual
@@ -156,7 +164,7 @@ the test is not later mistaken for a guard on rendering.
 
 ## What visibly changes
 
-`/explore` renders `DL`, `SEA`, `A321` in place of `19790`, `14747`, `612`.
+`/explore` renders `DL`, `SEA`, `B737-7` in place of `19790`, `14747`, `612`.
 
 ### Exactly what a cell contains
 
@@ -170,7 +178,7 @@ column sized for a two-letter code.
 | `op_airline_id` | `DL` | the `abbr title`, same mechanism as the reason-code gutter |
 | `origin/dest_airport_id` | `SEA` | as above |
 | `origin/dest_city_market_id` | `Seattle, WA` | no code exists — the name **is** the display value |
-| `aircraft_type` | `A321` | as above |
+| `aircraft_type` | `B737-7` | as above |
 | `route` | `PDX–SEA` | both endpoint names |
 
 `route` joins its two resolved codes with an en dash, matching `features.md`'s `/route/PDX-AUS`
@@ -259,7 +267,7 @@ Deliberately excluded, each with a reason:
 - [ ] `resolve_{carrier,airport,city_market,aircraft_type}.sql` exist and are bound-parameter only
 - [ ] `route` has `join_dim`/`join_key` in `meta_pivot_dimensions`
 - [ ] `runPivot()` returns code and name alongside every resolvable dimension
-- [ ] `/explore` shows `DL`, `SEA`, `A321` — not `19790`, `14747`, `612`
+- [ ] `/explore` shows `DL`, `SEA`, `B737-7` — not `19790`, `14747`, `612`
 - [ ] Legend rail states codes are current identity
 - [ ] Every test in the table above passes
 - [ ] `make check`, `make app-check`, `make app-smoke`, `make verify` all green
