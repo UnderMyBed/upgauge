@@ -18,7 +18,7 @@ upgauge/
 │   ├── 01_staging/             shared by pipeline AND server. Never inline SQL.
 │   ├── 02_marts/
 │   └── 03_queries/             the Explorer's parameterized queries
-├── app/                        Next.js 15, App Router, TS, Tailwind, shadcn/ui
+├── app/                        Next.js 16, App Router, TS, Tailwind v4, shadcn/ui
 │   ├── api/                    route handlers → @duckdb/node-api → sql/03_queries/
 │   └── (routes)/               explorer, route, airport, carrier, aircraft, watch
 └── data/                       gitignored
@@ -584,9 +584,18 @@ everywhere except a machine holding the full 2015–2026 window — today, exact
 here, and nothing in the output says so. Standing up CI is M6-shaped; see
 [data/invariants.md](../data/invariants.md#where-these-are-enforced).
 
-**Node is pinned at 24.13.0 in `mise.toml`** — LTS since 2025-10, and Next.js 15 needs
-≥ 18.18. This supersedes the earlier plan to add a `.nvmrc`: a second pinning mechanism
-alongside `.python-version` was the thing worth avoiding, and mise removes both.
+**Node is pinned at 24.13.0 in `mise.toml`** — LTS since 2025-10, and the Next.js scaffolded
+in M3b Task 2 is v16, which needs ≥ 20.9. This supersedes the earlier plan to add a
+`.nvmrc`: a second pinning mechanism alongside `.python-version` was the thing worth
+avoiding, and mise removes both.
+
+**`make app-check` (typecheck + `vitest run`) is the app's gate, the way `make check` is
+`pipeline/`'s.** M3b Task 2 scaffolded `app/` — Next.js 16 (App Router, TS, Tailwind v4,
+ESLint), `@duckdb/node-api` for the route handlers, Vitest for tests — via `create-next-app`
+under the pinned Node, with `NPM ?= $(MISE) npm --prefix app` following the same `mise exec`
+indirection as `UV`. No application code yet: `make app-check` at scaffold time typechecks
+clean and Vitest correctly reports "no test files found" — a real failure until the first
+test lands (M3b Task 4), not a broken gate.
 
 Docker is not needed until M6. When it arrives, the image installs the same pinned versions
 and sets `MISE=` so `make` calls the tools directly rather than shelling through mise.

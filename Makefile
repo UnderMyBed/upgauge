@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install ingest build goldens dev test lint fmt check clean
+.PHONY: help install ingest build goldens dev app-check app-build test lint fmt check clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -7,6 +7,7 @@
 # Set MISE= to bypass when the tools are already on PATH, e.g. inside the Docker image.
 MISE ?= mise exec --
 UV ?= $(MISE) uv
+NPM ?= $(MISE) npm --prefix app
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -39,9 +40,15 @@ build:  ## Run sql/02_marts/ in order -> upgauge.duckdb
 goldens:  ## Regenerate the Explorer contract fixtures from the reference implementation
 	$(UV) run python -m pipeline.pivot --write-goldens
 
-dev:  ## Next.js dev server                                 [M3, needs node]
-	@echo "not implemented — M3"
-	@exit 1
+dev:  ## Next.js dev server
+	$(NPM) run dev
+
+app-check:  ## Typecheck + test the app
+	$(NPM) run typecheck
+	$(NPM) test
+
+app-build:  ## Production build
+	$(NPM) run build
 
 test:  ## Run the pipeline test suite
 	$(UV) run pytest

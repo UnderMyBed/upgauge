@@ -74,7 +74,7 @@ aggregation wants RAM, and a cold start lands on the first click of every shared
 ```
 pipeline/    Python 3.12 + uv. CI only, never runs in prod.
 sql/         01_staging/ 02_marts/ 03_queries/ — shared by pipeline AND server
-app/         Next.js 15 App Router, TS, Tailwind, shadcn/ui
+app/         Next.js 16 App Router, TS, Tailwind v4, shadcn/ui
 data/        gitignored. raw/ is the audit trail
 ```
 
@@ -100,7 +100,9 @@ versions.** `make` shells through `mise exec`, so the commands below work withou
 | `make ingest` | `fetch` + `fetch-reference` + `warehouse` | ✅ |
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |
 | `make goldens` | Regenerate the Explorer contract fixtures (`sql/03_queries/goldens/`) from `pipeline/pivot.py` | ✅ |
-| `make dev` | Next.js dev server (needs node) | M3b |
+| `make dev` | Next.js dev server (needs node) | ✅ |
+| `make app-check` | Typecheck + test the app (`app/`) | ✅ |
+| `make app-build` | Production build of the app | ✅ |
 
 ## Hard rules
 
