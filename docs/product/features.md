@@ -16,17 +16,43 @@ aircraft type · aircraft group · distance group
    **The encoding is a frozen public contract from the first shipped link.** Once permalinks are
    in forum posts, changing the format breaks them, and nobody will report it. So:
 
-   - **Short, stable keys** — `v` version, `d` dimensions, `m` measures, `f` filters, `t` time
-     range, `s` sort, `g` grouping mode (operating vs mainline-group). Not a base64 JSON blob:
-     that is opaque in a forum, unreadable at a glance, and impossible to hand-edit — and
-     hand-editing a permalink is exactly what this audience does.
+   - **Short, stable keys**, frozen from the first shipped link. Not a base64 JSON blob: that
+     is opaque in a forum, unreadable at a glance, and impossible to hand-edit — and
+     hand-editing a permalink is exactly what this audience does. Reference implementation:
+     `pipeline/urlstate.py` (`encode`/`decode`); M3b's TypeScript port must match it exactly.
+
+     | Key | Meaning | Example |
+     |---|---|---|
+     | `v` | version | `v=1` |
+     | `k` | grain | `k=seg` / `k=route` |
+     | `d` | dimensions, comma-separated | `d=year_month,op_airline_id` |
+     | `m` | measures, comma-separated | `m=seats,load_factor` |
+     | `t` | time range | `t=2024-01:2024-12` |
+     | `f` | filter, repeatable | `f=origin_airport_id:14771,13487` |
+     | `s` | sort, `-` prefix = descending | `s=-seats` |
+     | `n` | limit | `n=50` |
+     | `g` | grouping | `g=op` / `g=ml` |
+
    - **Versioned** (`v=1`), so a future incompatible change can migrate rather than silently
      misread an old link.
-   - **Decode is total.** An unknown key, or a dimension not on the allowlist, is a rejection
-     with a message — never a silent drop to a default. A permalink that quietly renders a
-     *different* query than it encodes is worse than one that errors, because the screenshot
-     still looks authoritative.
-   - Round-trip tested both directions: `state → url → state` and `url → state → url`.
+   - **Decode is total.** An unknown key, a duplicate non-`f` key, or a dimension not on the
+     allowlist, is a rejection with a message — never a silent drop to a default or a silent
+     last-wins. A permalink that quietly renders a *different* query than it encodes is worse
+     than one that errors, because the screenshot still looks authoritative. Identifier/
+     structural validation (unknown dimension, measure, sort key, grain, grouping, empty
+     lists, non-positive limit) is reused as-is from `pipeline.pivot.render_pivot` — one
+     allowlist, not two. URL syntax that `render_pivot` can't see (`v` itself, unknown or
+     duplicate query-string keys, the shape of `t` and `f`, `n` as an integer) is validated
+     in the codec.
+   - **Filter values are percent-encoded individually**, because they are the one piece of
+     free text in the format and can legally contain the delimiters (`,`, `:`, `&`, `=`) the
+     format itself uses. Every other key carries plain allowlisted-identifier text and needs
+     no escaping. Decoding never uses `urllib.parse.parse_qsl` — see the "Escaping" section
+     of `pipeline/urlstate.py`'s module docstring for why an eager, whole-string unquote
+     would silently corrupt a percent-encoded structural comma.
+   - Round-trip tested both directions: `state → url → state` and `url → state → url` —
+     including a filter value containing a comma, an ampersand, and a percent sign, and both
+     `grain="route"` and `grouping="mainline"` (not just the defaults).
 2. **CSV / Parquet export of any result.** Nerds want the data, not just the picture.
 3. **Compare mode.** Pin 2–5 entities (routes, carriers, airports, *aircraft types*) and
    overlay on one chart. Most-requested feature in every data explorer ever built.
@@ -114,34 +140,41 @@ that. Excludes routes with **<30 departures *performed*** (not scheduled) in the
 
 **A route with no prior-12mo data gets `NULL` deltas and a `NULL` score, never an enormous
 "improvement."** It still appears as a row — that row is the Route Birth Tracker's input.
-Measured on the real 2015–2017 warehouse: 767 of 7,336 routes are new in exactly this sense
-(`p12_months_present = 0`).
+Measured on the real 2015–2017 warehouse (M2): 767 of 7,336 routes are new in exactly this
+sense (`p12_months_present = 0`). **Re-measured over the full 2015–2026 window** (M3a Task 1,
+`t12 = 2025-05..2026-04`, `p12 = 2024-05..2025-04`): 688 of 8,080 routes.
 
 **Show the components in the UI, not just the score.** The components are the insight; the
 score is a sort key. Label it plainly as a heuristic. Do not over-engineer this.
 
 ### `health_score` is `NULL` for three reasons — a route unrankable for lack of a filed schedule must not render as unhealthy
 
-Measured on the real 2015–2017 warehouse, **1,348 of 7,336 routes** have `health_score IS
-NULL`, for three distinct reasons (SQL-level accounting and evidence:
-[../data/model.md § Window rule, floor, and the NULL-prior-window trap](../data/model.md#window-rule-floor-and-the-null-prior-window-trap)):
+Measured on the real 2015–2017 warehouse (M2), **1,348 of 7,336 routes** had `health_score IS
+NULL`, for three distinct reasons, with no overlap between them (a coincidence of that
+window, not structural — see below). **Re-measured over the full 2015–2026 window** (M3a
+Task 1, `t12 = 2025-05..2026-04`, `p12 = 2024-05..2025-04`): **813 of 8,080 routes**, and the
+three reasons now overlap by 55 routes. Full SQL-level accounting and evidence for both
+windows: [../data/model.md § Window rule, floor, and the NULL-prior-window trap](../data/model.md#window-rule-floor-and-the-null-prior-window-trap).
 
-1. **767 — no prior window.** A genuinely new route (`p12_months_present = 0`). Correctly
-   has no deltas to show.
-2. **1 — zero-measure prior window.** The prior window is technically "present" but filed
-   zero seats and zero departures, so the ratio is undefined the same way division by zero
-   is.
-3. **580 — zero scheduled departures, the larger group.** `completion_factor` is undefined
-   when `t12_departures_scheduled = 0`, which BTS allows for on-demand/charter-style
-   operators that file real performed flights against no filed schedule at all. Unlike the
-   other two, this route usually has known `lf_delta`, `gauge_delta`, `capacity_delta`, and
-   `frequency_delta` — only `completion_factor` (and therefore the composite score) is
-   unknown.
+1. **No prior window — 767 (2015–2017) / 688 (2015–2026), the larger group today.** A
+   genuinely new route (`p12_months_present = 0`). Correctly has no deltas to show.
+2. **Zero-measure prior window — 1 (2015–2017) / 0 (2015–2026).** The prior window is
+   technically "present" but filed zero seats and zero departures, so the ratio is undefined
+   the same way division by zero is. Empty in the current window — a property of which 24
+   months happen to be the trailing window right now, not a structural absence of the case.
+3. **Zero scheduled departures — 580 (2015–2017) / 180 (2015–2026).** `completion_factor` is
+   undefined when `t12_departures_scheduled = 0`, which BTS allows for on-demand/
+   charter-style operators that file real performed flights against no filed schedule at
+   all. Unlike the other two, this route usually has known `lf_delta`, `gauge_delta`,
+   `capacity_delta`, and `frequency_delta` — only `completion_factor` (and therefore the
+   composite score) is unknown.
 
 **UI requirement: a `NULL` `health_score` must never render as "unhealthy."** All three
 groups are `NULL` for a data-availability reason, not a low-score reason — sorting or
-filtering that silently treats `NULL` as the bottom of the range would misrepresent 580
-routes (the largest of the three groups) as failing on completion when the real story is
-"no schedule was ever filed to complete." Render these rows with an explicit "insufficient
-data" state, distinguishable from a genuinely low score, and — for the 580-route group —
+filtering that silently treats `NULL` as the bottom of the range would misrepresent up to
+688 routes (the largest of the three groups today — "no prior window," not "zero scheduled
+departures," which was largest only in the smaller 2015–2017 measurement) as failing on
+completion when the real story is "no schedule was ever filed to complete" or "this route
+didn't exist yet." Render these rows with an explicit "insufficient data" state,
+distinguishable from a genuinely low score, and — for the zero-scheduled-departures group —
 still show the four known components even though the composite can't be computed.

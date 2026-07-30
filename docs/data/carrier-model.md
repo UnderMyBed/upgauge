@@ -40,7 +40,7 @@ joins on it by month.
 | American | PSA (OH) | window start | present | AAG-owned throughout |
 | American | Piedmont (PT) | window start | present | AAG-owned throughout |
 | Alaska | Horizon (QX) | window start | present | Air Group-owned throughout |
-| **Alaska** | **Virgin America (VX)** | **2016-12** | **carrier ceases filing** | Acquisition closed Dec 2016; SOC Jan 2018; brand retired Apr 2018 |
+| **Alaska** | **Virgin America (VX)** | **2016-12** | **2018-04 (exclusive)** | Acquisition closed Dec 2016; SOC Jan 2018; brand retired Apr 2018; last filing under VX is 2018-03 |
 | **Alaska** | **Hawaiian (HA)** | **2024-09** | **present** | AAG acquired Hawaiian Holdings Sept 2024; SOC Oct 2025; `HA` flight numbers retire ~Apr 2026 |
 | **United** | **— none —** | | | United owns no subsidiary operators; gets no rollup |
 
@@ -52,9 +52,38 @@ subsidiaries.
 
 - Key on `airline_id` (DOT ID), never the letter code. `VX` and `HA` are exactly the kind of
   codes that get reused — see [invariants.md](invariants.md).
-- Boundaries are **inclusive at month granularity**: rows roll up for
-  `year_month >= effective_from` and `<= effective_to`. Ownership changes mid-month are
+- Boundaries, as the Explorer's pivot actually joins them (`sql/03_queries/
+  pivot_mainline_join.sql`): **inclusive at `effective_from`, EXCLUSIVE at
+  `effective_to`** — `year_month >= effective_from AND (effective_to IS NULL OR year_month <
+  effective_to)`. `effective_from`/`effective_to` are `VARCHAR 'YYYY-MM'`, so the comparison
+  is lexical, not a parsed date. A carrier whose `effective_to` is `'2018-04'` has already
+  stopped rolling up *by* 2018-04, not after it — read it as "the first month it's back to
+  itself," not "the last month it still rolls up." Ownership changes mid-month are
   attributed to the whole month; a stated approximation, not an accident.
+  - Both boundaries are tested against the real 2015–2026 warehouse in
+    `pipeline/tests/test_pivot_real_data.py`: Virgin America rolls up from 2016-12 (not
+    2016-11) and Hawaiian from 2024-09 (not 2024-08) — real traffic straddles both months, so
+    those two are observable through the pivot's aggregated output. The upper boundary is
+    NOT observable that way for VX: it has zero `fct_segment_month` rows on or after
+    2018-04 (its last real filing is 2018-03, consistent with the brand retiring), so a
+    query filtered to VX at 2018-04 returns nothing regardless of `<` vs `<=` — there's
+    nothing on the left side of the join to begin with. That gap is closed by a second test
+    that loads the actual join fragment and probes it against one synthetic row standing in
+    for a segment filed in VX's exclusive thru month. Verified by mutation: flipping `>=` to
+    `>` breaks both real-traffic boundary tests; flipping `<` to `<=` breaks only the
+    synthetic-probe test — proof the naive "real data will catch it" assumption was false for
+    this specific boundary.
+  - `pipeline/mainline_map.py`'s `MapEntry.covers()` and `check_no_overlaps()` now use the
+    same inclusive-`effective_from`/exclusive-`effective_to` semantics as this SQL join —
+    this was flagged as a doc-only mismatch in Task 5's first pass, then found to be a real
+    bug: `parent_for(21171, "2018-04")` returned Alaska on the real shipped VX row (build-time
+    validation only, never reached query time, so it never produced a wrong pivot answer, but
+    it contradicted this doc and the SQL). A **gap-free handoff between two parents is one
+    row's `effective_to` equal to the next row's `effective_from`** — `check_no_overlaps` was
+    also fixed, since under the old inclusive reading it rejected that exact shape as an
+    overlap, which would have broken `make ingest`/`make warehouse` the next time a
+    date-ranged acquisition was entered using this convention. See
+    `pipeline/reference/mainline_group.csv`'s header comment, corrected to match.
 - Verify all dates against filings at ingest. **Do not trust the table above as gospel** —
   it is a starting point, and the single most reviewable artifact in the pipeline. Keep it
   as a checked-in declarative file (CSV/YAML), not code, so a reviewer needn't read Python

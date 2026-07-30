@@ -52,7 +52,7 @@ Phase 0 is complete — see [../data/sources.md](../data/sources.md) for what it
 | ~~3~~ | ~~Invariant tests, written red~~ | ✅ 156 tests; rules in `invariants.py` + `mainline_map.py`, validated against a real extract |
 | ~~4~~ | ~~`normalize.py` — raw → Parquet, quarantine flags, `download_date`~~ | ✅ `make ingest`; 2015 → 282,036 rows, 8.6 MB Parquet |
 | ~~5~~ | ~~Lookups → dims; `map_mainline_group` materialized~~ | ✅ 5 dims build; **zero orphans** joining 282,036 fact rows |
-| ~~6~~ | ~~Reproducibility gate~~ | ✅ `make verify` — 7 artifacts byte-identical across two builds (the count **at M1**; M2 added `dim_city_market`, so it prints 8 today) |
+| ~~6~~ | ~~Reproducibility gate~~ | ✅ `make verify` — 7 artifacts byte-identical across two builds (the count **at M1**; M2 added `dim_city_market`, so it printed 8 by M2, and **17** today on the full 2015–2026 window — see [the M2 gate](#the-m2-gate) below) |
 
 **Order rationale:** the spike came first because the acquisition path was the one part of
 the spec proven *not* as documented. Tests come after the fetcher but before normalize,
@@ -99,7 +99,7 @@ completing in 0.01 s with no network.
 
 **Verified on real 2015 data:** 367,360 raw rows → **282,036** scheduled-passenger rows,
 12 months, only `CLASS='F'` and configs 1/3/4, **16 quarantined (0.006%)**, zero route-key
-ordering violations, 8.6 MB Parquet from a 94 MB CSV.
+ordering violations, 8.6 MB Parquet from a 101,182,581-byte CSV.
 
 ### Reproducibility
 
@@ -130,7 +130,7 @@ yet. Building them now means guessing the presets twice.
 ### The runner
 
 ✅ **Built.** `pipeline/marts.py` executes `sql/02_marts/*.sql` in filename order — `make
-build` un-stubbed, 20 tests in `pipeline/tests/test_marts.py`. Each file declares its own
+build` un-stubbed, 21 tests in `pipeline/tests/test_marts.py`. Each file declares its own
 materialization in a header directive, so the runner needs no separate manifest to drift:
 
 ```sql
@@ -199,8 +199,11 @@ is the exact failure shape to expect if M6's Dockerfile ever ships without `WORK
 ✅ **Built.** `make verify` runs three checks in sequence and fails if any fails:
 
 1. **Parquet reproducibility** (M1, unchanged): `build_all` twice into throwaway temp
-   dirs from identical raw inputs, sha256 every artifact. **8 artifacts** on the current
-   2015–2017 window — 3 fact-year partitions + 5 dims.
+   dirs from identical raw inputs, sha256 every artifact. **17 artifacts on the full
+   2015–2026 window** — 12 fact-year partitions + 5 dims. (8 artifacts — 3 fact-year
+   partitions + 5 dims — was the count on the 2015–2017 window measured at M2; M3a Task 1
+   rebuilt on every year `make fetch` had landed and re-ran the gate. The dims count is
+   fixed; only the fact-year partition count grows with the window.)
 2. **Parquet freshness** (M2 fix wave 1, new): the two throwaway builds above only prove
    they agree *with each other* — neither is `--out-dir`, the Parquet that `make build`
    and the database gate below actually read. So `_digest_tree` on one of the throwaway
@@ -214,10 +217,11 @@ is the exact failure shape to expect if M6's Dockerfile ever ships without `WORK
    from the same Parquet and, for every catalog object, exports it through a
    `COPY (SELECT * FROM <object>) TO ... (FORMAT PARQUET)` on a connection with
    `SET threads TO 1` — the same writer setting M1 already proved byte-stable — then
-   sha256s that export. **8 objects**: the 6 views over Parquet
-   (`fct_segment_month`, `dim_airport`, `dim_city_market`, `dim_carrier`,
-   `dim_aircraft_type`, `map_mainline_group`) plus the two derived views/tables
-   (`fct_route_month`, `mart_route_health`).
+   sha256s that export. **10 objects today** (8 at M2, before M3a Task 2 added the pivot
+   catalog): the 6 views over Parquet (`fct_segment_month`, `dim_airport`,
+   `dim_city_market`, `dim_carrier`, `dim_aircraft_type`, `map_mainline_group`), the two
+   derived views/tables (`fct_route_month`, `mart_route_health`), and the two Explorer
+   allowlist views M3a Task 2 added (`meta_pivot_dimensions`, `meta_pivot_measures`).
 
 Both counts are measured, not asserted from the file layout — if `sql/02_marts/` ever grows
 or shrinks, the counts printed by `make verify` are what to trust over this paragraph.
@@ -234,7 +238,7 @@ sanctioned exception to "all Parquet writes go through `_writer_connection()`", 
 that `SET` is ever dropped the gate starts reporting false failures rather than silently
 passing.
 
-Real run, 2015–2017 warehouse:
+Real run, 2015–2017 warehouse (M2):
 
 ```
 $ make warehouse && make verify
@@ -243,6 +247,27 @@ parquet: comparing data/parquet (on disk) against a fresh build from data/raw
 parquet: data/parquet matches a fresh build from data/raw (8 artifacts)
 database: 8 objects identical across two builds
 ```
+
+**Re-run in M3a Task 1, full 2015–2026 warehouse**, after `make fetch` landed all 12 years —
+at that point in the branch, before Task 2 added the pivot catalog, this genuinely printed 8
+objects. **Re-verified again for this fix wave** (real, verbatim output — the previous
+revision of this doc had drifted to a stale, no-longer-true transcript rather than a run
+someone actually re-checked):
+
+```
+$ make warehouse && make verify
+parquet: 17 artifacts byte-identical across two builds
+parquet: comparing data/parquet (on disk) against a fresh build from data/raw
+parquet: data/parquet matches a fresh build from data/raw (17 artifacts)
+database: 10 objects identical across two builds
+```
+
+Artifact count moved 8 → 17 (more fact-year partitions, one per calendar year fetched) and
+held there since — it depends on `data/raw/`'s window, not on `sql/02_marts/`. Object count
+moved 8 → 10 later in the branch, when Task 2 added `meta_pivot_dimensions` and
+`meta_pivot_measures` to `sql/02_marts/` — it depends on `sql/02_marts/`, not on how much
+data each object's Parquet source spans, so it did not move again when the artifact count
+grew from 8 to 17.
 
 **M2 complete.** `make build` produces `upgauge.duckdb` from `sql/02_marts/`, and
 `make verify` proves both the Parquet artifacts and every database object byte-identical
@@ -254,7 +279,7 @@ M3 is split, because its two halves have different blockers.
 
 | | Scope | Blocked on |
 |---|---|---|
-| **M3a** | The pivot query contract: templates, the allowlist, the URL codec, golden fixtures | nothing — no Node required |
+| ~~**M3a**~~ | ~~The pivot query contract: templates, the allowlist, the URL codec, golden fixtures~~ ✅ Complete — see [Task 7 below](#task-7--golden-fixtures-and-make-goldens-m3a-complete). |
 | **design session** | [../design/brief.md](../design/brief.md) — tokens, the data table, the chart, the signature element | never been run |
 | **M3b** | The Next.js app: route handlers, the table, URL wiring | Node, and the design session |
 
@@ -273,13 +298,13 @@ security-relevant validator in TS and we would have two, drifting.
 
 M3a therefore ships a **contract plus golden fixtures**, not a query layer:
 
-| Artifact | Purpose |
-|---|---|
-| `sql/03_queries/pivot_segment.sql`, `pivot_route.sql` | The templates. `{{TOKENS}}` for identifiers, `$params` for values. |
-| `sql/02_marts/300_meta_pivot_dimensions.sql` | The allowlist, **as a catalog object** — the server already opens the database, so there is no extra artifact to ship and `make build` regenerates it. |
-| Golden fixtures: query state → expected SQL | M3b's TypeScript must reproduce them byte-for-byte. One validator semantics, two runtimes, proven to agree. |
-| Golden fixtures: URL round-trips | The permalink contract, settled before any component reads state. |
-| Python reference implementation | Legitimately in `pipeline/`: it *generates and verifies* the goldens in CI and never serves a request. |
+| Artifact | Purpose | |
+|---|---|---|
+| `sql/03_queries/pivot_segment.sql`, `pivot_route.sql` | The templates. `{{TOKENS}}` for identifiers, `$params` for values. | ✅ Task 3 |
+| `sql/02_marts/300_meta_pivot_dimensions.sql`, `301_meta_pivot_measures.sql` | The allowlist, **as catalog objects** — the server already opens the database, so there is no extra artifact to ship and `make build` regenerates it. | ✅ Task 2 |
+| `sql/03_queries/goldens/pivot.json` | Golden fixtures: query state → expected SQL/params. M3b's TypeScript must reproduce them byte-for-byte. One validator semantics, two runtimes, proven to agree. | ✅ Task 7 |
+| `sql/03_queries/goldens/urlstate.json` | Golden fixtures: URL round-trips. The permalink contract, settled before any component reads state. | ✅ Task 7 |
+| Python reference implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`) | Legitimately in `pipeline/`: it *generates and verifies* the goldens in CI and never serves a request. | ✅ Tasks 3, 6 |
 
 The allowlist is **curated, not introspected** — which dimensions we offer is a product
 decision, not a schema fact. A test cross-checks it against `duckdb_columns()` so a renamed
@@ -324,17 +349,226 @@ So in M3a this is a required step, not an aspiration: for each guard, make the c
 to catch, observe the failure, revert, and record the output. A guard never observed failing is
 not a guard.
 
+### Task 3 — the templates and `pipeline/pivot.py`, built
+
+✅ **Built.** `sql/03_queries/pivot_segment.sql` and `pivot_route.sql` are the two templates;
+`pipeline/pivot.py`'s `render_pivot(q, con)` validates a `PivotQuery` against Task 2's two
+catalog allowlists and renders one of them. Task 3 shipped with 11 tests in
+`pipeline/tests/test_pivot.py`; Tasks 5–6 added 10 more (mainline-grouping regressions and
+sort-under-grouping), and the whole-branch fix wave added 3 more still (filter-key
+validation coverage and a `sort_desc` normalization unit test) — **24 tests in the file
+today.** See "Step 6 — the injection guards, observed failing" below for which tests have a
+demonstrated RED and by which round.
+
+**One validation function, reused for both the dimension list and every filter key.**
+`_validate_dimension` is the only place a dimension-shaped identifier is checked — called once
+per requested dimension and once per filter key — so a filter cannot become a side door around
+the allowlist that the main dimension list already enforces. It checks both that the key
+exists and that its catalog `grain` (`'both'` / `'segment'` / `'route'`) admits the query's
+requested grain; `'segment'`-only dimensions (`aircraft_type`, `aircraft_group`,
+`origin_state`, `dest_state`, `distance_group`) are rejected at `grain="route"` before any SQL
+is built, not left to fail at execution against a `fct_route_month` that doesn't carry them.
+
+**No dimension is assumed to be one column.** `column_expr` is substituted verbatim and
+comma-joined across requested dimensions, so the `route` dimension's pair
+(`route_key_low, route_key_high`) needs no special-cased code — it is already the same shape
+`render_pivot` handles for every other dimension. The same property makes a multi-column
+dimension deliberately **unsortable and unfilterable directly**: `render_pivot` raises
+`PivotError` rather than guess which of the two columns a bare `route`-keyed sort or filter
+should mean.
+
+**Sortable identifiers are restricted to what's actually in the SELECT list** — the requested
+dimensions (single-column ones only) and measures, by their output alias — not the full
+allowlist. `ORDER BY` on a column the query didn't select is a DuckDB `BinderException`
+waiting to happen; restricting the sortable set to the selected columns turns that into a
+validation-time `PivotError` instead. With no `sort` given, `render_pivot` defaults to the
+first requested measure, descending — matching how every Top-N view in the product is read.
+
+**Derived measures are substituted from the catalog's `expr`, never rebuilt.**
+`measure_select` is built as `f"{entry['expr']} AS {key}"` straight from
+`meta_pivot_measures` — `render_pivot` contains no measure-specific branch, so there is no
+second place the no-averaging rule could drift from the catalog. Verified by Mutation 7 below.
+
+**Quarantined rows differ by template, not by convention.** `pivot_segment.sql` computes
+`count(*) FILTER (WHERE is_quarantined)` and `string_agg(...) FILTER (WHERE is_quarantined)`
+directly off `fct_segment_month`'s row-level flag and reason. `pivot_route.sql` instead `sum`s
+`fct_route_month.quarantined_rows` — a count `fct_route_month` already carries from its own
+rollup of `fct_segment_month` — and has **no `quarantine_reasons` column at all**, because the
+reason string does not survive that rollup. Documented in `pivot_route.sql`'s header so a
+consumer does not expect the column at both grains.
+
+#### Step 6 — the injection guards, observed failing
+
+Two are mandated by the plan: dimension validation and sort validation removed, one at a time,
+confirming the guard actually guards something. Both — plus eight more mutations covering
+every other test in the file — were run and reverted; full detail (each mutation's diff, the
+exact `pytest` RED output, and the revert confirmation) is in the Task 3 SDD report rather than
+duplicated here. **The 11 tests in the mutation table below have a demonstrated RED, not
+merely a passing test that has never been watched fail; the 10 added by Tasks 5–6 (the
+mainline-grouping regressions and sort-under-grouping) are covered by those tasks' own
+mutation records, not repeated here.**
+
+| Mutation | Test(s) driven RED |
+|---|---|
+| 1. Dimension validation bypassed entirely | `test_unknown_dimension_is_rejected`, `test_sql_injection_via_dimension_is_rejected`, `test_segment_only_dimension_rejected_at_route_grain` |
+| 2. Grain check alone removed (existence check kept) | `test_segment_only_dimension_rejected_at_route_grain` (isolated) |
+| 3. Sort validation removed | `test_sql_injection_via_sort_is_rejected` |
+| 4. Measure validation removed | `test_unknown_measure_is_rejected` |
+| 5. Time range interpolated instead of bound | `test_values_are_bound_never_interpolated` |
+| 6. Filter values interpolated instead of bound | `test_filters_bind_their_values` |
+| 7. `load_factor` rebuilt as `AVG(load_factor)` in Python | `test_derived_measure_is_computed_not_averaged` |
+| 8. `q.limit` ignored, a fixed large limit bound instead | `test_limit_is_bound_and_enforced` |
+| 9. `quarantined_rows` dropped from `pivot_segment.sql` | `test_quarantined_rows_are_excluded_and_reported` |
+| 10. `{{GROUP_BY}}` left unsubstituted | `test_renders_and_executes` (plus two others that also execute the rendered SQL) |
+
+Every mutation was reverted immediately after its RED was observed; `git status --porcelain`
+and a full `pipeline/tests/test_pivot.py` GREEN re-run confirm no mutation survived into the
+commit.
+
+**Whole-branch review fix wave, one more mutation observed failing.** The review found the
+filter-key slot in `render_pivot`'s filter loop had NO test coverage at all — `_validate_dimension`
+was called there but nothing exercised it, so replacing that call with a pass-through
+(`entry = {"column_expr": key, "grain": q.grain}`) left **all 409 tests green** and made
+`decode("...&f=1%3D1)%20OR%20(1:x...")` render a working WHERE-clause injection
+(`AND (1=1) OR (1 IN ($f0_0))`). Fixed by adding `test_unknown_filter_key_is_rejected` and
+`test_sql_injection_via_filter_key_is_rejected` to `test_pivot.py`, and a `decode`-level case
+in `test_urlstate.py`; the same pass-through mutation drove all three RED, then was reverted.
+Also added in this wave: `test_every_sum_is_quarantine_filtered` in
+`test_pivot_allowlist.py`, a structural check (every `SUM(` in every `meta_pivot_measures`
+`expr` must be immediately `FILTER (WHERE NOT is_quarantined)`) that closes the same class of
+gap for the measure catalog — 8 of 12 measures had their FILTER strippable with zero tests
+noticing, mutation-confirmed on `departures_scheduled`.
+
+### Task 7 — golden fixtures and `make goldens`, M3a complete
+
+✅ **Built.** `sql/03_queries/goldens/pivot.json` and `urlstate.json` are the handoff
+artifact this whole milestone exists to produce: **M3b's TypeScript is verified against
+these exact bytes, not re-derived from this module's semantics.** One validator's behavior,
+pinned once, checked twice — a Python reference implementation and a TypeScript port proven
+to agree, rather than two implementations that could quietly drift apart.
+
+**Data, not SQL, despite the `sql/` path.** Both files live under `sql/03_queries/goldens/`
+for proximity to the templates they pin, and both say so explicitly in their own
+`_data_not_sql` header field — a stray `.json` under `sql/` would otherwise read as a mistake.
+Consumed only by `pipeline/tests/test_pivot_goldens.py`; nothing executes them as SQL.
+
+**9 pivot cases, 7 URL cases** (8 and 6 at Task 7; the whole-branch fix wave added one of
+each — see below), generated by `pipeline.pivot.write_goldens()` (`make
+goldens` → `python -m pipeline.pivot --write-goldens`) against the same small, deterministic
+warehouse `pipeline/tests/test_pivot.py` and `test_urlstate.py` already build from committed
+fixtures — reused rather than re-defined, since a golden's rendered SQL/params depend only on
+the catalog views and the static template files, never on fact row content. The pivot cases
+cover a single-dimension segment pivot, a multi-dimension pivot, a route-grain pivot (the
+multi-column `route` dimension), a derived-measure pivot (`load_factor`), a filtered pivot,
+a mainline-grouped pivot, a mainline-grouped pivot WITH a carrier filter (pins the
+undocumented-until-the-fix-wave gap that the filter doesn't coalesce the way the dimension
+does — see `sql/03_queries/pivot_mainline_join.sql`'s header), an ascending-sort pivot, and
+the Task 5 regression — sorting by the carrier dimension under mainline grouping. The URL
+cases cover a multi-dimension round trip, `grain="route"`, `grouping="mainline"`, an
+ascending sort, `sort=None` with `sort_desc=False` (pins that `PivotQuery.__post_init__`
+normalizes this to `sort_desc=True` — the fix wave's Important 3), ordinary multi-value
+filters, and a filter value containing every character the URL format itself uses
+structurally (`,` `&` `%` `:` `=` `+` and a space).
+
+**Every case generated is read by eye before being trusted**, not just asserted equal to
+itself: for each pivot case, confirmed no filter/time-range literal leaks into the SQL text
+(only into `params`), the derived-measure case has no `AVG(`, the route-grain case uses
+`fct_route_month`'s `SUM(quarantined_rows)` rather than the segment template's `count(*)
+FILTER`, and the mainline-sort case's `GROUP BY` carries the raw `coalesce(m.parent_airline_id,
+f.op_airline_id)` while `ORDER BY op_airline_id` references the SELECT-list alias — the exact
+shape Task 5 had to fix. For each URL case, confirmed the reserved-character filter value
+round-trips through individually percent-encoded tokens (`,`→`%2C`, `&`→`%26`, `%`→`%25`,
+`:`→`%3A`, `=`→`%3D`, `+`→`%2B`, space→`%20`) rather than corrupting the structural
+delimiters.
+
+**A real bug caught by running the actual `make` target, not a `-c` shortcut.** The first
+`make goldens` run failed: `write_goldens()` builds `_PIVOT_GOLDEN_CASES`/
+`_URLSTATE_GOLDEN_CASES` as `PivotQuery` instances, then round-trips the URL cases through
+`pipeline.urlstate.encode`/`decode` before writing anything — and `decode(...) == query`
+came back `False` despite identical field values. Cause: `python -m pipeline.pivot` runs the
+file as `__main__`, a module object distinct from `pipeline.pivot`. Once `write_goldens`
+imports `pipeline.urlstate` (which does its own top-level `from pipeline.pivot import ...
+PivotQuery`), Python has never seen `'pipeline.pivot'` under that dotted name and imports the
+file a *second* time — so `urlstate.decode()`'s `PivotQuery(...)` construction returns an
+instance of a different class than the one `write_goldens` built its case list from. A frozen
+dataclass's generated `__eq__` checks `type(self) is type(other)`, so two field-identical
+`PivotQuery`s from the two module copies never compare equal. Invisible from `python -c
+"from pipeline.pivot import write_goldens; write_goldens()"` (a normal import, one module
+instance) — only the literal `make goldens` invocation reproduced it. Fixed by having the
+`__main__` guard explicitly `import pipeline.pivot as _canonical` before calling `_canonical
+.main()`, which registers the canonical module in `sys.modules` first so `urlstate`'s later
+import resolves to the same module instance `main()` is already running from.
+
+**Step 4, the proof the goldens pin something.** `sql/02_marts/301_meta_pivot_measures.sql`'s
+`load_factor` expr was mutated from
+`SUM(passengers) FILTER (WHERE NOT is_quarantined)::DOUBLE / NULLIF(SUM(seats) FILTER (WHERE
+NOT is_quarantined), 0)` to `AVG(passengers::DOUBLE / NULLIF(seats, 0))`, `make build` was
+re-run, and `pipeline/tests/test_pivot_goldens.py` was re-run **without** `make goldens`:
+
+```
+FAILED pipeline/tests/test_pivot_goldens.py::test_pivot_case_renders_to_the_pinned_sql_and_params[derived_measure_load_factor]
+AssertionError: derived_measure_load_factor: rendered SQL no longer matches the pinned golden
+-     SUM(passengers) FILTER (WHERE NOT is_quarantined)::DOUBLE / NULLIF(SUM(seats) FILTER (WHERE NOT is_quarantined), 0) AS load_factor,
++     AVG(passengers::DOUBLE / NULLIF(seats, 0)) AS load_factor,
+1 failed, 31 passed in 0.33s
+```
+
+Named the exact case, showed the exact diff, and every other case stayed green — the golden
+suite doesn't fail wholesale on an unrelated change. Reverted; `git diff` on the mart file is
+empty and the full suite is back to 32 passed.
+
+**`make goldens` overwrites unconditionally — the soft spot in this contract.** The target
+regenerates both files from whatever `pipeline/pivot.py` does at that moment. It never diffs
+first and never refuses. So the failure mode is a developer who breaks the validator, sees
+`test_pivot_goldens.py` go red, reaches for `make goldens` to "fix" it, and bakes the
+regression into the pinned bytes — after which M3b's TypeScript is verified against the bug,
+and the golden suite reports green while doing it. Everything standing between that and a
+shipped wrong contract is prose: this paragraph, the Makefile help text, and each file's
+`_data_not_sql` header ("read the diff by eye before committing: a golden file is only as
+good as its first generation"). The structural fix is a CI job that runs `make goldens` and
+fails on any resulting `git diff`, which forces regeneration to be a reviewed commit rather
+than an error-recovery reflex — deferred with CI itself, see [Toolchain](#toolchain).
+
+**M3a complete.** The pivot query contract — templates (Task 3), the allowlist as catalog
+objects (Task 2), derived measures re-verified against real data (Task 4), the mainline-group
+toggle on both real acquisition boundaries (Task 5), the URL state codec (Task 6), and now
+the golden fixtures that let M3b's TypeScript be *verified* against this contract instead of
+re-implementing its validation semantics from scratch (Task 7) — is done. Next up: the design
+session (`docs/design/brief.md`), then M3b.
+
 ## Toolchain
 
 `uv` pins **Python 3.12** via `.python-version`, independent of whatever the system has.
 `make check` (lint + test) is the pre-commit gate. Unimplemented `make` targets exit
 non-zero rather than succeeding silently, so a half-built pipeline can't look finished.
 
-**Node is pinned by a checked-in `.nvmrc`**, mirroring the `.python-version` precedent: the
-Dockerfile reads the same file and CI installs from it, so the version lives in one place. The
-alternative — a distro package — drifts independently of whatever the Dockerfile pins, which is
-the class of problem `uv` exists to prevent for Python. Nothing before M3b needs Node installed;
-the decision is recorded here so the commit that scaffolds `app/` does not have to relitigate it.
+**`check` excludes `fmt`, and the tree is not format-clean.** It runs `ruff check` and
+`pytest`, never `ruff format`. Measured at the end of M3a: `ruff format --check .` reports
+**8 of 47 files would be reformatted**. So the first person to run `make fmt` gets a large
+diff across files their change never touched, mixed into whatever they were actually doing.
+Two clean ways out, neither taken yet: reformat once in a commit that does nothing else and
+add `ruff format --check` to `check` so the gate holds from then on, or decide formatting
+stays unenforced and delete `fmt`. The bad middle is reformatting only the files a change
+already touches — that smears the same diff across every future commit instead of isolating
+it in one.
+
+**There is no CI. `make check` on a developer's machine is the only gate that exists.**
+Several docs (including this one, above) say "runs in CI" about `pipeline/` — that is the
+intended deployment shape, not current state. The consequence is not theoretical: the
+real-data invariant layer (`test_invariants_against_real_data.py`) skips itself when
+`data/raw/` is empty, which is right for a fresh clone but means those rules go dark
+everywhere except a machine holding the full 2015–2026 window — today, exactly one. A green
+`420 passed` from a clone without data is a materially weaker claim than the same number
+here, and nothing in the output says so. Standing up CI is M6-shaped; see
+[data/invariants.md](../data/invariants.md#where-these-are-enforced).
+
+**Node will be pinned by a checked-in `.nvmrc`** when M3b scaffolds `app/` — no such file
+exists yet, this is a decision, not current state. It mirrors the `.python-version`
+precedent: the Dockerfile will read the same file and CI will install from it, so the
+version lives in one place. The alternative — a distro package — drifts independently of
+whatever the Dockerfile pins, which is the class of problem `uv` exists to prevent for
+Python. Nothing before M3b needs Node installed; the decision is recorded here so the commit
+that scaffolds `app/` does not have to relitigate it.
 
 Docker is not needed until M6.
 

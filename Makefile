@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install ingest build dev test lint fmt check clean
+.PHONY: help install ingest build goldens dev test lint fmt check clean
 
 UV ?= uv
 
@@ -29,6 +29,9 @@ ingest: fetch fetch-reference warehouse  ## Fetch + build everything. The full M
 
 build:  ## Run sql/02_marts/ in order -> upgauge.duckdb
 	$(UV) run python -m pipeline.marts $(ARGS)
+
+goldens:  ## Regenerate the Explorer contract fixtures from the reference implementation
+	$(UV) run python -m pipeline.pivot --write-goldens
 
 dev:  ## Next.js dev server                                 [M3, needs node]
 	@echo "not implemented — M3"

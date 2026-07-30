@@ -1,0 +1,176 @@
+{
+  "_data_not_sql": "Same note as pivot.json: DATA, not SQL, despite the sql/ path. Pins pipeline.urlstate's encode/decode contract -- consumed by pipeline/tests/test_pivot_goldens.py. Regenerate ONLY via `make goldens`.",
+  "cases": [
+    {
+      "name": "baseline_round_trip",
+      "description": "Multiple dimensions and measures, explicit descending sort, non-default limit.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "year_month",
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats",
+          "load_factor"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": "seats",
+        "sort_desc": true,
+        "limit": 25,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=seg&d=year_month,op_airline_id&m=seats,load_factor&t=2015-01:2015-12&s=-seats&n=25&g=op"
+    },
+    {
+      "name": "route_grain",
+      "description": "grain='route' round-trips through its short URL token ('k=route').",
+      "query": {
+        "grain": "route",
+        "dimensions": [
+          "route"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=route&d=route&m=seats&t=2015-01:2015-12&n=100&g=op"
+    },
+    {
+      "name": "mainline_grouping",
+      "description": "grouping='mainline' round-trips through its short URL token ('g=ml') -- must not silently decode back to the 'operating' default.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "mainline"
+      },
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&n=100&g=ml"
+    },
+    {
+      "name": "ascending_sort",
+      "description": "sort_desc=False encodes without the '-' prefix ('s=seats', not 's=-seats').",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": "seats",
+        "sort_desc": false,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&s=seats&n=100&g=op"
+    },
+    {
+      "name": "no_sort_key_ignores_sort_desc",
+      "description": "PivotQuery(sort=None, sort_desc=False) has no representation in this format -- a direction is only ever emitted alongside a sort key -- so PivotQuery.__post_init__ normalizes sort_desc back to True at construction time. That normalization itself is guarded by pipeline/tests/test_pivot.py's test_sort_desc_normalizes_to_true_when_sort_is_none and pipeline/tests/test_urlstate.py's test_sort_none_and_sort_desc_false_round_trips, both mutation-verified. This golden pins only the ENCODED FORM the normalized query produces (no 's=' key, identical to the default) -- since query_from_jsonable reconstructs an already-normalized PivotQuery from the stored 'sort_desc: true', a regression that removed the normalization would NOT fail this or any other golden test; it would only show up as a diff in the next `make goldens` regeneration, which no test runs automatically.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&n=100&g=op"
+    },
+    {
+      "name": "multiple_plain_filter_values",
+      "description": "A filter with several ordinary values, joined by the structural ','.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [
+          [
+            "origin_airport_id",
+            [
+              "14771",
+              "13487",
+              "12892"
+            ]
+          ]
+        ],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=origin_airport_id:14771,13487,12892&n=100&g=op"
+    },
+    {
+      "name": "filter_value_reserved_characters",
+      "description": "A filter value containing every character the URL format itself uses as a delimiter or the escape character (',' '&' '%' ':' '=' '+' and a space) -- must percent-encode and round-trip exactly rather than corrupt the structural delimiters or silently reparse into the wrong number of values.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [
+          [
+            "origin_airport_id",
+            [
+              "14,771",
+              "13&487",
+              "9%5",
+              "12:34",
+              "a=b",
+              "a+b",
+              "a b"
+            ]
+          ]
+        ],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=origin_airport_id:14%2C771,13%26487,9%255,12%3A34,a%3Db,a%2Bb,a%20b&n=100&g=op"
+    }
+  ]
+}

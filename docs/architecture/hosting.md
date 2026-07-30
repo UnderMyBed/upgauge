@@ -60,7 +60,7 @@ Surveyed 2026-07:
 | Option | Cost | Resources | Assessment |
 |---|---|---|---|
 | **Hetzner CX22 / CX23** | **~€3.79–4.59/mo** | 2 vCPU / 4GB / 40GB NVMe / 20TB | **Chosen.** Best RAM-per-euro from a reputable host. Always-on, no cold start. |
-| **Google Cloud Run** | **$0** at this traffic | container, scale-to-zero | **Strongest $0 option.** Free tier: 2M req + 180k vCPU-s + 360k GiB-s/mo. Container-based, so it *passes* the portability test. Cold start is the risk — a baked-in image is fat, and as of the M2 catalog-over-Parquet shape it's `data/parquet/` (26 MB and growing every year, not the thin `.duckdb` catalog file) driving that image size. Free tier is per-*account*, not per-project; `us-central1/east1/west1` only. |
+| **Google Cloud Run** | **$0** at this traffic | container, scale-to-zero | **Strongest $0 option.** Free tier: 2M req + 180k vCPU-s + 360k GiB-s/mo. Container-based, so it *passes* the portability test. Cold start is the risk — a baked-in image is fat, and as of the M2 catalog-over-Parquet shape it's `data/parquet/` (96 MB over the full 2015–2026 window as of M3a Task 1, was 26 MB at 2015–2017; not the thin `.duckdb` catalog file) driving that image size. Free tier is per-*account*, not per-project; `us-central1/east1/west1` only. |
 | **Self-host + Cloudflare Tunnel** | **$0** | whatever you own | Underrated: `cloudflared` is free and unlimited, needs no open ports or static IP, and the domain is already required to be on Cloudflare, so it composes. Trades cash for home uptime/power/ISP risk. |
 | Contabo VPS 10 | ~€4.50/mo | 8GB | Most RAM per euro found. Weaker reliability reputation — the tradeoff is real. |
 | Oracle Cloud Always Free | $0 | ARM Ampere A1 | Free-tier A1 cut to 2 OCPU / 12GB in June 2026; reclamation risk. Fine as a $0 mirror, not the only copy. |
@@ -116,8 +116,9 @@ With Cloudflare's free tier in front, near-zero repeat traffic touches the box.
 
 ## Portability test
 
-**The deployable artifact is `upgauge.duckdb` *plus* `data/parquet/` (26 MB at the current
-2015–2017 window), not the `.duckdb` file alone.** As built, the catalog is views over
+**The deployable artifact is `upgauge.duckdb` *plus* `data/parquet/` (96 MB, measured
+`du -sh data/parquet` over the full 2015–2026 window after M3a Task 1's rebuild — was 26 MB
+on the 2015–2017 window measured at M2), not the `.duckdb` file alone.** As built, the catalog is views over
 *relative* Parquet paths — it carries almost no data itself — so it behaves identically
 under `docker run` only if `data/parquet/` is co-located with it and `WORKDIR` is the
 directory containing `data/`. Get that wrong and the container still starts and the file

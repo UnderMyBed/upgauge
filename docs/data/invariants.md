@@ -166,6 +166,17 @@ aggregated under a null carrier. Two tests hold the line: one asserts no carrier
 reach the ingested subset today (so we notice if that changes), and one constructs such a
 row and proves it would be caught.
 
+> ⚠️ **Correction (M3a Task 1).** The paragraph above was true of 2015, the only year
+> ingested when it was written, but is not true of the full window. **Re-measured over
+> 2015–2026: `missing_carrier` fires 51 times** — 27 rows in 2018, 24 in 2022, 0 in every
+> other year (see the per-year table under "Quarantine is a feature" below). So it is not
+> purely defensive after all — it has caught real carrier-less rows reaching the ingested
+> subset, twice, outside 2015. The rule still behaves correctly (those 51 rows are
+> quarantined and excluded from aggregates, exactly as designed); what changes is the claim
+> that it never fires. The two tests referenced above are unaffected — they assert against
+> the 2015 extract specifically, which genuinely still has zero — but "no carrier-less rows
+> reach the ingested subset today" must not be read as a claim about the full window.
+
 `missing_carrier` outranks every other reason — an unattributable row is unattributable
 regardless of what else is wrong with it.
 
@@ -233,9 +244,9 @@ already fixes), city market ids are copied per filed row from `raw.ORIGIN_CITY_M
 `raw.DEST_CITY_MARKET_ID` — a data assumption, not a structural guarantee, since an airport
 genuinely can be reassigned between city markets over time.
 
-**Measured in M2**, over the full `data/parquet/t100_segment/` warehouse (years 2015–2017,
-494,451 non-quarantined `(year_month, op_airline_id, origin_airport_id, dest_airport_id)`
-route-months):
+**Measured in M2**, over the `data/parquet/t100_segment/` warehouse as it stood then (years
+2015–2017, 494,451 non-quarantined `(year_month, op_airline_id, origin_airport_id,
+dest_airport_id)` route-months):
 
 ```
 route_months                      494,451
@@ -243,7 +254,19 @@ groups w/ >1 origin_city_market_id      0
 groups w/ >1 dest_city_market_id        0
 ```
 
-Zero groups vary in either direction. `any_value()` is kept, backed by a test
+**Re-measured in M3a Task 1, over the full 2015–2026 window** (1,861,880 non-quarantined
+route-months, after `make fetch` landed all 12 years):
+
+```
+route_months                    1,861,880
+groups w/ >1 origin_city_market_id      0
+groups w/ >1 dest_city_market_id        0
+```
+
+Zero groups vary in either direction, in both measurements. Unlike the sibling `distance`
+measurement (see [model.md](model.md#distance-is-not-additive)), which DID find non-zero
+variance once the full window was measured, this one held. `any_value()` is kept, backed by
+a test
 (`pipeline/tests/test_route_month.py::test_city_market_ids_are_constant_within_the_route_month_grain`)
 that asserts the constancy on every build rather than assuming it silently — a future
 violation (e.g. a genuine mid-month market reassignment) surfaces as a failing test instead
@@ -332,19 +355,60 @@ so a reappearance fails the build rather than shifting every field silently.
 Quarantined rows are **excluded from aggregates but surfaced in the UI** with a count and
 reason. Showing the dirt is a trust feature.
 
-Reasons, in precedence order. Volumes are measured on the **ingested** 2015 subset —
-282,036 scheduled-passenger rows out of 367,360 raw:
+Reasons, in precedence order:
 
-| Reason | Fires when | 2015 volume |
-|---|---|---|
-| `missing_carrier` | no `AIRLINE_ID` | **0** — defensive; see above |
-| `zero_seats` | passenger config, departures performed, no seats | 4 |
-| `load_factor_gt_1` | `passengers > seats` | 12 |
+| Reason | Fires when |
+|---|---|
+| `missing_carrier` | no `AIRLINE_ID` |
+| `zero_seats` | passenger config, departures performed, no seats |
+| `load_factor_gt_1` | `passengers > seats` |
 
-**Total 16 rows = 0.006% of ingested passenger rows.** That rate is itself an invariant —
-the real-data suite asserts it stays under 0.1%. A rule that fires on ordinary data makes the
-whole signal worthless, which is exactly what happened before the departures check was
-added.
+Volumes were originally measured on the **ingested** 2015 subset only — 282,036
+scheduled-passenger rows out of 367,360 raw, 16 quarantined (`zero_seats` 4,
+`load_factor_gt_1` 12, `missing_carrier` 0) = **0.006%**. That was the only year ingested at
+M1.
+
+> ⚠️ **Correction — the 0.006% figure was 2015's rate quoted as though it characterised the
+> whole window.** Re-measured in M3a Task 1 over the full **2015–2026** window
+> (`fct_segment_month`, `upgauge.duckdb`, all 12 fetched years), per year:
+>
+> | Year | Rows | Quarantined | Rate |
+> |---|---:|---:|---:|
+> | 2015 | 282,036 | 16 | 0.0057% |
+> | 2016 | 291,339 | 32 | 0.0110% |
+> | 2017 | 278,825 | 49 | 0.0176% |
+> | 2018 | 284,357 | 94 | 0.0331% |
+> | 2019 | 300,821 | 61 | 0.0203% |
+> | 2020 | 211,478 | 241 | **0.1140%** |
+> | 2021 | 271,967 | 155 | 0.0570% |
+> | 2022 | 298,636 | 157 | 0.0526% |
+> | 2023 | 320,961 | 165 | 0.0514% |
+> | 2024 | 341,577 | 133 | 0.0389% |
+> | 2025 | 358,834 | 146 | 0.0407% |
+> | 2026 | 118,650 | 52 | 0.0438% (partial year — BTS lags a few months, see [pipeline.md](../architecture/pipeline.md)) |
+> | **Total** | **3,359,481** | **1,301** | **0.0387%** |
+>
+> The rate ranges from **0.0057% (2015) to 0.1140% (2020)** — a ~20× spread across years.
+> **2020 alone exceeds the 0.1% ceiling** that
+> `pipeline/tests/test_invariants_against_real_data.py::test_quarantine_stays_rare_on_real_data`
+> enforces. That test currently reads only the 2015 extract
+> (`latest_raw(RAW_DIR, T100D_SEGMENT_US, 2015)`), so it does not exercise 2020 and stays
+> green regardless of this finding — a real scoping gap in the test, left as-is here per this
+> task's docs-only mandate; widening the real-data suite to the full window is a follow-up,
+> not a doc fix. **2020's elevated rate is COVID, not a data defect**: mass route suspension
+> and collapsed load factors produce more `zero_seats` and `load_factor_gt_1` filings — the
+> reason mix below shows exactly that shift.
+>
+> Reason mix over the full window: `zero_seats` 1,060, `load_factor_gt_1` 190,
+> `missing_carrier` 51.
+>
+> **`missing_carrier` is no longer 0 outside 2015** — see the correction inline in "Rows with
+> no carrier identity — a defensive rule" above, where this rule is owned. 51 rows reach the
+> quarantine stage over the full window: 27 in 2018, 24 in 2022, 0 elsewhere.
+>
+> **A single year's rate must never again stand in for the window's** — that is the whole
+> reason this correction exists. Quote the per-year table, or the full-window total, not one
+> year's number.
 
 ---
 
@@ -358,6 +422,14 @@ Two test layers:
 
 - `test_invariants.py` / `test_mainline_map.py` — the rules in isolation, always run.
 - `test_invariants_against_real_data.py` — the same rules over a real extract, **skipped
-  when `data/raw/` is empty** so CI and fresh clones stay green. Run `make fetch` locally
+  when `data/raw/` is empty** so a fresh clone stays green. Run `make fetch` locally
   to enable them. This layer is what caught both refinements above; neither was visible
   from synthetic values.
+
+**That skip is load-bearing, and there is no CI to compensate for it.** No automated runner
+exists yet (see [architecture/pipeline.md](../architecture/pipeline.md#toolchain)), so this
+layer executes only where someone has fetched the full 2015–2026 window. Everywhere else the
+suite passes *without* checking a single real row against these rules, and says nothing about
+it — the skip is silent by design, which is correct for a clone and dangerous as a
+verification claim. Until CI runs with data mounted, "the invariants pass" is only true of
+the machine it was run on.

@@ -6,7 +6,12 @@
 # Rules:
 #   - Keyed on DOT airline_id, never the letter code. Codes get reused; VX and HA are
 #     exactly the kind that do.
-#   - effective_from/effective_to are inclusive, YYYY-MM. Blank effective_to = still current.
+#   - effective_from/effective_to are YYYY-MM. effective_from is INCLUSIVE, effective_to is
+#     EXCLUSIVE -- a row with effective_to=2018-04 has already stopped rolling up BY 2018-04,
+#     not after it (last rolled-up month is 2018-03). Blank effective_to = still current.
+#     Matches sql/03_queries/pivot_mainline_join.sql's join and pipeline/mainline_map.py's
+#     MapEntry.covers(). A clean, gap-free handoff between two parents is one row's
+#     effective_to equal to the next row's effective_from.
 #   - Ownership changes mid-month are attributed to the whole month. Stated approximation.
 #   - ONLY wholly-owned subsidiaries. Never shared regionals (SkyWest/Republic/Mesa) or
 #     serially-exclusive contract carriers (Air Wisconsin/ExpressJet) — a rollup of those

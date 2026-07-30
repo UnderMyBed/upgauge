@@ -49,14 +49,21 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M2 COMPLETE.** `make ingest` fetches and builds facts + 5 dims from BTS; `make build` runs
+**M3a COMPLETE.** The Explorer's pivot query contract — templates
+(`sql/03_queries/pivot_segment.sql` / `pivot_route.sql`), the allowlist as catalog objects
+(`meta_pivot_dimensions` / `meta_pivot_measures`), the CI-only Python reference
+implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`), the mainline-grouping toggle,
+and the URL state codec — is done, plus the golden fixtures
+(`sql/03_queries/goldens/{pivot,urlstate}.json`, `make goldens`) that M3b's TypeScript must
+reproduce byte-for-byte rather than re-deriving the validator semantics. `make build` runs
 `sql/02_marts/` into `upgauge.duckdb` (6 catalog views + `fct_route_month` +
-`mart_route_health`); `make verify` proves both the Parquet layer and the database layer
-reproducible across two from-scratch builds — `parquet: 8 artifacts byte-identical`,
-`database: 8 objects identical`. 307 tests green, zero join orphans. `data/raw/` currently
-holds 2015–2017; run `make fetch` for the full window.
+`mart_route_health` + the 2 pivot-vocabulary catalog views); `make verify` proves both the
+Parquet layer and the database layer reproducible across two from-scratch builds —
+`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 420 tests green,
+zero join orphans. `data/raw/` holds the full 2015–2026 window.
 
-Next: **M3** — Explorer: pivot query + URL state + table.
+Next: **the design session** (`docs/design/brief.md`), then **M3b** — the Next.js app: route
+handlers, the table, URL wiring, verified against the M3a goldens.
 
 ## Architecture
 
@@ -90,7 +97,8 @@ basemap — tiles are usage-priced).
 | **`make verify`** | **M2 gate: build twice, prove Parquet + database byte-identical** | ✅ |
 | `make ingest` | `fetch` + `fetch-reference` + `warehouse` | ✅ |
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |
-| `make dev` | Next.js dev server (needs node) | M3 |
+| `make goldens` | Regenerate the Explorer contract fixtures (`sql/03_queries/goldens/`) from `pipeline/pivot.py` | ✅ |
+| `make dev` | Next.js dev server (needs node) | M3b |
 
 ## Hard rules
 
@@ -174,8 +182,9 @@ Full detail and the measurements behind each: `docs/data/invariants.md`.
   **and** departures were performed. 5,713 of 2015's 5,717 zero-seat rows never flew; they
   are ordinary "no service" filings, not anomalies.
 - **Rows with no `AIRLINE_ID` exist** (158 in 2015, carrying real traffic) — but all are
-  `CLASS='L'` charter, so the service filter removes them. `missing_carrier` is a
-  **defensive** rule, not routine handling.
+  `CLASS='L'` charter, so the service filter removes them in 2015. Outside 2015 it does fire
+  in routine handling — 51 rows over 2015–2026 (27 in 2018, 24 in 2022) — see
+  `docs/data/invariants.md`.
 - **`load_factor > 1.0`** → quarantine, **never clamp.** Quarantined rows are excluded from
   aggregates but surfaced in the UI with count + reason. Showing the dirt is a trust feature.
 - **Zero-padded codes stay strings** — `AIRCRAFT_TYPE` `079` becomes `79` if int-parsed, and
