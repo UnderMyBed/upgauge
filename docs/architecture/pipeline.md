@@ -290,13 +290,13 @@ security-relevant validator in TS and we would have two, drifting.
 
 M3a therefore ships a **contract plus golden fixtures**, not a query layer:
 
-| Artifact | Purpose |
-|---|---|
-| `sql/03_queries/pivot_segment.sql`, `pivot_route.sql` | The templates. `{{TOKENS}}` for identifiers, `$params` for values. |
-| `sql/02_marts/300_meta_pivot_dimensions.sql` | The allowlist, **as a catalog object** — the server already opens the database, so there is no extra artifact to ship and `make build` regenerates it. |
-| Golden fixtures: query state → expected SQL | M3b's TypeScript must reproduce them byte-for-byte. One validator semantics, two runtimes, proven to agree. |
-| Golden fixtures: URL round-trips | The permalink contract, settled before any component reads state. |
-| Python reference implementation | Legitimately in `pipeline/`: it *generates and verifies* the goldens in CI and never serves a request. |
+| Artifact | Purpose | |
+|---|---|---|
+| `sql/03_queries/pivot_segment.sql`, `pivot_route.sql` | The templates. `{{TOKENS}}` for identifiers, `$params` for values. | ✅ Task 3 |
+| `sql/02_marts/300_meta_pivot_dimensions.sql`, `301_meta_pivot_measures.sql` | The allowlist, **as catalog objects** — the server already opens the database, so there is no extra artifact to ship and `make build` regenerates it. | ✅ Task 2 |
+| Golden fixtures: query state → expected SQL | M3b's TypeScript must reproduce them byte-for-byte. One validator semantics, two runtimes, proven to agree. | Task 4+ |
+| Golden fixtures: URL round-trips | The permalink contract, settled before any component reads state. | Task 5+ |
+| Python reference implementation (`pipeline/pivot.py`) | Legitimately in `pipeline/`: it *generates and verifies* the goldens in CI and never serves a request. | ✅ Task 3 |
 
 The allowlist is **curated, not introspected** — which dimensions we offer is a product
 decision, not a schema fact. A test cross-checks it against `duckdb_columns()` so a renamed
@@ -340,6 +340,75 @@ visible from reading the diff.
 So in M3a this is a required step, not an aspiration: for each guard, make the change it exists
 to catch, observe the failure, revert, and record the output. A guard never observed failing is
 not a guard.
+
+### Task 3 — the templates and `pipeline/pivot.py`, built
+
+✅ **Built.** `sql/03_queries/pivot_segment.sql` and `pivot_route.sql` are the two templates;
+`pipeline/pivot.py`'s `render_pivot(q, con)` validates a `PivotQuery` against Task 2's two
+catalog allowlists and renders one of them. 11 tests in `pipeline/tests/test_pivot.py`.
+
+**One validation function, reused for both the dimension list and every filter key.**
+`_validate_dimension` is the only place a dimension-shaped identifier is checked — called once
+per requested dimension and once per filter key — so a filter cannot become a side door around
+the allowlist that the main dimension list already enforces. It checks both that the key
+exists and that its catalog `grain` (`'both'` / `'segment'` / `'route'`) admits the query's
+requested grain; `'segment'`-only dimensions (`aircraft_type`, `aircraft_group`,
+`origin_state`, `dest_state`, `distance_group`) are rejected at `grain="route"` before any SQL
+is built, not left to fail at execution against a `fct_route_month` that doesn't carry them.
+
+**No dimension is assumed to be one column.** `column_expr` is substituted verbatim and
+comma-joined across requested dimensions, so the `route` dimension's pair
+(`route_key_low, route_key_high`) needs no special-cased code — it is already the same shape
+`render_pivot` handles for every other dimension. The same property makes a multi-column
+dimension deliberately **unsortable and unfilterable directly**: `render_pivot` raises
+`PivotError` rather than guess which of the two columns a bare `route`-keyed sort or filter
+should mean.
+
+**Sortable identifiers are restricted to what's actually in the SELECT list** — the requested
+dimensions (single-column ones only) and measures, by their output alias — not the full
+allowlist. `ORDER BY` on a column the query didn't select is a DuckDB `BinderException`
+waiting to happen; restricting the sortable set to the selected columns turns that into a
+validation-time `PivotError` instead. With no `sort` given, `render_pivot` defaults to the
+first requested measure, descending — matching how every Top-N view in the product is read.
+
+**Derived measures are substituted from the catalog's `expr`, never rebuilt.**
+`measure_select` is built as `f"{entry['expr']} AS {key}"` straight from
+`meta_pivot_measures` — `render_pivot` contains no measure-specific branch, so there is no
+second place the no-averaging rule could drift from the catalog. Verified by Mutation 7 below.
+
+**Quarantined rows differ by template, not by convention.** `pivot_segment.sql` computes
+`count(*) FILTER (WHERE is_quarantined)` and `string_agg(...) FILTER (WHERE is_quarantined)`
+directly off `fct_segment_month`'s row-level flag and reason. `pivot_route.sql` instead `sum`s
+`fct_route_month.quarantined_rows` — a count `fct_route_month` already carries from its own
+rollup of `fct_segment_month` — and has **no `quarantine_reasons` column at all**, because the
+reason string does not survive that rollup. Documented in `pivot_route.sql`'s header so a
+consumer does not expect the column at both grains.
+
+#### Step 6 — the injection guards, observed failing
+
+Two are mandated by the plan: dimension validation and sort validation removed, one at a time,
+confirming the guard actually guards something. Both — plus eight more mutations covering
+every other test in the file — were run and reverted; full detail (each mutation's diff, the
+exact `pytest` RED output, and the revert confirmation) is in the Task 3 SDD report rather than
+duplicated here. Summary: **all 11 tests in `pipeline/tests/test_pivot.py` have a demonstrated
+RED**, not merely a passing test that has never been watched fail —
+
+| Mutation | Test(s) driven RED |
+|---|---|
+| 1. Dimension validation bypassed entirely | `test_unknown_dimension_is_rejected`, `test_sql_injection_via_dimension_is_rejected`, `test_segment_only_dimension_rejected_at_route_grain` |
+| 2. Grain check alone removed (existence check kept) | `test_segment_only_dimension_rejected_at_route_grain` (isolated) |
+| 3. Sort validation removed | `test_sql_injection_via_sort_is_rejected` |
+| 4. Measure validation removed | `test_unknown_measure_is_rejected` |
+| 5. Time range interpolated instead of bound | `test_values_are_bound_never_interpolated` |
+| 6. Filter values interpolated instead of bound | `test_filters_bind_their_values` |
+| 7. `load_factor` rebuilt as `AVG(load_factor)` in Python | `test_derived_measure_is_computed_not_averaged` |
+| 8. `q.limit` ignored, a fixed large limit bound instead | `test_limit_is_bound_and_enforced` |
+| 9. `quarantined_rows` dropped from `pivot_segment.sql` | `test_quarantined_rows_are_excluded_but_counted` |
+| 10. `{{GROUP_BY}}` left unsubstituted | `test_renders_and_executes` (plus two others that also execute the rendered SQL) |
+
+Every mutation was reverted immediately after its RED was observed; `git status --porcelain`
+and a full `pipeline/tests/test_pivot.py` GREEN re-run confirm no mutation survived into the
+commit.
 
 ## Toolchain
 
