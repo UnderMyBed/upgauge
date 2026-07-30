@@ -167,6 +167,11 @@ def test_carrier_less_rows_stay_a_tiny_minority(rows):
 PARQUET_DIR = Path("data/parquet/t100_segment")
 
 
+# Deliberately a per-function skipif, NOT the module-level `pytestmark` every other test in
+# this file relies on: `pytestmark` gates on the 2015 raw extract (`EXTRACT`/`rows`), which
+# this test never reads. Gating it on that instead would make it silently depend on the
+# wrong precondition -- it needs the built Parquet warehouse (`make warehouse`), not the raw
+# 2015 CSV. Do not collapse this into the module-level pattern.
 @pytest.mark.skipif(
     not PARQUET_DIR.exists() or not any(PARQUET_DIR.glob("year=*")),
     reason=f"no built Parquet warehouse under {PARQUET_DIR} — run `make warehouse`",

@@ -166,6 +166,17 @@ aggregated under a null carrier. Two tests hold the line: one asserts no carrier
 reach the ingested subset today (so we notice if that changes), and one constructs such a
 row and proves it would be caught.
 
+> ⚠️ **Correction (M3a Task 1).** The paragraph above was true of 2015, the only year
+> ingested when it was written, but is not true of the full window. **Re-measured over
+> 2015–2026: `missing_carrier` fires 51 times** — 27 rows in 2018, 24 in 2022, 0 in every
+> other year (see the per-year table under "Quarantine is a feature" below). So it is not
+> purely defensive after all — it has caught real carrier-less rows reaching the ingested
+> subset, twice, outside 2015. The rule still behaves correctly (those 51 rows are
+> quarantined and excluded from aggregates, exactly as designed); what changes is the claim
+> that it never fires. The two tests referenced above are unaffected — they assert against
+> the 2015 extract specifically, which genuinely still has zero — but "no carrier-less rows
+> reach the ingested subset today" must not be read as a claim about the full window.
+
 `missing_carrier` outranks every other reason — an unattributable row is unattributable
 regardless of what else is wrong with it.
 
@@ -391,13 +402,9 @@ M1.
 > Reason mix over the full window: `zero_seats` 1,060, `load_factor_gt_1` 190,
 > `missing_carrier` 51.
 >
-> **`missing_carrier` is no longer 0 outside 2015.** The "Rows with no carrier identity"
-> section above measured 2015 only, where all 158 carrier-less raw rows were `CLASS='L'`
-> charter and never reached the ingested passenger subset — hence 0 quarantined that year.
-> Over the full window, **51 rows DO reach the quarantine stage**: 27 in 2018, 24 in 2022, 0
-> in every other year. The defensive rule is not purely theoretical — it has fired for real,
-> twice, in years outside the one it was designed against. This does not change the rule
-> (still correctly excludes these rows); it changes the claim that it never fires.
+> **`missing_carrier` is no longer 0 outside 2015** — see the correction inline in "Rows with
+> no carrier identity — a defensive rule" above, where this rule is owned. 51 rows reach the
+> quarantine stage over the full window: 27 in 2018, 24 in 2022, 0 elsewhere.
 >
 > **A single year's rate must never again stand in for the window's** — that is the whole
 > reason this correction exists. Quote the per-year table, or the full-window total, not one
