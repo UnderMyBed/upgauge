@@ -30,10 +30,15 @@ dim_aircraft_type     code, name, short_name, manufacturer, ssd_name,
 
 dim_city_market       city_market_id, name
                       -- from T_MASTER_CORD's CITY_MARKET_ID / DISPLAY_CITY_MARKET_NAME_FULL
-                      -- 6,177 markets. Collapsed to one row per city_market_id: the source
-                      -- is keyed by the point-in-time CITY_MARKET_SEQ_ID, exactly like
-                      -- AIRPORT_SEQ_ID. Collapse by PARSED date -- see the dim_carrier
-                      -- caveat below; a string sort reproduces the HOZ/SEA bug.
+                      -- 6,177 distinct city_market_ids (master_coordinate_20260729), of
+                      -- which 257 have more than one DISPLAY_CITY_MARKET_NAME_FULL across
+                      -- all history -- mostly geopolitical renames ('Aachen, West Germany'
+                      -- -> 'Aachen, Germany'; 'Adler/Sochi, U.S.S.R.' -> 'Adler/Sochi,
+                      -- Russia'). Restricting to AIRPORT_IS_LATEST = '1' leaves exactly ONE
+                      -- ambiguous market: 30973 (CGQ), seq 3097301 'Changchun, China' vs
+                      -- seq 3097302 'Changchun\Jilin City, China'. The max(seq_id) tiebreak
+                      -- is load-bearing, not cosmetic: a nondeterministic pick would drift
+                      -- between builds and break the byte-identical Parquet gate.
 
 map_mainline_group    airline_id, parent_airline_id, effective_from, effective_to
                       -- DATE-RANGED. Wholly-owned subsidiaries ONLY.

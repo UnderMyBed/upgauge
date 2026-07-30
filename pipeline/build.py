@@ -18,6 +18,7 @@ from pipeline.dims import (
     build_aircraft_type_dim,
     build_airport_dim,
     build_carrier_dim,
+    build_city_market_dim,
     build_mainline_map,
 )
 from pipeline.fetch import T100D_SEGMENT_US, Table, latest_raw
@@ -72,6 +73,7 @@ def build_all(raw_dir: Path, out_dir: Path) -> list[Path]:
 
     dims = out_dir / DIMS_SUBDIR
     written.append(build_airport_dim(sources["airport"], dims))
+    written.append(build_city_market_dim(sources["airport"], dims))
     written.append(build_carrier_dim(sources["carrier"], dims))
     written.append(build_aircraft_type_dim(sources["aircraft_type"], dims))
     written.append(build_mainline_map(dims))

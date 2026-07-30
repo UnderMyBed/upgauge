@@ -44,6 +44,7 @@ def test_build_all_produces_facts_and_every_dim(raw, tmp_path):
     written = build_all(raw, out)
     names = {p.name for p in written}
     assert "dim_airport.parquet" in names
+    assert "dim_city_market.parquet" in names
     assert "dim_carrier.parquet" in names
     assert "dim_aircraft_type.parquet" in names
     assert "map_mainline_group.parquet" in names
@@ -73,9 +74,9 @@ def test_verify_reproducible_passes_on_a_clean_build(raw, tmp_path):
 
 
 def test_verify_reproducible_checks_every_artifact(raw, tmp_path):
-    """Facts plus four dims — a gate that only checked one file would prove little."""
+    """Facts plus five dims — a gate that only checked one file would prove little."""
     report = verify_reproducible(raw, tmp_path / "work")
-    assert report.artifacts >= 5
+    assert report.artifacts >= 6
 
 
 def test_verify_reproducible_reports_a_mismatch_rather_than_raising(raw, tmp_path, monkeypatch):
