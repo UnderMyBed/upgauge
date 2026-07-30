@@ -26,6 +26,7 @@ doesn't match any data."
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,9 @@ import duckdb
 
 QUERIES_DIR = Path(__file__).parents[1] / "sql" / "03_queries"
 MAINLINE_JOIN_PATH = QUERIES_DIR / "pivot_mainline_join.sql"
+GOLDENS_DIR = QUERIES_DIR / "goldens"
+PIVOT_GOLDENS_PATH = GOLDENS_DIR / "pivot.json"
+URLSTATE_GOLDENS_PATH = GOLDENS_DIR / "urlstate.json"
 
 GRAINS = frozenset({"segment", "route"})
 GROUPINGS = frozenset({"operating", "mainline"})
@@ -60,6 +64,46 @@ class PivotQuery:
     sort_desc: bool = True
     limit: int = 100
     grouping: str = "operating"  # "operating" | "mainline"
+
+
+def query_to_jsonable(q: PivotQuery) -> dict:
+    """`PivotQuery` -> a plain dict of JSON-safe types (tuples become lists).
+
+    Shared by `write_goldens` (below) and `pipeline/tests/test_pivot_goldens.py` via
+    `query_from_jsonable`'s inverse, so the on-disk shape of a golden case and the shape the
+    test reconstructs from it can never drift apart into two hand-written definitions of the
+    same mapping.
+    """
+    return {
+        "grain": q.grain,
+        "dimensions": list(q.dimensions),
+        "measures": list(q.measures),
+        "time_from": q.time_from,
+        "time_to": q.time_to,
+        "filters": [[key, list(values)] for key, values in q.filters],
+        "sort": q.sort,
+        "sort_desc": q.sort_desc,
+        "limit": q.limit,
+        "grouping": q.grouping,
+    }
+
+
+def query_from_jsonable(d: dict) -> PivotQuery:
+    """Inverse of `query_to_jsonable`. Defaults on `sort`/`sort_desc`/`limit`/`grouping` match
+    `PivotQuery`'s own, so a golden case that omits one (none currently do) still round-trips
+    to the same query a bare `PivotQuery(...)` call would produce."""
+    return PivotQuery(
+        grain=d["grain"],
+        dimensions=tuple(d["dimensions"]),
+        measures=tuple(d["measures"]),
+        time_from=d["time_from"],
+        time_to=d["time_to"],
+        filters=tuple((key, tuple(values)) for key, values in d.get("filters", [])),
+        sort=d.get("sort"),
+        sort_desc=d.get("sort_desc", True),
+        limit=d.get("limit", 100),
+        grouping=d.get("grouping", "operating"),
+    )
 
 
 def load_allowlist(
@@ -263,3 +307,310 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     sql = sql.replace("{{MAINLINE_JOIN}}", mainline_join_sql)
 
     return sql, params
+
+
+# ---------------------------------------------------------------------------------------
+# Golden fixtures -- `make goldens`.
+#
+# sql/03_queries/goldens/{pivot,urlstate}.json are the M3a handoff artifact: M3b's
+# TypeScript is verified against these exact bytes rather than re-deriving this module's
+# validation/rendering semantics. Each case below is a `PivotQuery`; `write_goldens` renders
+# it through THIS module's own `render_pivot` (and, for the URL cases,
+# `pipeline.urlstate.encode`/`decode`) and writes the result verbatim. The cases are curated
+# here, not generated combinatorially, because which combinations matter is a judgment call
+# about what the contract needs to prove -- see each case's `description`.
+# ---------------------------------------------------------------------------------------
+
+#: (name, description, query). Covers: a single-dimension segment pivot; a multi-dimension
+#: pivot; a route-grain pivot (the multi-column `route` dimension); a derived-measure pivot
+#: (also the case Step 4 of the M3a plan mutates to prove the goldens pin something); a
+#: filtered pivot; a mainline-grouped pivot; an ascending-sort pivot; and the Task 5
+#: regression -- sorting by the carrier dimension under mainline grouping, which crashed
+#: until op_airline_id's ORDER BY expression was made to match its GROUP BY expression.
+_PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
+    (
+        "single_dimension_segment",
+        "One dimension, one additive measure, segment grain, default sort/limit/grouping.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12",
+        ),
+    ),
+    (
+        "multi_dimension_segment",
+        "Two dimensions x two measures -- exercises the comma-joined SELECT/GROUP BY list.",
+        PivotQuery(
+            grain="segment", dimensions=("year_month", "op_airline_id"),
+            measures=("seats", "passengers"), time_from="2015-01", time_to="2015-12",
+        ),
+    ),
+    (
+        "route_grain",
+        "The route dimension's multi-column column_expr (route_key_low, route_key_high) at "
+        "route grain, against fct_route_month's SUM(quarantined_rows) -- not the segment "
+        "template's COUNT(*) FILTER.",
+        PivotQuery(
+            grain="route", dimensions=("route",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12",
+        ),
+    ),
+    (
+        "derived_measure_load_factor",
+        "load_factor: SUM(passengers)/NULLIF(SUM(seats),0), each SUM filtered by NOT "
+        "is_quarantined -- never AVG(). Step 4 of the M3a plan mutates this measure's expr "
+        "in sql/02_marts/301_meta_pivot_measures.sql to prove this golden actually pins it.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("load_factor",),
+            time_from="2015-01", time_to="2015-12",
+        ),
+    ),
+    (
+        "filtered_by_carrier",
+        "A filter clause: op_airline_id IN ($f0_0, $f0_1) -- the values are bound params, "
+        "never interpolated into the SQL text.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12",
+            filters=(("op_airline_id", ("19790", "19805")),),
+        ),
+    ),
+    (
+        "mainline_grouped",
+        "grouping='mainline': op_airline_id's SELECT/GROUP BY becomes "
+        "coalesce(m.parent_airline_id, f.op_airline_id) AS op_airline_id and "
+        "pivot_mainline_join.sql's LEFT JOIN is appended after FROM.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12", grouping="mainline",
+        ),
+    ),
+    (
+        "ascending_sort",
+        "sort_desc=False renders 'ORDER BY seats ASC' instead of the default DESC.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12", sort="seats", sort_desc=False,
+        ),
+    ),
+    (
+        "sort_by_carrier_under_mainline_grouping",
+        "The Task 5 regression: under grouping='mainline', op_airline_id's GROUP BY "
+        "expression is coalesce(m.parent_airline_id, f.op_airline_id), not the bare column, "
+        "so ORDER BY must reference the identical expression -- the alias the SELECT list "
+        "assigns back to op_airline_id lets ORDER BY name it uniformly in both grouping "
+        "modes.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12", sort="op_airline_id", grouping="mainline",
+        ),
+    ),
+]
+
+#: (name, description, query). Covers the URL codec's own required round-trips: grain='route'
+#: through its short token ('k=route'); grouping='mainline' through its short token ('g=ml');
+#: an ascending sort (no '-' prefix on 's'); ordinary multi-value filters; and a filter value
+#: containing every character the URL format itself uses structurally (',' '&' '%' ':' '='
+#: '+' and a space) -- the one piece of user/attacker-controlled free text in the contract.
+_URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
+    (
+        "baseline_round_trip",
+        "Multiple dimensions and measures, explicit descending sort, non-default limit.",
+        PivotQuery(
+            grain="segment", dimensions=("year_month", "op_airline_id"),
+            measures=("seats", "load_factor"), time_from="2015-01", time_to="2015-12",
+            sort="seats", sort_desc=True, limit=25,
+        ),
+    ),
+    (
+        "route_grain",
+        "grain='route' round-trips through its short URL token ('k=route').",
+        PivotQuery(
+            grain="route", dimensions=("route",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12",
+        ),
+    ),
+    (
+        "mainline_grouping",
+        "grouping='mainline' round-trips through its short URL token ('g=ml') -- must not "
+        "silently decode back to the 'operating' default.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12", grouping="mainline",
+        ),
+    ),
+    (
+        "ascending_sort",
+        "sort_desc=False encodes without the '-' prefix ('s=seats', not 's=-seats').",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12", sort="seats", sort_desc=False,
+        ),
+    ),
+    (
+        "multiple_plain_filter_values",
+        "A filter with several ordinary values, joined by the structural ','.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12",
+            filters=(("origin_airport_id", ("14771", "13487", "12892")),),
+        ),
+    ),
+    (
+        "filter_value_reserved_characters",
+        "A filter value containing every character the URL format itself uses as a "
+        "delimiter or the escape character (',' '&' '%' ':' '=' '+' and a space) -- must "
+        "percent-encode and round-trip exactly rather than corrupt the structural "
+        "delimiters or silently reparse into the wrong number of values.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12",
+            filters=(
+                ("origin_airport_id", ("14,771", "13&487", "9%5", "12:34", "a=b", "a+b", "a b")),
+            ),
+        ),
+    ),
+]
+
+
+def _goldens_connection(tmp_path: Path) -> duckdb.DuckDBPyConnection:
+    """Build the same small, deterministic warehouse pipeline/tests/test_pivot.py and
+    test_urlstate.py build from the fixtures committed under pipeline/tests/fixtures/.
+
+    Deliberately the ONLY place pipeline/pivot.py imports from pipeline/tests: this reuses
+    that construction instead of writing a second "how to build a throwaway warehouse from
+    fixtures" recipe that could silently drift from the one every other pivot test already
+    relies on. Rendered SQL/params depend only on the catalog views (300_/301_, hand-curated
+    VALUES) and the static template files -- never on fact row content -- so this warehouse
+    (built from a 2015 sample) is exactly as valid a source for the goldens as the full
+    2015-2026 production database would be, and is available in any checkout without first
+    requiring `make ingest` against live BTS data.
+    """
+    from pipeline.marts import build_database
+    from pipeline.tests.test_marts import _warehouse
+
+    db = tmp_path / "goldens.duckdb"
+    build_database(_warehouse(tmp_path), db)
+    return duckdb.connect(str(db))
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+
+
+def write_goldens() -> None:
+    """Regenerate sql/03_queries/goldens/{pivot,urlstate}.json. `make goldens` runs this.
+
+    NEVER hand-edit the JSON -- see each file's own `_data_not_sql` header and
+    pipeline/tests/test_pivot_goldens.py, which is what actually consumes them. Every case is
+    executed against real DuckDB (not merely rendered) before being written, and every
+    urlstate case's encode/decode round trip is asserted before being written -- a golden
+    built from a query that doesn't actually run, or a round trip that's already broken,
+    would only enshrine the bug.
+    """
+    import tempfile
+
+    from pipeline.urlstate import decode, encode
+
+    with tempfile.TemporaryDirectory() as tmp:
+        con = _goldens_connection(Path(tmp))
+        try:
+            pivot_cases = []
+            for name, description, query in _PIVOT_GOLDEN_CASES:
+                sql, params = render_pivot(query, con)
+                con.execute(sql, params).fetchall()
+                pivot_cases.append(
+                    {
+                        "name": name,
+                        "description": description,
+                        "query": query_to_jsonable(query),
+                        "sql": sql,
+                        "params": params,
+                    }
+                )
+
+            url_cases = []
+            for name, description, query in _URLSTATE_GOLDEN_CASES:
+                url = encode(query)
+                decoded = decode(url, con)
+                assert decoded == query, (
+                    f"{name}: encode/decode did not round-trip while generating the "
+                    "golden -- a fixture built from a broken round trip would only "
+                    "confirm the bug, never catch it"
+                )
+                url_cases.append(
+                    {
+                        "name": name,
+                        "description": description,
+                        "query": query_to_jsonable(query),
+                        "url": url,
+                    }
+                )
+        finally:
+            con.close()
+
+    GOLDENS_DIR.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        PIVOT_GOLDENS_PATH,
+        {
+            "_data_not_sql": (
+                "This file lives under sql/03_queries/ for proximity to the templates it "
+                "pins, but it is DATA, not SQL -- consumed by "
+                "pipeline/tests/test_pivot_goldens.py, never executed directly. Regenerate "
+                "ONLY via `make goldens` (python -m pipeline.pivot --write-goldens), and "
+                "read the diff by eye before committing: a golden file is only as good as "
+                "its first generation."
+            ),
+            "cases": pivot_cases,
+        },
+    )
+    _write_json(
+        URLSTATE_GOLDENS_PATH,
+        {
+            "_data_not_sql": (
+                "Same note as pivot.json: DATA, not SQL, despite the sql/ path. Pins "
+                "pipeline.urlstate's encode/decode contract -- consumed by "
+                "pipeline/tests/test_pivot_goldens.py. Regenerate ONLY via `make goldens`."
+            ),
+            "cases": url_cases,
+        },
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`make goldens`."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate the Explorer pivot contract goldens.")
+    parser.add_argument(
+        "--write-goldens",
+        action="store_true",
+        help="Regenerate sql/03_queries/goldens/{pivot,urlstate}.json from this module",
+    )
+    args = parser.parse_args(argv)
+    if not args.write_goldens:
+        parser.error("nothing to do -- pass --write-goldens")
+
+    write_goldens()
+    print(f"wrote {PIVOT_GOLDENS_PATH} ({len(_PIVOT_GOLDEN_CASES)} cases)")
+    print(f"wrote {URLSTATE_GOLDENS_PATH} ({len(_URLSTATE_GOLDEN_CASES)} cases)")
+    return 0
+
+
+if __name__ == "__main__":
+    # `python -m pipeline.pivot` runs this file as the `__main__` module -- a SEPARATE module
+    # object from `pipeline.pivot`, with its own copy of every class defined here. Once
+    # `write_goldens` imports `pipeline.urlstate` (which does its own top-level
+    # `from pipeline.pivot import ... PivotQuery ...`), Python has never seen 'pipeline.pivot'
+    # imported by that dotted name before, so it imports the file a SECOND time as a genuinely
+    # distinct module -- `pipeline.urlstate.decode` then returns a `PivotQuery` instance built
+    # from that second class, which a frozen dataclass's `__eq__` (type-checked) never
+    # considers equal to a `PivotQuery` from `__main__`'s class, even with identical fields.
+    # Importing the canonical module explicitly here -- before `main()` runs -- registers
+    # 'pipeline.pivot' in `sys.modules` up front, so `pipeline.urlstate`'s later import
+    # resolves to the SAME module `main()` itself is running from, and every `PivotQuery`
+    # compared anywhere in `write_goldens` is the one class. Caught by running
+    # `make goldens` for real rather than only via `python -c "...write_goldens()"`, which
+    # imports this module normally and never reproduces the bug.
+    import pipeline.pivot as _canonical
+
+    raise SystemExit(_canonical.main())

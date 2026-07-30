@@ -155,12 +155,29 @@ SUM(passengers * distance)                                    -- rpm
 >
 > **Measured, not asserted from theory.** `pipeline/tests/test_pivot_real_data.py` swaps the
 > catalog's `asm` expression to the naive `SUM(seats) * MAX(distance)`, rebuilds, and
-> re-runs: over segment-month rows for **2019-01..2019-12** the naive form comes out **5.72x**
-> the correct `SUM(seats * distance)` (884,432,752,731 correct vs. 5,055,984,838,795 naive);
-> over the single month **2019-06** alone it's **5.67x** (76,617,116,348 vs.
-> 434,252,113,135). Both forms agree to the last unit on a single-route slice — the
-> divergence is purely a function of how many distinct routes fall inside the group. A guard
-> never watched fail proves nothing; this one was.
+> re-runs. The reproducible recipe — both forms filtered identically, `FILTER (WHERE NOT
+> is_quarantined)` on every aggregate, exactly as `meta_pivot_measures.expr` renders it:
+> ```sql
+> SELECT
+>     SUM(seats * distance)  FILTER (WHERE NOT is_quarantined) AS correct,
+>     SUM(seats)              FILTER (WHERE NOT is_quarantined)
+>       * MAX(distance)       FILTER (WHERE NOT is_quarantined) AS naive
+> FROM fct_segment_month
+> WHERE year_month BETWEEN '2019-01' AND '2019-12'
+> ```
+> over segment-month rows for **2019-01..2019-12** the naive form comes out **5.7166x** the
+> correct `SUM(seats * distance)` (884,432,752,731 correct vs. **5,055,972,549,655** naive,
+> rounding to the **5.72x** already used above); over the single month **2019-06** alone it's
+> **5.67x** (76,617,116,348 vs. 434,252,113,135). Both forms agree to the last unit on a
+> single-route slice — the divergence is purely a function of how many distinct routes fall
+> inside the group. A guard never watched fail proves nothing; this one was.
+>
+> **Correction (M3a Task 7):** an earlier pass of this measurement reported the annual naive
+> figure as `5,055,984,838,795` — computed by dropping `FILTER (WHERE NOT is_quarantined)`
+> from the mutation before summing, so it wasn't reproducible from this recipe. The
+> difference, `12,289,140`, is exactly the 61 quarantined 2019 rows' `2,412` total seats ×
+> `5,095` mi (the single `MAX(distance)` for the full year). The rounded **5.72x** headline is
+> unchanged; only the underlying unfiltered figure was wrong.
 >
 > **Consequence for route-grain ASM.** The canonical form directly above, `SUM(seats *
 > distance)` at **segment** grain, is unaffected by the route-month distance variance — it

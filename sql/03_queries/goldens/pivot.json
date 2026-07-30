@@ -1,0 +1,225 @@
+{
+  "_data_not_sql": "This file lives under sql/03_queries/ for proximity to the templates it pins, but it is DATA, not SQL -- consumed by pipeline/tests/test_pivot_goldens.py, never executed directly. Regenerate ONLY via `make goldens` (python -m pipeline.pivot --write-goldens), and read the diff by eye before committing: a golden file is only as good as its first generation.",
+  "cases": [
+    {
+      "name": "single_dimension_segment",
+      "description": "One dimension, one additive measure, segment grain, default sort/limit/grouping.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "sql": "-- The Explorer's pivot over fct_segment_month.\n--\n-- {{TOKENS}} are IDENTIFIERS, substituted only after allowlist validation against\n-- meta_pivot_dimensions / meta_pivot_measures. $params are VALUES, always bound. Request\n-- input never reaches a token slot un-validated. Same shape as M2's {{PARQUET_ROOT}}.\n--\n-- Quarantined rows leave the measures but stay countable: dropping them silently hides the\n-- dirt the UI is required to surface, and including them corrupts the aggregate. So every\n-- measure is FILTERed per aggregate rather than in WHERE -- a WHERE filter would remove them\n-- before count(*) FILTER could see them, making quarantined_rows always 0.\n--\n-- The mainline-join token (after FROM) renders to pivot_mainline_join.sql's contents when\n-- PivotQuery.grouping == \"mainline\", else the empty string -- see that file for the join and\n-- its boundary semantics. The fact table is aliased AS f so the join predicate is\n-- unambiguous; when grouping == \"mainline\", op_airline_id's dimension expression becomes\n-- coalesce(m.parent_airline_id, f.op_airline_id) instead of the catalog's bare column_expr.\nSELECT\n    op_airline_id,\n    SUM(seats) FILTER (WHERE NOT is_quarantined) AS seats,\n    count(*) FILTER (WHERE is_quarantined)                       AS quarantined_rows,\n    string_agg(DISTINCT quarantine_reason, ',')\n        FILTER (WHERE is_quarantined)                            AS quarantine_reasons\nFROM fct_segment_month AS f\nWHERE year_month BETWEEN $time_from AND $time_to\n  AND (TRUE)\nGROUP BY op_airline_id\nORDER BY seats DESC\nLIMIT $limit\n",
+      "params": {
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "limit": 100
+      }
+    },
+    {
+      "name": "multi_dimension_segment",
+      "description": "Two dimensions x two measures -- exercises the comma-joined SELECT/GROUP BY list.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "year_month",
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats",
+          "passengers"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "sql": "-- The Explorer's pivot over fct_segment_month.\n--\n-- {{TOKENS}} are IDENTIFIERS, substituted only after allowlist validation against\n-- meta_pivot_dimensions / meta_pivot_measures. $params are VALUES, always bound. Request\n-- input never reaches a token slot un-validated. Same shape as M2's {{PARQUET_ROOT}}.\n--\n-- Quarantined rows leave the measures but stay countable: dropping them silently hides the\n-- dirt the UI is required to surface, and including them corrupts the aggregate. So every\n-- measure is FILTERed per aggregate rather than in WHERE -- a WHERE filter would remove them\n-- before count(*) FILTER could see them, making quarantined_rows always 0.\n--\n-- The mainline-join token (after FROM) renders to pivot_mainline_join.sql's contents when\n-- PivotQuery.grouping == \"mainline\", else the empty string -- see that file for the join and\n-- its boundary semantics. The fact table is aliased AS f so the join predicate is\n-- unambiguous; when grouping == \"mainline\", op_airline_id's dimension expression becomes\n-- coalesce(m.parent_airline_id, f.op_airline_id) instead of the catalog's bare column_expr.\nSELECT\n    year_month, op_airline_id,\n    SUM(seats) FILTER (WHERE NOT is_quarantined) AS seats, SUM(passengers) FILTER (WHERE NOT is_quarantined) AS passengers,\n    count(*) FILTER (WHERE is_quarantined)                       AS quarantined_rows,\n    string_agg(DISTINCT quarantine_reason, ',')\n        FILTER (WHERE is_quarantined)                            AS quarantine_reasons\nFROM fct_segment_month AS f\nWHERE year_month BETWEEN $time_from AND $time_to\n  AND (TRUE)\nGROUP BY year_month, op_airline_id\nORDER BY seats DESC\nLIMIT $limit\n",
+      "params": {
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "limit": 100
+      }
+    },
+    {
+      "name": "route_grain",
+      "description": "The route dimension's multi-column column_expr (route_key_low, route_key_high) at route grain, against fct_route_month's SUM(quarantined_rows) -- not the segment template's COUNT(*) FILTER.",
+      "query": {
+        "grain": "route",
+        "dimensions": [
+          "route"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "sql": "-- The Explorer's pivot over fct_route_month.\n--\n-- {{TOKENS}} are IDENTIFIERS, substituted only after allowlist validation against\n-- meta_pivot_dimensions / meta_pivot_measures. $params are VALUES, always bound. Request\n-- input never reaches a token slot un-validated. Same shape as M2's {{PARQUET_ROOT}}.\n--\n-- DIFFERENCE FROM pivot_segment.sql -- fct_route_month already carries a per-row\n-- quarantined_rows COUNT (rolled up from fct_segment_month by sql/02_marts/100_fct_route_month.sql),\n-- so this template SUMs that column rather than counting quarantined rows itself, and it does\n-- NOT have a quarantine_reasons column at all: the reason string does not survive the rollup\n-- from segment to route grain. A consumer of this template must not expect\n-- quarantine_reasons to exist at route grain -- only at segment grain.\n--\n-- The mainline-join token (after FROM) renders to pivot_mainline_join.sql's contents when\n-- PivotQuery.grouping == \"mainline\", else the empty string -- see that file for the join and\n-- its boundary semantics. The fact table is aliased AS f so the join predicate is\n-- unambiguous; when grouping == \"mainline\", op_airline_id's dimension expression becomes\n-- coalesce(m.parent_airline_id, f.op_airline_id) instead of the catalog's bare column_expr.\nSELECT\n    route_key_low, route_key_high,\n    SUM(seats) FILTER (WHERE NOT is_quarantined) AS seats,\n    sum(quarantined_rows)                                        AS quarantined_rows\nFROM fct_route_month AS f\nWHERE year_month BETWEEN $time_from AND $time_to\n  AND (TRUE)\nGROUP BY route_key_low, route_key_high\nORDER BY seats DESC\nLIMIT $limit\n",
+      "params": {
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "limit": 100
+      }
+    },
+    {
+      "name": "derived_measure_load_factor",
+      "description": "load_factor: SUM(passengers)/NULLIF(SUM(seats),0), each SUM filtered by NOT is_quarantined -- never AVG(). Step 4 of the M3a plan mutates this measure's expr in sql/02_marts/301_meta_pivot_measures.sql to prove this golden actually pins it.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "load_factor"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "sql": "-- The Explorer's pivot over fct_segment_month.\n--\n-- {{TOKENS}} are IDENTIFIERS, substituted only after allowlist validation against\n-- meta_pivot_dimensions / meta_pivot_measures. $params are VALUES, always bound. Request\n-- input never reaches a token slot un-validated. Same shape as M2's {{PARQUET_ROOT}}.\n--\n-- Quarantined rows leave the measures but stay countable: dropping them silently hides the\n-- dirt the UI is required to surface, and including them corrupts the aggregate. So every\n-- measure is FILTERed per aggregate rather than in WHERE -- a WHERE filter would remove them\n-- before count(*) FILTER could see them, making quarantined_rows always 0.\n--\n-- The mainline-join token (after FROM) renders to pivot_mainline_join.sql's contents when\n-- PivotQuery.grouping == \"mainline\", else the empty string -- see that file for the join and\n-- its boundary semantics. The fact table is aliased AS f so the join predicate is\n-- unambiguous; when grouping == \"mainline\", op_airline_id's dimension expression becomes\n-- coalesce(m.parent_airline_id, f.op_airline_id) instead of the catalog's bare column_expr.\nSELECT\n    op_airline_id,\n    SUM(passengers) FILTER (WHERE NOT is_quarantined)::DOUBLE / NULLIF(SUM(seats) FILTER (WHERE NOT is_quarantined), 0) AS load_factor,\n    count(*) FILTER (WHERE is_quarantined)                       AS quarantined_rows,\n    string_agg(DISTINCT quarantine_reason, ',')\n        FILTER (WHERE is_quarantined)                            AS quarantine_reasons\nFROM fct_segment_month AS f\nWHERE year_month BETWEEN $time_from AND $time_to\n  AND (TRUE)\nGROUP BY op_airline_id\nORDER BY load_factor DESC\nLIMIT $limit\n",
+      "params": {
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "limit": 100
+      }
+    },
+    {
+      "name": "filtered_by_carrier",
+      "description": "A filter clause: op_airline_id IN ($f0_0, $f0_1) -- the values are bound params, never interpolated into the SQL text.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [
+          [
+            "op_airline_id",
+            [
+              "19790",
+              "19805"
+            ]
+          ]
+        ],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "sql": "-- The Explorer's pivot over fct_segment_month.\n--\n-- {{TOKENS}} are IDENTIFIERS, substituted only after allowlist validation against\n-- meta_pivot_dimensions / meta_pivot_measures. $params are VALUES, always bound. Request\n-- input never reaches a token slot un-validated. Same shape as M2's {{PARQUET_ROOT}}.\n--\n-- Quarantined rows leave the measures but stay countable: dropping them silently hides the\n-- dirt the UI is required to surface, and including them corrupts the aggregate. So every\n-- measure is FILTERed per aggregate rather than in WHERE -- a WHERE filter would remove them\n-- before count(*) FILTER could see them, making quarantined_rows always 0.\n--\n-- The mainline-join token (after FROM) renders to pivot_mainline_join.sql's contents when\n-- PivotQuery.grouping == \"mainline\", else the empty string -- see that file for the join and\n-- its boundary semantics. The fact table is aliased AS f so the join predicate is\n-- unambiguous; when grouping == \"mainline\", op_airline_id's dimension expression becomes\n-- coalesce(m.parent_airline_id, f.op_airline_id) instead of the catalog's bare column_expr.\nSELECT\n    op_airline_id,\n    SUM(seats) FILTER (WHERE NOT is_quarantined) AS seats,\n    count(*) FILTER (WHERE is_quarantined)                       AS quarantined_rows,\n    string_agg(DISTINCT quarantine_reason, ',')\n        FILTER (WHERE is_quarantined)                            AS quarantine_reasons\nFROM fct_segment_month AS f\nWHERE year_month BETWEEN $time_from AND $time_to\n  AND (op_airline_id IN ($f0_0, $f0_1))\nGROUP BY op_airline_id\nORDER BY seats DESC\nLIMIT $limit\n",
+      "params": {
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "limit": 100,
+        "f0_0": "19790",
+        "f0_1": "19805"
+      }
+    },
+    {
+      "name": "mainline_grouped",
+      "description": "grouping='mainline': op_airline_id's SELECT/GROUP BY becomes coalesce(m.parent_airline_id, f.op_airline_id) AS op_airline_id and pivot_mainline_join.sql's LEFT JOIN is appended after FROM.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "mainline"
+      },
+      "sql": "-- The Explorer's pivot over fct_segment_month.\n--\n-- {{TOKENS}} are IDENTIFIERS, substituted only after allowlist validation against\n-- meta_pivot_dimensions / meta_pivot_measures. $params are VALUES, always bound. Request\n-- input never reaches a token slot un-validated. Same shape as M2's {{PARQUET_ROOT}}.\n--\n-- Quarantined rows leave the measures but stay countable: dropping them silently hides the\n-- dirt the UI is required to surface, and including them corrupts the aggregate. So every\n-- measure is FILTERed per aggregate rather than in WHERE -- a WHERE filter would remove them\n-- before count(*) FILTER could see them, making quarantined_rows always 0.\n--\n-- The mainline-join token (after FROM) renders to pivot_mainline_join.sql's contents when\n-- PivotQuery.grouping == \"mainline\", else the empty string -- see that file for the join and\n-- its boundary semantics. The fact table is aliased AS f so the join predicate is\n-- unambiguous; when grouping == \"mainline\", op_airline_id's dimension expression becomes\n-- coalesce(m.parent_airline_id, f.op_airline_id) instead of the catalog's bare column_expr.\nSELECT\n    coalesce(m.parent_airline_id, f.op_airline_id) AS op_airline_id,\n    SUM(seats) FILTER (WHERE NOT is_quarantined) AS seats,\n    count(*) FILTER (WHERE is_quarantined)                       AS quarantined_rows,\n    string_agg(DISTINCT quarantine_reason, ',')\n        FILTER (WHERE is_quarantined)                            AS quarantine_reasons\nFROM fct_segment_month AS f\n-- Substituted into the {{MAINLINE_JOIN}} token in pivot_segment.sql / pivot_route.sql when\n-- PivotQuery.grouping == \"mainline\" (empty string when grouping == \"operating\"). No request\n-- input reaches this file -- pivot.py only chooses whether to include it verbatim, so it is\n-- query logic living in SQL, not a string built in Python.\n--\n-- effective_from/effective_to are VARCHAR 'YYYY-MM', compared lexically against year_month\n-- directly -- no date parsing needed at that granularity. effective_to is EXCLUSIVE: a\n-- carrier whose thru-month is '2018-04' has already stopped rolling up BY 2018-04, not\n-- after it. See docs/data/carrier-model.md for the boundary evidence (Virgin America,\n-- Hawaiian) and pipeline/tests/test_pivot_real_data.py for the mutation-tested proof.\n--\n-- The fact table must be aliased AS f by the including template, both so this predicate is\n-- unambiguous and so a second `is_quarantined`-named column could never silently shadow the\n-- one every measure's FILTER depends on (map_mainline_group has no such column, but the\n-- alias makes that a structural fact of the join, not a coincidence of today's schema).\nLEFT JOIN map_mainline_group m\n       ON m.airline_id = f.op_airline_id\n      AND f.year_month >= m.effective_from\n      AND (m.effective_to IS NULL OR f.year_month < m.effective_to)\nWHERE year_month BETWEEN $time_from AND $time_to\n  AND (TRUE)\nGROUP BY coalesce(m.parent_airline_id, f.op_airline_id)\nORDER BY seats DESC\nLIMIT $limit\n",
+      "params": {
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "limit": 100
+      }
+    },
+    {
+      "name": "ascending_sort",
+      "description": "sort_desc=False renders 'ORDER BY seats ASC' instead of the default DESC.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": "seats",
+        "sort_desc": false,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "sql": "-- The Explorer's pivot over fct_segment_month.\n--\n-- {{TOKENS}} are IDENTIFIERS, substituted only after allowlist validation against\n-- meta_pivot_dimensions / meta_pivot_measures. $params are VALUES, always bound. Request\n-- input never reaches a token slot un-validated. Same shape as M2's {{PARQUET_ROOT}}.\n--\n-- Quarantined rows leave the measures but stay countable: dropping them silently hides the\n-- dirt the UI is required to surface, and including them corrupts the aggregate. So every\n-- measure is FILTERed per aggregate rather than in WHERE -- a WHERE filter would remove them\n-- before count(*) FILTER could see them, making quarantined_rows always 0.\n--\n-- The mainline-join token (after FROM) renders to pivot_mainline_join.sql's contents when\n-- PivotQuery.grouping == \"mainline\", else the empty string -- see that file for the join and\n-- its boundary semantics. The fact table is aliased AS f so the join predicate is\n-- unambiguous; when grouping == \"mainline\", op_airline_id's dimension expression becomes\n-- coalesce(m.parent_airline_id, f.op_airline_id) instead of the catalog's bare column_expr.\nSELECT\n    op_airline_id,\n    SUM(seats) FILTER (WHERE NOT is_quarantined) AS seats,\n    count(*) FILTER (WHERE is_quarantined)                       AS quarantined_rows,\n    string_agg(DISTINCT quarantine_reason, ',')\n        FILTER (WHERE is_quarantined)                            AS quarantine_reasons\nFROM fct_segment_month AS f\nWHERE year_month BETWEEN $time_from AND $time_to\n  AND (TRUE)\nGROUP BY op_airline_id\nORDER BY seats ASC\nLIMIT $limit\n",
+      "params": {
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "limit": 100
+      }
+    },
+    {
+      "name": "sort_by_carrier_under_mainline_grouping",
+      "description": "The Task 5 regression: under grouping='mainline', op_airline_id's GROUP BY expression is coalesce(m.parent_airline_id, f.op_airline_id), not the bare column, so ORDER BY must reference the identical expression -- the alias the SELECT list assigns back to op_airline_id lets ORDER BY name it uniformly in both grouping modes.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": "op_airline_id",
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "mainline"
+      },
+      "sql": "-- The Explorer's pivot over fct_segment_month.\n--\n-- {{TOKENS}} are IDENTIFIERS, substituted only after allowlist validation against\n-- meta_pivot_dimensions / meta_pivot_measures. $params are VALUES, always bound. Request\n-- input never reaches a token slot un-validated. Same shape as M2's {{PARQUET_ROOT}}.\n--\n-- Quarantined rows leave the measures but stay countable: dropping them silently hides the\n-- dirt the UI is required to surface, and including them corrupts the aggregate. So every\n-- measure is FILTERed per aggregate rather than in WHERE -- a WHERE filter would remove them\n-- before count(*) FILTER could see them, making quarantined_rows always 0.\n--\n-- The mainline-join token (after FROM) renders to pivot_mainline_join.sql's contents when\n-- PivotQuery.grouping == \"mainline\", else the empty string -- see that file for the join and\n-- its boundary semantics. The fact table is aliased AS f so the join predicate is\n-- unambiguous; when grouping == \"mainline\", op_airline_id's dimension expression becomes\n-- coalesce(m.parent_airline_id, f.op_airline_id) instead of the catalog's bare column_expr.\nSELECT\n    coalesce(m.parent_airline_id, f.op_airline_id) AS op_airline_id,\n    SUM(seats) FILTER (WHERE NOT is_quarantined) AS seats,\n    count(*) FILTER (WHERE is_quarantined)                       AS quarantined_rows,\n    string_agg(DISTINCT quarantine_reason, ',')\n        FILTER (WHERE is_quarantined)                            AS quarantine_reasons\nFROM fct_segment_month AS f\n-- Substituted into the {{MAINLINE_JOIN}} token in pivot_segment.sql / pivot_route.sql when\n-- PivotQuery.grouping == \"mainline\" (empty string when grouping == \"operating\"). No request\n-- input reaches this file -- pivot.py only chooses whether to include it verbatim, so it is\n-- query logic living in SQL, not a string built in Python.\n--\n-- effective_from/effective_to are VARCHAR 'YYYY-MM', compared lexically against year_month\n-- directly -- no date parsing needed at that granularity. effective_to is EXCLUSIVE: a\n-- carrier whose thru-month is '2018-04' has already stopped rolling up BY 2018-04, not\n-- after it. See docs/data/carrier-model.md for the boundary evidence (Virgin America,\n-- Hawaiian) and pipeline/tests/test_pivot_real_data.py for the mutation-tested proof.\n--\n-- The fact table must be aliased AS f by the including template, both so this predicate is\n-- unambiguous and so a second `is_quarantined`-named column could never silently shadow the\n-- one every measure's FILTER depends on (map_mainline_group has no such column, but the\n-- alias makes that a structural fact of the join, not a coincidence of today's schema).\nLEFT JOIN map_mainline_group m\n       ON m.airline_id = f.op_airline_id\n      AND f.year_month >= m.effective_from\n      AND (m.effective_to IS NULL OR f.year_month < m.effective_to)\nWHERE year_month BETWEEN $time_from AND $time_to\n  AND (TRUE)\nGROUP BY coalesce(m.parent_airline_id, f.op_airline_id)\nORDER BY op_airline_id DESC\nLIMIT $limit\n",
+      "params": {
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "limit": 100
+      }
+    }
+  ]
+}

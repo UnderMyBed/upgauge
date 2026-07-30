@@ -1,0 +1,155 @@
+{
+  "_data_not_sql": "Same note as pivot.json: DATA, not SQL, despite the sql/ path. Pins pipeline.urlstate's encode/decode contract -- consumed by pipeline/tests/test_pivot_goldens.py. Regenerate ONLY via `make goldens`.",
+  "cases": [
+    {
+      "name": "baseline_round_trip",
+      "description": "Multiple dimensions and measures, explicit descending sort, non-default limit.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "year_month",
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats",
+          "load_factor"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": "seats",
+        "sort_desc": true,
+        "limit": 25,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=seg&d=year_month,op_airline_id&m=seats,load_factor&t=2015-01:2015-12&s=-seats&n=25&g=op"
+    },
+    {
+      "name": "route_grain",
+      "description": "grain='route' round-trips through its short URL token ('k=route').",
+      "query": {
+        "grain": "route",
+        "dimensions": [
+          "route"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=route&d=route&m=seats&t=2015-01:2015-12&n=100&g=op"
+    },
+    {
+      "name": "mainline_grouping",
+      "description": "grouping='mainline' round-trips through its short URL token ('g=ml') -- must not silently decode back to the 'operating' default.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "mainline"
+      },
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&n=100&g=ml"
+    },
+    {
+      "name": "ascending_sort",
+      "description": "sort_desc=False encodes without the '-' prefix ('s=seats', not 's=-seats').",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": "seats",
+        "sort_desc": false,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&s=seats&n=100&g=op"
+    },
+    {
+      "name": "multiple_plain_filter_values",
+      "description": "A filter with several ordinary values, joined by the structural ','.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [
+          [
+            "origin_airport_id",
+            [
+              "14771",
+              "13487",
+              "12892"
+            ]
+          ]
+        ],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=origin_airport_id:14771,13487,12892&n=100&g=op"
+    },
+    {
+      "name": "filter_value_reserved_characters",
+      "description": "A filter value containing every character the URL format itself uses as a delimiter or the escape character (',' '&' '%' ':' '=' '+' and a space) -- must percent-encode and round-trip exactly rather than corrupt the structural delimiters or silently reparse into the wrong number of values.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [
+          [
+            "origin_airport_id",
+            [
+              "14,771",
+              "13&487",
+              "9%5",
+              "12:34",
+              "a=b",
+              "a+b",
+              "a b"
+            ]
+          ]
+        ],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=origin_airport_id:14%2C771,13%26487,9%255,12%3A34,a%3Db,a%2Bb,a%20b&n=100&g=op"
+    }
+  ]
+}
