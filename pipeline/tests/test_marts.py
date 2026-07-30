@@ -287,15 +287,19 @@ def test_aircraft_type_stays_a_string_through_the_view(tmp_path):
     assert types["aircraft_type"] == "VARCHAR"
 
 
-def test_year_partition_is_exposed_as_a_column(tmp_path):
-    """Hive partitioning is the pruning mechanism; losing the column loses the pruning.
+def test_year_partition_matches_the_directory_it_was_read_from(tmp_path):
+    """`year` is a genuine content column (`normalize_t100_segment.sql` casts `raw.YEAR`),
+    written independently of the `year=YYYY` directory it lands in. This test guards that
+    the two never silently drift apart -- e.g. a normalize bug that wrote a row to the wrong
+    partition, or wrote the wrong integer into the column.
 
-    Stronger than a bare `count(DISTINCT year) >= 1`, which a single-year fixture cannot
-    falsify -- that would still pass if `year` were, say, a constant literal instead of the
-    real partition column. Instead: read the partition directories straight off disk and
-    assert the view's distinct `year` values match them exactly, and that `year` shows up in
-    `DESCRIBE` at all (a plain `read_parquet(..., hive_partitioning = false)` would drop the
-    column entirely and fail the `DESCRIBE` half of this assertion).
+    CORRECTED (fix round 1): this does NOT guard `hive_partitioning = true` specifically.
+    Measured empirically: flipping that flag to `false` in the view still leaves `year`
+    present with the same values, because the column already exists in the Parquet content,
+    not only in the directory name. What `hive_partitioning = true` actually buys is file
+    pruning -- see `test_fct_segment_month_view_sets_hive_partitioning_for_pruning` below,
+    and the measured pruning numbers in the .sql header comment and
+    docs/architecture/pipeline.md.
     """
     parquet = _warehouse(tmp_path)
     partition_years = {
@@ -316,3 +320,31 @@ def test_year_partition_is_exposed_as_a_column(tmp_path):
         r[0] for r in con.execute("SELECT DISTINCT year FROM fct_segment_month").fetchall()
     }
     assert view_years == partition_years
+
+
+def test_fct_segment_month_view_sets_hive_partitioning_for_pruning(tmp_path):
+    """`hive_partitioning = true` is not what makes `year` exist -- see the test above --
+    it is what lets DuckDB skip whole `year=YYYY` files instead of opening every one and
+    filtering by content. Measured against the real 3-year warehouse in data/parquet/: a
+    `WHERE year = 2015` query reports `Total Files Read: 1` (of 3) with the flag on, versus
+    `Total Files Read: 3` with it off -- same result, 3x the I/O.
+
+    Asserting that measurement itself via EXPLAIN ANALYZE would be brittle: DuckDB's
+    profiling `extra_info` keys ('Total Files Read', 'Scanning Files', ...) are a debug
+    rendering, not a stable public API, and are free to change format across versions. So
+    this pins the config instead of the runtime effect: the compiled view's own SQL text
+    (the artifact this repo controls) must still request hive partitioning. That is
+    everything standing between "prunes 2 of 3 files" and "silently scans all of them."
+    """
+    parquet = _warehouse(tmp_path)
+    db = tmp_path / "u.duckdb"
+    build_database(parquet, db)
+    con = duckdb.connect(str(db))
+    sql = con.execute(
+        "SELECT sql FROM duckdb_views() WHERE view_name = 'fct_segment_month'"
+    ).fetchone()[0]
+    # DuckDB re-serializes the boolean literal as CAST('t' AS BOOLEAN) / CAST('f' AS
+    # BOOLEAN) rather than echoing `true`/`false` back verbatim -- verified directly
+    # against this DuckDB version before writing this assertion.
+    assert "hive_partitioning" in sql
+    assert "CAST('t' AS BOOLEAN)" in sql

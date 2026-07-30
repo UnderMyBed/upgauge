@@ -150,11 +150,26 @@ about *query logic*, which stays in `.sql`.
 `02x_dim_*.sql` / `024_map_mainline_group.sql` files turn the Parquet tree into `make build`'s
 six database objects — `fct_segment_month`, `dim_airport`, `dim_city_market`, `dim_carrier`,
 `dim_aircraft_type`, `map_mainline_group`. All six are plain `SELECT * FROM read_parquet(...)`
-views, nothing materialized: the fact view adds `hive_partitioning = true` so `year` stays a
-real, prunable column, and every dim view is a single-file read. No derived measure column
+views, nothing materialized: the fact view adds `hive_partitioning = true`, and every dim view
+is a single-file read. No derived measure column
 (`load_factor`/`asm`/`rpm`/`avg_gauge`/`completion_factor`) exists on `fct_segment_month`, and
 quarantined rows are retained with their flag rather than dropped — the view is the fact
 table, so this is the last point at which dropping them would be reversible.
+
+**`year` is a content column AND a Hive partition key — `hive_partitioning = true` is for
+pruning, not schema.** `normalize_t100_segment.sql` already casts `raw.YEAR` into the Parquet
+content, independent of the `year=YYYY` directory it lands in, so `year` shows up in
+`fct_segment_month` either way — flipping the flag to `false` does not drop the column.
+Measured against the real 3-year warehouse in `data/parquet/` (`EXPLAIN ANALYZE`, JSON
+profiling, DuckDB 1.5.5): `WHERE year = 2015` reports `Total Files Read: 1` (of 3) with the
+flag on, versus `Total Files Read: 3` with it off — same result (705,332,563 passengers)
+either way, so the flag buys I/O, not correctness. Separately, a scratch experiment (two
+partition dirs whose content `year` column deliberately disagreed with the directory name)
+showed DuckDB does not error or duplicate the column when the two conflict: there is still
+exactly one `year` column, and the partition-derived value silently wins over the file's own
+content value. Real builds never hit this — the partition directory name and the content
+column are written from the same `year` argument in `normalize_year` — but it is a real,
+previously-undocumented property of this view.
 
 ### Views cannot take bound parameters — so CWD is load-bearing
 
