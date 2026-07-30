@@ -15,6 +15,9 @@ fct_route_month       grain: (year_month, op_airline_id, origin_airport_id, dest
                       DIRECTED, and a view -- it is purely derived from fct_segment_month
                       with the aircraft_type grain dropped. Excludes quarantined rows but
                       carries quarantined_rows as a count, so the UI can still show the dirt.
+                      Also carries `is_quarantined`, always FALSE -- a structural stand-in so
+                      meta_pivot_measures' shared `FILTER (WHERE NOT is_quarantined)` resolves
+                      at route grain too, instead of "column does not exist".
 
 dim_airport           airport_id, airport_seq_id, code, name, city, state, lat, lon,
                       effective_from, effective_to
@@ -150,6 +153,15 @@ SUM(passengers * distance)                                    -- rpm
 > distances. Same number, two conclusions, only one of them valid. Guarded by a test that
 > asserts the two forms diverge on a multi-route group.
 >
+> **Measured, not asserted from theory.** `pipeline/tests/test_pivot_real_data.py` swaps the
+> catalog's `asm` expression to the naive `SUM(seats) * MAX(distance)`, rebuilds, and
+> re-runs: over segment-month rows for **2019-01..2019-12** the naive form comes out **5.72x**
+> the correct `SUM(seats * distance)` (884,432,752,731 correct vs. 5,055,984,838,795 naive);
+> over the single month **2019-06** alone it's **5.67x** (76,617,116,348 vs.
+> 434,252,113,135). Both forms agree to the last unit on a single-route slice — the
+> divergence is purely a function of how many distinct routes fall inside the group. A guard
+> never watched fail proves nothing; this one was.
+>
 > **Consequence for route-grain ASM.** The canonical form directly above, `SUM(seats *
 > distance)` at **segment** grain, is unaffected by the route-month distance variance — it
 > multiplies per row before summing and never touches the route-grain `distance` attribute.
@@ -196,6 +208,17 @@ Aggregates exclude quarantined rows, but the response must carry `quarantined_ro
 distinct reasons for the grouped set, because the UI is required to surface count and reason —
 showing the dirt is a trust feature ([invariants.md](invariants.md)). A pivot that returns only
 clean sums, with no way to tell whether 3 rows or 30,000 were dropped, cannot satisfy that.
+
+> 🔴 **The exclusion lives in `meta_pivot_measures.expr`, not the template's `WHERE`.** Every
+> `SUM(...)` in the catalog carries its own `FILTER (WHERE NOT is_quarantined)` — a `WHERE`
+> in `pivot_segment.sql`/`pivot_route.sql` would drop quarantined rows before
+> `count(*) FILTER (WHERE is_quarantined)` could see them, making `quarantined_rows` always
+> 0. `pipeline/tests/test_pivot_real_data.py::test_load_factor_matches_an_independent_recomputation`
+> caught this expression missing the FILTER against the real 2019 warehouse — 61 quarantined
+> rows in that window shifted `load_factor` for 7 of 80 carriers by up to 0.26%, small enough
+> to look plausible and be trusted wrongly. Both fct_segment_month (real per-row
+> `is_quarantined`) and fct_route_month (structural `FALSE AS is_quarantined`, see the schema
+> block above) expose the column so the one catalog expression resolves at both grains.
 
 ### The mainline-group toggle is a DATE-RANGED join
 

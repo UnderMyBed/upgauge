@@ -68,6 +68,15 @@ SELECT
 
     max(distance) FILTER (WHERE NOT is_quarantined) AS distance,
 
-    count(*) FILTER (WHERE is_quarantined) AS quarantined_rows
+    count(*) FILTER (WHERE is_quarantined) AS quarantined_rows,
+
+    -- Always FALSE, never a real per-row flag: every quarantined segment row was already
+    -- excluded from the sums above, so no row of THIS view is itself quarantined -- that's
+    -- what quarantined_rows records. It exists so meta_pivot_measures.expr (301_*.sql) can
+    -- write one FILTER (WHERE NOT is_quarantined) per SUM that is correct at BOTH grains: a
+    -- structural no-op here, the actual exclusion on fct_segment_month. Without this column,
+    -- a shared measure expression referencing is_quarantined would raise "column does not
+    -- exist" the moment a pivot request hit route grain.
+    FALSE AS is_quarantined
 FROM fct_segment_month
 GROUP BY year_month, year, quarter, month, op_airline_id, origin_airport_id, dest_airport_id

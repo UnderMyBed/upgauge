@@ -83,7 +83,9 @@ def test_limit_is_bound_and_enforced(con):
 def test_derived_measure_is_computed_not_averaged(con):
     sql, _ = render_pivot(q(measures=("load_factor",)), con)
     assert "AVG(" not in sql.upper()
-    assert "NULLIF(SUM(seats), 0)" in sql
+    # Each SUM carries its own quarantine FILTER (see 301_meta_pivot_measures.sql) -- the
+    # numerator and denominator are summed from raw rows, never from an averaged ratio.
+    assert "NULLIF(SUM(seats) FILTER (WHERE NOT is_quarantined), 0)" in sql
 
 
 def test_filters_bind_their_values(con):
