@@ -12,6 +12,16 @@ substitution slot un-validated. Same shape as marts.py's `{{PARQUET_ROOT}}` toke
 Derived measures (load_factor, asm, rpm, ...) come from the allowlist's `expr` verbatim --
 this module never rebuilds a measure expression itself, which is what keeps the
 no-averaging rule enforced in exactly one place (the catalog), not two.
+
+Where the validation line is drawn (M3b needs this -- this module IS the spec it ports):
+anything `render_pivot` can reject CHEAPLY as structurally malformed (an identifier not on
+the allowlist, an empty dimension/measure list, a non-positive limit, a filter with no
+values) raises `PivotError`. Anything that is a legitimate value-domain mismatch -- a filter
+value of the wrong type for its column, an out-of-range airline_id -- is left to DuckDB's own
+casting/binding to reject. Duplicating DuckDB's type system in Python would be exactly the
+over-engineering the project's rules forbid elsewhere. The boundary: PivotError for "this
+request could never produce valid SQL," DuckDB for "this request produced valid SQL that
+doesn't match any data."
 """
 
 from __future__ import annotations
@@ -92,6 +102,16 @@ def _validate_measure(key: str, meas: dict[str, dict]) -> dict:
     return entry
 
 
+def _dimension_columns(entry: dict) -> list[str]:
+    """Split a dimension's `column_expr` into its underlying column name(s).
+
+    Most dimensions are one column; `route` is the PAIR `route_key_low, route_key_high`.
+    Shared by the filter and sort logic below so a multi-column dimension is handled once,
+    not reasoned about separately in two places.
+    """
+    return [c.strip() for c in entry["column_expr"].split(",")]
+
+
 def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, dict]:
     """Validate `q` against the catalog allowlists and render one of the pivot templates.
 
@@ -101,6 +121,20 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     """
     if q.grain not in GRAINS:
         raise PivotError(f"unknown grain {q.grain!r}, expected one of {sorted(GRAINS)}")
+
+    # Structurally malformed requests, rejected before touching the allowlist or the
+    # template: an empty dimension/measure list renders a stray-comma SELECT that only fails
+    # once DuckDB parses it, and deselecting every dimension (or every measure) is a
+    # plausible Explorer UI state, not an exotic edge case.
+    if not q.dimensions:
+        raise PivotError("at least one dimension is required")
+    if not q.measures:
+        raise PivotError("at least one measure is required")
+    if isinstance(q.limit, bool) or not isinstance(q.limit, int) or q.limit <= 0:
+        raise PivotError(f"limit must be a positive integer, got {q.limit!r}")
+    for key, values in q.filters:
+        if not values:
+            raise PivotError(f"filter {key!r} has no values")
 
     dims, meas = load_allowlist(con)
 
@@ -128,7 +162,7 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     filter_clauses: list[str] = []
     for i, (key, values) in enumerate(q.filters):
         entry = _validate_dimension(key, dims, q.grain)
-        columns = [c.strip() for c in entry["column_expr"].split(",")]
+        columns = _dimension_columns(entry)
         if len(columns) != 1:
             raise PivotError(
                 f"dimension {key!r} spans multiple columns ({entry['column_expr']}); "
@@ -147,7 +181,7 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     # (route) has no single sortable name, so it is deliberately absent here.
     sortable: dict[str, str] = {}
     for key, entry in zip(q.dimensions, dim_entries, strict=True):
-        columns = [c.strip() for c in entry["column_expr"].split(",")]
+        columns = _dimension_columns(entry)
         if len(columns) == 1:
             sortable[key] = columns[0]
     for key in q.measures:

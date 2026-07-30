@@ -91,3 +91,37 @@ def test_filters_bind_their_values(con):
         q(filters=(("op_airline_id", ("19790",)),)), con)
     assert "19790" not in sql
     assert "19790" in str(params.values())
+
+
+def test_empty_dimensions_is_rejected(con):
+    """An empty dimension list renders a stray-comma SELECT that fails at the DuckDB parser,
+    not at validation. Deselecting every dimension is a plausible Explorer UI state."""
+    with pytest.raises(PivotError, match="dimension"):
+        render_pivot(q(dimensions=()), con)
+
+
+def test_empty_measures_is_rejected(con):
+    with pytest.raises(PivotError, match="measure"):
+        render_pivot(q(measures=()), con)
+
+
+def test_non_integer_limit_is_rejected(con):
+    with pytest.raises(PivotError, match="limit"):
+        render_pivot(q(limit=1.5), con)
+
+
+def test_negative_limit_is_rejected(con):
+    with pytest.raises(PivotError, match="limit"):
+        render_pivot(q(limit=-1), con)
+
+
+def test_zero_limit_is_rejected(con):
+    with pytest.raises(PivotError, match="limit"):
+        render_pivot(q(limit=0), con)
+
+
+def test_empty_filter_values_is_rejected(con):
+    """A filter with no values renders `IN ()`, invalid SQL -- and a filter with an empty
+    value list is not a meaningful request in the first place."""
+    with pytest.raises(PivotError, match="filter"):
+        render_pivot(q(filters=(("op_airline_id", ()),)), con)
