@@ -21,29 +21,32 @@ aircraft type · aircraft group · distance group
      hand-editing a permalink is exactly what this audience does. Reference implementation:
      `pipeline/urlstate.py` (`encode`/`decode`); M3b's TypeScript port must match it exactly.
 
-     | Key | Meaning | Example |
-     |---|---|---|
-     | `v` | version | `v=1` |
-     | `k` | grain | `k=seg` / `k=route` |
-     | `d` | dimensions, comma-separated | `d=year_month,op_airline_id` |
-     | `m` | measures, comma-separated | `m=seats,load_factor` |
-     | `t` | time range | `t=2024-01:2024-12` |
-     | `f` | filter, repeatable | `f=origin_airport_id:14771,13487` |
-     | `s` | sort, `-` prefix = descending | `s=-seats` |
-     | `n` | limit | `n=50` |
-     | `g` | grouping | `g=op` / `g=ml` |
+     | Key | Meaning | Example | Required? |
+     |---|---|---|---|
+     | `v` | version | `v=1` | yes |
+     | `k` | grain | `k=seg` / `k=route` | yes |
+     | `d` | dimensions, comma-separated | `d=year_month,op_airline_id` | yes |
+     | `m` | measures, comma-separated | `m=seats,load_factor` | yes |
+     | `t` | time range | `t=2024-01:2024-12` | yes |
+     | `f` | filter, repeatable | `f=origin_airport_id:14771,13487` | no |
+     | `s` | sort, `-` prefix = descending | `s=-seats` | no |
+     | `n` | limit | `n=50` | no — defaults to `100` |
+     | `g` | grouping | `g=op` / `g=ml` | no — defaults to `op` (operating) |
 
    - **Versioned** (`v=1`), so a future incompatible change can migrate rather than silently
      misread an old link.
    - **Decode is total.** An unknown key, a duplicate non-`f` key, or a dimension not on the
      allowlist, is a rejection with a message — never a silent drop to a default or a silent
      last-wins. A permalink that quietly renders a *different* query than it encodes is worse
-     than one that errors, because the screenshot still looks authoritative. Identifier/
-     structural validation (unknown dimension, measure, sort key, grain, grouping, empty
-     lists, non-positive limit) is reused as-is from `pipeline.pivot.render_pivot` — one
-     allowlist, not two. URL syntax that `render_pivot` can't see (`v` itself, unknown or
-     duplicate query-string keys, the shape of `t` and `f`, `n` as an integer) is validated
-     in the codec.
+     than one that errors, because the screenshot still looks authoritative. This does *not*
+     extend to `n`/`g` being merely absent: those two keys have a documented default (above)
+     that both `encode` and a hand-editor can legitimately omit, and applying it is not the
+     kind of silent misreading the totality rule targets — a value that *is* present and
+     invalid is still rejected the same as any other key. Identifier/structural validation
+     (unknown dimension, measure, sort key, grain, grouping, empty lists, non-positive limit)
+     is reused as-is from `pipeline.pivot.render_pivot` — one allowlist, not two. URL syntax
+     that `render_pivot` can't see (`v` itself, unknown or duplicate query-string keys, the
+     shape of `t` and `f`, `n`/`v` as integers) is validated in the codec.
    - **Filter values are percent-encoded individually**, because they are the one piece of
      free text in the format and can legally contain the delimiters (`,`, `:`, `&`, `=`) the
      format itself uses. Every other key carries plain allowlisted-identifier text and needs
