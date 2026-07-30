@@ -48,6 +48,12 @@ mart_route_health     one row per (op_airline_id, route_key_low, route_key_high)
                       Global trailing-12 / prior-12 windows, <30 performed-departures floor,
                       NULL (not huge-positive) deltas when the prior window is empty.
 mart_leaderboards     precomputed JSON, built at pipeline time                    [M5]
+
+meta_pivot_dimensions  key, label, column_expr, grain, join_dim, join_key
+                      -- The Explorer's dimension vocabulary. See "The Explorer's
+                      -- vocabulary lives in the catalog" below.
+meta_pivot_measures    key, label, is_additive, expr
+                      -- The Explorer's measure vocabulary. Same section.
 ```
 
 ## Route health is UNDIRECTED
@@ -151,6 +157,38 @@ SUM(passengers * distance)                                    -- rpm
 > `t12_seats * fct_route_month.distance` at route grain carries an error of **at most 8 miles
 > × seats, on 0.0034% of route-months** (concentrated in 2022–2023 — see below). Bounded and
 > accepted by ruling, not fixed.
+
+### The Explorer's vocabulary lives in the catalog
+
+Which dimensions and measures the Explorer may pivot on is curated as two catalog objects —
+`meta_pivot_dimensions` (`sql/02_marts/300_meta_pivot_dimensions.sql`) and
+`meta_pivot_measures` (`sql/02_marts/301_meta_pivot_measures.sql`) — not a committed JSON
+file. The server already opens this database, so there is no extra artifact to ship, and
+`make build` regenerates the vocabulary alongside everything else. That is what makes it
+un-driftable: a JSON file next to the code can silently name a column that no longer exists;
+a view built from the same catalog the Explorer queries cannot describe a table that isn't
+there without failing to build at all.
+
+The list itself is still **curated, not introspected** — which dimensions we *offer* is a
+product decision (`fct_segment_month` carries `download_date` and `quarantine_reason`, which
+are real columns but not Explorer dimensions), not a schema fact. What the catalog-object
+form buys is a drift guard: `pipeline/tests/test_pivot_allowlist.py` cross-checks every
+curated `column_expr` against `DESCRIBE` on the fact table(s) its `grain` claims, in both
+directions — a `'segment'`-grain dimension must be absent from `fct_route_month`, and a
+`'both'`-grain dimension must be present on it. A renamed or dropped fact column fails that
+test loudly instead of silently dropping a dimension from the Explorer at request time.
+
+The measure allowlist encodes the derived-measure rule (see "Measures" above) as *data*
+rather than only as a convention: `pipeline/tests/test_pivot_allowlist.py` asserts no
+`meta_pivot_measures.expr` contains `AVG(` or `MEAN(`, and that `asm` / `rpm` multiply per
+row (`SUM(seats * distance)`) rather than summing then multiplying
+(`SUM(seats) * distance`).
+
+**Consequence accepted knowingly: `make verify`'s database-object gate now covers a product
+decision, not only data.** Before this task `make verify` reported 8 database objects;
+after, 10 — the two new views join the byte-identical-across-two-builds proof alongside the
+facts and dims. That is the price of the vocabulary being impossible to drift: it participates
+in the same reproducibility gate as everything else the server serves.
 
 ### Every pivot response carries the quarantine count
 
