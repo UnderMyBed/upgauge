@@ -7,6 +7,8 @@ so a drift test cross-checks the curated list against duckdb_columns().
 
 from __future__ import annotations
 
+import re
+
 import duckdb
 import pytest
 
@@ -22,7 +24,7 @@ def con(tmp_path_factory):
     return duckdb.connect(str(db))
 
 
-def test_all_twelve_dimensions_are_offered(con):
+def test_all_fourteen_dimensions_are_offered(con):
     keys = {r[0] for r in con.execute("SELECT key FROM meta_pivot_dimensions").fetchall()}
     assert keys == {
         "year_month",
@@ -111,6 +113,27 @@ def test_no_measure_expression_averages_a_ratio(con):
         lowered = expr.lower()
         assert "avg(" not in lowered, f"{key} averages: {expr}"
         assert "mean(" not in lowered, f"{key} averages: {expr}"
+
+
+def test_every_sum_is_quarantine_filtered(con):
+    """Direct recurrence guard for a Task 4 defect: without `FILTER (WHERE NOT
+    is_quarantined)` on EVERY `SUM(...)`, quarantined rows silently re-enter the aggregate --
+    a bare `WHERE` in the template can't do this job instead, because it would remove
+    quarantined rows before `count(*) FILTER (WHERE is_quarantined)` could still count them
+    (see 301_meta_pivot_measures.sql's header). Whole-branch review found this guarded for
+    only 4 of the 12 measures (the ones a golden or real-data test happened to touch); this
+    checks the full catalog structurally, one `SUM(` at a time, so a new measure added
+    without the FILTER fails here instead of shipping unguarded.
+    """
+    for key, expr in con.execute("SELECT key, expr FROM meta_pivot_measures").fetchall():
+        sums = list(re.finditer(r"SUM\([^()]*\)", expr))
+        assert sums, f"{key}: no SUM( found in expr: {expr}"
+        for m in sums:
+            tail = expr[m.end() :].lstrip()
+            assert tail.startswith("FILTER (WHERE NOT is_quarantined)"), (
+                f"{key}: {m.group()!r} is not immediately FILTERed by "
+                f"NOT is_quarantined: {expr}"
+            )
 
 
 def test_asm_and_rpm_multiply_before_summing(con):

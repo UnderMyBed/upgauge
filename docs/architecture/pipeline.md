@@ -52,7 +52,7 @@ Phase 0 is complete — see [../data/sources.md](../data/sources.md) for what it
 | ~~3~~ | ~~Invariant tests, written red~~ | ✅ 156 tests; rules in `invariants.py` + `mainline_map.py`, validated against a real extract |
 | ~~4~~ | ~~`normalize.py` — raw → Parquet, quarantine flags, `download_date`~~ | ✅ `make ingest`; 2015 → 282,036 rows, 8.6 MB Parquet |
 | ~~5~~ | ~~Lookups → dims; `map_mainline_group` materialized~~ | ✅ 5 dims build; **zero orphans** joining 282,036 fact rows |
-| ~~6~~ | ~~Reproducibility gate~~ | ✅ `make verify` — 7 artifacts byte-identical across two builds (the count **at M1**; M2 added `dim_city_market`, so it prints 8 today) |
+| ~~6~~ | ~~Reproducibility gate~~ | ✅ `make verify` — 7 artifacts byte-identical across two builds (the count **at M1**; M2 added `dim_city_market`, so it printed 8 by M2, and **17** today on the full 2015–2026 window — see [the M2 gate](#the-m2-gate) below) |
 
 **Order rationale:** the spike came first because the acquisition path was the one part of
 the spec proven *not* as documented. Tests come after the fetcher but before normalize,
@@ -99,7 +99,7 @@ completing in 0.01 s with no network.
 
 **Verified on real 2015 data:** 367,360 raw rows → **282,036** scheduled-passenger rows,
 12 months, only `CLASS='F'` and configs 1/3/4, **16 quarantined (0.006%)**, zero route-key
-ordering violations, 8.6 MB Parquet from a 94 MB CSV.
+ordering violations, 8.6 MB Parquet from a 101,182,581-byte CSV.
 
 ### Reproducibility
 
@@ -130,7 +130,7 @@ yet. Building them now means guessing the presets twice.
 ### The runner
 
 ✅ **Built.** `pipeline/marts.py` executes `sql/02_marts/*.sql` in filename order — `make
-build` un-stubbed, 20 tests in `pipeline/tests/test_marts.py`. Each file declares its own
+build` un-stubbed, 21 tests in `pipeline/tests/test_marts.py`. Each file declares its own
 materialization in a header directive, so the runner needs no separate manifest to drift:
 
 ```sql
@@ -217,10 +217,11 @@ is the exact failure shape to expect if M6's Dockerfile ever ships without `WORK
    from the same Parquet and, for every catalog object, exports it through a
    `COPY (SELECT * FROM <object>) TO ... (FORMAT PARQUET)` on a connection with
    `SET threads TO 1` — the same writer setting M1 already proved byte-stable — then
-   sha256s that export. **8 objects**: the 6 views over Parquet
-   (`fct_segment_month`, `dim_airport`, `dim_city_market`, `dim_carrier`,
-   `dim_aircraft_type`, `map_mainline_group`) plus the two derived views/tables
-   (`fct_route_month`, `mart_route_health`).
+   sha256s that export. **10 objects today** (8 at M2, before M3a Task 2 added the pivot
+   catalog): the 6 views over Parquet (`fct_segment_month`, `dim_airport`,
+   `dim_city_market`, `dim_carrier`, `dim_aircraft_type`, `map_mainline_group`), the two
+   derived views/tables (`fct_route_month`, `mart_route_health`), and the two Explorer
+   allowlist views M3a Task 2 added (`meta_pivot_dimensions`, `meta_pivot_measures`).
 
 Both counts are measured, not asserted from the file layout — if `sql/02_marts/` ever grows
 or shrinks, the counts printed by `make verify` are what to trust over this paragraph.
@@ -247,19 +248,26 @@ parquet: data/parquet matches a fresh build from data/raw (8 artifacts)
 database: 8 objects identical across two builds
 ```
 
-**Re-run in M3a Task 1, full 2015–2026 warehouse**, after `make fetch` landed all 12 years:
+**Re-run in M3a Task 1, full 2015–2026 warehouse**, after `make fetch` landed all 12 years —
+at that point in the branch, before Task 2 added the pivot catalog, this genuinely printed 8
+objects. **Re-verified again for this fix wave** (real, verbatim output — the previous
+revision of this doc had drifted to a stale, no-longer-true transcript rather than a run
+someone actually re-checked):
 
 ```
 $ make warehouse && make verify
 parquet: 17 artifacts byte-identical across two builds
 parquet: comparing data/parquet (on disk) against a fresh build from data/raw
 parquet: data/parquet matches a fresh build from data/raw (17 artifacts)
-database: 8 objects identical across two builds
+database: 10 objects identical across two builds
 ```
 
-Artifact count moved 8 → 17 (more fact-year partitions, one per calendar year fetched);
-object count held at 8 — the catalog object count depends on `sql/02_marts/`, not on how
-much data each object's Parquet source spans.
+Artifact count moved 8 → 17 (more fact-year partitions, one per calendar year fetched) and
+held there since — it depends on `data/raw/`'s window, not on `sql/02_marts/`. Object count
+moved 8 → 10 later in the branch, when Task 2 added `meta_pivot_dimensions` and
+`meta_pivot_measures` to `sql/02_marts/` — it depends on `sql/02_marts/`, not on how much
+data each object's Parquet source spans, so it did not move again when the artifact count
+grew from 8 to 17.
 
 **M2 complete.** `make build` produces `upgauge.duckdb` from `sql/02_marts/`, and
 `make verify` proves both the Parquet artifacts and every database object byte-identical
@@ -345,7 +353,12 @@ not a guard.
 
 ✅ **Built.** `sql/03_queries/pivot_segment.sql` and `pivot_route.sql` are the two templates;
 `pipeline/pivot.py`'s `render_pivot(q, con)` validates a `PivotQuery` against Task 2's two
-catalog allowlists and renders one of them. 11 tests in `pipeline/tests/test_pivot.py`.
+catalog allowlists and renders one of them. Task 3 shipped with 11 tests in
+`pipeline/tests/test_pivot.py`; Tasks 5–6 added 10 more (mainline-grouping regressions and
+sort-under-grouping), and the whole-branch fix wave added 3 more still (filter-key
+validation coverage and a `sort_desc` normalization unit test) — **24 tests in the file
+today.** See "Step 6 — the injection guards, observed failing" below for which tests have a
+demonstrated RED and by which round.
 
 **One validation function, reused for both the dimension list and every filter key.**
 `_validate_dimension` is the only place a dimension-shaped identifier is checked — called once
@@ -390,8 +403,10 @@ Two are mandated by the plan: dimension validation and sort validation removed, 
 confirming the guard actually guards something. Both — plus eight more mutations covering
 every other test in the file — were run and reverted; full detail (each mutation's diff, the
 exact `pytest` RED output, and the revert confirmation) is in the Task 3 SDD report rather than
-duplicated here. Summary: **all 11 tests in `pipeline/tests/test_pivot.py` have a demonstrated
-RED**, not merely a passing test that has never been watched fail —
+duplicated here. **The 11 tests in the mutation table below have a demonstrated RED, not
+merely a passing test that has never been watched fail; the 10 added by Tasks 5–6 (the
+mainline-grouping regressions and sort-under-grouping) are covered by those tasks' own
+mutation records, not repeated here.**
 
 | Mutation | Test(s) driven RED |
 |---|---|
@@ -403,12 +418,26 @@ RED**, not merely a passing test that has never been watched fail —
 | 6. Filter values interpolated instead of bound | `test_filters_bind_their_values` |
 | 7. `load_factor` rebuilt as `AVG(load_factor)` in Python | `test_derived_measure_is_computed_not_averaged` |
 | 8. `q.limit` ignored, a fixed large limit bound instead | `test_limit_is_bound_and_enforced` |
-| 9. `quarantined_rows` dropped from `pivot_segment.sql` | `test_quarantined_rows_are_excluded_but_counted` |
+| 9. `quarantined_rows` dropped from `pivot_segment.sql` | `test_quarantined_rows_are_excluded_and_reported` |
 | 10. `{{GROUP_BY}}` left unsubstituted | `test_renders_and_executes` (plus two others that also execute the rendered SQL) |
 
 Every mutation was reverted immediately after its RED was observed; `git status --porcelain`
 and a full `pipeline/tests/test_pivot.py` GREEN re-run confirm no mutation survived into the
 commit.
+
+**Whole-branch review fix wave, one more mutation observed failing.** The review found the
+filter-key slot in `render_pivot`'s filter loop had NO test coverage at all — `_validate_dimension`
+was called there but nothing exercised it, so replacing that call with a pass-through
+(`entry = {"column_expr": key, "grain": q.grain}`) left **all 409 tests green** and made
+`decode("...&f=1%3D1)%20OR%20(1:x...")` render a working WHERE-clause injection
+(`AND (1=1) OR (1 IN ($f0_0))`). Fixed by adding `test_unknown_filter_key_is_rejected` and
+`test_sql_injection_via_filter_key_is_rejected` to `test_pivot.py`, and a `decode`-level case
+in `test_urlstate.py`; the same pass-through mutation drove all three RED, then was reverted.
+Also added in this wave: `test_every_sum_is_quarantine_filtered` in
+`test_pivot_allowlist.py`, a structural check (every `SUM(` in every `meta_pivot_measures`
+`expr` must be immediately `FILTER (WHERE NOT is_quarantined)`) that closes the same class of
+gap for the measure catalog — 8 of 12 measures had their FILTER strippable with zero tests
+noticing, mutation-confirmed on `departures_scheduled`.
 
 ### Task 7 — golden fixtures and `make goldens`, M3a complete
 
@@ -423,18 +452,23 @@ for proximity to the templates they pin, and both say so explicitly in their own
 `_data_not_sql` header field — a stray `.json` under `sql/` would otherwise read as a mistake.
 Consumed only by `pipeline/tests/test_pivot_goldens.py`; nothing executes them as SQL.
 
-**8 pivot cases, 6 URL cases**, generated by `pipeline.pivot.write_goldens()` (`make
+**9 pivot cases, 7 URL cases** (8 and 6 at Task 7; the whole-branch fix wave added one of
+each — see below), generated by `pipeline.pivot.write_goldens()` (`make
 goldens` → `python -m pipeline.pivot --write-goldens`) against the same small, deterministic
 warehouse `pipeline/tests/test_pivot.py` and `test_urlstate.py` already build from committed
 fixtures — reused rather than re-defined, since a golden's rendered SQL/params depend only on
 the catalog views and the static template files, never on fact row content. The pivot cases
 cover a single-dimension segment pivot, a multi-dimension pivot, a route-grain pivot (the
 multi-column `route` dimension), a derived-measure pivot (`load_factor`), a filtered pivot,
-a mainline-grouped pivot, an ascending-sort pivot, and the Task 5 regression — sorting by the
-carrier dimension under mainline grouping. The URL cases cover a multi-dimension round trip,
-`grain="route"`, `grouping="mainline"`, an ascending sort, ordinary multi-value filters, and
-a filter value containing every character the URL format itself uses structurally (`,` `&`
-`%` `:` `=` `+` and a space).
+a mainline-grouped pivot, a mainline-grouped pivot WITH a carrier filter (pins the
+undocumented-until-the-fix-wave gap that the filter doesn't coalesce the way the dimension
+does — see `sql/03_queries/pivot_mainline_join.sql`'s header), an ascending-sort pivot, and
+the Task 5 regression — sorting by the carrier dimension under mainline grouping. The URL
+cases cover a multi-dimension round trip, `grain="route"`, `grouping="mainline"`, an
+ascending sort, `sort=None` with `sort_desc=False` (pins that `PivotQuery.__post_init__`
+normalizes this to `sort_desc=True` — the fix wave's Important 3), ordinary multi-value
+filters, and a filter value containing every character the URL format itself uses
+structurally (`,` `&` `%` `:` `=` `+` and a space).
 
 **Every case generated is read by eye before being trusted**, not just asserted equal to
 itself: for each pivot case, confirmed no filter/time-range literal leaks into the SQL text
@@ -496,11 +530,13 @@ session (`docs/design/brief.md`), then M3b.
 `make check` (lint + test) is the pre-commit gate. Unimplemented `make` targets exit
 non-zero rather than succeeding silently, so a half-built pipeline can't look finished.
 
-**Node is pinned by a checked-in `.nvmrc`**, mirroring the `.python-version` precedent: the
-Dockerfile reads the same file and CI installs from it, so the version lives in one place. The
-alternative — a distro package — drifts independently of whatever the Dockerfile pins, which is
-the class of problem `uv` exists to prevent for Python. Nothing before M3b needs Node installed;
-the decision is recorded here so the commit that scaffolds `app/` does not have to relitigate it.
+**Node will be pinned by a checked-in `.nvmrc`** when M3b scaffolds `app/` — no such file
+exists yet, this is a decision, not current state. It mirrors the `.python-version`
+precedent: the Dockerfile will read the same file and CI will install from it, so the
+version lives in one place. The alternative — a distro package — drifts independently of
+whatever the Dockerfile pins, which is the class of problem `uv` exists to prevent for
+Python. Nothing before M3b needs Node installed; the decision is recorded here so the commit
+that scaffolds `app/` does not have to relitigate it.
 
 Docker is not needed until M6.
 

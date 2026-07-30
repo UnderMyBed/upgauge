@@ -88,6 +88,27 @@
       "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&s=seats&n=100&g=op"
     },
     {
+      "name": "no_sort_key_ignores_sort_desc",
+      "description": "PivotQuery(sort=None, sort_desc=False) has no representation in this format -- a direction is only ever emitted alongside a sort key -- so PivotQuery.__post_init__ normalizes sort_desc back to True at construction time. Pins that the URL this case encodes to has no 's=' key at all (identical to the default), so a regression that removed the normalization would surface as a changed golden here, not merely as a round-trip assertion during `make goldens` itself.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2015-01",
+        "time_to": "2015-12",
+        "filters": [],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 100,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&n=100&g=op"
+    },
+    {
       "name": "multiple_plain_filter_values",
       "description": "A filter with several ordinary values, joined by the structural ','.",
       "query": {

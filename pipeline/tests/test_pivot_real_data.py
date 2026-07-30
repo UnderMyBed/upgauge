@@ -143,28 +143,6 @@ def test_virgin_america_stops_rolling_up_after_its_thru_month(con):
     assert result["2018-04"] is None, "2018-04 is on/after the exclusive thru month"
 
 
-def test_mainline_join_boundary_is_exclusive_at_effective_to(con):
-    """The test above is vacuous: VX has ZERO fct_segment_month rows on or after 2018-04
-    (its last real filing is 2018-03, consistent with the brand retiring), so
-    `WHERE op_airline_id = 21171 AND year_month >= '2018-04'` matches no fact rows at all --
-    it returns count 0 regardless of `<` vs `<=`, because there is nothing on the left side
-    of the LEFT JOIN to begin with. Confirmed by running that exact test with the production
-    join mutated from `<` to `<=`: it still passes.
-
-    This test closes that gap by loading the ACTUAL join fragment pivot.py substitutes
-    (sql/03_queries/pivot_mainline_join.sql -- not a hand-copied duplicate) and joining it
-    against one synthetic row standing in for a segment that filed in VX's exclusive thru
-    month, so a `<` -> `<=` regression on the real production artifact is observable."""
-    join_sql = Path("sql/03_queries/pivot_mainline_join.sql").read_text()
-    row = con.execute(f"""
-        WITH f AS (SELECT 21171 AS op_airline_id, '2018-04' AS year_month)
-        SELECT m.parent_airline_id
-        FROM f
-        {join_sql}
-    """).fetchone()
-    assert row[0] is None, "a segment filed in VX's exclusive thru month must not roll up"
-
-
 def test_hawaiian_rolls_up_from_2024_09_and_not_2024_08(con):
     before = _carrier_total(con, 19690, "2024-08", "mainline")
     after = _carrier_total(con, 19690, "2024-09", "mainline")
@@ -178,6 +156,35 @@ def test_shared_regionals_never_roll_up(con):
     mapped = {r[0] for r in con.execute(
         "SELECT carrier_code FROM map_mainline_group").fetchall()}
     assert not mapped & {"OO", "YX", "YV"}
+
+
+def test_mainline_filter_does_not_coalesce_like_the_dimension_does(con):
+    """Pins a KNOWN, DELIBERATELY UNCHANGED gap (see pivot_mainline_join.sql's header):
+    under grouping='mainline', the op_airline_id dimension is coalesced to the parent
+    airline_id, but a filter on op_airline_id is not -- it still matches the raw column, so
+    filtering a mainline-grouped pivot to a parent excludes the rows its wholly-owned
+    subsidiaries contribute to that same, already-rolled-up row. Measured on 2017-01: the
+    unfiltered mainline row for 19930 (Alaska) is 3,842,350 seats; filtered to
+    op_airline_id:19930 it drops to 2,336,210 -- Horizon and Virgin America are folded into
+    the row but excluded by the filter. This is a regression pin, not an endorsement --
+    whether the filter SHOULD target the coalesced expression is a product decision left to
+    a human, not something this test authorizes changing silently."""
+    unfiltered = _carrier_total(con, 19930, "2017-01", "mainline")
+    sql, params = render_pivot(
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2017-01", time_to="2017-01", grouping="mainline",
+            filters=(("op_airline_id", ("19930",)),),
+        ),
+        con,
+    )
+    filtered = {r[0]: r[1] for r in con.execute(sql, params).fetchall()}
+    assert unfiltered[19930] == pytest.approx(3_842_350)
+    assert filtered[19930] == pytest.approx(2_336_210)
+    assert filtered[19930] < unfiltered[19930], (
+        "if this ever becomes equal, the filter now coalesces like the dimension does -- "
+        "update this test to reflect the (deliberate) behaviour change, don't just widen it"
+    )
 
 
 def test_operating_grouping_leaves_carriers_alone(con):

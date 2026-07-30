@@ -62,6 +62,24 @@ def test_sql_injection_via_sort_is_rejected(con):
         render_pivot(q(sort="seats; DELETE FROM dim_carrier--"), con)
 
 
+def test_unknown_filter_key_is_rejected(con):
+    """A filter key goes through the SAME `_validate_dimension` gate as the dimension list
+    (see its docstring) -- so an unknown key must be rejected exactly like an unknown
+    dimension, not silently substituted into the WHERE clause."""
+    with pytest.raises(PivotError, match="dimension"):
+        render_pivot(q(filters=(("not_a_dimension", ("x",)),)), con)
+
+
+def test_sql_injection_via_filter_key_is_rejected(con):
+    """The filter key reaches a WHERE-clause identifier slot (`{columns[0]} IN (...)`) just
+    like a dimension key reaches a SELECT/GROUP BY slot. This must raise, never substitute --
+    same as test_sql_injection_via_dimension_is_rejected above, but for the filter loop."""
+    with pytest.raises(PivotError):
+        render_pivot(
+            q(filters=(("op_airline_id; DROP TABLE fct_segment_month--", ("x",)),)), con
+        )
+
+
 def test_segment_only_dimension_rejected_at_route_grain(con):
     """aircraft_type does not exist on fct_route_month; offering it would render SQL that
     fails at execution rather than validation."""
@@ -69,10 +87,34 @@ def test_segment_only_dimension_rejected_at_route_grain(con):
         render_pivot(q(grain="route", dimensions=("aircraft_type",)), con)
 
 
-def test_quarantined_rows_are_excluded_but_counted(con):
-    sql, params = render_pivot(q(), con)
+def test_quarantined_rows_are_excluded_and_reported(con):
+    """Renamed from `_are_excluded_but_counted`: the original version only asserted the
+    `quarantined_rows` COLUMN is present, which cannot detect a broken exclusion -- a FILTER
+    silently stripped from a measure's expr (the Task 4 defect this branch's whole-branch
+    review found recurring on 8 of 12 measures) would leave that column present and this
+    test green regardless. This recomputes `departures_performed` independently from the raw
+    fact rows and confirms the pivot's sum actually EXCLUDES the quarantined ones."""
+    sql, params = render_pivot(q(measures=("departures_performed",)), con)
     cols = [d[0] for d in con.execute(sql, params).description]
     assert "quarantined_rows" in cols, "the UI must be able to surface the dirt"
+
+    dep_idx = cols.index("departures_performed")
+    # A group whose only rows are quarantined sums to NULL (FILTER (WHERE NOT
+    # is_quarantined) matches nothing) -- correct (see 301_meta_pivot_measures.sql), and
+    # equivalent to 0 for this recomputed total.
+    got = sum(row[dep_idx] or 0 for row in con.execute(sql, params).fetchall())
+
+    total_including_quarantined, quarantined_only = con.execute(
+        """
+        SELECT
+            SUM(departures_performed),
+            SUM(departures_performed) FILTER (WHERE is_quarantined)
+        FROM fct_segment_month
+        WHERE year_month BETWEEN '2015-01' AND '2015-12'
+        """
+    ).fetchone()
+    assert quarantined_only, "fixture has no quarantined rows in range -- test can't discriminate"
+    assert got == pytest.approx(total_including_quarantined - quarantined_only)
 
 
 def test_limit_is_bound_and_enforced(con):
@@ -149,6 +191,24 @@ def test_sort_by_carrier_dimension_works_under_mainline_grouping(con):
     there is."""
     sql, params = render_pivot(q(sort="op_airline_id", grouping="mainline"), con)
     con.execute(sql, params).fetchall()
+
+
+def test_sort_desc_normalizes_to_true_when_sort_is_none():
+    """`sort_desc` only matters once a sort key exists -- with sort=None, render_pivot reads
+    it for the DEFAULT sort's direction, so sort=None/sort_desc=False is not a no-op, it
+    renders ASC instead of DESC. But the URL codec's `s=` key only ever carries a direction
+    alongside a sort key (`pipeline/urlstate.py`'s `encode`), so that combination has no URL
+    representation. Constructing it must normalize rather than silently produce a PivotQuery
+    the codec cannot round-trip."""
+    normalized = PivotQuery(
+        grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+        time_from="2015-01", time_to="2015-12", sort=None, sort_desc=False,
+    )
+    assert normalized.sort_desc is True
+    assert normalized == PivotQuery(
+        grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+        time_from="2015-01", time_to="2015-12", sort=None, sort_desc=True,
+    )
 
 
 def test_output_column_names_match_across_grouping_modes(con):

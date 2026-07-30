@@ -19,6 +19,18 @@ A duplicate key (`d=a&d=b`) is rejected on the same principle: `encode` never pr
 so a decoded link containing one is malformed, not a link whose second value should quietly
 win.
 
+**Known, accepted gap: two `f` tokens naming the same dimension.** `f` is repeatable by
+design (a query filters on several different dimensions at once), so the duplicate-key check
+above deliberately exempts it -- but nothing stops two `f` tokens from naming the SAME
+dimension, e.g. `f=op_airline_id:19790&f=op_airline_id:19805`. `render_pivot` ANDs every
+filter clause together, so that decodes to `op_airline_id IN (19790) AND op_airline_id IN
+(19805)` -- always zero rows, since one row's `op_airline_id` cannot be both values at once.
+`encode` can produce this: two `PivotQuery.filters` tuples keyed on the same dimension is a
+valid field value it does not deduplicate or merge. Not guarded here on purpose, same
+reasoning as the reversed-time-range gap below -- a silently-empty result is a surprising but
+plausible reading of a self-contradictory filter, not a corruption of the query it claims to
+encode.
+
 **Division of validation labour** (per the project rule against a second, drifting
 validator): identifier and structural validation -- is this dimension/measure/sort key on
 the allowlist, is the grain/grouping recognised, is the limit a positive int, does every
@@ -58,11 +70,20 @@ backwards range, not a corruption of the query it claims to encode.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import quote, unquote
 
 from pipeline.pivot import GRAINS, GROUPINGS, PivotError, PivotQuery, render_pivot
 
 URL_VERSION = 1
+
+#: `t`'s shape is `YYYY-MM`, per the module docstring's "what render_pivot cannot check"
+#: section -- this is URL syntax, not a value-domain question (an out-of-range month number
+#: like '2015-99' is still rejected here, as shape, not left to DuckDB; a real but
+#: nonexistent month like '2015-02' with no data is a value-domain question and IS left to
+#: DuckDB, which just returns zero rows). Format only: no calendar validity (e.g. no check
+#: that a year is "reasonable") beyond the two digits being 01-12.
+_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 
 #: grain <-> its short URL token. Frozen alongside the rest of the key schema.
 _GRAIN_TO_URL = {"segment": "seg", "route": "route"}
@@ -89,7 +110,11 @@ def encode(q: PivotQuery) -> str:
 
     Deterministic and total over every `PivotQuery` the caller can construct: every field
     always has a key, in a fixed order, so two equal queries always encode to the same
-    string -- required for the `url -> state -> url` round trip.
+    string -- required for the `url -> state -> url` round trip. This holds only because
+    `PivotQuery.__post_init__` normalizes `sort_desc` to `True` whenever `sort is None` --
+    `sort=None, sort_desc=False` has no representation in this format (a direction is only
+    ever emitted alongside a sort key, below), so without that normalization it would be a
+    constructible `PivotQuery` this function cannot round-trip.
     """
     parts = [
         f"v={URL_VERSION}",
@@ -114,7 +139,7 @@ def _parse_time_range(raw: str) -> tuple[str, str]:
     if raw.count(":") != 1:
         raise UrlStateError(f"malformed time range {raw!r}, expected 'YYYY-MM:YYYY-MM'")
     time_from, time_to = raw.split(":")
-    if not time_from or not time_to:
+    if not _MONTH_RE.match(time_from) or not _MONTH_RE.match(time_to):
         raise UrlStateError(f"malformed time range {raw!r}, expected 'YYYY-MM:YYYY-MM'")
     return time_from, time_to
 

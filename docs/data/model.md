@@ -38,8 +38,8 @@ dim_city_market       city_market_id, name
                       -- all history -- mostly geopolitical renames ('Aachen, West Germany'
                       -- -> 'Aachen, Germany'; 'Adler/Sochi, U.S.S.R.' -> 'Adler/Sochi,
                       -- Russia'). Restricting to AIRPORT_IS_LATEST = '1' leaves exactly ONE
-                      -- ambiguous market: 30973 (CGQ), seq 3097301 'Changchun, China' vs
-                      -- seq 3097302 'Changchun\Jilin City, China'. The max(seq_id) tiebreak
+                      -- ambiguous market: 30973 (CGQ), seq 1097301 'Changchun, China' vs
+                      -- seq 1646701 'Changchun\Jilin City, China'. The max(seq_id) tiebreak
                       -- is load-bearing, not cosmetic: a nondeterministic pick would drift
                       -- between builds and break the byte-identical Parquet gate.
 
@@ -58,6 +58,18 @@ meta_pivot_dimensions  key, label, column_expr, grain, join_dim, join_key
 meta_pivot_measures    key, label, is_additive, expr
                       -- The Explorer's measure vocabulary. Same section.
 ```
+
+## `effective_to` means two different things across this catalog
+
+Four objects carry a column literally named `effective_to`, and it is NOT one convention:
+`dim_airport`, `dim_aircraft_type`, and `dim_carrier` copy it straight from a BTS thru-date
+field (`AIRPORT_THRU_DATE`, `END_DATE`, `THRU_DATE_SOURCE`) — a BTS thru-date is
+**INCLUSIVE**, the record is valid *through* that date, not up to but excluding it.
+`map_mainline_group.effective_to` is **our own** column, deliberately **EXCLUSIVE** (see
+`pipeline/mainline_map.py`'s `covers()` and `sql/03_queries/pivot_mainline_join.sql`) — a
+carrier whose `effective_to` is `'2018-04'` has already stopped rolling up *by* 2018-04, not
+after it. Same column name, opposite boundary semantics, same catalog: check which object
+you're reading before writing a `>=`/`<`/`<=` comparison against either.
 
 ## Route health is UNDIRECTED
 
@@ -80,11 +92,14 @@ letter code. See [carrier-model.md](carrier-model.md) and [invariants.md](invari
 
 T-100 already ships `CARRIER_GROUP` and `CARRIER_GROUP_NEW` — BTS's own revenue-based
 reporting classification, which drives filing requirements. Confirmed populated in live
-data:
+data, **measured on the full-year 2024 raw extract** (`t100d_segment_us_2024_20260729.zip`;
+an earlier revision of this doc quoted counts from the 2024-01 phase-0 single-month sample,
+which is a different, much smaller window — always state the window a distribution was
+measured over, per the rule Task 1 exists to enforce):
 
 ```
-CARRIER_GROUP      {'3': 26715, '1': 4666, '2': 4555}
-CARRIER_GROUP_NEW  {'3': 26715, '2': 4555, '5': 3072, '6': 1070, '4': 267, '1': 247, '9': 10}
+CARRIER_GROUP      {'3': 326570, '1': 64160, '2': 47141}
+CARRIER_GROUP_NEW  {'3': 326570, '2': 47141, '5': 43081, '6': 15952, '1': 3415, '4': 1544, '9': 168}
 ```
 
 Nothing to do with mainline rollup. **Ours is `mainline_group`; theirs is preserved as

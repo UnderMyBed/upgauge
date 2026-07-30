@@ -65,6 +65,19 @@ class PivotQuery:
     limit: int = 100
     grouping: str = "operating"  # "operating" | "mainline"
 
+    def __post_init__(self) -> None:
+        # sort_desc is only meaningful once a sort key exists: with sort=None, render_pivot
+        # picks the default sort key (the first measure) and reads sort_desc for its
+        # direction, so `sort=None, sort_desc=False` is NOT a no-op -- it changes rendered
+        # SQL from DESC to ASC. But `encode` only ever emits a direction alongside a sort key
+        # (`if q.sort is not None: ...`), so a `PivotQuery(sort=None, sort_desc=False)` has no
+        # representation in the URL format and silently decodes back as `sort_desc=True`.
+        # Normalizing here, at construction, means every equal-by-value PivotQuery the format
+        # CAN represent is the only kind that can ever be built -- so the round trip is total
+        # by construction, not merely in the cases someone thought to test.
+        if self.sort is None and not self.sort_desc:
+            object.__setattr__(self, "sort_desc", True)
+
 
 def query_to_jsonable(q: PivotQuery) -> dict:
     """`PivotQuery` -> a plain dict of JSON-safe types (tuples become lists).
@@ -279,8 +292,11 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
         if not sortable:
             raise PivotError("no sort specified and nothing sortable is selected")
         # Prefer the first requested measure so a sort default always points at a value
-        # column, not a dimension -- matches how every product Top-N view is read.
-        sort_key = q.measures[0] if q.measures else next(iter(sortable))
+        # column, not a dimension -- matches how every product Top-N view is read. No `else`
+        # branch: `q.measures` is already guaranteed non-empty by the "at least one measure
+        # is required" check near the top of this function, so falling back to `sortable`
+        # here would be unreachable dead code, not defensive.
+        sort_key = q.measures[0]
 
     if sort_key not in sortable:
         raise PivotError(
@@ -385,6 +401,23 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         ),
     ),
     (
+        "mainline_grouped_with_filter_on_carrier",
+        "The undocumented-until-now gap pinned in pivot_mainline_join.sql's header: under "
+        "grouping='mainline' the SELECT/GROUP BY dimension coalesces to the parent airline, "
+        "but {{FILTERS}} still renders the raw, un-coalesced op_airline_id IN (...) -- "
+        "filtering a mainline-grouped pivot to a parent excludes rows its subsidiaries "
+        "contribute to that same rolled-up row. See "
+        "test_mainline_filter_does_not_coalesce_like_the_dimension_does in "
+        "test_pivot_real_data.py for the real-number proof (3,842,350 unfiltered vs "
+        "2,336,210 filtered, 2017-01, op_airline_id=19930/Alaska). This is a pin of CURRENT "
+        "behaviour, not an endorsement -- see the SQL file's header for why it's unchanged.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12", grouping="mainline",
+            filters=(("op_airline_id", ("19930",)),),
+        ),
+    ),
+    (
         "ascending_sort",
         "sort_desc=False renders 'ORDER BY seats ASC' instead of the default DESC.",
         PivotQuery(
@@ -444,6 +477,19 @@ _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         PivotQuery(
             grain="segment", dimensions=("op_airline_id",), measures=("seats",),
             time_from="2015-01", time_to="2015-12", sort="seats", sort_desc=False,
+        ),
+    ),
+    (
+        "no_sort_key_ignores_sort_desc",
+        "PivotQuery(sort=None, sort_desc=False) has no representation in this format -- a "
+        "direction is only ever emitted alongside a sort key -- so PivotQuery.__post_init__ "
+        "normalizes sort_desc back to True at construction time. Pins that the URL this "
+        "case encodes to has no 's=' key at all (identical to the default), so a regression "
+        "that removed the normalization would surface as a changed golden here, not merely "
+        "as a round-trip assertion during `make goldens` itself.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2015-01", time_to="2015-12", sort=None, sort_desc=False,
         ),
     ),
     (
