@@ -146,6 +146,48 @@ def test_asm_and_rpm_multiply_before_summing(con):
     assert "sum(passengers * distance)" in exprs["rpm"].lower().replace("  ", " ")
 
 
+# The catalog is CURATED, not introspected (see 300_meta_pivot_dimensions.sql's header), so
+# which dimensions need resolving is a product decision. Pin it as an explicit mapping: a new
+# dimension then cannot be added without classifying it, in either direction.
+#
+# Inferring "needs resolution" from a column-name suffix does NOT work and must not be used:
+# route's column_expr tokens are `route_key_low` and `route_key_high`, which end in _low/_high
+# despite being airport ids underneath (LEAST/GREATEST over ORIGIN/DEST_AIRPORT_ID, see
+# sql/01_staging/normalize_t100_segment.sql). A suffix test passes vacuously and catches nothing.
+RESOLVABLE_DIMENSIONS = {
+    "op_airline_id": ("dim_carrier", "airline_id"),
+    "origin_airport_id": ("dim_airport", "airport_id"),
+    "dest_airport_id": ("dim_airport", "airport_id"),
+    "origin_city_market_id": ("dim_city_market", "city_market_id"),
+    "dest_city_market_id": ("dim_city_market", "city_market_id"),
+    "aircraft_type": ("dim_aircraft_type", "code"),
+    "route": ("dim_airport", "airport_id"),
+}
+
+
+def test_resolvable_dimensions_carry_exactly_the_expected_join_metadata(con):
+    """Every dimension that renders a machine identifier must say how to resolve it, and
+    every dimension that does not must carry no join metadata at all.
+
+    `route` shipped with NULL join_dim/join_key, so the catalog could not describe resolving
+    the dimension that renders as two bare airport ids. This is the check that catches it.
+    """
+    catalog = {
+        key: (join_dim, join_key)
+        for key, join_dim, join_key in con.execute(
+            "SELECT key, join_dim, join_key FROM meta_pivot_dimensions"
+        ).fetchall()
+    }
+
+    for key, expected in RESOLVABLE_DIMENSIONS.items():
+        assert key in catalog, f"{key}: missing from meta_pivot_dimensions"
+        assert catalog[key] == expected, f"{key}: expected {expected}, got {catalog[key]}"
+
+    for key, got in catalog.items():
+        if key not in RESOLVABLE_DIMENSIONS:
+            assert got == (None, None), f"{key}: unexpected join metadata {got}"
+
+
 def test_load_allowlist_reads_its_sql_from_files_not_string_literals():
     """CLAUDE.md: all query logic lives in .sql files, never inline string literals.
 
