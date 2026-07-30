@@ -17,6 +17,7 @@ import zipfile
 from collections import Counter
 from pathlib import Path
 
+import duckdb
 import pytest
 
 from pipeline.fetch import T100D_SEGMENT_US, latest_raw
@@ -157,3 +158,42 @@ def test_carrier_less_rows_stay_a_tiny_minority(rows):
     something about how carriers are reported."""
     orphans = sum(1 for r in rows if not r["AIRLINE_ID"].strip())
     assert 0 < orphans / len(rows) < 0.001
+
+
+# `distance` licenses `max(distance)` as a route attribute on `fct_route_month` only because
+# it is (almost) constant per (origin, dest) per month -- see docs/data/model.md, "distance
+# is not additive". That measurement needs the full multi-year Parquet warehouse, not just
+# the 2015 raw extract `rows` above reads, so it is skip-gated separately.
+PARQUET_DIR = Path("data/parquet/t100_segment")
+
+
+@pytest.mark.skipif(
+    not PARQUET_DIR.exists() or not any(PARQUET_DIR.glob("year=*")),
+    reason=f"no built Parquet warehouse under {PARQUET_DIR} — run `make warehouse`",
+)
+def test_distance_variance_stays_within_bound():
+    """`max(distance)` on `fct_route_month` is a representative filed value, not a true
+    invariant: M3a Task 1 measured 37 of 1,082,147 non-quarantined route-months (0.0034%)
+    genuinely disagreeing on DISTANCE over the full 2015-2026 window, max spread 8.0 miles,
+    concentrated in 2022-2023 around airport 15887/WWT (Newtok, AK, which physically
+    relocated to Mertarvik in 2023). The ruling recorded in docs/data/model.md is that
+    max(distance) stays because the variance is bounded and tiny -- this test is what
+    enforces "bounded": it must fail if the variance grows past what was ruled acceptable,
+    not stay silently green while it quietly drifts further.
+    """
+    con = duckdb.connect()
+    total, varying, max_spread = con.execute(f"""
+        WITH per_route AS (
+            SELECT year_month, origin_airport_id, dest_airport_id,
+                   count(DISTINCT distance) AS n, max(distance) - min(distance) AS spread
+            FROM read_parquet('{PARQUET_DIR}/**/*.parquet')
+            WHERE NOT is_quarantined
+            GROUP BY 1, 2, 3
+        )
+        SELECT count(*), sum((n > 1)::INT), max(spread) FROM per_route
+    """).fetchone()
+    pct_varying = 100.0 * varying / total
+    assert pct_varying < 0.01, (
+        f"{varying}/{total} route-months vary ({pct_varying:.4f}%) -- exceeds the ruled bound"
+    )
+    assert max_spread < 20.0, f"max spread {max_spread} miles exceeds the ruled bound"

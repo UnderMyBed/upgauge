@@ -199,8 +199,11 @@ is the exact failure shape to expect if M6's Dockerfile ever ships without `WORK
 ✅ **Built.** `make verify` runs three checks in sequence and fails if any fails:
 
 1. **Parquet reproducibility** (M1, unchanged): `build_all` twice into throwaway temp
-   dirs from identical raw inputs, sha256 every artifact. **8 artifacts** on the current
-   2015–2017 window — 3 fact-year partitions + 5 dims.
+   dirs from identical raw inputs, sha256 every artifact. **17 artifacts on the full
+   2015–2026 window** — 12 fact-year partitions + 5 dims. (8 artifacts — 3 fact-year
+   partitions + 5 dims — was the count on the 2015–2017 window measured at M2; M3a Task 1
+   rebuilt on every year `make fetch` had landed and re-ran the gate. The dims count is
+   fixed; only the fact-year partition count grows with the window.)
 2. **Parquet freshness** (M2 fix wave 1, new): the two throwaway builds above only prove
    they agree *with each other* — neither is `--out-dir`, the Parquet that `make build`
    and the database gate below actually read. So `_digest_tree` on one of the throwaway
@@ -234,7 +237,7 @@ sanctioned exception to "all Parquet writes go through `_writer_connection()`", 
 that `SET` is ever dropped the gate starts reporting false failures rather than silently
 passing.
 
-Real run, 2015–2017 warehouse:
+Real run, 2015–2017 warehouse (M2):
 
 ```
 $ make warehouse && make verify
@@ -243,6 +246,20 @@ parquet: comparing data/parquet (on disk) against a fresh build from data/raw
 parquet: data/parquet matches a fresh build from data/raw (8 artifacts)
 database: 8 objects identical across two builds
 ```
+
+**Re-run in M3a Task 1, full 2015–2026 warehouse**, after `make fetch` landed all 12 years:
+
+```
+$ make warehouse && make verify
+parquet: 17 artifacts byte-identical across two builds
+parquet: comparing data/parquet (on disk) against a fresh build from data/raw
+parquet: data/parquet matches a fresh build from data/raw (17 artifacts)
+database: 8 objects identical across two builds
+```
+
+Artifact count moved 8 → 17 (more fact-year partitions, one per calendar year fetched);
+object count held at 8 — the catalog object count depends on `sql/02_marts/`, not on how
+much data each object's Parquet source spans.
 
 **M2 complete.** `make build` produces `upgauge.duckdb` from `sql/02_marts/`, and
 `make verify` proves both the Parquet artifacts and every database object byte-identical

@@ -136,12 +136,21 @@ SUM(passengers * distance)                                    -- rpm
 > within a single route and is silently wrong across any pivot that groups more than one — which
 > is most of them.
 >
-> This is a trap M2 set up. The measurement that `distance` is constant per (origin, dest) per
-> month (0 of 274,824 route-months vary) licenses `max(distance)` as a route *attribute* on
-> `fct_route_month`. It does **not** license `distance` as an ASM multiplier outside a single
-> route, because different routes have genuinely different distances. Same number, two
-> conclusions, only one of them valid. Guarded by a test that asserts the two forms diverge on a
-> multi-route group.
+> This is a trap M2 set up. `distance` is *almost* constant per (origin, dest) per month — 37 of
+> 1,082,147 route-months vary, measured over the full **2015–2026** window (see "`distance` is
+> not additive" below) — which licenses `max(distance)` as a *representative filed value* on
+> `fct_route_month`, not a literal invariant. It does **not** license `distance` as an ASM
+> multiplier outside a single route, because different routes have genuinely different
+> distances. Same number, two conclusions, only one of them valid. Guarded by a test that
+> asserts the two forms diverge on a multi-route group.
+>
+> **Consequence for route-grain ASM.** The canonical form directly above, `SUM(seats *
+> distance)` at **segment** grain, is unaffected by the route-month distance variance — it
+> multiplies per row before summing and never touches the route-grain `distance` attribute.
+> Only `fct_route_month`'s `max(distance)` inherits the imprecision: an ASM computed as
+> `t12_seats * fct_route_month.distance` at route grain carries an error of **at most 8 miles
+> × seats, on 0.0034% of route-months** (concentrated in 2022–2023 — see below). Bounded and
+> accepted by ruling, not fixed.
 
 ### Every pivot response carries the quarantine count
 
@@ -222,8 +231,11 @@ themselves, is the thing to revisit if `sql/03_queries/` grows a query that trip
 Windows are **global, not per-route**: `t12_start_month..t12_end_month` is the latest 12
 calendar months present anywhere in `fct_route_month`; `p12_start_month..p12_end_month` is
 the 12 immediately before that. `'YYYY-MM'` strings compare correctly with `BETWEEN`, so no
-per-row date parsing is needed. Measured on the real 2015–2017 warehouse: `2017-01..2017-12`
-vs. `2016-01..2016-12`.
+per-row date parsing is needed. Measured on the 2015–2017 warehouse (M2): `2017-01..2017-12`
+vs. `2016-01..2016-12`. **Re-measured over the full 2015–2026 window** (M3a Task 1, after
+`make fetch` + `make warehouse` landed all 12 years — 2026 is a partial year, so the trailing
+window lands mid-2026 rather than at a year boundary): `t12 = 2025-05..2026-04`,
+`p12 = 2024-05..2025-04`.
 
 The `<30 departures` floor applies to `t12_departures_performed` — **performed, not
 scheduled** — same reasoning as the fact-table quarantine rules: a route with a big schedule
@@ -239,7 +251,9 @@ much narrower and mostly incidental condition.
 A new route is not a route that improved infinitely. Enforced by `CASE WHEN
 p12_months_present = 0 THEN NULL ELSE ... END` on every `p12_*`-derived ratio and every
 `*_delta` column. This `CASE` is a documentation aid, not the load-bearing guard — deleting
-all four is a provable no-op today (identical byte-for-byte 7,336-row mart), because a
+all four is a provable no-op (identical byte-for-byte 7,336-row mart, measured on the
+2015–2017 warehouse at M2; not re-run against the full 2015–2026 window in M3a Task 1,
+which now has 8,080 rows), because a
 `SUM(...) FILTER (WHERE <no rows match>)` already returns `NULL`, not `0`, in DuckDB, and
 `nullif` on each denominator propagates that `NULL` through. The real guard is the
 `nullif`s: deleting *those* is what a test catches. Keep the `CASE` anyway — it is correct
@@ -247,7 +261,7 @@ defence against a future `coalesce` on the p12 sums, just not what "enforces" th
 today. The row itself still exists (it is the Route Birth Tracker's input); only its
 deltas are unknown.
 
-Measured on the real 2015–2017 warehouse: of 7,336 surviving routes, **767** have no
+Measured on the 2015–2017 warehouse (M2): of 7,336 surviving routes, **767** have no
 prior-window data (`p12_months_present = 0`, `new_routes`) and are correctly `NULL`-delta
 rows. The other **6,569** have `p12_months_present >= 1` (i.e. at least one month present —
 only 203 of them have *exactly* one), but one of those 6,569 —
@@ -257,6 +271,16 @@ their denominators even though the prior window is technically "present." So `lf
 NULL` for **768** routes, not 767 — the extra one is a zero-measure prior window, not a
 missing one, and the two must not be conflated: **767 + 1 = 768**, and only the 767 are
 `new_routes` in the Route Birth Tracker sense.
+
+**Re-measured over the full 2015–2026 window** (M3a Task 1): of **8,080** surviving routes,
+**688** have no prior-window data (`p12_months_present = 0`, `new_routes`), and **7,392**
+have `p12_months_present >= 1`. The zero-measure-prior-window case (`op_airline_id=20378`
+above) is specific to the 2016→2017 windows measured at M2; over the current global
+trailing window (`t12 = 2025-05..2026-04`, `p12 = 2024-05..2025-04`) **zero** routes have a
+"present but all-zero" prior window, so that third category is empty today — a property of
+which 24 months happen to be the trailing window right now, not a structural guarantee. The
+768-vs-767 accounting shape from M2 does not carry forward unchanged; see the corrected
+three-reason breakdown below.
 
 `health_score` is an **equal-0.20-weighted** z-score composite of `lf_delta`, `gauge_delta`,
 `capacity_delta`, `frequency_delta`, and `completion_factor`, all oriented so **higher is
@@ -268,7 +292,7 @@ weighting, because [../product/features.md](../product/features.md) says this is
 *deliberately dumb* — any other weighting would be a number invented in this task with no
 basis.
 
-Measured on the real warehouse: `health_score` ranges from **-2.686 to 17.329** —
+Measured on the 2015–2017 warehouse (M2): `health_score` ranges from **-2.686 to 17.329** —
 single/double-digit z-composites, not `1e17`-scale blowups, confirming no near-zero
 `stddev_samp` slipped past its `nullif`. The +17.329 max is real, not an artifact: traced to
 `op_airline_id=20452`, route `11298-12953`, where `p12_departures_performed = 1` (the route was
@@ -282,18 +306,44 @@ is exactly the kind of finding the product should surface, but the UI must show 
 "this route tripled its traffic" when the real story is "this route had almost no prior-year
 baseline to compare against."
 
+**Re-measured over the full 2015–2026 window** (M3a Task 1): `health_score` ranges from
+**-1.865 to 19.067** — still single/double-digit, same shape as M2, no blowup. The new max
+traces to the **same carrier**, `op_airline_id=20452`, now on route `10397-12953` (a
+different specific route than M2's `11298-12953` — more routes now compete for the extremes
+over a nine-year-wider window, so a different one wins) with `p12_departures_performed =
+1.0` and `t12_departures_performed = 2387.0` — the identical dormant-to-active pattern,
+confirming this is a recurring, structural consequence of the scoring shape rather than a
+one-off artifact of the 2015–2017 subset.
+
 > ⚠️ **`health_score` is `NULL` for three distinct reasons, not one — 1,348 of 7,336 routes
-> total.** The product-facing writeup (what the UI must do about each) lives in
+> total, measured on the 2015–2017 warehouse (M2).** The product-facing writeup (what the UI
+> must do about each) lives in
 > [../product/features.md § Route Health score](../product/features.md#route-health-score-v0--deliberately-dumb);
 > this is the SQL-level accounting behind it.
 >
-> | Reason | Count | Why |
+> | Reason | Count (2015–2017) | Why |
 > |---|---|---|
 > | No prior window | 767 | `p12_months_present = 0` — a genuinely new route. |
 > | Zero-measure prior window | 1 | `p12_months_present = 1` but `p12_seats = 0` and `p12_departures_performed = 0` (`op_airline_id=20378`, route `12266-12951`) — `nullif` makes `lf_p12`/`gauge_p12` NULL despite the window being "present." |
 > | Zero scheduled departures | 580 | `t12_departures_scheduled = 0` despite real `t12_departures_performed` (all on-demand/charter-style operators) — `completion_factor = t12_departures_performed / nullif(t12_departures_scheduled, 0)` is computed from `t12_*` sums alone and has nothing to do with `p12_months_present`. |
 >
-> `767 + 1 + 580 = 1,348`, the real `health_score IS NULL` count. A test that infers
+> `767 + 1 + 580 = 1,348` on 2015–2017, with **no overlap** between the three reasons — a
+> coincidence of that particular window, not a structural guarantee, corrected below.
+>
+> **Re-measured over the full 2015–2026 window** (M3a Task 1, `t12 = 2025-05..2026-04`,
+> `p12 = 2024-05..2025-04`): **813 of 8,080** routes have `health_score IS NULL`.
+>
+> | Reason | Count (2015–2026) | Why |
+> |---|---|---|
+> | No prior window | 688 | `p12_months_present = 0`. |
+> | Zero-measure prior window | 0 | No route currently has a "present but all-zero" prior window — a property of which 24 months are the current global trailing window, not a structural absence of the case. |
+> | Zero scheduled departures | 180 | `t12_departures_scheduled = 0` despite real `t12_departures_performed`. |
+> | *(overlap: no-prior-window AND zero-scheduled)* | **-55** | 55 routes are in **both** the "no prior window" and "zero scheduled" categories at once — the 2015–2017 measurement's assumption of no overlap does not hold over the full window. |
+>
+> `688 + 0 + 180 - 55 = 813`, the real `health_score IS NULL` count over 2015–2026. The
+> zero-overlap arithmetic quoted for 2015–2017 above was correct for that window but is not a
+> general property — a query summing the three reason counts without subtracting the overlap
+> would overcount by 55 today. A test that infers
 > "`health_score` is null exactly when `lf_delta` is null" asserts a narrower invariant than
 > the real one ("null exactly when *any* of the five components is null") — true on the M2
 > test fixture (too small to have a `p12`-populated, `t12_departures_scheduled = 0` route at
@@ -345,34 +395,69 @@ baseline to compare against."
 meaningless. Whether `fct_route_month` may carry it as a route *attribute* depends on whether
 it is constant per (origin, dest) within a month.
 
-**Measured in M2**, over all of `data/parquet/t100_segment/` (years 2015–2017, 274,824
-non-quarantined `(year_month, origin_airport_id, dest_airport_id)` route-months):
+**Measured in M2, over the 2015–2017 subset** (274,824 non-quarantined `(year_month,
+origin_airport_id, dest_airport_id)` route-months): zero varied, max spread 0.0. That
+measurement licensed `max(distance)` as an attribute — but it was a property of the 3-year
+subset available at the time, not a proven property of the data, and M3a re-measured before
+building the Explorer's pivot contract on it.
+
+**Re-measured in M3a Task 1, over the full 2015–2026 window** (1,082,147 non-quarantined
+`(year_month, origin_airport_id, dest_airport_id)` route-months, after `make fetch` landed
+all 12 years):
 
 ```
-route_months     274,824
-varying                0
-pct_varying         0.0%
-max_spread_miles      0.0
+route_months     1,082,147
+varying                  37
+pct_varying          0.0034%
+max_spread_miles        8.0
 ```
 
-Zero route-months show more than one distinct `DISTANCE` value. **`DISTANCE` is constant per
-(origin, dest) within a month across the full measured window** — this is the *constant*
-branch: `fct_route_month` carries `distance` as an attribute via `max(distance)`, and ASM
-computes downstream as `SUM(seats) * distance`. A `seat_miles = SUM(seats * distance)` column
-is not needed; Task 5's SQL should use the plain attribute + downstream multiplication.
+**37 of 1,082,147 route-months (0.0034%) DO vary — the "always constant" claim is false over
+the full window.** All 37 are concentrated in **2022 (32 route-months) and 2023 (5
+route-months)**; none appear in 2015–2021, 2024, 2025, or 2026. Spread is small: 32 of the 37
+differ by exactly 1 mile, the largest spread is 8 miles.
+
+**Root cause identified.** Airport **15887 / `WWT`** accounts for **5 of the 37** offending
+route-months (`SELECT * FROM dim_airport WHERE airport_id = 15887`). `dim_airport` carries
+three `airport_seq_id` rows for it: `Newtok Airport` (Newtok, AK) through 2011-06, `Newtok
+Airport` again through 2023-04 at a slightly different lat/lon, then `Mertarvik` (Newtok, AK)
+from 2023-05 — Newtok's village relocation site, following the original village's erosion.
+Small Alaska bush carriers (`7S`, `GV`, `K2`, `6F`) filed slightly different mileage for the
+same nominal origin/destination pair during the transition. The remaining 32 route-months
+follow the same shape: sub-100-mile Alaska bush routes where different small carriers
+disagree on filed mileage by a handful of miles — not a data-corruption pattern, a
+rounding-scale filing disagreement.
+
+**Ruling: `max(distance)` stays.** The assumption is not broken, it is bounded — 0.0034% of
+route-months disagreeing by at most 8 miles, entirely in 2022–2023, does not justify
+inventing a number no carrier filed (e.g. a seats-weighted mean) to correct an 8-mile
+discrepancy on three ten-thousandths of the data; that is exactly the over-engineering "never
+average what doesn't exist" forbids elsewhere in this doc. `max(distance)` selects a
+genuinely filed value. **`fct_route_month.distance` is therefore documented as a
+representative filed value, not a true invariant** — this corrects the earlier "constant"
+framing rather than softening it; the 2015–2017 zero was a property of that subset, not of
+the data.
 
 Guarded by `pipeline/tests/test_route_month.py::test_distance_is_not_summed`, which asserts
 `count(DISTINCT distance) = 1` per route-month, not only `distance <= max(segment distance)`
 — the latter is satisfied by construction (`max()` always equals the max) and so cannot
 catch a route-month where distance genuinely disagrees across rows, the same gap the
-city-market-id test next to it was written to avoid.
+city-market-id test next to it was written to avoid. That test runs on M2's small committed
+CI fixture, which cannot see the WWT/2022–2023 case at all (same single-year-fixture
+limitation documented elsewhere in this doc), so it stays green regardless of this finding.
+The guard that actually exercises real data is
+`pipeline/tests/test_invariants_against_real_data.py::test_distance_variance_stays_within_bound`
+(added in M3a Task 1): it asserts both bounds observed above — under 0.01% of route-months
+vary, and under 20 miles of spread — so a future widening beyond the 2022–2023/WWT pattern
+documented here fails the build instead of silently drifting further.
 
 ### `origin_city_market_id` / `dest_city_market_id` are collapsed with `any_value()`
 
 Same shape of question as `distance`, different answer path: these are carried through
 `fct_route_month` via `any_value()` rather than a `GROUP BY` column, which is safe only if
-they don't vary within the route-month grain. **Measured 0 of 494,451 non-quarantined
-route-months varying**, over the full 2015–2017 warehouse — see the "City market ids are
-constant within the route-month grain" section of
+they don't vary within the route-month grain. **Measured 0 of 1,861,880 non-quarantined
+route-months varying, over the full 2015–2026 window** (re-measured in M3a Task 1 alongside
+the `distance` re-measurement above; this one did **not** find variance, unlike `distance`)
+— see the "City market ids are constant within the route-month grain" section of
 [invariants.md](invariants.md#city-market-ids-are-constant-within-the-route-month-grain) for
 the full measurement and the test that guards it.
