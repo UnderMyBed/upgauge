@@ -41,7 +41,13 @@ goldens:  ## Regenerate the Explorer contract fixtures from the reference implem
 	$(UV) run python -m pipeline.pivot --write-goldens
 
 dev:  ## Next.js dev server
-	$(NPM) run dev
+	# `next dev app` from the REPO ROOT, not `npm --prefix app run dev`. The --prefix form
+	# starts Node with cwd=app/, and db.ts anchors DB_PATH and QUERIES_DIR on process.cwd()
+	# per the WORKDIR contract (docs/architecture/hosting.md) -- so every route 500s with
+	# `Cannot open database ".../app/upgauge.duckdb"`. Passing the app directory as an
+	# ARGUMENT leaves cwd at the repo root, which is exactly what production does
+	# (`next start app`, see app/smoke.sh) and what the Docker image's WORKDIR is.
+	$(MISE) npx next dev app
 
 app-check:  ## Typecheck + lint + test the app
 	$(NPM) run typecheck
