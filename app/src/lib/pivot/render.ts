@@ -3,14 +3,19 @@ import path from "node:path";
 import { PivotError, type PivotQuery } from "@/lib/pivot/types";
 import type { Allowlist, DimensionEntry } from "@/lib/pivot/allowlist";
 
-// Resolved relative to this module's own location, NOT process.cwd() -- vitest runs with
-// cwd() == app/, where "sql/03_queries" would resolve to app/sql/03_queries (doesn't exist).
-// __dirname is app/src/lib/pivot at both test-time and (once Task 7 imports this module from
-// a route handler) at server run-time, so walking up four levels always lands on the repo
-// root regardless of what invoked the process -- the same resolution render.test.ts's own
-// REPO constant uses. process.cwd() is left alone everywhere else: the DuckDB catalog
-// (Task 7) depends on cwd() being the directory containing data/, per docs/architecture/hosting.md.
-const QUERIES_DIR = path.resolve(__dirname, "../../../../sql/03_queries");
+// process.cwd() is the correct anchor: docs/architecture/hosting.md requires WORKDIR to be
+// the directory containing data/ (so the DuckDB catalog's relative Parquet paths resolve),
+// which is the repo root -- the same directory that contains sql/. __dirname is NOT usable
+// here: Turbopack inlines this module into a chunk under .next/server/ in a production
+// build, where __dirname resolves to "/", so a "../../../../sql/03_queries" walk has no
+// correct anchor and 404s every request (verified: `next start` throws ENOENT on
+// '/sql/03_queries/pivot_segment.sql').
+//
+// UPGAUGE_ROOT overrides cwd() for Vitest only: vitest chdirs to its own root (app/), not
+// the repo root npm was invoked from, so app/vitest.config.ts sets UPGAUGE_ROOT to the repo
+// root for the test process. Production never sets it, so it falls through to cwd(), which
+// hosting.md already pins correctly.
+const QUERIES_DIR = path.join(process.env.UPGAUGE_ROOT ?? process.cwd(), "sql", "03_queries");
 const MAINLINE_CARRIER_EXPR = "coalesce(m.parent_airline_id, f.op_airline_id)";
 
 function validateDimension(key: string, a: Allowlist, grain: string): DimensionEntry {
@@ -121,12 +126,19 @@ export function renderPivot(
         readFileSync(path.join(QUERIES_DIR, "pivot_mainline_join.sql"), "utf8").replace(/\n+$/, "")
       : "";
 
+  // Each replacement uses the FUNCTION form, not a plain string, even though the search
+  // pattern is a string (which only replaces the first occurrence -- correct, since every
+  // token appears once). A string REPLACEMENT interprets `$&`, `` $` ``, `$'`, `$$`, `$n`,
+  // `$<name>` as substitution patterns; a function replacement disables that interpretation
+  // entirely, matching Python's str.replace exactly. No catalog expr contains `$` today, but
+  // a future one that does must not silently diverge from the reference implementation in
+  // the one place divergence is SQL-injection-shaped.
   let sql = readFileSync(path.join(QUERIES_DIR, `pivot_${q.grain}.sql`), "utf8");
-  sql = sql.replace("{{DIM_SELECT}}", dimSelect);
-  sql = sql.replace("{{MEASURE_SELECT}}", measureSelect);
-  sql = sql.replace("{{GROUP_BY}}", groupBy);
-  sql = sql.replace("{{FILTERS}}", filtersSql);
-  sql = sql.replace("{{SORT}}", sortSql);
-  sql = sql.replace("{{MAINLINE_JOIN}}", mainlineJoin);
+  sql = sql.replace("{{DIM_SELECT}}", () => dimSelect);
+  sql = sql.replace("{{MEASURE_SELECT}}", () => measureSelect);
+  sql = sql.replace("{{GROUP_BY}}", () => groupBy);
+  sql = sql.replace("{{FILTERS}}", () => filtersSql);
+  sql = sql.replace("{{SORT}}", () => sortSql);
+  sql = sql.replace("{{MAINLINE_JOIN}}", () => mainlineJoin);
   return { sql, params };
 }
