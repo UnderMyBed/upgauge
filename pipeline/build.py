@@ -45,7 +45,7 @@ def _require(raw_dir: Path, table: Table) -> Path:
 
 
 def build_all(raw_dir: Path, out_dir: Path) -> list[Path]:
-    """Normalize every cached fact year and build all four dimensions.
+    """Normalize every cached fact year and build all five dimensions.
 
     Returns the artifacts written. Raises if anything required is missing.
     """
