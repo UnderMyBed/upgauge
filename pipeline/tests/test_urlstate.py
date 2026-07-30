@@ -150,3 +150,26 @@ def test_duplicate_non_f_key_is_rejected(con):
     contradictory values instead of rejecting the malformed link."""
     with pytest.raises(UrlStateError, match="duplicate"):
         decode(encode(q()) + "&d=op_airline_id", con)
+
+
+def test_encode_percent_encodes_characters_encodeuricomponent_leaves_alone():
+    """JS encodeURIComponent leaves ! * ' ( ) literal; Python quote(safe='') does not.
+
+    M3b's TypeScript port must match Python, not the JS default, so this divergence is
+    pinned here and in the goldens. Real data hits it: 119 unique_carrier_code values
+    contain parentheses.
+    """
+    q = PivotQuery(
+        grain="segment",
+        dimensions=("op_airline_id",),
+        measures=("seats",),
+        time_from="2015-01",
+        time_to="2015-12",
+        filters=(("op_airline_id", ("2T (1)", "O'Hare", "a!b", "c*d")),),
+    )
+    url = encode(q)
+    assert "%28" in url and "%29" in url, "parentheses must be percent-encoded"
+    assert "%27" in url, "apostrophe must be percent-encoded"
+    assert "%21" in url, "exclamation mark must be percent-encoded"
+    assert "%2A" in url, "asterisk must be percent-encoded"
+    assert "(" not in url and ")" not in url and "'" not in url

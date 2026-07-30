@@ -8,11 +8,13 @@ so a drift test cross-checks the curated list against duckdb_columns().
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import duckdb
 import pytest
 
 from pipeline.marts import build_database
+from pipeline.pivot import QUERIES_DIR
 from pipeline.tests.test_marts import _warehouse
 
 
@@ -142,3 +144,20 @@ def test_asm_and_rpm_multiply_before_summing(con):
     exprs = dict(con.execute("SELECT key, expr FROM meta_pivot_measures").fetchall())
     assert "sum(seats * distance)" in exprs["asm"].lower().replace("  ", " ")
     assert "sum(passengers * distance)" in exprs["rpm"].lower().replace("  ", " ")
+
+
+def test_load_allowlist_reads_its_sql_from_files_not_string_literals():
+    """CLAUDE.md: all query logic lives in .sql files, never inline string literals.
+
+    The server reads these same two files from TypeScript, which is the reason the rule
+    exists -- one definition, two runtimes. A grep guard is cheap and catches the
+    regression at the moment someone reintroduces a convenient inline SELECT.
+    """
+    source = (Path(__file__).resolve().parents[1] / "pivot.py").read_text()
+    assert "SELECT * FROM meta_pivot_dimensions" not in source
+    assert "SELECT * FROM meta_pivot_measures" not in source
+
+    for name in ("catalog_dimensions", "catalog_measures", "data_as_of"):
+        path = QUERIES_DIR / f"{name}.sql"
+        assert path.exists(), f"{name}.sql is missing"
+        assert "SELECT" in path.read_text().upper()
