@@ -119,19 +119,28 @@ def test_virgin_america_rolls_up_from_its_effective_month(con):
 
 
 def test_virgin_america_stops_rolling_up_after_its_thru_month(con):
-    """effective_to = '2018-04' is EXCLUSIVE. If VX still filed in 2018-04 it is its own
-    carrier again; if it filed nothing, it is absent from both -- assert on the mapping,
-    not on the presence of traffic."""
-    rows = con.execute("""
-        SELECT count(*) FROM fct_segment_month f
-        LEFT JOIN map_mainline_group m
-               ON m.airline_id = f.op_airline_id
-              AND f.year_month >= m.effective_from
-              AND (m.effective_to IS NULL OR f.year_month < m.effective_to)
-        WHERE f.op_airline_id = 21171 AND f.year_month >= '2018-04'
-          AND m.parent_airline_id IS NOT NULL
-    """).fetchone()[0]
-    assert rows == 0, "VX must not roll up on or after its exclusive thru month"
+    """effective_to = '2018-04' is EXCLUSIVE. Asserts the MAPPING itself at both sides of the
+    boundary, via the actual join fragment production renders -- NOT on real VX traffic.
+
+    An earlier version of this test filtered fct_segment_month to VX at/after 2018-04 and
+    asserted zero matching rows had a parent. That is VACUOUS: VX has ZERO
+    fct_segment_month rows on or after 2018-04 (its last real filing is 2018-03, consistent
+    with the brand retiring), so the WHERE clause matched no fact rows at all -- the count
+    was 0 regardless of the join's boundary operator, because there was nothing on the left
+    side of the LEFT JOIN to begin with. Confirmed by mutating the production join from `<`
+    to `<=` and watching the old version of this test stay green. This version uses a
+    synthetic probe row instead of real traffic, so it can actually fail."""
+    join_sql = Path("sql/03_queries/pivot_mainline_join.sql").read_text()
+    rows = con.execute(f"""
+        WITH f(op_airline_id, year_month) AS (VALUES (21171, '2018-03'), (21171, '2018-04'))
+        SELECT f.year_month, m.parent_airline_id
+        FROM f
+        {join_sql}
+        ORDER BY f.year_month
+    """).fetchall()
+    result = dict(rows)
+    assert result["2018-03"] == 19930, "2018-03 is still within the range, must roll up"
+    assert result["2018-04"] is None, "2018-04 is on/after the exclusive thru month"
 
 
 def test_mainline_join_boundary_is_exclusive_at_effective_to(con):

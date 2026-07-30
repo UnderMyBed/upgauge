@@ -73,11 +73,17 @@ subsidiaries.
     `>` breaks both real-traffic boundary tests; flipping `<` to `<=` breaks only the
     synthetic-probe test — proof the naive "real data will catch it" assumption was false for
     this specific boundary.
-  - `pipeline/mainline_map.py`'s `MapEntry.covers()` (inclusive at *both* ends) uses
-    different edge semantics than this SQL join. It is build-time validation only (checked-in
-    CSV → parquet, overlap/totality checks) and never runs at query time, so it cannot
-    produce wrong pivot output — but the mismatch means "does this month roll up" reads
-    differently in the two layers. Worth reconciling if either layer changes.
+  - `pipeline/mainline_map.py`'s `MapEntry.covers()` and `check_no_overlaps()` now use the
+    same inclusive-`effective_from`/exclusive-`effective_to` semantics as this SQL join —
+    this was flagged as a doc-only mismatch in Task 5's first pass, then found to be a real
+    bug: `parent_for(21171, "2018-04")` returned Alaska on the real shipped VX row (build-time
+    validation only, never reached query time, so it never produced a wrong pivot answer, but
+    it contradicted this doc and the SQL). A **gap-free handoff between two parents is one
+    row's `effective_to` equal to the next row's `effective_from`** — `check_no_overlaps` was
+    also fixed, since under the old inclusive reading it rejected that exact shape as an
+    overlap, which would have broken `make ingest`/`make warehouse` the next time a
+    date-ranged acquisition was entered using this convention. See
+    `pipeline/reference/mainline_group.csv`'s header comment, corrected to match.
 - Verify all dates against filings at ingest. **Do not trust the table above as gospel** —
   it is a starting point, and the single most reviewable artifact in the pipeline. Keep it
   as a checked-in declarative file (CSV/YAML), not code, so a reviewer needn't read Python

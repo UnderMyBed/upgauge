@@ -127,3 +127,35 @@ def test_empty_filter_values_is_rejected(con):
     value list is not a meaningful request in the first place."""
     with pytest.raises(PivotError, match="filter"):
         render_pivot(q(filters=(("op_airline_id", ()),)), con)
+
+
+def test_unknown_grouping_is_rejected(con):
+    """grouping is documented as "operating" | "mainline" -- anything else must not silently
+    fall through to operating semantics, which would render the wrong query without error."""
+    with pytest.raises(PivotError, match="grouping"):
+        render_pivot(q(grouping="Mainline"), con)
+
+
+def test_sort_by_carrier_dimension_works_under_operating_grouping(con):
+    sql, params = render_pivot(q(sort="op_airline_id", grouping="operating"), con)
+    con.execute(sql, params).fetchall()
+
+
+def test_sort_by_carrier_dimension_works_under_mainline_grouping(con):
+    """Regression: under grouping='mainline', op_airline_id's GROUP BY expression becomes
+    coalesce(m.parent_airline_id, f.op_airline_id), but ORDER BY was still pointing at the
+    bare column name -- which is no longer in the GROUP BY list, so DuckDB's binder rejects
+    it. Clicking a column header to sort by carrier is the most natural Explorer interaction
+    there is."""
+    sql, params = render_pivot(q(sort="op_airline_id", grouping="mainline"), con)
+    con.execute(sql, params).fetchall()
+
+
+def test_output_column_names_match_across_grouping_modes(con):
+    """A client (including M3b's TypeScript port) must be able to key a pivot's results by
+    column name regardless of which grouping mode was requested."""
+    op_sql, op_params = render_pivot(q(grouping="operating"), con)
+    ml_sql, ml_params = render_pivot(q(grouping="mainline"), con)
+    op_cols = [d[0] for d in con.execute(op_sql, op_params).description]
+    ml_cols = [d[0] for d in con.execute(ml_sql, ml_params).description]
+    assert op_cols == ml_cols

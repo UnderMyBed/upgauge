@@ -38,8 +38,12 @@ class MapEntry:
     note: str = ""
 
     def covers(self, year_month: str) -> bool:
-        """Inclusive at both ends, at month granularity."""
-        return self.effective_from <= year_month <= (self.effective_to or _OPEN_ENDED)
+        """Inclusive at `effective_from`, EXCLUSIVE at `effective_to` -- matching the SQL
+        join in sql/03_queries/pivot_mainline_join.sql (`>= effective_from AND <
+        effective_to`), which is the actual query-time rollup this validates against. A
+        carrier whose `effective_to` is '2018-04' has already stopped rolling up BY 2018-04,
+        not after it. See docs/data/carrier-model.md."""
+        return self.effective_from <= year_month < (self.effective_to or _OPEN_ENDED)
 
 
 @dataclass(frozen=True)
@@ -83,7 +87,14 @@ def load_mainline_map(path: Path | None = None) -> MainlineMap:
 
 
 def check_no_overlaps(entries: Iterable[MapEntry]) -> None:
-    """Raise if any carrier has two parents covering the same month."""
+    """Raise if any carrier has two parents covering the same month.
+
+    `effective_to` is EXCLUSIVE (matches `covers()` and the SQL join), so a clean,
+    gap-free handoff is encoded as the earlier range's `effective_to` equalling the later
+    range's `effective_from` -- the earlier entry covers up to but not including that month,
+    the later entry starts exactly there. That shape must be ACCEPTED, not flagged as an
+    overlap, which is why this compares with `<`, not `<=`.
+    """
     by_carrier: dict[int, list[MapEntry]] = {}
     for entry in entries:
         by_carrier.setdefault(entry.airline_id, []).append(entry)
@@ -92,7 +103,7 @@ def check_no_overlaps(entries: Iterable[MapEntry]) -> None:
         ordered = sorted(group, key=lambda e: e.effective_from)
         for earlier, later in zip(ordered, ordered[1:], strict=False):
             earlier_end = earlier.effective_to or _OPEN_ENDED
-            if later.effective_from <= earlier_end:
+            if later.effective_from < earlier_end:
                 raise OverlapError(
                     f"airline_id {airline_id}: range starting {later.effective_from} overlaps "
                     f"the one ending {earlier_end} — two parents for one month is unresolvable"

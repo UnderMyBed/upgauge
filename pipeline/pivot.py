@@ -35,6 +35,7 @@ QUERIES_DIR = Path(__file__).parents[1] / "sql" / "03_queries"
 MAINLINE_JOIN_PATH = QUERIES_DIR / "pivot_mainline_join.sql"
 
 GRAINS = frozenset({"segment", "route"})
+GROUPINGS = frozenset({"operating", "mainline"})
 
 #: The one dimension whose SELECT/GROUP BY expression changes when grouping == "mainline".
 #: coalesce(...) falls back to the operating carrier for anyone absent from
@@ -119,6 +120,26 @@ def _dimension_columns(entry: dict) -> list[str]:
     return [c.strip() for c in entry["column_expr"].split(",")]
 
 
+def _dim_render(key: str, entry: dict, grouping: str) -> tuple[str, str, str]:
+    """Return `(select_expr, group_by_expr, sortable_name)` for one dimension key.
+
+    Identical for every dimension except `op_airline_id` under `grouping == "mainline"`:
+    there the SELECT item is `coalesce(...) AS op_airline_id` -- aliased back to the
+    dimension's own key -- so the OUTPUT column name (and therefore what ORDER BY can name)
+    is identical in both grouping modes, matching every other dimension's behavior. GROUP BY
+    uses the raw, unaliased expression: relying on an output alias inside GROUP BY is
+    engine-specific behavior this module -- the spec M3b's TypeScript port copies -- should
+    not assume.
+
+    `sortable_name` is only meaningful for single-column dimensions; the caller checks
+    `_dimension_columns(entry)` before trusting it (route, the one multi-column dimension,
+    has no single sortable name).
+    """
+    if grouping == "mainline" and key == "op_airline_id":
+        return f"{_MAINLINE_CARRIER_EXPR} AS op_airline_id", _MAINLINE_CARRIER_EXPR, "op_airline_id"
+    return entry["column_expr"], entry["column_expr"], entry["column_expr"]
+
+
 def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, dict]:
     """Validate `q` against the catalog allowlists and render one of the pivot templates.
 
@@ -128,6 +149,8 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     """
     if q.grain not in GRAINS:
         raise PivotError(f"unknown grain {q.grain!r}, expected one of {sorted(GRAINS)}")
+    if q.grouping not in GROUPINGS:
+        raise PivotError(f"unknown grouping {q.grouping!r}, expected one of {sorted(GROUPINGS)}")
 
     # Structurally malformed requests, rejected before touching the allowlist or the
     # template: an empty dimension/measure list renders a stray-comma SELECT that only fails
@@ -153,16 +176,16 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     # needed, and joining dimension exprs with a comma naturally handles a multi-column
     # dimension without any code that assumes one column per key.
     #
-    # The one exception: when grouping == "mainline", op_airline_id's expression is swapped
-    # for the coalesced parent lookup, so the SAME string doubles as both the SELECT item and
-    # the GROUP BY key -- a carrier that rolled up groups under its parent, not itself.
-    dim_select = ", ".join(
-        _MAINLINE_CARRIER_EXPR
-        if q.grouping == "mainline" and key == "op_airline_id"
-        else entry["column_expr"]
+    # The one exception is op_airline_id under grouping == "mainline" -- see _dim_render's
+    # docstring. dim_renders is computed once and shared by dim_select/group_by below AND by
+    # the sortable map further down, so the SELECT alias and what ORDER BY may reference can
+    # never drift apart.
+    dim_renders = [
+        _dim_render(key, entry, q.grouping)
         for key, entry in zip(q.dimensions, dim_entries, strict=True)
-    )
-    group_by = dim_select
+    ]
+    dim_select = ", ".join(r[0] for r in dim_renders)
+    group_by = ", ".join(r[1] for r in dim_renders)
 
     measure_select = ", ".join(
         f"{entry['expr']} AS {key}"
@@ -193,13 +216,17 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     filters_sql = " AND ".join(filter_clauses) if filter_clauses else "TRUE"
 
     # Sortable identifiers are exactly what's in the SELECT list: single-column dimensions by
-    # their (unaliased) column name, and measures by their alias. A multi-column dimension
-    # (route) has no single sortable name, so it is deliberately absent here.
+    # their OUTPUT column name (from dim_renders -- the alias when op_airline_id was rewritten
+    # for mainline grouping, the bare column name otherwise), and measures by their alias. A
+    # multi-column dimension (route) has no single sortable name, so it is deliberately absent
+    # here.
     sortable: dict[str, str] = {}
-    for key, entry in zip(q.dimensions, dim_entries, strict=True):
+    for (key, entry), (_select_expr, _group_expr, sortable_name) in zip(
+        zip(q.dimensions, dim_entries, strict=True), dim_renders, strict=True
+    ):
         columns = _dimension_columns(entry)
         if len(columns) == 1:
-            sortable[key] = columns[0]
+            sortable[key] = sortable_name
     for key in q.measures:
         sortable[key] = key
 

@@ -63,6 +63,19 @@ def test_virgin_america_rolls_up_from_december_2016(mapping):
     assert mapping.parent_for(VIRGIN_AMERICA, "2016-12") == AS
 
 
+def test_virgin_america_rolls_up_through_its_last_month(mapping):
+    """effective_to = '2018-04' is EXCLUSIVE: 2018-03 is the last month VX rolls up."""
+    assert mapping.parent_for(VIRGIN_AMERICA, "2018-03") == AS
+
+
+def test_virgin_america_stops_rolling_up_at_its_exclusive_thru_month(mapping):
+    """The SQL join (sql/03_queries/pivot_mainline_join.sql) treats effective_to as
+    EXCLUSIVE -- this is the Python side of that same rule, on the real shipped VX row.
+    Before this fix, parent_for(21171, "2018-04") returned 19930 (Alaska), directly
+    contradicting the SQL and the docs this task corrected."""
+    assert mapping.parent_for(VIRGIN_AMERICA, "2018-04") is None
+
+
 # ------------------------------------------------------- steady-state subsidiaries
 
 
@@ -144,6 +157,25 @@ def test_adjacent_non_overlapping_ranges_are_fine():
             airline_id=99, parent_airline_id=1, effective_from="2015-01", effective_to="2017-12"
         ),
         MapEntry(airline_id=99, parent_airline_id=2, effective_from="2018-01", effective_to=None),
+    ]
+    check_no_overlaps(entries)
+
+
+def test_gap_free_handoff_at_the_shared_boundary_month_is_accepted():
+    """Under exclusive-effective_to semantics (matching the SQL join), the natural way to
+    encode a clean, gap-free handoff is for the earlier range's effective_to to equal the
+    later range's effective_from -- the earlier entry covers up to but not including that
+    month, and the later entry starts exactly there. This must NOT be flagged as an overlap:
+    before this fix, check_no_overlaps used inclusive-effective_to semantics and rejected
+    exactly this shape, which would break the build the next time a date-ranged acquisition
+    is entered using the convention this task just documented."""
+    from pipeline.mainline_map import MapEntry
+
+    entries = [
+        MapEntry(
+            airline_id=99, parent_airline_id=1, effective_from="2015-01", effective_to="2020-01"
+        ),
+        MapEntry(airline_id=99, parent_airline_id=2, effective_from="2020-01", effective_to=None),
     ]
     check_no_overlaps(entries)
 
