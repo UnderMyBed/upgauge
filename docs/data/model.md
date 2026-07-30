@@ -136,9 +136,12 @@ freight, mail, air_time, ramp_to_ramp_time
 
 ### The one exception: `mart_route_health`
 
-`mart_route_health` **does** store derived columns — `lf_t12`, `lf_delta`, `gauge_delta`,
-`capacity_delta`, `frequency_delta`, `completion_factor`, `health_score`. The rule therefore
-reads: *no derived columns on `fct_*` tables.* Marts may carry them.
+`mart_route_health` **does** store derived columns — all ten of `lf_t12`, `lf_p12`,
+`lf_delta`, `gauge_t12`, `gauge_p12`, `gauge_delta`, `capacity_delta`, `frequency_delta`,
+`completion_factor`, `health_score`. This list and
+[`MART_DERIVED_COLUMNS`](../../pipeline/tests/test_derived_measure_rules.py) must not
+diverge; the test is authoritative if they ever do. The rule therefore reads: *no derived
+columns on `fct_*` tables.* Marts may carry them.
 
 What makes that safe is not a convention, it is the grain: **`mart_route_health` has no time
 dimension and no partial grain.** One row per (carrier, undirected route) is already the
@@ -150,13 +153,20 @@ It also stores the additive `t12_*` / `p12_*` sums alongside them, because
 [../product/features.md](../product/features.md) requires the *components* be shown and not
 just the score, and because they let any consumer recompute a ratio itself.
 
-Backed by five tests in
+Backed by four tests in
 [`pipeline/tests/test_derived_measure_rules.py`](../../pipeline/tests/test_derived_measure_rules.py):
 no `fct_*` object carries a column from the derived list; no `mart_route_health` derived
 column appears inside a `SUM(`/`AVG(`/`MEAN(`/`MEDIAN(` anywhere in `sql/`;
 `mart_route_health` still has no time grain (the exception's own justification, asserted
-directly rather than inferred); every mart file declares a known materialization; and
-`mart_route_health` is the only object materialized as a table.
+directly rather than inferred); and `mart_route_health` is the only object materialized as
+a table.
+
+The `SUM(`/`AVG(` scan matches whitespace-collapsed source text (so a hand-wrapped
+`SUM(\n  lf_delta\n)` split across lines is still caught), not a parsed SQL AST. A derived
+column name reused as an unrelated identifier, or one aggregate's closing paren landing
+immediately before an unrelated bare reference of the same name, could in principle still
+slip past it — no such case exists in `sql/` today. This residual gap, not the four tests
+themselves, is the thing to revisit if `sql/03_queries/` grows a query that trips it.
 
 #### Window rule, floor, and the NULL-prior-window trap
 

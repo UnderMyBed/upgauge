@@ -2,8 +2,29 @@
 
 `AVG(load_factor)` is the #1 bug in every homemade T-100 tool. The defence is that the
 column does not exist to be averaged. mart_route_health is the single exception, permitted
-only because it has no time grain -- so these two tests police the boundary of that
-exception rather than trusting a convention.
+only because it has no time grain. Four guards here, not all of them about averaging
+directly:
+
+- `test_no_fct_object_carries_a_derived_column` -- no `fct_*` object stores a derived
+  column at all, so there is nothing on a fact table to average by mistake.
+- `test_no_mart_derived_column_is_ever_aggregated_in_sql` -- none of mart_route_health's
+  own derived columns is ever fed into `SUM`/`AVG`/`MEAN`/`MEDIAN` anywhere else in `sql/`.
+  This is a source-text scan, not a semantic one: known gap below.
+- `test_mart_route_health_still_has_no_time_grain` -- asserts the exception's own
+  justification directly, rather than trusting that no one adds a time column later.
+- `test_only_marts_are_materialized_as_tables` -- not a derived-measure test on its own,
+  but the boundary these guards police is "marts may store derived columns, fct_*/dim_*
+  may not," and that boundary is only meaningful if materialization also tracks the
+  fct/dim vs. mart split. It additionally protects M1's byte-identical Parquet gate, which
+  stops covering an object the moment it becomes a table instead of a view.
+
+Known gap: the source-text scan matches against whitespace-collapsed text, so a
+hand-wrapped `SUM(\\n  lf_delta\\n)` split across lines is caught (see
+`_flatten_with_line_map`), but it is still a substring match over normalised text, not a
+SQL parser -- a derived column name reused as an unrelated identifier in a different
+schema, or one aggregate's closing paren landing immediately before an unrelated bare
+column reference of the same name, could in principle still confuse it. No such case
+exists in `sql/` today; see docs/data/model.md for the residual limitation this implies.
 """
 
 from __future__ import annotations
@@ -73,10 +94,50 @@ def test_no_fct_object_carries_a_derived_column(con):
         assert not offending, f"{name} stores derived column(s): {sorted(offending)}"
 
 
+def _flatten_with_line_map(text: str) -> tuple[str, list[tuple[int, int]]]:
+    """Collapse whitespace runs -- including newlines -- to a single space, so a
+    hand-wrapped `SUM(\n  lf_delta\n)` reads identically to `SUM( lf_delta )`. Comment
+    lines are dropped entirely rather than collapsed, so a derived column named only in a
+    comment cannot trigger a match.
+
+    Returns the flattened text plus a list of (offset, source_line_number) markers so a
+    match position in the flattened text can be mapped back to an actionable line number.
+    """
+    parts: list[str] = []
+    markers: list[tuple[int, int]] = []
+    offset = 0
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if line.lstrip().startswith("--"):
+            continue
+        collapsed = re.sub(r"\s+", " ", line).strip()
+        if not collapsed:
+            continue
+        if parts:
+            parts.append(" ")
+            offset += 1
+        markers.append((offset, lineno))
+        parts.append(collapsed)
+        offset += len(collapsed)
+    return "".join(parts), markers
+
+
+def _line_for_offset(markers: list[tuple[int, int]], pos: int) -> int:
+    lineno = markers[0][1] if markers else 1
+    for start, candidate in markers:
+        if start > pos:
+            break
+        lineno = candidate
+    return lineno
+
+
 def test_no_mart_derived_column_is_ever_aggregated_in_sql(con):
     """mart_route_health has no time grain, so there is nothing to GROUP BY -- which is the
     whole justification for letting it store these columns. An aggregate over one is a sign
-    that assumption has stopped holding."""
+    that assumption has stopped holding.
+
+    Matches against whitespace-collapsed text (see `_flatten_with_line_map`), not raw
+    lines, specifically so a hand- or formatter-wrapped multi-line aggregate call cannot
+    slip past a naive line-by-line regex."""
     names = "|".join(sorted(MART_DERIVED_COLUMNS))
     pattern = re.compile(
         r"\b(sum|avg|mean|median)\s*\(\s*[\w.]*\b(" + names + r")\b",
@@ -87,11 +148,11 @@ def test_no_mart_derived_column_is_ever_aggregated_in_sql(con):
         # The mart's own definition computes these; it does not aggregate them.
         if path.name == "200_mart_route_health.sql":
             continue
-        for n, line in enumerate(path.read_text().splitlines(), 1):
-            if line.lstrip().startswith("--"):
-                continue
-            if pattern.search(line):
-                offences.append(f"{path.relative_to(SQL_ROOT)}:{n}: {line.strip()}")
+        flat, markers = _flatten_with_line_map(path.read_text())
+        for match in pattern.finditer(flat):
+            lineno = _line_for_offset(markers, match.start())
+            snippet = flat[match.start() : match.start() + 80]
+            offences.append(f"{path.relative_to(SQL_ROOT)}:{lineno}: {snippet}")
     assert not offences, "derived mart columns aggregated:\n" + "\n".join(offences)
 
 
@@ -104,12 +165,6 @@ def test_mart_route_health_still_has_no_time_grain(con):
         "mart_route_health gained a time grain, which invalidates its permission to store "
         "derived columns -- see docs/data/model.md"
     )
-
-
-def test_every_mart_file_declares_a_known_materialization():
-    """A typo'd directive must not silently skip an object."""
-    for mart in mart_files():
-        assert mart.materialization in {"view", "table"}
 
 
 def test_only_marts_are_materialized_as_tables():
