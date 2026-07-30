@@ -100,3 +100,78 @@ def test_quarantined_rows_are_reported_not_hidden(con):
         WHERE year_month BETWEEN '2020-01' AND '2020-12' AND is_quarantined
     """).fetchone()[0]
     assert sum(r[qi] for r in rows) == expected
+
+
+def _carrier_total(con, airline_id, month, grouping):
+    sql, params = render_pivot(PivotQuery(
+        grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+        time_from=month, time_to=month, grouping=grouping, limit=5000), con)
+    return {r[0]: r[1] for r in con.execute(sql, params).fetchall()}
+
+
+def test_virgin_america_rolls_up_from_its_effective_month(con):
+    """2016-12 is the acquisition month. 2016-11 must NOT roll up."""
+    before = _carrier_total(con, 21171, "2016-11", "mainline")
+    after = _carrier_total(con, 21171, "2016-12", "mainline")
+    assert 21171 in before, "VX should still be its own carrier in 2016-11"
+    assert 21171 not in after, "VX should have rolled into AS from 2016-12"
+    assert 19930 in after
+
+
+def test_virgin_america_stops_rolling_up_after_its_thru_month(con):
+    """effective_to = '2018-04' is EXCLUSIVE. If VX still filed in 2018-04 it is its own
+    carrier again; if it filed nothing, it is absent from both -- assert on the mapping,
+    not on the presence of traffic."""
+    rows = con.execute("""
+        SELECT count(*) FROM fct_segment_month f
+        LEFT JOIN map_mainline_group m
+               ON m.airline_id = f.op_airline_id
+              AND f.year_month >= m.effective_from
+              AND (m.effective_to IS NULL OR f.year_month < m.effective_to)
+        WHERE f.op_airline_id = 21171 AND f.year_month >= '2018-04'
+          AND m.parent_airline_id IS NOT NULL
+    """).fetchone()[0]
+    assert rows == 0, "VX must not roll up on or after its exclusive thru month"
+
+
+def test_mainline_join_boundary_is_exclusive_at_effective_to(con):
+    """The test above is vacuous: VX has ZERO fct_segment_month rows on or after 2018-04
+    (its last real filing is 2018-03, consistent with the brand retiring), so
+    `WHERE op_airline_id = 21171 AND year_month >= '2018-04'` matches no fact rows at all --
+    it returns count 0 regardless of `<` vs `<=`, because there is nothing on the left side
+    of the LEFT JOIN to begin with. Confirmed by running that exact test with the production
+    join mutated from `<` to `<=`: it still passes.
+
+    This test closes that gap by loading the ACTUAL join fragment pivot.py substitutes
+    (sql/03_queries/pivot_mainline_join.sql -- not a hand-copied duplicate) and joining it
+    against one synthetic row standing in for a segment that filed in VX's exclusive thru
+    month, so a `<` -> `<=` regression on the real production artifact is observable."""
+    join_sql = Path("sql/03_queries/pivot_mainline_join.sql").read_text()
+    row = con.execute(f"""
+        WITH f AS (SELECT 21171 AS op_airline_id, '2018-04' AS year_month)
+        SELECT m.parent_airline_id
+        FROM f
+        {join_sql}
+    """).fetchone()
+    assert row[0] is None, "a segment filed in VX's exclusive thru month must not roll up"
+
+
+def test_hawaiian_rolls_up_from_2024_09_and_not_2024_08(con):
+    before = _carrier_total(con, 19690, "2024-08", "mainline")
+    after = _carrier_total(con, 19690, "2024-09", "mainline")
+    assert 19690 in before, "HA should be its own carrier in 2024-08"
+    assert 19690 not in after, "HA should have rolled into AS from 2024-09"
+
+
+def test_shared_regionals_never_roll_up(con):
+    """SkyWest flies for several mainlines on the same day. No date range fixes that, so it
+    must not appear in the map at all."""
+    mapped = {r[0] for r in con.execute(
+        "SELECT carrier_code FROM map_mainline_group").fetchall()}
+    assert not mapped & {"OO", "YX", "YV"}
+
+
+def test_operating_grouping_leaves_carriers_alone(con):
+    """The default must not silently roll anything up."""
+    after = _carrier_total(con, 19690, "2024-09", "operating")
+    assert 19690 in after

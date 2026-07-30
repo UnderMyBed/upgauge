@@ -32,8 +32,15 @@ from pathlib import Path
 import duckdb
 
 QUERIES_DIR = Path(__file__).parents[1] / "sql" / "03_queries"
+MAINLINE_JOIN_PATH = QUERIES_DIR / "pivot_mainline_join.sql"
 
 GRAINS = frozenset({"segment", "route"})
+
+#: The one dimension whose SELECT/GROUP BY expression changes when grouping == "mainline".
+#: coalesce(...) falls back to the operating carrier for anyone absent from
+#: map_mainline_group (independents, shared regionals, subsidiaries before their acquisition
+#: month) -- which is every carrier by default, since the map is wholly-owned-only.
+_MAINLINE_CARRIER_EXPR = "coalesce(m.parent_airline_id, f.op_airline_id)"
 
 
 class PivotError(Exception):
@@ -51,7 +58,7 @@ class PivotQuery:
     sort: str | None = None
     sort_desc: bool = True
     limit: int = 100
-    grouping: str = "operating"  # "operating" | "mainline" -- reserved for a later task
+    grouping: str = "operating"  # "operating" | "mainline"
 
 
 def load_allowlist(
@@ -145,7 +152,16 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     # or the PAIR 'route_key_low, route_key_high' for the route dimension) -- so no alias is
     # needed, and joining dimension exprs with a comma naturally handles a multi-column
     # dimension without any code that assumes one column per key.
-    dim_select = ", ".join(entry["column_expr"] for entry in dim_entries)
+    #
+    # The one exception: when grouping == "mainline", op_airline_id's expression is swapped
+    # for the coalesced parent lookup, so the SAME string doubles as both the SELECT item and
+    # the GROUP BY key -- a carrier that rolled up groups under its parent, not itself.
+    dim_select = ", ".join(
+        _MAINLINE_CARRIER_EXPR
+        if q.grouping == "mainline" and key == "op_airline_id"
+        else entry["column_expr"]
+        for key, entry in zip(q.dimensions, dim_entries, strict=True)
+    )
     group_by = dim_select
 
     measure_select = ", ".join(
@@ -203,6 +219,13 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     direction = "DESC" if q.sort_desc else "ASC"
     sort_sql = f"{sortable[sort_key]} {direction}"
 
+    # The join is its own .sql file, not a string built in Python -- read fresh each call,
+    # same as the templates below, so query logic lives in exactly one place. Rendered to the
+    # empty string for "operating" so the default grouping adds no join at all.
+    mainline_join_sql = (
+        "\n" + MAINLINE_JOIN_PATH.read_text().rstrip("\n") if q.grouping == "mainline" else ""
+    )
+
     template_path = QUERIES_DIR / f"pivot_{q.grain}.sql"
     sql = template_path.read_text()
     sql = sql.replace("{{DIM_SELECT}}", dim_select)
@@ -210,5 +233,6 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     sql = sql.replace("{{GROUP_BY}}", group_by)
     sql = sql.replace("{{FILTERS}}", filters_sql)
     sql = sql.replace("{{SORT}}", sort_sql)
+    sql = sql.replace("{{MAINLINE_JOIN}}", mainline_join_sql)
 
     return sql, params
