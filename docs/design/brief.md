@@ -1,5 +1,15 @@
 # Upgauge — Design Brief
 
+> ✅ **This brief has been answered. The design lives in [`system.md`](system.md)**, with
+> working mockups in [`mockups/`](mockups/). This file is kept as the *problem statement* —
+> the constraints and anti-goals below still bind, and the content inventory is still the
+> checklist. Do not edit it to match the outcome; edit `system.md`.
+>
+> **The sectional hypothesis below was built, rendered against real data, and rejected** in
+> favour of an instrument-panel direction. The reasoning is recorded in `system.md` so it
+> is not re-litigated: a sectional's palette makes hue carry carrier *identity*, which is
+> the one thing the map encoding rule forbids.
+
 > Handoff for a **design-focused** Claude session. Companion to
 > [`../product/overview.md`](../product/overview.md) (read that first for what the product
 > does). Your job here is the *visual identity and the key screens*, not the data

@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upgauge — the Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --panel:#F0F2F1; --panel-2:#E5E8E6; --field:#FAFBFA;
+  --ink:#15181A; --ink-2:#5C6367; --ink-3:#666E71;
+  --rule:#D6DAD8; --rule-2:#828A8B;
+  --signal:#0B6E63; --limit:#A8322A;
+}
+*{box-sizing:border-box} html,body{margin:0}
+body{background:var(--panel);color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,"Adwaita Sans",sans-serif;font-size:13px;line-height:1.35;
+  -webkit-font-smoothing:antialiased}
+.mono{font-family:"IBM Plex Mono",ui-monospace,"Adwaita Mono",monospace}
+.num{font-family:"IBM Plex Mono",ui-monospace,monospace;font-variant-numeric:tabular-nums;
+  font-feature-settings:"tnum" 1;text-align:right;white-space:nowrap}
+.wrap{max-width:1200px;margin:0 auto;padding:0 20px 50px}
+:focus-visible{outline:2px solid var(--signal);outline-offset:1px}
+
+.top{display:flex;align-items:center;gap:16px;padding:11px 0 10px;border-bottom:1px solid var(--ink)}
+.mark{font-weight:600;font-size:16px;letter-spacing:.17em;text-transform:uppercase;white-space:nowrap}
+.mark span{color:var(--signal)}
+.omni{flex:1;background:var(--field);border:1px solid var(--rule-2);padding:4px 9px;color:var(--ink-3);font-size:12.5px}
+.asof{font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600;letter-spacing:.09em;
+  color:var(--signal);border:1px solid var(--signal);padding:3px 7px;white-space:nowrap}
+
+h1{font-size:15px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;margin:16px 0 2px}
+.lede{font-size:11.5px;color:var(--ink-2);margin-bottom:12px}
+
+/* ---- the query builder: a form that looks like a filed query, not a wizard ---- */
+.builder{border:1px solid var(--rule-2);background:var(--field)}
+.brow{display:grid;grid-template-columns:88px 1fr;border-bottom:1px solid var(--rule);align-items:start}
+.brow:last-child{border-bottom:0}
+.bk{font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-2);
+  padding:8px 9px;border-right:1px solid var(--rule);background:var(--panel);height:100%}
+.bk .kk{font-family:"IBM Plex Mono",monospace;color:var(--ink-3);font-size:9px;display:block;margin-top:2px}
+.bv{padding:6px 9px;display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.chip{font-family:"IBM Plex Mono",monospace;font-size:11px;border:1px solid var(--rule-2);
+  padding:2px 7px;background:var(--panel);color:var(--ink-2);white-space:nowrap}
+.chip.on{background:var(--ink);border-color:var(--ink);color:var(--panel)}
+.chip.derived{border-style:dashed}
+.chip .x{color:var(--ink-3);margin-left:5px}
+.chip.on .x{color:var(--panel)}
+.chip.add{border-style:dashed;color:var(--ink-3)}
+.seg{display:flex;border:1px solid var(--rule-2)}
+.seg b{font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:500;padding:2px 9px;
+  color:var(--ink-2);border-right:1px solid var(--rule-2);cursor:pointer}
+.seg b:last-child{border-right:0}
+.seg b.on{background:var(--ink);color:var(--panel)}
+.hint{font-size:10.5px;color:var(--ink-3);margin-left:4px}
+
+/* permalink */
+.perma{display:flex;align-items:center;gap:8px;margin-top:10px;border:1px solid var(--signal);background:var(--field)}
+.perma .pk{font-size:9px;letter-spacing:.15em;text-transform:uppercase;color:var(--panel);
+  background:var(--signal);padding:5px 8px;white-space:nowrap;align-self:stretch;display:flex;align-items:center}
+.perma code{flex:1;font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink);
+  overflow-x:auto;white-space:nowrap;padding:5px 0}
+.perma .act{font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--signal);
+  border-left:1px solid var(--rule);padding:5px 8px;white-space:nowrap}
+
+.rhead{display:flex;align-items:baseline;gap:10px;border-bottom:1px solid var(--ink);
+  padding-bottom:4px;margin:20px 0 0}
+.ctitle{font-size:11px;letter-spacing:.13em;text-transform:uppercase;font-weight:500}
+.csub{font-size:11px;color:var(--ink-2);flex:1}
+.exp{font-family:"IBM Plex Mono",monospace;font-size:10px;color:var(--ink-2);
+  border:1px solid var(--rule-2);padding:2px 7px}
+
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+thead th{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2);
+  font-weight:500;text-align:left;padding:5px 10px 5px 0;border-bottom:1px solid var(--ink)}
+thead th.r{text-align:right}
+thead th .srt{color:var(--ink);font-family:"IBM Plex Mono",monospace}
+tbody td{padding:0 10px 0 0;border-bottom:1px solid var(--rule);height:22px;font-size:12.5px}
+tbody tr:hover td{background:var(--panel-2)}
+.mn{font-family:"IBM Plex Mono",monospace;font-weight:500}
+.drill{color:var(--signal);font-family:"IBM Plex Mono",monospace;font-size:10px}
+.foot{margin-top:12px;font-size:11px;color:var(--ink-2);max-width:760px}
+.count{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--ink-2);margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="mark">UP<span>GAUGE</span></div>
+    <div class="omni">PDX &nbsp;·&nbsp; try: A220 · Alaska · PDX-AUS · Portland</div>
+    <div class="asof">DATA AS OF 2026-04</div>
+  </div>
+
+  <h1>Explorer</h1>
+  <div class="lede">Pick dimensions and measures, filter, sort. Every state is a permalink —
+    the URL below is generated by the same codec the server validates against.</div>
+
+  <div class="builder">
+    <div class="brow"><div class="bk">Grain<span class="kk">k</span></div>
+      <div class="bv">
+        <div class="seg"><b class="on">Segment</b><b>Route</b></div>
+        <span class="hint">route grain is undirected and drops aircraft dimensions</span>
+      </div></div>
+
+    <div class="brow"><div class="bk">Carriers<span class="kk">g</span></div>
+      <div class="bv">
+        <div class="seg"><b class="on">Operating</b><b>Mainline group</b></div>
+        <span class="hint">wholly-owned rollup, date-ranged — AS gains VX from 2016-12, HA from 2024-09</span>
+      </div></div>
+
+    <div class="brow"><div class="bk">Dimensions<span class="kk">d</span></div>
+      <div class="bv" id="dims"></div></div>
+
+    <div class="brow"><div class="bk">Measures<span class="kk">m</span></div>
+      <div class="bv" id="meas"></div></div>
+
+    <div class="brow"><div class="bk">Window<span class="kk">t</span></div>
+      <div class="bv">
+        <span class="chip on mono">2025-05</span><span class="hint">→</span><span class="chip on mono">2026-04</span>
+        <span class="hint">full range 2015-01 → 2026-04</span>
+      </div></div>
+
+    <div class="brow"><div class="bk">Filters<span class="kk">f</span></div>
+      <div class="bv">
+        <span class="chip on">origin_airport_id : 14057 <span class="x">×</span></span>
+        <span class="hint">PDX</span>
+        <span class="chip add">+ filter</span>
+      </div></div>
+
+    <div class="brow"><div class="bk">Sort · limit<span class="kk">s n</span></div>
+      <div class="bv">
+        <span class="chip on mono">seats ↓</span><span class="chip mono">50 rows</span>
+        <span class="chip add">+ compare entity</span>
+        <span class="hint">pin 2–5 entities to overlay on one chart</span>
+      </div></div>
+  </div>
+
+  <div class="perma">
+    <span class="pk">Permalink</span>
+    <code id="url"></code>
+    <span class="act">COPY</span>
+  </div>
+
+  <div class="rhead">
+    <div class="ctitle">Result</div>
+    <div class="csub" id="rsub"></div>
+    <span class="exp">CSV</span><span class="exp">PARQUET</span>
+  </div>
+
+  <table>
+    <colgroup><col style="width:74px"><col style="width:58px"><col style="width:140px">
+      <col style="width:96px"><col style="width:92px"><col style="width:92px"><col style="width:78px"><col style="width:70px"></colgroup>
+    <thead><tr>
+      <th>Month</th><th>Carrier</th><th>Aircraft type</th>
+      <th class="r"><span class="srt">↓</span> Seats</th><th class="r">Dep. performed</th>
+      <th class="r">Load factor</th><th class="r">Avg gauge</th><th></th>
+    </tr></thead>
+    <tbody id="tb"></tbody>
+  </table>
+
+  <div class="count" id="cnt"></div>
+  <div class="foot">
+    Load factor and average gauge are <b>derived</b> — dashed chips above — and are computed
+    from summed numerator and denominator at query time, so adding a dimension re-derives them
+    rather than averaging an average. Every row links to the raw filed rows behind it.
+  </div>
+</div>
+
+<script>
+const E = {"url": "v=1&k=seg&d=year_month,op_airline_id,aircraft_type&m=seats,departures_performed,load_factor,avg_gauge&t=2025-05:2026-04&f=origin_airport_id:14057&s=-seats&n=50&g=op", "dims": [{"key": "year_month", "label": "Month", "column_expr": "year_month", "grain": "both", "join_dim": "None", "join_key": "None"}, {"key": "quarter", "label": "Quarter", "column_expr": "quarter", "grain": "both", "join_dim": "None", "join_key": "None"}, {"key": "year", "label": "Year", "column_expr": "year", "grain": "both", "join_dim": "None", "join_key": "None"}, {"key": "op_airline_id", "label": "Carrier", "column_expr": "op_airline_id", "grain": "both", "join_dim": "dim_carrier", "join_key": "airline_id"}, {"key": "origin_airport_id", "label": "Origin", "column_expr": "origin_airport_id", "grain": "both", "join_dim": "dim_airport", "join_key": "airport_id"}, {"key": "dest_airport_id", "label": "Destination", "column_expr": "dest_airport_id", "grain": "both", "join_dim": "dim_airport", "join_key": "airport_id"}, {"key": "route", "label": "Route", "column_expr": "route_key_low, route_key_high", "grain": "both", "join_dim": "None", "join_key": "None"}, {"key": "origin_city_market_id", "label": "Origin market", "column_expr": "origin_city_market_id", "grain": "both", "join_dim": "dim_city_market", "join_key": "city_market_id"}, {"key": "dest_city_market_id", "label": "Dest market", "column_expr": "dest_city_market_id", "grain": "both", "join_dim": "dim_city_market", "join_key": "city_market_id"}, {"key": "origin_state", "label": "Origin state", "column_expr": "origin_state", "grain": "segment", "join_dim": "None", "join_key": "None"}, {"key": "dest_state", "label": "Dest state", "column_expr": "dest_state", "grain": "segment", "join_dim": "None", "join_key": "None"}, {"key": "aircraft_type", "label": "Aircraft type", "column_expr": "aircraft_type", "grain": "segment", "join_dim": "dim_aircraft_type", "join_key": "code"}, {"key": "aircraft_group", "label": "Aircraft group", "column_expr": "aircraft_group", "grain": "segment", "join_dim": "None", "join_key": "None"}, {"key": "distance_group", "label": "Distance group", "column_expr": "distance_group", "grain": "segment", "join_dim": "None", "join_key": "None"}], "meas": [{"key": "departures_scheduled", "label": "Dep. scheduled", "is_additive": "True", "expr": "SUM(departures_scheduled) FILTER (WHERE NOT is_quarantined)"}, {"key": "departures_performed", "label": "Dep. performed", "is_additive": "True", "expr": "SUM(departures_performed) FILTER (WHERE NOT is_quarantined)"}, {"key": "seats", "label": "Seats", "is_additive": "True", "expr": "SUM(seats) FILTER (WHERE NOT is_quarantined)"}, {"key": "passengers", "label": "Passengers", "is_additive": "True", "expr": "SUM(passengers) FILTER (WHERE NOT is_quarantined)"}, {"key": "freight", "label": "Freight", "is_additive": "True", "expr": "SUM(freight) FILTER (WHERE NOT is_quarantined)"}, {"key": "mail", "label": "Mail", "is_additive": "True", "expr": "SUM(mail) FILTER (WHERE NOT is_quarantined)"}, {"key": "air_time", "label": "Air time", "is_additive": "True", "expr": "SUM(air_time) FILTER (WHERE NOT is_quarantined)"}, {"key": "load_factor", "label": "Load factor", "is_additive": "False", "expr": "SUM(passengers) FILTER (WHERE NOT is_quarantined)::DOUBLE / NULLIF(SUM(seats) FILTER (WHERE NOT is_quarantined), 0)"}, {"key": "avg_gauge", "label": "Avg gauge", "is_additive": "False", "expr": "SUM(seats) FILTER (WHERE NOT is_quarantined)::DOUBLE / NULLIF(SUM(departures_performed) FILTER (WHERE NOT is_quarantined), 0)"}, {"key": "completion_factor", "label": "Completion", "is_additive": "False", "expr": "SUM(departures_performed) FILTER (WHERE NOT is_quarantined)::DOUBLE / NULLIF(SUM(departures_scheduled) FILTER (WHERE NOT is_quarantined), 0)"}, {"key": "asm", "label": "ASM", "is_additive": "False", "expr": "SUM(seats * distance) FILTER (WHERE NOT is_quarantined)"}, {"key": "rpm", "label": "RPM", "is_additive": "False", "expr": "SUM(passengers * distance) FILTER (WHERE NOT is_quarantined)"}], "rows": [{"ym": "2026-03", "cc": "AS", "at": "888", "tn": "B737-9ER", "seats": 128338.0, "dep": 721.0, "lf": 0.7830026960058595, "gauge": 178.0}, {"ym": "2025-12", "cc": "AS", "at": "839", "tn": "MAX 9", "seats": 124778.0, "dep": 701.0, "lf": 0.7985702607831509, "gauge": 178.0}, {"ym": "2026-04", "cc": "AS", "at": "888", "tn": "B737-9ER", "seats": 122464.0, "dep": 688.0, "lf": 0.7865740135876665, "gauge": 178.0}, {"ym": "2025-11", "cc": "AS", "at": "888", "tn": "B737-9ER", "seats": 121574.0, "dep": 683.0, "lf": 0.7807919456462731, "gauge": 178.0}, {"ym": "2025-10", "cc": "AS", "at": "888", "tn": "B737-9ER", "seats": 119082.0, "dep": 669.0, "lf": 0.8271359231453956, "gauge": 178.0}, {"ym": "2026-01", "cc": "AS", "at": "888", "tn": "B737-9ER", "seats": 119082.0, "dep": 669.0, "lf": 0.7269612535899632, "gauge": 178.0}, {"ym": "2025-12", "cc": "AS", "at": "888", "tn": "B737-9ER", "seats": 114454.0, "dep": 643.0, "lf": 0.8003739493595681, "gauge": 178.0}, {"ym": "2025-10", "cc": "AS", "at": "839", "tn": "MAX 9", "seats": 113386.0, "dep": 637.0, "lf": 0.836902263065987, "gauge": 178.0}, {"ym": "2026-03", "cc": "AS", "at": "839", "tn": "MAX 9", "seats": 112496.0, "dep": 632.0, "lf": 0.7812544446024747, "gauge": 178.0}, {"ym": "2025-11", "cc": "AS", "at": "839", "tn": "MAX 9", "seats": 112496.0, "dep": 632.0, "lf": 0.7797610581709572, "gauge": 178.0}, {"ym": "2026-04", "cc": "AS", "at": "839", "tn": "MAX 9", "seats": 111428.0, "dep": 626.0, "lf": 0.77502961553649, "gauge": 178.0}, {"ym": "2025-07", "cc": "QX", "at": "673", "tn": "ERJ-175", "seats": 108832.0, "dep": 1432.0, "lf": 0.85545611584828, "gauge": 76.0}]};
+document.getElementById('url').textContent = 'upgauge.shipman.dev/explore?' + E.url;
+
+const ACTIVE_D = ["year_month","op_airline_id","aircraft_type"];
+const ACTIVE_M = ["seats","departures_performed","load_factor","avg_gauge"];
+const DERIVED  = new Set(["load_factor","avg_gauge","asm","rpm","completion_factor"]);
+
+document.getElementById('dims').innerHTML =
+  E.dims.map(d=>`<span class="chip ${ACTIVE_D.includes(d.key)?'on':''}" title="${d.key}">${d.label}${
+    ACTIVE_D.includes(d.key)?' <span class="x">×</span>':''}</span>`).join('')
+  + `<span class="chip add">+ dimension</span>`;
+
+document.getElementById('meas').innerHTML =
+  E.meas.map(m=>`<span class="chip ${ACTIVE_M.includes(m.key)?'on':''} ${DERIVED.has(m.key)?'derived':''}"
+     title="${m.expr}">${m.label}${ACTIVE_M.includes(m.key)?' <span class="x">×</span>':''}</span>`).join('')
+  + `<span class="chip add">+ measure</span>`;
+
+const n0=v=>Math.round(v).toLocaleString('en-US');
+document.getElementById('tb').innerHTML = E.rows.map(r=>`<tr>
+  <td class="mn">${r.ym}</td><td class="mn">${r.cc}</td>
+  <td>${r.tn} <span style="color:var(--ink-3)" class="mono">${r.at}</span></td>
+  <td class="num">${n0(r.seats)}</td><td class="num">${n0(r.dep)}</td>
+  <td class="num">${(r.lf*100).toFixed(2)}%</td><td class="num">${r.gauge.toFixed(1)}</td>
+  <td><span class="drill">rows →</span></td></tr>`).join('');
+
+document.getElementById('rsub').textContent =
+  `${E.rows.length} of 50 shown · segment grain · operating carrier`;
+document.getElementById('cnt').textContent =
+  '0 quarantined rows excluded from this result.';
+</script>
+</body>
+</html>

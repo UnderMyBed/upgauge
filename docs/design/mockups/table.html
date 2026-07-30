@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upgauge — merged system v1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  /* ---- surface ---- */
+  --panel:#F0F2F1;       /* instrument panel */
+  --panel-2:#E5E8E6;     /* zone band / hover */
+  --field:#FAFBFA;       /* input + raised */
+  --ink:#15181A;
+  --ink-2:#5C6367;
+  --ink-3:#666E71;
+  --rule:#D6DAD8;        /* hairline */
+  --rule-2:#828A8B;      /* engraved */
+  /* ---- the only two colors, and each has one job ---- */
+  --signal:#0B6E63;      /* chrome that means "this is the instrument": DATA AS OF, links, focus */
+  --limit:#A8322A;       /* OUT OF LIMIT ONLY: quarantined, zero-pax, failed invariant. Never decorative. */
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--panel);color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,"Adwaita Sans","Noto Sans",sans-serif;
+  font-size:13px;line-height:1.35;-webkit-font-smoothing:antialiased}
+.num{font-family:"IBM Plex Mono",ui-monospace,"Adwaita Mono","Liberation Mono",monospace;
+  font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;text-align:right;white-space:nowrap}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+.fontwarn{display:none;background:var(--limit);color:#fff;padding:6px 10px;font-size:12px}
+.wrap{max-width:1200px;margin:0 auto;padding:0 20px 50px}
+a{color:var(--signal)}
+:focus-visible{outline:2px solid var(--signal);outline-offset:1px}
+
+/* ---------- header ---------- */
+.top{display:flex;align-items:center;gap:16px;padding:11px 0 10px;border-bottom:1px solid var(--ink)}
+.mark{font-weight:600;font-size:16px;letter-spacing:.17em;text-transform:uppercase;white-space:nowrap}
+.mark span{color:var(--signal)}
+.omni{flex:1;background:var(--field);border:1px solid var(--rule-2);padding:4px 9px;color:var(--ink-3);font-size:12.5px}
+.asof{font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600;letter-spacing:.09em;
+  color:var(--signal);border:1px solid var(--signal);padding:3px 7px;white-space:nowrap}
+
+/* ---------- entity block ---------- */
+.entity{display:flex;align-items:baseline;gap:11px;padding:15px 0 8px}
+.code{font-family:"IBM Plex Mono",monospace;font-size:34px;font-weight:600;letter-spacing:.01em;line-height:1}
+.ename{font-size:13px;color:var(--ink-2)}
+.stats{display:flex;flex-wrap:wrap;gap:22px;padding:7px 0 7px;
+  border-top:1px solid var(--rule-2);border-bottom:1px solid var(--rule-2)}
+.stat .k{font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-2);white-space:nowrap}
+.stat .v{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;
+  font-size:20px;font-weight:500;letter-spacing:-.01em;line-height:1.25}
+.stat .v small{font-size:10.5px;color:var(--ink-2);font-weight:400;letter-spacing:0}
+.deriv{border-bottom:1px dotted var(--ink-3)}
+.window{font-size:11px;color:var(--ink-2);padding:6px 0 12px}
+
+/* ---------- body: table + legend rail ---------- */
+.body{display:grid;grid-template-columns:minmax(0,1fr) 214px;gap:24px;align-items:start}
+@media(max-width:920px){.body{grid-template-columns:1fr}.legend{position:static!important}}
+
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+thead th{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2);
+  font-weight:500;text-align:left;padding:0 10px 5px 0;border-bottom:1px solid var(--ink);vertical-align:bottom}
+thead th.r{text-align:right}
+tbody td{padding:0 10px 0 0;border-bottom:1px solid var(--rule);height:22px;font-size:12.5px}
+tbody tr:hover td{background:var(--panel-2)}
+.pair{font-family:"IBM Plex Mono",monospace;font-weight:500;letter-spacing:.01em}
+.cc{font-family:"IBM Plex Mono",monospace;font-weight:600}
+.spark{width:72px;height:14px;display:block}
+
+/* reason-code gutter (from C) — the caveat is a column, not a tooltip */
+.gut,th.gut{width:22px;padding-right:6px!important;text-align:center;
+  font-family:"IBM Plex Mono",monospace;font-size:10px;font-weight:600;color:var(--limit)}
+.gut .nl{color:var(--ink-2)}
+
+/* the gauge rail (from B) — fixed axis, position not hue */
+.railhead{position:relative;height:13px}
+.railhead .lbl{position:absolute;top:3px;font-family:"IBM Plex Mono",monospace;font-size:8.5px;
+  color:var(--ink-3);transform:translateX(-50%)}
+.rail{position:relative;height:22px}
+.rail .band{position:absolute;top:2px;bottom:2px;background:var(--panel-2)}
+.rail .grid{position:absolute;top:5px;bottom:5px;width:1px;background:var(--rule)}
+.rail .tick{position:absolute;top:4px;height:14px;width:2px;background:var(--ink);transform:translateX(-1px)}
+tr.thin .rail .tick{width:1px;background:var(--ink-3)}
+
+tr.thin td{color:var(--ink-2);border-bottom:1px dashed var(--rule-2)}
+tr.thin .pair{font-weight:400}
+.sep td{border-bottom:0;height:auto;padding-top:12px;padding-bottom:3px;
+  font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-2)}
+
+/* ---------- SIGNATURE: legend rail (from A), absorbing C's codes ---------- */
+.legend{border:1px solid var(--ink);background:var(--field);position:sticky;top:10px}
+.legend h4{margin:0;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+  background:var(--ink);color:var(--panel);padding:4px 9px;font-weight:500}
+.legend .grp{padding:8px 9px 6px;border-bottom:1px solid var(--rule)}
+.legend .grp:last-child{border-bottom:0}
+.legend .gt{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);margin-bottom:5px}
+.lrow{display:flex;align-items:baseline;gap:7px;margin-bottom:4px;font-size:11px;color:var(--ink-2)}
+.lrow .g{flex:0 0 40px;text-align:center}
+.lrow b{font-family:"IBM Plex Mono",monospace;font-weight:600;color:var(--limit);flex:0 0 40px;text-align:center}
+.lrow b.k{color:var(--ink)}
+.foot{margin-top:16px;padding-top:9px;border-top:1px solid var(--rule);font-size:11px;color:var(--ink-2);max-width:660px}
+</style>
+</head>
+<body>
+<div class="fontwarn" id="fw">IBM Plex did not load — shown in fallback faces.</div>
+<div class="wrap">
+
+  <div class="top">
+    <div class="mark">UP<span>GAUGE</span></div>
+    <div class="omni">PDX &nbsp;·&nbsp; try: A220 · Alaska · PDX-AUS · Portland</div>
+    <div class="asof">DATA AS OF 2026-04</div>
+  </div>
+
+  <div class="entity">
+    <div class="code">PDX</div>
+    <div class="ename">Portland International · Portland, OR</div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="k">Seats</div><div class="v">21,404,561</div></div>
+    <div class="stat"><div class="k"><span class="deriv">Load factor</span></div><div class="v">82.15<small>%</small></div></div>
+    <div class="stat"><div class="k"><span class="deriv">Avg gauge</span></div><div class="v">137.3<small> seats/dep</small></div></div>
+    <div class="stat"><div class="k">Departures</div><div class="v">155,902</div></div>
+    <div class="stat"><div class="k">Destinations</div><div class="v">118</div></div>
+    <div class="stat"><div class="k">Quarantined</div><div class="v">0</div></div>
+  </div>
+  <div class="window">Trailing 12 months · 2025-05 → 2026-04 · operating carrier is the grain · quarantined rows excluded from totals</div>
+
+  <div class="body">
+    <div>
+      <table>
+        <colgroup>
+          <col style="width:22px"><col style="width:104px"><col style="width:52px">
+          <col style="width:88px"><col style="width:86px"><col style="width:60px"><col style="width:58px">
+          <col><col style="width:80px">
+        </colgroup>
+        <thead>
+          <tr>
+            <th class="gut"></th><th>Route</th><th>Carrier</th>
+            <th class="r">Seats</th><th class="r">Load factor</th>
+            <th class="r">Gauge</th><th class="r">Dep.</th>
+            <th>Gauge, seats per departure<div class="railhead" id="rh"></div></th>
+            <th>Seats, monthly</th>
+          </tr>
+        </thead>
+        <tbody id="tb"></tbody>
+      </table>
+      <div class="foot">
+        <span class="deriv">Load factor</span> and <span class="deriv">gauge</span> are computed
+        at query time from summed passengers, seats and performed departures — never averaged
+        from monthly values.
+      </div>
+    </div>
+
+    <aside class="legend">
+      <h4>Chart legend</h4>
+      <div class="grp">
+        <div class="gt">Gauge rail</div>
+        <div class="lrow"><span class="g"><svg width="40" height="10"><rect x="0" y="2" width="40" height="6" fill="#E5E8E6"/><rect x="7" y="0" width="2" height="10" fill="#15181A"/></svg></span><em>one tick, fixed 0–260 axis</em></div>
+        <div class="lrow"><span class="g mono" style="font-size:9px">&lt;110</span><em>regional metal</em></div>
+        <div class="lrow"><span class="g mono" style="font-size:9px">&gt;210</span><em>widebody</em></div>
+      </div>
+      <div class="grp">
+        <div class="gt">Row marks</div>
+        <div class="lrow"><b>⌀</b><em>flew, carried no passengers</em></div>
+        <div class="lrow"><b class="k">n</b><em>below the 30-departure floor</em></div>
+        <div class="lrow"><b>Q</b><em>quarantined — failed an invariant</em></div>
+        <div class="lrow"><span class="g" style="border-bottom:1px dotted #666E71">abc</span><em>computed measure</em></div>
+      </div>
+      <div class="grp">
+        <div class="gt">Arc rendering (maps)</div>
+        <div class="lrow"><span class="g"><svg width="40" height="8"><line x1="1" y1="4" x2="39" y2="4" stroke="#15181A" stroke-width="4"/></svg></span><em>seats — weight</em></div>
+        <div class="lrow"><span class="g"><svg width="40" height="8"><line x1="1" y1="4" x2="39" y2="4" stroke="#15181A" stroke-width="2" stroke-dasharray="5 3"/></svg></span><em>load factor &lt; 70%</em></div>
+        <div class="lrow"><span class="g"><svg width="40" height="8"><line x1="1" y1="4" x2="39" y2="4" stroke="#666E71" stroke-width="1" stroke-dasharray="1 3"/></svg></span><em>below floor</em></div>
+      </div>
+      <div class="grp">
+        <div class="gt">Reading this</div>
+        <div class="lrow"><em>Operating carrier is the grain: a Delta-branded regional files under its own code, not DL. Summing carriers does not double-count.</em></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+const ROWS = [
+{dest:"DFW",cc:"AA",seats:706767,lf:0.8998,gauge:190.4,dep:3712,ser:[58349,62538,62666,66682,56234,64830,57578,60694,48268,49954,57982,60992]},
+{dest:"LAX",cc:"AS",seats:668589,lf:0.7804,gauge:171.5,dep:3898,ser:[61663,62859,63608,62969,56395,54876,56098,60785,51083,44245,47675,46333]},
+{dest:"DEN",cc:"UA",seats:625166,lf:0.8691,gauge:173.1,dep:3611,ser:[50819,56296,58565,61989,60523,60966,46899,48218,42467,41415,48977,48032]},
+{dest:"SAN",cc:"AS",seats:569879,lf:0.8302,gauge:174.0,dep:3275,ser:[49469,50864,51621,50041,44938,48215,49704,52711,45208,36527,44814,45767]},
+{dest:"SLC",cc:"DL",seats:554250,lf:0.8566,gauge:165.2,dep:3356,ser:[47939,50005,51901,49368,46292,50111,45140,47222,37104,37188,45884,46096]},
+{dest:"DEN",cc:"WN",seats:538859,lf:0.8806,gauge:169.0,dep:3189,ser:[49103,52612,55318,49927,49133,49421,45684,45891,35297,33244,36219,37010]},
+{dest:"LAS",cc:"AS",seats:524370,lf:0.8600,gauge:173.5,dep:3022,ser:[40840,38651,40388,43969,45917,46934,46099,46088,40716,39643,50264,44861]},
+{dest:"SFO",cc:"UA",seats:522495,lf:0.8129,gauge:159.9,dep:3268,ser:[47160,43398,37924,48832,52937,62509,52692,41076,34646,32365,32952,36004]},
+{dest:"SEA",cc:"OO",seats:501089,lf:0.7782,gauge:73.6,dep:6810,ser:[44114,44400,46660,48032,48342,50396,42080,38289,38552,31260,33946,35018]},
+{dest:"SNA",cc:"AS",seats:486465,lf:0.8402,gauge:159.4,dep:3052,ser:[39315,36263,36894,41342,46836,44971,45519,46982,37035,33954,39611,37743]},
+{sep:"Below the 30-departure floor — reported, never scored or ranked"},
+{dest:"PDX",cc:"OO",seats:2780,lf:0.0000,gauge:73.2,dep:38,thin:1,code:"⌀",ser:[76,152,444,434,146,520,146,293,217,287,65]},
+{dest:"SEA",cc:"HA",seats:489,lf:0.6605,gauge:244.5,dep:2,thin:1,code:"n",ser:[189,300]},
+{dest:"AUS",cc:"AA",seats:190,lf:0.9789,gauge:190.0,dep:1,thin:1,code:"n",ser:[190]},
+];
+const GMAX=260, TICKS=[0,50,100,150,200,250];
+document.getElementById('rh').innerHTML =
+  TICKS.map(v=>`<div class="lbl" style="left:${(v/GMAX)*100}%">${v}</div>`).join('');
+function rail(g){
+  const grids=TICKS.slice(1).map(v=>`<div class="grid" style="left:${(v/GMAX)*100}%"></div>`).join('');
+  const bands=`<div class="band" style="left:0;width:${(110/GMAX)*100}%"></div>`
+             +`<div class="band" style="left:${(210/GMAX)*100}%;right:0"></div>`;
+  return `<div class="rail">${bands}${grids}<div class="tick" style="left:${(g/GMAX)*100}%"></div></div>`;
+}
+function spark(ser,thin){
+  if(ser.length<2) return '<svg class="spark" viewBox="0 0 72 14"><circle cx="36" cy="7" r="1.6" fill="#666E71"/></svg>';
+  const mx=Math.max(...ser),mn=Math.min(...ser),rg=(mx-mn)||1;
+  const pts=ser.map((v,i)=>[(i/(ser.length-1))*70+1,12-((v-mn)/rg)*10].map(n=>n.toFixed(1)).join(',')).join(' ');
+  return `<svg class="spark" viewBox="0 0 72 14"><polyline points="${pts}" fill="none" stroke="${thin?'#666E71':'#15181A'}" stroke-width="1.2" stroke-linejoin="round"/></svg>`;
+}
+const n0=v=>v.toLocaleString('en-US'),pc=v=>(v*100).toFixed(2),g1=v=>v.toFixed(1);
+document.getElementById('tb').innerHTML = ROWS.map(r=>{
+  if(r.sep) return `<tr class="sep"><td class="gut"></td><td colspan="8">${r.sep}</td></tr>`;
+  return `<tr class="${r.thin?'thin':''}">
+    <td class="gut">${r.code?(r.code==="n"?`<span class="nl">n</span>`:r.code):""}</td>
+    <td class="pair">PDX–${r.dest}</td>
+    <td class="cc">${r.cc}</td>
+    <td class="num">${n0(r.seats)}</td>
+    <td class="num">${pc(r.lf)}%</td>
+    <td class="num">${g1(r.gauge)}</td>
+    <td class="num">${n0(r.dep)}</td>
+    <td>${rail(r.gauge)}</td>
+    <td>${spark(r.ser,r.thin)}</td></tr>`;
+}).join('');
+document.fonts.ready.then(()=>{ if(!document.fonts.check('12px "IBM Plex Mono"')) document.getElementById('fw').style.display='block'; });
+</script>
+</body>
+</html>

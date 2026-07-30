@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Upgauge — /route/PDX-DFW</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --panel:#F0F2F1; --panel-2:#E5E8E6; --field:#FAFBFA;
+  --ink:#15181A; --ink-2:#5C6367; --ink-3:#666E71;
+  --rule:#D6DAD8; --rule-2:#828A8B;
+  --signal:#0B6E63; --limit:#A8322A;
+  /* fleet ramp — ORDERED BY GAUGE, light = small metal, dark = large metal */
+  --g1:#C8D3D1; --g2:#A6B7B4; --g3:#7E9793; --g4:#4F736E; --g5:#21514A; --g0:#E3E7E6;
+}
+*{box-sizing:border-box} html,body{margin:0}
+body{background:var(--panel);color:var(--ink);
+  font-family:"IBM Plex Sans",system-ui,"Adwaita Sans",sans-serif;font-size:13px;line-height:1.35;
+  -webkit-font-smoothing:antialiased}
+.num{font-family:"IBM Plex Mono",ui-monospace,"Adwaita Mono",monospace;
+  font-variant-numeric:tabular-nums;font-feature-settings:"tnum" 1;text-align:right;white-space:nowrap}
+.mono{font-family:"IBM Plex Mono",ui-monospace,monospace}
+.wrap{max-width:1200px;margin:0 auto;padding:0 20px 50px}
+:focus-visible{outline:2px solid var(--signal);outline-offset:1px}
+
+.top{display:flex;align-items:center;gap:16px;padding:11px 0 10px;border-bottom:1px solid var(--ink)}
+.mark{font-weight:600;font-size:16px;letter-spacing:.17em;text-transform:uppercase;white-space:nowrap}
+.mark span{color:var(--signal)}
+.omni{flex:1;background:var(--field);border:1px solid var(--rule-2);padding:4px 9px;color:var(--ink-3);font-size:12.5px}
+.asof{font-family:"IBM Plex Mono",monospace;font-size:11px;font-weight:600;letter-spacing:.09em;
+  color:var(--signal);border:1px solid var(--signal);padding:3px 7px;white-space:nowrap}
+
+.entity{display:flex;align-items:baseline;gap:11px;padding:15px 0 8px;flex-wrap:wrap}
+.code{font-family:"IBM Plex Mono",monospace;font-size:34px;font-weight:600;line-height:1}
+.ename{font-size:13px;color:var(--ink-2)}
+.tag{font-family:"IBM Plex Mono",monospace;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;
+  border:1px solid var(--rule-2);color:var(--ink-2);padding:1px 5px}
+.stats{display:flex;flex-wrap:wrap;gap:22px;padding:7px 0;border-top:1px solid var(--rule-2);border-bottom:1px solid var(--rule-2)}
+.stat .k{font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-2);white-space:nowrap}
+.stat .v{font-family:"IBM Plex Mono",monospace;font-variant-numeric:tabular-nums;font-size:20px;font-weight:500;line-height:1.25}
+.stat .v small{font-size:10.5px;color:var(--ink-2);font-weight:400}
+.deriv{border-bottom:1px dotted var(--ink-3)}
+.window{font-size:11px;color:var(--ink-2);padding:6px 0 14px}
+
+.body{display:grid;grid-template-columns:minmax(0,1fr) 214px;gap:24px;align-items:start}
+@media(max-width:920px){.body{grid-template-columns:1fr}.legend{position:static!important}}
+
+/* ---- chart block ---- */
+.chart{margin-bottom:22px}
+.chead{display:flex;align-items:baseline;gap:10px;border-bottom:1px solid var(--ink);padding-bottom:4px;margin-bottom:7px}
+.ctitle{font-size:11px;letter-spacing:.13em;text-transform:uppercase;font-weight:500}
+.csub{font-size:11px;color:var(--ink-2);flex:1}
+.toggle{display:flex;border:1px solid var(--rule-2);font-family:"IBM Plex Mono",monospace;font-size:9.5px;letter-spacing:.08em}
+.toggle b{padding:2px 7px;font-weight:500;color:var(--ink-2);border-right:1px solid var(--rule-2);cursor:pointer}
+.toggle b:last-child{border-right:0}
+.toggle b.on{background:var(--ink);color:var(--panel)}
+.ckey{display:flex;flex-wrap:wrap;gap:12px;margin-top:5px;font-size:10.5px;color:var(--ink-2);align-items:center}
+.ckey i{display:inline-block;width:10px;height:9px;margin-right:4px;vertical-align:-1px}
+.ckey .gnum{font-family:"IBM Plex Mono",monospace;color:var(--ink-3);font-size:9.5px}
+svg.plot{display:block;width:100%;height:auto}
+.axl{font-family:"IBM Plex Mono",monospace;font-size:8.5px;fill:var(--ink-3)}
+.annot{font-size:10px;fill:var(--ink-2)}
+.annot b{font-weight:600;fill:var(--ink)}
+
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+thead th{font-size:9.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-2);
+  font-weight:500;text-align:left;padding:0 10px 5px 0;border-bottom:1px solid var(--ink);vertical-align:bottom}
+thead th.r{text-align:right}
+tbody td{padding:0 10px 0 0;border-bottom:1px solid var(--rule);height:22px;font-size:12.5px}
+tbody tr:hover td{background:var(--panel-2)}
+.pair{font-family:"IBM Plex Mono",monospace;font-weight:500}
+.cc{font-family:"IBM Plex Mono",monospace;font-weight:600}
+.gut,th.gut{width:22px;padding-right:6px!important;text-align:center;
+  font-family:"IBM Plex Mono",monospace;font-size:10px;font-weight:600;color:var(--limit)}
+.gut .nl{color:var(--ink-2)}
+.railhead{position:relative;height:13px}
+.railhead .lbl{position:absolute;top:3px;font-family:"IBM Plex Mono",monospace;font-size:8.5px;color:var(--ink-3);transform:translateX(-50%)}
+.rail{position:relative;height:22px}
+.rail .grid{position:absolute;top:5px;bottom:5px;width:1px;background:var(--rule)}
+.rail .tick{position:absolute;top:4px;height:14px;width:2px;background:var(--ink);transform:translateX(-1px)}
+tr.thin td{color:var(--ink-2);border-bottom:1px dashed var(--rule-2)}
+tr.thin .rail .tick{width:1px;background:var(--ink-3)}
+
+.legend{border:1px solid var(--ink);background:var(--field);position:sticky;top:10px}
+.legend h4{margin:0;font-size:9.5px;letter-spacing:.16em;text-transform:uppercase;
+  background:var(--ink);color:var(--panel);padding:4px 9px;font-weight:500}
+.legend .grp{padding:8px 9px 6px;border-bottom:1px solid var(--rule)}
+.legend .grp:last-child{border-bottom:0}
+.legend .gt{font-size:9px;letter-spacing:.13em;text-transform:uppercase;color:var(--ink-3);margin-bottom:5px}
+.lrow{display:flex;align-items:baseline;gap:7px;margin-bottom:4px;font-size:11px;color:var(--ink-2)}
+.lrow .g{flex:0 0 40px;text-align:center}
+.lrow b{font-family:"IBM Plex Mono",monospace;font-weight:600;color:var(--limit);flex:0 0 40px;text-align:center}
+.lrow b.k{color:var(--ink)}
+.lrow span.t{flex:1}
+.foot{margin-top:14px;padding-top:9px;border-top:1px solid var(--rule);font-size:11px;color:var(--ink-2)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div class="mark">UP<span>GAUGE</span></div>
+    <div class="omni">PDX-DFW &nbsp;·&nbsp; try: A220 · Alaska · PDX-AUS · Portland</div>
+    <div class="asof">DATA AS OF 2026-04</div>
+  </div>
+
+  <div class="entity">
+    <div class="code">PDX–DFW</div>
+    <div class="ename">Portland International ↔ Dallas/Fort Worth</div>
+    <span class="tag">Undirected</span><span class="tag">1,616 mi</span>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="k">Seats</div><div class="v">893,185</div></div>
+    <div class="stat"><div class="k"><span class="deriv">Load factor</span></div><div class="v">88.82<small>%</small></div></div>
+    <div class="stat"><div class="k"><span class="deriv">Avg gauge</span></div><div class="v">186.7<small> seats/dep</small></div></div>
+    <div class="stat"><div class="k">Departures</div><div class="v">4,785</div></div>
+    <div class="stat"><div class="k">Carriers</div><div class="v">4</div></div>
+    <div class="stat"><div class="k">Quarantined</div><div class="v">0</div></div>
+  </div>
+  <div class="window">Trailing 12 months · 2025-05 → 2026-04 · charts show the full window, 2015-01 → 2026-04</div>
+
+  <div class="body">
+    <div>
+      <!-- CHART 1 — built before load factor, on purpose -->
+      <div class="chart">
+        <div class="chead">
+          <div class="ctitle">Seats by aircraft type</div>
+          <div class="csub">American Airlines · monthly · shaded by gauge</div>
+          <div class="toggle"><b class="on">Seats</b><b>Share</b></div>
+        </div>
+        <svg class="plot" id="mix" viewBox="0 0 960 210" preserveAspectRatio="none" role="img"
+             aria-label="Stacked area of seats by aircraft type, 2015 to 2026"></svg>
+        <div class="ckey" id="mixkey"></div>
+      </div>
+
+      <!-- CHART 2 -->
+      <div class="chart">
+        <div class="chead">
+          <div class="ctitle">Load factor by carrier</div>
+          <div class="csub">operating carrier · <span class="deriv">computed</span> per window</div>
+          <div class="toggle"><b>Month</b><b class="on">Rolling 12</b></div>
+        </div>
+        <svg class="plot" id="lf" viewBox="0 0 960 170" preserveAspectRatio="none" role="img"
+             aria-label="Load factor by carrier over time"></svg>
+        <div class="ckey"><span>Carriers are told apart by line weight and dash, never by hue — the chart survives grayscale and a screenshot.</span></div>
+      </div>
+
+      <!-- TABLE -->
+      <div class="chart">
+        <div class="chead"><div class="ctitle">Carriers on this route</div>
+          <div class="csub">trailing 12 months</div></div>
+        <table>
+          <colgroup><col style="width:22px"><col style="width:150px"><col style="width:92px">
+            <col style="width:92px"><col style="width:66px"><col style="width:64px"><col></colgroup>
+          <thead><tr><th class="gut"></th><th>Carrier</th>
+            <th class="r">Seats</th><th class="r">Load factor</th>
+            <th class="r">Gauge</th><th class="r">Dep.</th>
+            <th>Gauge, seats per departure<div class="railhead" id="rh"></div></th></tr></thead>
+          <tbody id="tb"></tbody>
+        </table>
+        <div class="foot">Rows below the 30-departure floor are reported and never ranked.
+          American's A321neo share reached 24% of seats in 2024 — the upgauge this route's
+          gauge number is made of.</div>
+      </div>
+    </div>
+
+    <aside class="legend">
+      <h4>Chart legend</h4>
+      <div class="grp">
+        <div class="gt">Fleet shading</div>
+        <div class="lrow"><span class="g"><svg width="40" height="9"><rect width="40" height="9" fill="#C8D3D1"/></svg></span><span class="t">smaller metal</span></div>
+        <div class="lrow"><span class="g"><svg width="40" height="9"><rect width="40" height="9" fill="#21514A"/></svg></span><span class="t">larger metal</span></div>
+        <div class="lrow"><span class="t">One ramp, ordered by seats per departure — an upgauge darkens the stack.</span></div>
+      </div>
+      <div class="grp">
+        <div class="gt">Series</div>
+        <div class="lrow"><span class="g"><svg width="40" height="8"><line x1="1" y1="4" x2="39" y2="4" stroke="#15181A" stroke-width="2.2"/></svg></span><span class="t">largest carrier</span></div>
+        <div class="lrow"><span class="g"><svg width="40" height="8"><line x1="1" y1="4" x2="39" y2="4" stroke="#15181A" stroke-width="1.1"/></svg></span><span class="t">second</span></div>
+        <div class="lrow"><span class="g"><svg width="40" height="8"><line x1="1" y1="4" x2="39" y2="4" stroke="#5C6367" stroke-width="1.1" stroke-dasharray="4 3"/></svg></span><span class="t">third</span></div>
+        <div class="lrow"><span class="g"><svg width="40" height="8"><line x1="1" y1="4" x2="39" y2="4" stroke="#666E71" stroke-width="1" stroke-dasharray="1 3"/></svg></span><span class="t">below floor</span></div>
+      </div>
+      <div class="grp">
+        <div class="gt">Row marks</div>
+        <div class="lrow"><b>⌀</b><span class="t">flew, carried no passengers</span></div>
+        <div class="lrow"><b class="k">n</b><span class="t">below the 30-departure floor</span></div>
+        <div class="lrow"><b>Q</b><span class="t">quarantined — failed an invariant</span></div>
+      </div>
+      <div class="grp">
+        <div class="gt">Reading this</div>
+        <div class="lrow"><span class="t">Operating carrier is the grain. Summing carriers on a route does not double-count.</span></div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<script>
+const DATA = {"months": ["2015-01", "2015-02", "2015-03", "2015-04", "2015-05", "2015-06", "2015-07", "2015-08", "2015-09", "2015-10", "2015-11", "2015-12", "2016-01", "2016-02", "2016-03", "2016-04", "2016-05", "2016-06", "2016-07", "2016-08", "2016-09", "2016-10", "2016-11", "2016-12", "2017-01", "2017-02", "2017-03", "2017-04", "2017-05", "2017-06", "2017-07", "2017-08", "2017-09", "2017-10", "2017-11", "2017-12", "2018-01", "2018-02", "2018-03", "2018-04", "2018-05", "2018-06", "2018-07", "2018-08", "2018-09", "2018-10", "2018-11", "2018-12", "2019-01", "2019-02", "2019-03", "2019-04", "2019-05", "2019-06", "2019-07", "2019-08", "2019-09", "2019-10", "2019-11", "2019-12", "2020-01", "2020-02", "2020-03", "2020-04", "2020-05", "2020-06", "2020-07", "2020-08", "2020-09", "2020-10", "2020-11", "2020-12", "2021-01", "2021-02", "2021-03", "2021-04", "2021-05", "2021-06", "2021-07", "2021-08", "2021-09", "2021-10", "2021-11", "2021-12", "2022-01", "2022-02", "2022-03", "2022-04", "2022-05", "2022-06", "2022-07", "2022-08", "2022-09", "2022-10", "2022-11", "2022-12", "2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06", "2023-07", "2023-08", "2023-09", "2023-10", "2023-11", "2023-12", "2024-01", "2024-02", "2024-03", "2024-04", "2024-05", "2024-06", "2024-07", "2024-08", "2024-09", "2024-10", "2024-11", "2024-12", "2025-01", "2025-02", "2025-03", "2025-04", "2025-05", "2025-06", "2025-07", "2025-08", "2025-09", "2025-10", "2025-11", "2025-12", "2026-01", "2026-02", "2026-03", "2026-04"], "mix": [{"code": "699", "name": "A321/LR", "v": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4675.0, 5049.0, 4862.0, 4675.0, 4862.0, 5598.0, 5423.0, 5423.0, 5236.0, 5797.0, 5610.0, 5984.0, 5423.0, 5423.0, 5797.0, 5610.0, 5797.0, 10098.0, 11033.0, 9314.0, 6310.0, 7420.0, 20421.0, 32210.0, 32477.0, 32580.0, 32399.0, 21901.0, 22082.0, 21720.0, 25702.0, 24447.0, 20453.0, 22263.0, 11234.0, 29503.0, 30046.0, 12320.0, 18824.0, 12314.0, 11047.0, 24253.0, 28754.0, 14528.0, 10136.0, 9231.0, 6154.0, 2353.0, 0, 15047.0, 19566.0, 4199.0, 0, 0, 0, 0, 0, 9484.0, 0, 0, 49429.0, 54239.0, 50258.0, 50048.0, 45876.0, 40263.0, 45085.0, 36037.0, 26600.0, 34580.0, 43700.0, 46740.0, 56050.0, 62700.0, 60420.0, 56050.0, 47310.0, 44270.0, 47500.0, 39330.0, 42560.0, 50920.0, 45410.0, 49970.0, 53770.0, 56050.0, 51110.0, 48450.0, 53390.0, 43700.0, 43700.0, 28310.0, 27360.0, 32300.0, 37238.0, 40850.0, 43320.0, 55100.0, 52250.0, 53770.0, 55290.0, 33820.0, 41230.0, 37620.0, 34769.0, 41800.0, 37050.0, 43510.0, 47120.0, 47690.0, 58710.0, 49020.0, 60800.0, 41040.0, 40090.0, 35150.0, 37050.0, 39710.0, 45030.0]}, {"code": "614", "name": "B737-8", "v": [0, 0, 320.0, 0, 0, 40550.0, 46140.0, 45780.0, 39620.0, 36450.0, 34860.0, 32920.0, 31000.0, 25250.0, 35980.0, 33740.0, 37440.0, 40480.0, 43040.0, 41280.0, 39680.0, 33600.0, 35840.0, 37120.0, 25920.0, 22400.0, 33120.0, 33120.0, 34720.0, 42240.0, 43680.0, 44320.0, 34400.0, 32160.0, 30400.0, 33440.0, 25760.0, 21120.0, 31520.0, 19840.0, 15040.0, 17760.0, 19200.0, 19692.0, 24160.0, 17760.0, 16196.0, 17500.0, 10584.0, 9696.0, 14396.0, 23836.0, 14472.0, 14976.0, 32708.0, 30138.0, 25340.0, 27640.0, 14880.0, 8640.0, 17280.0, 18128.0, 16932.0, 11920.0, 24020.0, 29212.0, 19680.0, 17708.0, 38568.0, 38056.0, 34920.0, 35236.0, 26292.0, 18748.0, 21672.0, 23048.0, 37496.0, 2924.0, 344.0, 0, 0, 2752.0, 344.0, 0, 0, 0, 344.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2752.0, 0, 0, 0, 6020.0, 1892.0, 0, 1032.0, 688.0, 2924.0, 2064.0, 0, 0, 1720.0, 344.0, 0, 0, 0, 0, 344.0, 1204.0, 0, 1032.0, 1720.0, 3096.0, 688.0, 0, 0, 0, 5504.0, 1548.0, 1892.0, 3096.0, 688.0, 1376.0, 2064.0, 1720.0]}, {"code": "721", "name": "A321NEO", "v": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 392.0, 0, 784.0, 784.0, 0, 0, 784.0, 0, 0, 0, 0, 0, 392.0, 392.0, 0, 392.0, 0, 0, 0, 0, 0, 196.0, 0, 588.0, 0, 784.0, 0, 10192.0, 12544.0, 18032.0, 20776.0, 23716.0, 11956.0, 11564.0, 21946.0, 13132.0, 12152.0, 1372.0, 392.0, 18424.0, 17634.0, 13720.0, 11736.0, 12728.0, 14676.0, 13880.0, 15418.0, 14676.0, 7328.0, 1710.0, 2482.0, 14646.0, 17508.0, 12086.0, 11528.0, 16208.0, 14242.0]}, {"code": "655", "name": "MD-80", "v": [25760.0, 20720.0, 23660.0, 24920.0, 32480.0, 3080.0, 0, 0, 0, 0, 0, 0, 0, 2240.0, 0, 0, 560.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"code": "694", "name": "A320-1/2", "v": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2850.0, 1200.0, 0, 1200.0, 0, 0, 150.0, 0, 1800.0, 600.0, 0, 0, 0, 0, 0, 0, 0, 0, 300.0, 300.0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"code": "OTH", "name": "Other", "v": [0, 0, 368.0, 0, 0, 0, 0, 368.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1152.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2048.0, 984.0, 128.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 256.0, 0, 0, 0, 0, 256.0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 271.0, 0, 0, 344.0, 0, 0, 0, 0, 344.0, 0, 0, 0]}], "lf": [{"cc": "AA", "v": [0.8826086956521739, 0.9470559845559846, 0.9210612781337276, 0.9216292134831461, 0.8792487684729065, 0.9067614027045611, 0.9317945383615085, 0.9397807055560371, 0.9529782937910146, 0.9271330589849108, 0.8698795180722891, 0.9094775212636695, 0.9038709677419355, 0.9297562750090942, 0.9020289049471929, 0.8888855957320687, 0.8871842105263158, 0.8628280367622633, 0.9161762565243611, 0.9199644575441029, 0.9269529928982077, 0.9126410483074203, 0.882306095854047, 0.8773241191265309, 0.8403152218996267, 0.8350340136054422, 0.8910244880129506, 0.9073844564936742, 0.8939170597484277, 0.8859702494597487, 0.8934688308250005, 0.8816569228006464, 0.892451887028243, 0.9047343046078458, 0.8979208849819744, 0.8899107323544623, 0.8496322061926214, 0.9091505650747357, 0.8711864406779661, 0.8680112267454857, 0.8635343915343915, 0.8765451758663932, 0.9155658555426806, 0.9241327676566009, 0.863919584898287, 0.8772902966718539, 0.8941871505433062, 0.8672746632100365, 0.8846450286888755, 0.910411622276029, 0.9294034207152405, 0.915825491873396, 0.924138715179079, 0.9303895873128692, 0.9346406680287821, 0.9396062252358972, 0.8973017474903064, 0.9246258433065371, 0.9011064830194465, 0.9385997753650318, 0.9057469818913481, 0.9168553637135579, 0.5673279058211979, 0.23671070425465515, 0.662495734273689, 0.8065178693687526, 0.8239986177901921, 0.8052529913612706, 0.7490354712745809, 0.7831879335715787, 0.7389747995418099, 0.7096151663071858, 0.6665525635174198, 0.6751120119479411, 0.7775388368211581, 0.9132132610774626, 0.8648128898128898, 0.9207141632209752, 0.9349431141564223, 0.8793287265547878, 0.8136588874680307, 0.8876993442888367, 0.9281003116619555, 0.9362093822779195, 0.8595332574853622, 0.911189015483494, 0.933169167334784, 0.9412356979405034, 0.9360718870346598, 0.9389652096342551, 0.9211642743221691, 0.9023547983950536, 0.8849792707558202, 0.9194039315155358, 0.9189691460301822, 0.8918526315789473, 0.8348588863463006, 0.8629229323308271, 0.868707988119431, 0.8890619160333874, 0.9034206434637005, 0.9214245862004835, 0.9178113633956001, 0.9076255532708326, 0.9041387943512107, 0.9224199288256227, 0.9198710946034521, 0.8759397175577882, 0.8623647248445775, 0.8774513618677042, 0.8675735504141674, 0.913620669127277, 0.9115897587468135, 0.9282731290961743, 0.9322190050013162, 0.9351572932517623, 0.9189526184538653, 0.9468924345261363, 0.9273598539590782, 0.9307618032896051, 0.8930853135956369, 0.9029597997349433, 0.876920068269094, 0.8948779686986976, 0.9188160893931344, 0.9068246506124277, 0.9304886222193853, 0.9407336312648091, 0.9208308140982324, 0.9195742711707543, 0.8878564729584216, 0.9163508748805483, 0.863159857462501, 0.8665972694879289, 0.8479873064054362, 0.8577846274921301]}, {"cc": "AS", "v": [0.8477709314969192, 0.8809049963339269, 0.8992156147391464, 0.9055429864253394, 0.881950774840474, 0.88315985801095, 0.9000558035714286, 0.874660172179429, 0.8640746500777605, 0.8476291955247736, 0.9132783343154587, 0.9166587834641945, 0.8969574036511156, 0.921994884910486, 0.934799920366315, 0.9424304605563155, 0.9002413515687852, 0.8498046426108941, 0.854157960718763, 0.9005812545410511, 0.9245364381198793, 0.896422704873152, 0.8739324173783884, 0.8845616137407629, 0.7240679217423404, 0.7574783957456237, 0.829546572243533, 0.8858419662807231, 0.9223509624369277, 0.9022950195219502, 0.902332222751071, 0.9052995811327627, 0.8095746746941154, 0.8253068055039048, 0.8737393328161366, 0.8270062018417591, 0.7487404366486284, 0.8005346493933786, 0.8892870268283719, 0.8857006673021925, 0.8914982164090368, 0.9345909370514661, 0.9317525773195876, 0.9106813996316758, 0.856244847485573, 0.8785895682750537, 0.8690224697522566, 0.8424326833797586, 0.8036353362215106, 0.8189599828803766, 0.885918811163465, 0.9063449848024316, 0.9056761268781303, 0.9389666529435982, 0.945540567747131, 0.9054401582591494, 0.9002923366047192, 0.9068153134202777, 0.8122913803259375, 0.895926719937634, 0.8128900255754475, 0.8253819769254755, 0.5296578882599065, 0.07303370786516854, null, 0.6446629213483146, 0.5323553890969621, 0.4289323374340949, 0.40759109311740893, 0.4344871330192099, 0.40355878883208807, 0.4457223567393059, 0.32039492788694224, 0.38297297297297295, 0.6212800183844651, 0.6716132120631881, 0.757008466603951, 0.8975520431765613, 0.9277496548550391, 0.8294794937672472, 0.6281468862388794, 0.7293277810826889, 0.8682492581602373, null, null, null, 0.9176029962546817, 0.9330626888217523, 0.9360298336201951, 0.9359477124183007, 0.8917935142289874, 0.8963486454652533, 0.8768011527377522, 0.9106217616580311, 0.8661063890745869, 0.8932018241595079, 0.7727616884346016, 0.7702419730107026, 0.826804313761637, 0.7768061628149073, 0.8325467769696296, 0.8930541423445617, 0.9216470455697628, 0.80635854500198, 0.8429668922626669, 0.8984553775743707, 0.8762476984203895, 0.8645852407983886, 0.8668990976210008, 0.8245853453705647, 0.8676440434693459, 0.799967814612166, 0.7986851054182725, 0.9011662093296746, 0.9128167994207096, 0.879222309505106, 0.8456342668863261, 0.9099065651877978, 0.8134982586765942, 0.8419773489525105, 0.8796614430570686, 0.8914840843323687, 0.8798848974287571, 0.8722818345836103, 0.8255192517915705, 0.8523705324580598, 0.8862464740783971, 0.8612549800796813, 0.8056677683927042, 0.8228339183447256, 0.7940034876525848, 0.8379804069329314, 0.8360128617363344, 0.8958602087486807, 0.8988876732312181, 0.8536128790715088]}, {"cc": "OO", "v": [null, null, null, null, null, null, null, null, null, null, null, null, null, 0.8180778032036613, 0.8595076400679117, 0.7978070175438596, 0.8182017543859649, 0.8030701754385965, 0.8166666666666667, 0.8673599320882852, 0.8530701754385965, 0.8602243313201036, 0.8363068688670829, 0.8134167385677308, 0.6141917293233082, 0.669377990430622, 0.7801358234295416, 0.8122807017543859, 0.8035087719298246, 0.8791666666666667, 0.8508771929824561, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0.8508771929824561, 0.8362289218191109, 0.8482730263157895, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, 0.0, null, null, null, null, null, 0.0, null, null, 0.0, null]}, {"cc": "NK", "v": [null, null, null, 0.7979310344827586, 0.7841854934601664, 0.8185091825711199, 0.8091427318570489, 0.8332304526748971, 0.7851270553064275, null, null, null, null, null, null, 0.7222850678733032, 0.7663179916317991, 0.8610567514677103, 0.870446697114849, 0.8208365352947634, 0.8527093596059113, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]}], "totals": {"seats": 893185.0, "lf": 0.8881676248481558, "gauge": 186.66353187042841, "dep": 4785.0, "dist": 1616.0}};
+const RAMP = {"655":"#C8D3D1","694":"#A6B7B4","614":"#7E9793","699":"#4F736E","721":"#21514A","OTH":"#E3E7E6"};
+const GAUGE_ORDER = ["OTH","655","694","614","699","721"];  // ascending seats/departure
+const M = DATA.months, N = M.length;
+
+/* ---------- stacked area ---------- */
+(function(){
+  const W=960,H=210,P={l:44,r:8,t:6,b:16};
+  const ser = GAUGE_ORDER.map(c=>DATA.mix.find(s=>s.code===c)).filter(Boolean);
+  const totals = M.map((_,i)=>ser.reduce((a,s)=>a+(s.v[i]||0),0));
+  const mx = Math.max(...totals)*1.02;
+  const x = i => P.l + (i/(N-1))*(W-P.l-P.r);
+  const y = v => H-P.b - (v/mx)*(H-P.t-P.b);
+  let acc = new Array(N).fill(0), out='';
+  ser.forEach(s=>{
+    const lo = acc.slice();
+    acc = acc.map((a,i)=>a+(s.v[i]||0));
+    const up = acc.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+    const dn = lo.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).reverse().join(' ');
+    out += `<polygon points="${up} ${dn}" fill="${RAMP[s.code]}"/>`;
+  });
+  // y grid
+  let grid='';
+  for(let k=0;k<=3;k++){ const v=mx*k/3;
+    grid += `<line x1="${P.l}" y1="${y(v)}" x2="${W-P.r}" y2="${y(v)}" stroke="#D6DAD8" stroke-width="1"/>`
+          + `<text class="axl" x="${P.l-5}" y="${y(v)+3}" text-anchor="end">${Math.round(v/1000)}k</text>`;
+  }
+  // x labels at each January
+  let xl='';
+  M.forEach((m,i)=>{ if(m.endsWith('-01'))
+    xl += `<text class="axl" x="${x(i)}" y="${H-4}" text-anchor="middle">${m.slice(0,4)}</text>`
+        + `<line x1="${x(i)}" y1="${P.t}" x2="${x(i)}" y2="${H-P.b}" stroke="#D6DAD8" stroke-width=".5"/>`;});
+  // the crossover annotation — one orchestrated moment, not confetti
+  const ci = M.indexOf('2018-01');
+  const an = `<line x1="${x(ci)}" y1="${P.t}" x2="${x(ci)}" y2="${H-P.b}" stroke="#15181A" stroke-width="1" stroke-dasharray="3 2"/>`
+    + `<text class="annot" x="${x(ci)+5}" y="${P.t+11}"><tspan font-weight="600">A321 overtakes 737-800</tspan> · 2018</text>`;
+  document.getElementById('mix').innerHTML = grid+xl+out+an;
+  document.getElementById('mixkey').innerHTML = ser.slice().reverse().map(s=>
+    `<span><i style="background:${RAMP[s.code]}"></i>${s.name}</span>`).join('')
+    + `<span class="gnum">← ordered by seats per departure</span>`;
+})();
+
+/* ---------- multi-series line, rolling 12 ---------- */
+(function(){
+  const W=960,H=170,P={l:44,r:54,t:6,b:16};
+  const roll = v => v.map((_,i)=>{
+    if(i<11) return null;
+    const w = v.slice(i-11,i+1).filter(z=>z!=null);
+    return w.length<10 ? null : w.reduce((a,b)=>a+b,0)/w.length;
+  });
+  const styles = [
+    {w:2.2,d:'',c:'#15181A'},{w:1.1,d:'',c:'#15181A'},
+    {w:1.1,d:'4 3',c:'#5C6367'},{w:1,d:'1 3',c:'#666E71'}];
+  const lo=0.5, hi=1.0;
+  const x = i => P.l + (i/(N-1))*(W-P.l-P.r);
+  const y = v => H-P.b - ((v-lo)/(hi-lo))*(H-P.t-P.b);
+  let grid='';
+  [0.6,0.7,0.8,0.9,1.0].forEach(v=>{
+    grid += `<line x1="${P.l}" y1="${y(v)}" x2="${W-P.r}" y2="${y(v)}" stroke="#D6DAD8" stroke-width="1"/>`
+          + `<text class="axl" x="${P.l-5}" y="${y(v)+3}" text-anchor="end">${(v*100).toFixed(0)}%</text>`;});
+  let xl='';
+  M.forEach((m,i)=>{ if(m.endsWith('-01'))
+    xl += `<text class="axl" x="${x(i)}" y="${H-4}" text-anchor="middle">${m.slice(0,4)}</text>`;});
+  let lines='';
+  DATA.lf.forEach((s,k)=>{
+    const st = styles[Math.min(k,3)], r = roll(s.v);
+    let seg=[], paths='';
+    r.forEach((v,i)=>{ if(v==null){ if(seg.length>1) paths+=`<polyline points="${seg.join(' ')}" fill="none" stroke="${st.c}" stroke-width="${st.w}" stroke-dasharray="${st.d}" stroke-linejoin="round"/>`; seg=[]; }
+      else seg.push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`);});
+    if(seg.length>1) paths+=`<polyline points="${seg.join(' ')}" fill="none" stroke="${st.c}" stroke-width="${st.w}" stroke-dasharray="${st.d}" stroke-linejoin="round"/>`;
+    let li=r.length-1; while(li>0 && r[li]==null) li--;
+    const lbl = r[li]!=null ? `<text class="axl" x="${x(li)+5}" y="${y(r[li])+3}" fill="${st.c}" font-weight="600">${s.cc}</text>` : '';
+    lines += paths+lbl;
+  });
+  // COVID band, stated not hidden
+  const a=M.indexOf('2020-03'), b=M.indexOf('2021-06');
+  const band = `<rect x="${x(a)}" y="${P.t}" width="${x(b)-x(a)}" height="${H-P.t-P.b}" fill="#E5E8E6"/>`
+    + `<text class="axl" x="${x(a)+4}" y="${P.t+9}">COVID — in window on purpose</text>`;
+  document.getElementById('lf').innerHTML = band+grid+xl+lines;
+})();
+
+/* ---------- carrier table ---------- */
+(function(){
+  const rows = [
+    {cc:"AA",name:"American Airlines Inc.",seats:706767,lf:0.8998,gauge:190.4,dep:3712},
+    {cc:"AS",name:"Alaska Airlines Inc.",seats:186114,lf:0.8450,gauge:174.1,dep:1069},
+    {cc:"OO",name:"SkyWest Airlines Inc.",seats:195,lf:0.0000,gauge:65.0,dep:3,thin:1,code:"⌀"},
+    {cc:"DL",name:"Delta Air Lines Inc.",seats:109,lf:0.8716,gauge:109.0,dep:1,thin:1,code:"n"},
+  ];
+  const GMAX=260, T=[0,50,100,150,200,250];
+  document.getElementById('rh').innerHTML = T.map(v=>`<div class="lbl" style="left:${(v/GMAX)*100}%">${v}</div>`).join('');
+  const n0=v=>v.toLocaleString('en-US');
+  document.getElementById('tb').innerHTML = rows.map(r=>{
+    const grids=T.slice(1).map(v=>`<div class="grid" style="left:${(v/GMAX)*100}%"></div>`).join('');
+    return `<tr class="${r.thin?'thin':''}"><td class="gut">${r.code?(r.code==="n"?`<span class="nl">n</span>`:r.code):""}</td>
+      <td><span class="cc">${r.cc}</span> <span style="color:var(--ink-2)">${r.name}</span></td>
+      <td class="num">${n0(r.seats)}</td><td class="num">${(r.lf*100).toFixed(2)}%</td>
+      <td class="num">${r.gauge.toFixed(1)}</td><td class="num">${n0(r.dep)}</td>
+      <td><div class="rail">${grids}<div class="tick" style="left:${(r.gauge/GMAX)*100}%"></div></div></td></tr>`;
+  }).join('');
+})();
+</script>
+</body>
+</html>

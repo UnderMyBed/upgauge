@@ -20,7 +20,8 @@ bite you.
 | [data/carrier-model.md](data/carrier-model.md) | Operating-carrier grain, the date-ranged mainline map |
 | [architecture/hosting.md](architecture/hosting.md) | Deployment shape, cost, the hosting survey, portability test |
 | [architecture/pipeline.md](architecture/pipeline.md) | Repo layout, milestones, M1 phase order, **the M2 marts layer and the load-bearing CWD constraint** |
-| [design/brief.md](design/brief.md) | Visual identity handoff |
+| [design/system.md](design/system.md) | **The design system: tokens, components, chart and map encodings, states** |
+| [design/brief.md](design/brief.md) | The design problem statement — constraints, anti-goals, content inventory (answered) |
 
 ## How these docs work
 
