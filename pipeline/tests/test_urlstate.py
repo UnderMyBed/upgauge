@@ -80,3 +80,33 @@ def test_sort_direction_round_trips(con):
     assert decode(encode(asc), con).sort_desc is False
     desc = q(sort="seats", sort_desc=True)
     assert "s=-seats" in encode(desc)
+
+
+def test_filter_values_with_reserved_characters_round_trip(con):
+    """A filter value is user/attacker-controlled free text, not an allowlisted identifier.
+    ',' is our own inter-value delimiter, '&' is the inter-pair delimiter, and '%' is the
+    escape character itself -- a value containing any of them must not corrupt the delimiter
+    structure or silently reparse into the wrong number of values."""
+    original = q(filters=(("origin_airport_id", ("14,771", "13&487", "9%5", "13487")),))
+    assert decode(encode(original), con) == original
+
+
+def test_route_grain_round_trips(con):
+    original = q(grain="route")
+    assert decode(encode(original), con) == original
+
+
+def test_mainline_grouping_round_trips(con):
+    """The whole reason the mainline-group toggle (Task 5) exists: a permalink with
+    grouping='mainline' must not silently decode back to the 'operating' default -- that is
+    precisely a permalink rendering a different query than the one it encodes."""
+    original = q(grouping="mainline")
+    assert decode(encode(original), con) == original
+
+
+def test_duplicate_non_f_key_is_rejected(con):
+    """A duplicate non-'f' key is not something `encode` ever produces, so it is as
+    illegitimate as an unknown key -- last-wins would silently prefer one of two
+    contradictory values instead of rejecting the malformed link."""
+    with pytest.raises(UrlStateError, match="duplicate"):
+        decode(encode(q()) + "&d=op_airline_id", con)

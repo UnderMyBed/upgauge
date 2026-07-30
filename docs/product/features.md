@@ -35,15 +35,24 @@ aircraft type · aircraft group · distance group
 
    - **Versioned** (`v=1`), so a future incompatible change can migrate rather than silently
      misread an old link.
-   - **Decode is total.** An unknown key, or a dimension not on the allowlist, is a rejection
-     with a message — never a silent drop to a default. A permalink that quietly renders a
-     *different* query than it encodes is worse than one that errors, because the screenshot
-     still looks authoritative. Identifier/structural validation (unknown dimension, measure,
-     sort key, grain, grouping, empty lists, non-positive limit) is reused as-is from
-     `pipeline.pivot.render_pivot` — one allowlist, not two. URL syntax that `render_pivot`
-     can't see (`v` itself, unknown query-string keys, the shape of `t` and `f`, `n` as an
-     integer) is validated in the codec.
-   - Round-trip tested both directions: `state → url → state` and `url → state → url`.
+   - **Decode is total.** An unknown key, a duplicate non-`f` key, or a dimension not on the
+     allowlist, is a rejection with a message — never a silent drop to a default or a silent
+     last-wins. A permalink that quietly renders a *different* query than it encodes is worse
+     than one that errors, because the screenshot still looks authoritative. Identifier/
+     structural validation (unknown dimension, measure, sort key, grain, grouping, empty
+     lists, non-positive limit) is reused as-is from `pipeline.pivot.render_pivot` — one
+     allowlist, not two. URL syntax that `render_pivot` can't see (`v` itself, unknown or
+     duplicate query-string keys, the shape of `t` and `f`, `n` as an integer) is validated
+     in the codec.
+   - **Filter values are percent-encoded individually**, because they are the one piece of
+     free text in the format and can legally contain the delimiters (`,`, `:`, `&`, `=`) the
+     format itself uses. Every other key carries plain allowlisted-identifier text and needs
+     no escaping. Decoding never uses `urllib.parse.parse_qsl` — see the "Escaping" section
+     of `pipeline/urlstate.py`'s module docstring for why an eager, whole-string unquote
+     would silently corrupt a percent-encoded structural comma.
+   - Round-trip tested both directions: `state → url → state` and `url → state → url` —
+     including a filter value containing a comma, an ampersand, and a percent sign, and both
+     `grain="route"` and `grouping="mainline"` (not just the defaults).
 2. **CSV / Parquet export of any result.** Nerds want the data, not just the picture.
 3. **Compare mode.** Pin 2–5 entities (routes, carriers, airports, *aircraft types*) and
    overlay on one chart. Most-requested feature in every data explorer ever built.

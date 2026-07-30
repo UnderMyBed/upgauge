@@ -9,12 +9,15 @@ readable, not a base64 JSON blob: this audience hand-edits permalinks and pastes
 forums, where an opaque blob is both unreadable and un-editable. `v=1` exists so a future
 incompatible change can migrate a link instead of silently misreading it.
 
-**Decode is TOTAL.** An unknown query-string key, an unrecognised or missing `v`, or anything
-that fails `render_pivot`'s own allowlist/structural validation (unknown dimension/measure/
-sort key, unknown grain/grouping, empty dimension or measure list, a non-positive limit, a
-filter with no values) is a rejection via `UrlStateError` -- never a silent drop to a
-default. A permalink that quietly renders a *different* query than the one it encodes still
-screenshots as authoritative, which is worse than one that errors.
+**Decode is TOTAL.** An unknown query-string key, a duplicate non-`f` key, an unrecognised or
+missing `v`, or anything that fails `render_pivot`'s own allowlist/structural validation
+(unknown dimension/measure/sort key, unknown grain/grouping, empty dimension or measure
+list, a non-positive limit, a filter with no values) is a rejection via `UrlStateError` --
+never a silent drop to a default. A permalink that quietly renders a *different* query than
+the one it encodes still screenshots as authoritative, which is worse than one that errors.
+A duplicate key (`d=a&d=b`) is rejected on the same principle: `encode` never produces one,
+so a decoded link containing one is malformed, not a link whose second value should quietly
+win.
 
 **Division of validation labour** (per the project rule against a second, drifting
 validator): identifier and structural validation -- is this dimension/measure/sort key on
@@ -26,15 +29,36 @@ That is the ONE place those rules live.
 What `render_pivot` cannot check, because it is URL syntax rather than a `PivotQuery` field,
 is validated HERE instead:
   - the `v` key itself (present, and equal to `URL_VERSION`);
-  - unknown query-string keys (anything not in `_ALLOWED_KEYS`);
+  - unknown query-string keys (anything not in `_ALLOWED_KEYS`) and duplicate non-`f` keys;
   - the shape of `t` (`YYYY-MM:YYYY-MM`) and `f` (`key:val1,val2,...`) tokens;
   - parsing `n` as an integer at all (a non-numeric limit is a codec-level parse failure,
     not a value `render_pivot` would ever see as anything but the wrong Python type).
+
+**Escaping: who owns which layer, and why `parse_qsl` is never used.** Every key except `f`
+carries plain, allowlisted-identifier text (dimension/measure/sort keys, the grain/grouping
+tokens, the limit) -- text this module itself produced or a hand-editor typed from the same
+vocabulary -- so it needs no escaping. A filter VALUE is the one piece of user/attacker-
+controlled free text in the whole contract, and it can legally contain the very characters
+this format uses as delimiters: `,` (between values), `:` (between a filter's key and its
+values), and `&`/`=` (between query-string pairs). `encode` therefore percent-encodes each
+filter key and value individually with `urllib.parse.quote(..., safe="")` before joining them
+with the structural `,`/`:`. Decoding must split on the structural delimiters FIRST and
+`unquote` each token only AFTER -- never the reverse. This is why `decode` does its own
+`&`/`=` splitting (`_split_pairs`) instead of `urllib.parse.parse_qsl`: `parse_qsl` unquotes
+each value as part of splitting it out, which would decode a percent-encoded structural comma
+(`%2C`) back into a literal comma before `_parse_filter`'s own `.split(",")` ever saw it --
+silently reintroducing the exact corruption the percent-encoding exists to prevent.
+
+**Known accepted gap.** A reversed time range (`t=2015-12:2015-01`) decodes without error and
+simply yields zero rows once queried, matching `render_pivot`'s own boundary -- it doesn't
+validate ordering either. Not guarded here on purpose: `encode` never produces one, but a
+hand-edited link can, and the empty result is a plausible (if surprising) reading of a
+backwards range, not a corruption of the query it claims to encode.
 """
 
 from __future__ import annotations
 
-from urllib.parse import parse_qsl
+from urllib.parse import quote, unquote
 
 from pipeline.pivot import GRAINS, GROUPINGS, PivotError, PivotQuery, render_pivot
 
@@ -75,7 +99,9 @@ def encode(q: PivotQuery) -> str:
         f"t={q.time_from}:{q.time_to}",
     ]
     for key, values in q.filters:
-        parts.append(f"f={key}:{','.join(values)}")
+        encoded_key = quote(key, safe="")
+        encoded_values = ",".join(quote(v, safe="") for v in values)
+        parts.append(f"f={encoded_key}:{encoded_values}")
     if q.sort is not None:
         prefix = "-" if q.sort_desc else ""
         parts.append(f"s={prefix}{q.sort}")
@@ -93,11 +119,39 @@ def _parse_time_range(raw: str) -> tuple[str, str]:
     return time_from, time_to
 
 
+def _split_pairs(qs: str) -> list[tuple[str, str]]:
+    """Split a query string into `(key, raw_value)` pairs, raw meaning NOT yet `unquote`d.
+
+    Deliberately not `urllib.parse.parse_qsl`: see the module docstring's escaping section.
+    Splitting is pure slicing on the literal `&` (between pairs) and the first `=` (between a
+    key and its value) -- both always literal here, because `encode` percent-encodes any `&`
+    or `=` that occurs *inside* a filter value before assembly. Percent-decoding happens only
+    later, after every structural delimiter -- including `f`'s own `:` and `,` -- has already
+    done its job.
+    """
+    if not qs:
+        return []
+    pairs: list[tuple[str, str]] = []
+    for chunk in qs.split("&"):
+        if not chunk:
+            continue
+        key, sep, raw_value = chunk.partition("=")
+        pairs.append((key, raw_value if sep else ""))
+    return pairs
+
+
 def _parse_filter(raw: str) -> tuple[str, tuple[str, ...]]:
+    """Parse one `f` token's raw (still percent-encoded) value into `(key, values)`.
+
+    Splits on the structural `:` and `,` first, then `unquote`s each resulting token -- so a
+    percent-encoded structural character (e.g. a filter value containing a literal comma,
+    encoded by `encode` as `%2C`) survives the split intact and is restored only afterward.
+    """
     if ":" not in raw:
         raise UrlStateError(f"malformed filter {raw!r}, expected 'key:val1,val2,...'")
-    key, values_raw = raw.split(":", 1)
-    values = tuple(v for v in values_raw.split(",") if v)
+    key_raw, values_raw = raw.split(":", 1)
+    key = unquote(key_raw)
+    values = tuple(unquote(v) for v in values_raw.split(",") if v)
     if not key or not values:
         raise UrlStateError(f"malformed filter {raw!r}, expected 'key:val1,val2,...'")
     return key, values
@@ -111,21 +165,32 @@ def decode(qs: str, con) -> PivotQuery:
     purely to validate -- as `UrlStateError` so callers only need to catch one exception
     type from this module.
     """
-    pairs = parse_qsl(qs, keep_blank_values=True)
+    pairs = _split_pairs(qs)
 
     unknown = [key for key, _ in pairs if key not in _ALLOWED_KEYS]
     if unknown:
         raise UrlStateError(f"unknown query key(s): {sorted(set(unknown))}")
 
+    # 'f' is the only key documented as repeatable (see module docstring's key schema); a
+    # repeated non-'f' key is not something `encode` ever produces, so -- same principle as
+    # the unknown-key check above -- it is rejected rather than resolved last-wins-silently.
+    key_counts: dict[str, int] = {}
+    for key, _ in pairs:
+        if key != "f":
+            key_counts[key] = key_counts.get(key, 0) + 1
+    duplicates = sorted(key for key, count in key_counts.items() if count > 1)
+    if duplicates:
+        raise UrlStateError(f"duplicate query key(s): {duplicates}")
+
     single: dict[str, str] = {}
     filters_raw: list[str] = []
-    for key, value in pairs:
+    for key, raw_value in pairs:
         if key == "f":
-            filters_raw.append(value)
+            # Left un-unquoted here on purpose -- `_parse_filter` unquotes each token only
+            # after splitting on ':' and ',', per the module docstring's escaping section.
+            filters_raw.append(raw_value)
         else:
-            # Last one wins for a repeated non-'f' key; nothing in the schema needs the
-            # first, and 'f' is the only key documented as repeatable.
-            single[key] = value
+            single[key] = unquote(raw_value)
 
     version_raw = single.get("v")
     if version_raw is None:
