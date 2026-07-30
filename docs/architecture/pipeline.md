@@ -517,6 +517,18 @@ Named the exact case, showed the exact diff, and every other case stayed green �
 suite doesn't fail wholesale on an unrelated change. Reverted; `git diff` on the mart file is
 empty and the full suite is back to 32 passed.
 
+**`make goldens` overwrites unconditionally — the soft spot in this contract.** The target
+regenerates both files from whatever `pipeline/pivot.py` does at that moment. It never diffs
+first and never refuses. So the failure mode is a developer who breaks the validator, sees
+`test_pivot_goldens.py` go red, reaches for `make goldens` to "fix" it, and bakes the
+regression into the pinned bytes — after which M3b's TypeScript is verified against the bug,
+and the golden suite reports green while doing it. Everything standing between that and a
+shipped wrong contract is prose: this paragraph, the Makefile help text, and each file's
+`_data_not_sql` header ("read the diff by eye before committing: a golden file is only as
+good as its first generation"). The structural fix is a CI job that runs `make goldens` and
+fails on any resulting `git diff`, which forces regeneration to be a reviewed commit rather
+than an error-recovery reflex — deferred with CI itself, see [Toolchain](#toolchain).
+
 **M3a complete.** The pivot query contract — templates (Task 3), the allowlist as catalog
 objects (Task 2), derived measures re-verified against real data (Task 4), the mainline-group
 toggle on both real acquisition boundaries (Task 5), the URL state codec (Task 6), and now
@@ -529,6 +541,26 @@ session (`docs/design/brief.md`), then M3b.
 `uv` pins **Python 3.12** via `.python-version`, independent of whatever the system has.
 `make check` (lint + test) is the pre-commit gate. Unimplemented `make` targets exit
 non-zero rather than succeeding silently, so a half-built pipeline can't look finished.
+
+**`check` excludes `fmt`, and the tree is not format-clean.** It runs `ruff check` and
+`pytest`, never `ruff format`. Measured at the end of M3a: `ruff format --check .` reports
+**8 of 47 files would be reformatted**. So the first person to run `make fmt` gets a large
+diff across files their change never touched, mixed into whatever they were actually doing.
+Two clean ways out, neither taken yet: reformat once in a commit that does nothing else and
+add `ruff format --check` to `check` so the gate holds from then on, or decide formatting
+stays unenforced and delete `fmt`. The bad middle is reformatting only the files a change
+already touches — that smears the same diff across every future commit instead of isolating
+it in one.
+
+**There is no CI. `make check` on a developer's machine is the only gate that exists.**
+Several docs (including this one, above) say "runs in CI" about `pipeline/` — that is the
+intended deployment shape, not current state. The consequence is not theoretical: the
+real-data invariant layer (`test_invariants_against_real_data.py`) skips itself when
+`data/raw/` is empty, which is right for a fresh clone but means those rules go dark
+everywhere except a machine holding the full 2015–2026 window — today, exactly one. A green
+`420 passed` from a clone without data is a materially weaker claim than the same number
+here, and nothing in the output says so. Standing up CI is M6-shaped; see
+[data/invariants.md](../data/invariants.md#where-these-are-enforced).
 
 **Node will be pinned by a checked-in `.nvmrc`** when M3b scaffolds `app/` — no such file
 exists yet, this is a decision, not current state. It mirrors the `.python-version`

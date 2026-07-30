@@ -422,6 +422,14 @@ Two test layers:
 
 - `test_invariants.py` / `test_mainline_map.py` — the rules in isolation, always run.
 - `test_invariants_against_real_data.py` — the same rules over a real extract, **skipped
-  when `data/raw/` is empty** so CI and fresh clones stay green. Run `make fetch` locally
+  when `data/raw/` is empty** so a fresh clone stays green. Run `make fetch` locally
   to enable them. This layer is what caught both refinements above; neither was visible
   from synthetic values.
+
+**That skip is load-bearing, and there is no CI to compensate for it.** No automated runner
+exists yet (see [architecture/pipeline.md](../architecture/pipeline.md#toolchain)), so this
+layer executes only where someone has fetched the full 2015–2026 window. Everywhere else the
+suite passes *without* checking a single real row against these rules, and says nothing about
+it — the skip is silent by design, which is correct for a clone and dangerous as a
+verification claim. Until CI runs with data mounted, "the invariants pass" is only true of
+the machine it was run on.
