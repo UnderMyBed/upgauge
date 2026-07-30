@@ -1,26 +1,51 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --panel: #F0F2F1;
+  --panel-2: #E5E8E6;
+  --field: #FAFBFA;
+  --ink: #15181A;
+  --ink-2: #5C6367;
+  --ink-3: #666E71;
+  --rule: #D6DAD8;
+  --rule-2: #828A8B;
+  --signal: #0B6E63;
+  --limit: #A8322A;
+  /* fleet ramp, ordered by seats per departure -- an upgauge darkens the stack */
+  --g0: #E3E7E6; --g1: #C8D3D1; --g2: #A6B7B4;
+  --g3: #7E9793; --g4: #4F736E; --g5: #21514A;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-field: var(--field);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-rule: var(--rule);
+  --color-rule-2: var(--rule-2);
+  --color-signal: var(--signal);
+  --color-limit: var(--limit);
+  --color-g0: var(--g0);
+  --color-g1: var(--g1);
+  --color-g2: var(--g2);
+  --color-g3: var(--g3);
+  --color-g4: var(--g4);
+  --color-g5: var(--g5);
+  --font-sans: var(--font-plex-sans);
+  --font-mono: var(--font-plex-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+body { background: var(--panel); color: var(--ink); }
+
+/* Every numeric cell. Non-negotiable: a data product with proportional numerals
+   is not serious. */
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+  text-align: right;
+  white-space: nowrap;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
-}
+:focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
