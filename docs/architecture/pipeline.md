@@ -538,9 +538,30 @@ session (`docs/design/brief.md`), then M3b.
 
 ## Toolchain
 
-`uv` pins **Python 3.12** via `.python-version`, independent of whatever the system has.
+**`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command
+(`mise install`, which `make install` runs first), independent of whatever the system has.
 `make check` (lint + test) is the pre-commit gate. Unimplemented `make` targets exit
 non-zero rather than succeeding silently, so a half-built pipeline can't look finished.
+
+**The pins are exact, not floating** — `python = "3.12.12"`, `node = "24.13.0"`,
+`uv = "0.12.0"`. A floating `"3.12"` moves to 3.12.13 the day it ships and silently
+invalidates the `make verify` proof below, which is only as good as the interpreter that
+produced it. Bumping is a deliberate commit that re-runs `make verify`.
+
+**`UV_PYTHON_PREFERENCE = "only-system"` is load-bearing.** mise owns the interpreter, so uv
+must not quietly download a second 3.12 that nobody pinned. `only-system` makes uv use
+what mise put on `PATH` and fail loudly when it is absent, rather than helpfully diverging.
+
+**Every `make` target runs through `mise exec`** (`MISE ?= mise exec --`), so the documented
+commands work in a shell that has never run `mise activate` — a fresh clone, a cron, an
+editor's task runner. Set `MISE=` to bypass it where the tools are already on `PATH`, which
+is what the Docker image will do.
+
+> **Migrated from `.python-version` + a planned `.nvmrc` on 2026-07-30.** Two pinning
+> mechanisms for two runtimes was already one too many before Node arrived. The interpreter
+> changed with it — from uv's own CPython 3.12.12 build to mise's — so `make verify` was
+> re-run on the new one before the migration was committed. See the reproducibility section
+> above for the result.
 
 **`check` excludes `fmt`, and the tree is not format-clean.** It runs `ruff check` and
 `pytest`, never `ruff format`. Measured at the end of M3a: `ruff format --check .` reports
@@ -562,15 +583,12 @@ everywhere except a machine holding the full 2015–2026 window — today, exact
 here, and nothing in the output says so. Standing up CI is M6-shaped; see
 [data/invariants.md](../data/invariants.md#where-these-are-enforced).
 
-**Node will be pinned by a checked-in `.nvmrc`** when M3b scaffolds `app/` — no such file
-exists yet, this is a decision, not current state. It mirrors the `.python-version`
-precedent: the Dockerfile will read the same file and CI will install from it, so the
-version lives in one place. The alternative — a distro package — drifts independently of
-whatever the Dockerfile pins, which is the class of problem `uv` exists to prevent for
-Python. Nothing before M3b needs Node installed; the decision is recorded here so the commit
-that scaffolds `app/` does not have to relitigate it.
+**Node is pinned at 24.13.0 in `mise.toml`** — LTS since 2025-10, and Next.js 15 needs
+≥ 18.18. This supersedes the earlier plan to add a `.nvmrc`: a second pinning mechanism
+alongside `.python-version` was the thing worth avoiding, and mise removes both.
 
-Docker is not needed until M6.
+Docker is not needed until M6. When it arrives, the image installs the same pinned versions
+and sets `MISE=` so `make` calls the tools directly rather than shelling through mise.
 
 > 🔔 **The cron must fail loudly.** If the monthly ingest breaks, nothing errors — the site
 > keeps serving happily and `DATA AS OF` just quietly stops advancing. For a product whose
