@@ -280,8 +280,8 @@ M3 is split, because its two halves have different blockers.
 | | Scope | Blocked on |
 |---|---|---|
 | ~~**M3a**~~ | ~~The pivot query contract: templates, the allowlist, the URL codec, golden fixtures~~ ✅ Complete — see [Task 7 below](#task-7--golden-fixtures-and-make-goldens-m3a-complete). |
-| **design session** | [../design/brief.md](../design/brief.md) — tokens, the data table, the chart, the signature element | never been run |
-| **M3b** | The Next.js app: route handlers, the table, URL wiring | Node, and the design session |
+| ~~**design session**~~ | ~~[../design/brief.md](../design/brief.md) — tokens, the data table, the chart, the signature element~~ ✅ Complete — the answer is [../design/system.md](../design/system.md), mockups in [../design/mockups/](../design/mockups/). |
+| **M3b** | The Next.js app: route handlers, the table, URL wiring | **Node** — no longer the design session |
 
 **Why the split.** `docs/design/brief.md` makes the data table deliverable #1 and says "most of
 the product is this table in different clothes. Get it right and everything else follows." M3
