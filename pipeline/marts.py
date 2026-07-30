@@ -48,9 +48,12 @@ def parse_mart_file(path: Path) -> MartFile:
 
     found: dict[str, str] = {}
     for line in text.splitlines():
-        if not line.lstrip().startswith("--"):
-            break  # header block ends at the first non-comment line
-        match = _DIRECTIVE.match(line.strip())
+        stripped = line.strip()
+        if not stripped:
+            continue  # blank lines inside the header are fine
+        if not stripped.startswith("--"):
+            break  # header block ends at the first line of real SQL
+        match = _DIRECTIVE.match(stripped)
         if match is None:
             continue
         key, value = match.group(1), match.group(2)

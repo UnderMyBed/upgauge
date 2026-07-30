@@ -130,9 +130,7 @@ yet. Building them now means guessing the presets twice.
 ### The runner
 
 ✅ **Built.** `pipeline/marts.py` executes `sql/02_marts/*.sql` in filename order — `make
-build` un-stubbed, 10 tests in `pipeline/tests/test_marts.py`. `sql/02_marts/` itself is still
-empty (Task 4 adds the view files), so today's `make build` produces a database with zero
-objects and exits 0; that is expected, not a bug. Each file declares its own
+build` un-stubbed, 20 tests in `pipeline/tests/test_marts.py`. Each file declares its own
 materialization in a header directive, so the runner needs no separate manifest to drift:
 
 ```sql
@@ -145,6 +143,18 @@ The runner wraps the body in `CREATE OR REPLACE VIEW <object> AS <body>` or
 `CREATE TABLE <object> AS <body>`. That DDL wrapper is the only SQL in Python, and it is the
 same shape as `normalize.py`'s already-accepted `COPY (<sql file>) TO ...` — the hard rule is
 about *query logic*, which stays in `.sql`.
+
+### The catalog views
+
+✅ **Built.** `sql/02_marts/010_fct_segment_month.sql` and the five
+`02x_dim_*.sql` / `024_map_mainline_group.sql` files turn the Parquet tree into `make build`'s
+six database objects — `fct_segment_month`, `dim_airport`, `dim_city_market`, `dim_carrier`,
+`dim_aircraft_type`, `map_mainline_group`. All six are plain `SELECT * FROM read_parquet(...)`
+views, nothing materialized: the fact view adds `hive_partitioning = true` so `year` stays a
+real, prunable column, and every dim view is a single-file read. No derived measure column
+(`load_factor`/`asm`/`rpm`/`avg_gauge`/`completion_factor`) exists on `fct_segment_month`, and
+quarantined rows are retained with their flag rather than dropped — the view is the fact
+table, so this is the last point at which dropping them would be reversible.
 
 ### Views cannot take bound parameters — so CWD is load-bearing
 
@@ -161,6 +171,13 @@ against the **process CWD, not the database file's directory**, which forces a c
 
 A test asserts no absolute path appears in any view definition, because that failure is
 invisible until deploy.
+
+**Confirmed empirically, not just by assertion.** With `upgauge.duckdb` built from the repo
+root (views referencing `data/parquet/...`), opening that same file from `/tmp` — a foreign
+CWD, the way the M6 container would if `WORKDIR` were wrong — and querying `fct_segment_month`
+raises `duckdb.IOException`: `IO Error: No files found that match the pattern
+"data/parquet/t100_segment/**/*.parquet"`. The database opens fine; only the read fails. That
+is the exact failure shape to expect if M6's Dockerfile ever ships without `WORKDIR /app`.
 
 ### The M2 gate
 
