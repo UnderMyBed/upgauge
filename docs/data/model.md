@@ -150,8 +150,13 @@ It also stores the additive `t12_*` / `p12_*` sums alongside them, because
 [../product/features.md](../product/features.md) requires the *components* be shown and not
 just the score, and because they let any consumer recompute a ratio itself.
 
-Backed by two tests: no `fct_*` object carries a column from the derived list, and no
-`mart_route_health` derived column appears inside a `SUM(` or `AVG(` anywhere in `sql/`.
+Backed by five tests in
+[`pipeline/tests/test_derived_measure_rules.py`](../../pipeline/tests/test_derived_measure_rules.py):
+no `fct_*` object carries a column from the derived list; no `mart_route_health` derived
+column appears inside a `SUM(`/`AVG(`/`MEAN(`/`MEDIAN(` anywhere in `sql/`;
+`mart_route_health` still has no time grain (the exception's own justification, asserted
+directly rather than inferred); every mart file declares a known materialization; and
+`mart_route_health` is the only object materialized as a table.
 
 #### Window rule, floor, and the NULL-prior-window trap
 
