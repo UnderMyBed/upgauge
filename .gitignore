@@ -21,6 +21,7 @@ out/
 # Implementation plans are working artifacts for the subagent loop, not docs.
 # Durable decisions belong in docs/ — see the working agreements in CLAUDE.md.
 docs/superpowers/plans/
+.superpowers/
 
 # Env
 .env
