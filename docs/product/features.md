@@ -77,17 +77,26 @@ filters pre-applied. Ship whichever three are ready first; **lead with Gauge Wat
 
 ## Route Health score (v0 — deliberately dumb)
 
-Per (op_airline_id, route), trailing 12 months vs. prior 12:
+Per (op_airline_id, **undirected** route), trailing 12 months vs. prior 12 — `mart_route_health`,
+see [../data/model.md](../data/model.md) for the SQL-level rules:
 
-| Component | Signal |
-|---|---|
-| `lf_delta` | Δ load factor |
-| `capacity_delta` | Δ total seats |
-| `gauge_delta` | Δ mean seats-per-departure (negative = downgauge) |
-| `frequency_delta` | Δ departures performed |
-| `completion` | departures_performed / departures_scheduled |
+| Component | Signal | Oriented so higher = healthier |
+|---|---|---|
+| `lf_delta` | Δ load factor | as-is |
+| `capacity_delta` | Δ total seats | as-is |
+| `gauge_delta` | Δ mean seats-per-departure | as-is (a **downgauge is the warning sign**) |
+| `frequency_delta` | Δ departures performed | as-is |
+| `completion_factor` | departures_performed / departures_scheduled (trailing 12mo) | as-is |
 
-Score = weighted z-score composite. Exclude routes with <30 departures in trailing 12mo.
+`health_score` = **equal 0.20-weighted** z-score composite of the five. Equal weights, not
+fitted — this is v0 and deliberately dumb; any other weighting would be an invented number.
+Windows are the latest 12 calendar months present (globally, not per-route) vs. the 12 before
+that. Excludes routes with **<30 departures *performed*** (not scheduled) in the trailing
+12mo.
+
+**A route with no prior-12mo data gets `NULL` deltas and a `NULL` score, never an enormous
+"improvement."** It still appears as a row — that row is the Route Birth Tracker's input.
+Measured on the real 2015–2017 warehouse: 768 of 7,336 routes are new in exactly this sense.
 
 **Show the components in the UI, not just the score.** The components are the insight; the
 score is a sort key. Label it plainly as a heuristic. Do not over-engineer this.

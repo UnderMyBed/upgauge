@@ -45,6 +45,8 @@ map_mainline_group    airline_id, parent_airline_id, effective_from, effective_t
 
 mart_route_health     one row per (op_airline_id, route_key_low, route_key_high)
                       UNDIRECTED, and the only materialized TABLE in the database.
+                      Global trailing-12 / prior-12 windows, <30 performed-departures floor,
+                      NULL (not huge-positive) deltas when the prior window is empty.
 mart_leaderboards     precomputed JSON, built at pipeline time                    [M5]
 ```
 
@@ -150,6 +152,52 @@ just the score, and because they let any consumer recompute a ratio itself.
 
 Backed by two tests: no `fct_*` object carries a column from the derived list, and no
 `mart_route_health` derived column appears inside a `SUM(` or `AVG(` anywhere in `sql/`.
+
+#### Window rule, floor, and the NULL-prior-window trap
+
+Windows are **global, not per-route**: `t12_start_month..t12_end_month` is the latest 12
+calendar months present anywhere in `fct_route_month`; `p12_start_month..p12_end_month` is
+the 12 immediately before that. `'YYYY-MM'` strings compare correctly with `BETWEEN`, so no
+per-row date parsing is needed. Measured on the real 2015–2017 warehouse: `2017-01..2017-12`
+vs. `2016-01..2016-12`.
+
+The `<30 departures` floor applies to `t12_departures_performed` — **performed, not
+scheduled** — same reasoning as the fact-table quarantine rules: a route with a big schedule
+that mostly didn't fly should not count as "active."
+
+**A route absent from the prior 12 months gets `NULL` deltas, never a huge positive number.**
+A new route is not a route that improved infinitely. Enforced by `CASE WHEN
+p12_months_present = 0 THEN NULL ELSE ... END` on every `p12_*`-derived ratio and every
+`*_delta` column — belt-and-suspenders alongside the `nullif` on each denominator, since a
+`SUM(...) FILTER (WHERE <no rows match>)` already returns `NULL`, not `0`, in DuckDB. The row
+itself still exists (it is the Route Birth Tracker's input); only its deltas are unknown.
+Measured on the real 2015–2017 warehouse: of 7,336 surviving routes, 768 have no prior-window
+data (`new_routes`) and are correctly `NULL`-delta rows; the other 6,568 have both windows
+populated.
+
+`health_score` is an **equal-0.20-weighted** z-score composite of `lf_delta`, `gauge_delta`,
+`capacity_delta`, `frequency_delta`, and `completion_factor`, all oriented so **higher is
+healthier** (including `gauge_delta` — a downgauge is the warning sign, so it is *negated*
+relative to the raw gauge change). Equal weights, not a fitted or eyeballed weighting, because
+[../product/features.md](../product/features.md) says this is v0 and *deliberately dumb* —
+any other weighting would be a number invented in this task with no basis. Measured on the
+real warehouse: `health_score` ranges from **-2.686 to 17.329** — single/double-digit
+z-composites, not `1e17`-scale blowups, confirming no near-zero `stddev_samp` slipped past its
+`nullif`.
+
+> ⚠️ **`health_score` can be `NULL` for a reason *other than* a missing prior window.**
+> `completion_factor = t12_departures_performed / nullif(t12_departures_scheduled, 0)` is
+> computed from `t12_*` sums alone and has nothing to do with `p12_months_present`. Measured
+> on the real warehouse: **580 of 7,336 routes** (all on-demand/charter-style operators) have
+> `t12_departures_scheduled = 0` despite dozens of real `t12_departures_performed` — BTS lets
+> a carrier file performed flights against no filed schedule. For those routes,
+> `completion_factor` is `NULL` and so is `health_score`, even though `lf_delta` and the other
+> three deltas are known (the prior window is fully populated). Any test that infers
+> "`health_score` is null exactly when `lf_delta` is null" is asserting a narrower invariant
+> than the real one ("null exactly when *any* of the five components is null") — true on the
+> M2 test fixture (too small to have a `p12`-populated, `t12_departures_scheduled = 0` route
+> at all), false against the full 2015–2017 warehouse. Any future strengthening of this test
+> must check all five components, not use `lf_delta` as a stand-in for the rest.
 
 ### `distance` is not additive
 
