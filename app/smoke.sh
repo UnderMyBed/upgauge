@@ -314,6 +314,21 @@ BODY=$(curl -s --max-time 30 "${BASE}/route/HNL-LAS")
 check    "chart: the unfiled months are stated (HNL-LAS)" "$BODY" '6 months with no filings, drawn as gaps rather than interpolated.'
 check_re "chart: the band BREAKS at them, drawn as two paths (HNL-LAS)" "$(count "$BODY" '<path fill="var(--g5)" d=')" '^2$'
 
+# The OTHER branch of the window line, in the served bytes. ATL-CAK filed 67 months, 2015-01 ->
+# 2022-06, and nothing since; the chart is fetched over the full window but can only draw to
+# 2022-06. The line shipped naming the REQUESTED window, putting "the full window · 2015-01 →
+# 2026-04" above a chart that stops in 2022 -- the aria-label was already right, so only the
+# text a sighted reader sees was wrong. 12,062 of 22,950 pairs last filed before the current
+# trailing-12 window, so this branch is the majority case, not an edge.
+#
+# Checked HERE and not only in page.test.tsx because the fix's first form was `chart: {a} → {b}`
+# -- adjacent JSX expressions, which React's SSR separates with `<!-- -->` in the served HTML.
+# `textContent` skips comment nodes, so all 281 unit tests passed while this tier went red. That
+# is the whole reason this file exists, and it is why the assertion below is over raw bytes.
+BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-CAK")
+check     "chart: a subject that stopped filing names ITS range (ATL-CAK)" "$BODY" 'chart: 2015-01 → 2022-06'
+check_not "chart: ...and does not claim the full window there"            "$BODY" 'chart: the full window'
+
 # Page weight, recorded rather than asserted: the chart is ~136 months x 6 bands of path data
 # on a force-dynamic page, and M4d mounts this same component on three more pages. A threshold
 # here would be a number invented in a shell script; the measurement is the useful part.

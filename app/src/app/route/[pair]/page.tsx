@@ -221,6 +221,23 @@ export async function RouteView({
   const truncated = result.rows.length >= limit;
   const isEmpty = result.rows.length === 0;
   const hasMix = mix.length > 0;
+  // The range the chart can DRAW, which is not the range it was fetched over. The fetch asks
+  // for EARLIEST_MONTH -> asOf; a subject that stopped filing in 2022 yields an x axis ending
+  // in 2022, and 12,062 of 22,950 route pairs last filed before the current trailing-12 window,
+  // so this is over half of them rather than a corner case. Naming the requested window in the
+  // line below put "2015-01 → 2026-04" over a chart stopping in 2022 -- the same fabrication as
+  // interpolating across a gap, and the exact inverse of what the comment above warns about.
+  // Months are zero-padded YYYY-MM, so lexical min/max IS chronological.
+  const drawnFrom = hasMix ? mix.reduce((m, r) => (r.month < m ? r.month : m), mix[0].month) : null;
+  const drawnTo = hasMix ? mix.reduce((m, r) => (r.month > m ? r.month : m), mix[0].month) : null;
+  const drawsFullWindow = drawnFrom === EARLIEST_MONTH && drawnTo === asOf;
+  // ONE string, not adjacent JSX expressions. React's SSR emits `<!-- -->` between adjacent
+  // text nodes so it can find the boundaries again when hydrating, so writing this as
+  // `chart: {a} → {b}` puts comment markers INSIDE the phrase in the served HTML. `textContent`
+  // skips comment nodes, so every unit test still passes while `smoke.sh`'s grep over the raw
+  // bytes stops matching -- the "green tests, broken production" shape this project has hit
+  // repeatedly. Caught here by app-smoke, which is exactly what it is for.
+  const chartWindow = `chart: ${drawsFullWindow ? "the full window · " : ""}${drawnFrom} → ${drawnTo}`;
 
   const columns = buildColumns(allowlist, result.columns);
 
@@ -263,7 +280,7 @@ export async function RouteView({
           {hasMix ? (
             <>
               {" "}
-              · chart: the full window · {EARLIEST_MONTH} → {asOf}
+              · {chartWindow}
             </>
           ) : null}
         </p>

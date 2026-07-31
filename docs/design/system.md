@@ -334,6 +334,18 @@ mark, not only lines.
   stopped filing in 2019 draws nothing to the right of 2019 rather than a flat zero line to
   2026. The page's own window line and the `aria-label` name the range actually drawn.
 
+  **The visible line has to say so too, not just the `aria-label`.** It shipped naming the
+  *requested* window and read `chart: the full window · 2015-01 → 2026-04` above a chart that
+  stopped in 2022 — on `/route/ATL-CAK`, which filed 67 months, 2015-01 → 2022-06, and nothing
+  since (measured). The `aria-label` was already correct, so only the text a sighted reader
+  sees was wrong, which is the worse half. 12,062 of 22,950 route pairs last filed before the
+  current trailing-12 window, so this is over half of them rather than a corner case. It is the
+  same fabrication as interpolating across a gap, and the exact inverse of the mistake the
+  two-window line exists to prevent: claiming a window you are not drawing. `page.test.tsx`
+  pins it as a pair — ATL-CAK must name `2015-01 → 2022-06` and must not name `asOf`, while
+  JFK-LAX files every month and must still show the full window, so an implementation that
+  hard-codes either range fails one of the two.
+
 ---
 
 ## The map

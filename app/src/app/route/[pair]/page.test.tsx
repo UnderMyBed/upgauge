@@ -284,6 +284,32 @@ describe("/route/<pair> aircraft-mix chart", () => {
     expect(line).toMatch(/2025-\d\d → /);
   });
 
+  it("names the range the chart actually draws, not the range it asked for", async () => {
+    // ATL-CAK filed 67 months, 2015-01 to 2022-06, and nothing since (measured). The chart is
+    // FETCHED over 2015-01 -> asOf but can only DRAW to 2022-06, and the x axis ends there.
+    // Stating the requested window in the visible line put "2015-01 → 2026-04" over a chart
+    // that stops in 2022 -- the same fabrication as interpolating a gap (M4c final review, F1),
+    // and the exact inverse of the mistake the mount comment warns about: claiming a window
+    // you are not drawing. The aria-label already said "2015-01 to 2022-06"; only the text a
+    // sighted reader sees was wrong.
+    //
+    // Falsifiable, and not merely by the presence of a date: it fails if the line reverts to
+    // the requested window, because asOf (2026-04) must NOT appear in it. Paired with the
+    // JFK-LAX test above, which files every month and so must still show the full window --
+    // an implementation that hard-coded either range fails one of the two.
+    const asOf = await dataAsOf();
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "ATL-CAK" }) }),
+    );
+    const line = container.querySelector(".window")?.textContent ?? "";
+    // Scoped to the chart half: asOf legitimately appears in the TABLE half, which really does
+    // run to 2026-04. Asserting over the whole line would fail for the right answer.
+    const chartHalf = line.slice(line.indexOf("chart:"));
+    expect(chartHalf).toContain("2015-01 → 2022-06");
+    expect(chartHalf).not.toContain(asOf);
+    expect(chartHalf).not.toMatch(/full window/);
+  });
+
   it("still draws the history when the trailing-12 table is empty", async () => {
     // ATL-CAK: 67 months of filings, none since 2022-06 (measured). 12,062 of this database's
     // route pairs last filed before the current trailing-12 window, so this is over half of
