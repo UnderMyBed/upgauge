@@ -1,8 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// Partial mock, same shape as app/api/pivot/route.test.ts and app/explore/page.test.tsx: wraps
+// the REAL loadAllowlist so every test except the ones that opt in via `mockRejectedValueOnce`
+// still exercises the real DuckDB catalog read. M5 Task 7 Part A's fail-safe test needs a way
+// to make the proxy's own /explore probe throw without a mock; this codebase's own precedent
+// for that (route.test.ts, page.test.tsx) is a partial mock, not a fake in-memory database.
+vi.mock("@/lib/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  return { ...actual, loadAllowlist: vi.fn(actual.loadAllowlist) };
+});
+
 import { NextRequest } from "next/server";
 import { proxy } from "@/proxy";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { RAW_PATH_HEADER } from "@/lib/rawPath";
+import { loadAllowlist } from "@/lib/db";
 
 const CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 
@@ -37,6 +49,26 @@ describe("proxy", () => {
     const res = await proxy(new NextRequest("http://localhost/explore?v=1"));
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
+
+  // M5 Task 7, Part A. Named the bug it exists to catch: before this fix, /explore's branch
+  // ran no database query at all and set CACHE unconditionally, so a broken data layer -- the
+  // exact scenario docs/architecture/hosting.md § "The gap" measured against a served build --
+  // still produced the 30-day header on a page.tsx that was about to 500. `loadAllowlist` is
+  // mocked to reject because it is exactly what ExploreView calls first, before its own
+  // try/catch (which wraps only decode()+runPivot()) -- this is the query a missing
+  // meta_pivot_dimensions/meta_pivot_measures catalog view would break.
+  it("does not long-cache /explore when the proxy's own data-layer probe throws", async () => {
+    vi.mocked(loadAllowlist).mockRejectedValueOnce(
+      new Error("duckdb: Catalog Error: Table with name meta_pivot_dimensions does not exist"),
+    );
+    const res = await proxy(new NextRequest("http://localhost/explore?v=1"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // Not vacuous: the immediately-preceding test above (a real request against a healthy
+  // database) proves the SAME code path returns CACHE when loadAllowlist() is not made to
+  // fail, so the assertion above is actually discriminating on the probe's outcome rather than
+  // the branch never being reachable at all.
 
   it("sets the project's Cache-Control on a real /route/<pair>", async () => {
     // Critical fix, final whole-branch review: the matcher used to omit /route/<pair>

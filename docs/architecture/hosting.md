@@ -561,8 +561,42 @@ HTML so an error self-corrects in minutes rather than a month.
 
 **M4d inherited it unchanged and widened its blast radius from one page to four.** `/airport`
 is the worst of them: it runs six pivots (below), so it has the most ways to throw, and its
-proxy resolution succeeds first. Still not fixable from the proxy, still recorded rather than
-papered over — it is on CLAUDE.md's M5 list.
+proxy resolution succeeds first. Still not fixable from the proxy — it is on CLAUDE.md's M5
+list, and M5 Task 7 is what closes as much of it as is honestly closeable.
+
+**M5 Task 7, Part A: `/explore`'s missing probe, closed.** Every `ENTITY_ROUTES` row already
+runs a real query (`resolve()`) before choosing a header, and already caught its own exception
+— `isCacheable`'s `catch { return false; }` predates this task (M4b fix wave 3) and was already
+correct: `/route`, `/airport`, `/carrier` and `/aircraft` already decline the cache when their
+own proxy-side lookup throws. **`/explore` was the one branch that ran no query at all** — it
+set `CACHE` unconditionally, with nothing to catch because nothing was attempted. That is
+precisely why the table above shows `/explore?…` 500ing with the 30-day header: the DB was
+broken (a missing catalog view), but the proxy's `/explore` branch never asked it anything.
+
+The fix (`app/src/proxy.ts`'s `isDataLayerHealthy()`) gives `/explore` the same shape as an
+entity row: call `loadAllowlist()` — exactly what `ExploreView` calls first, before its own
+try/catch, which wraps only `decode()`+`runPivot()` — and default to `no-store` if it throws.
+Pinned by `app/src/proxy.test.ts`'s *"does not long-cache /explore when the proxy's own
+data-layer probe throws"*, which mocks `loadAllowlist` to reject (same partial-mock shape as
+`route.test.ts`/`page.test.tsx`, since this codebase has no fakes for the database itself).
+Mutation-verified: changing the new `catch` to fall through to `true` (cacheable) turns that
+one test red and no other — the untouched *"sets the project's Cache-Control on /explore"*
+test, which runs the same code path against the real, healthy database, stays green under the
+same mutant, which is what proves the new test isn't vacuous.
+
+**What Part A does not, and by construction cannot, cover: a page-specific throw whose proxy
+resolution already succeeded.** `resolveRoutePair`/`resolveAirportCode`/`resolveCarrier`/
+`resolveAircraftSlug` each check dimension-table presence (`dim_airport`, `dim_carrier`,
+`fct_segment_month`), not the pivot catalog — so a database broken by removing, say,
+`mart_route_health` rather than `meta_pivot_dimensions` leaves every entity row's `resolve()`
+succeeding while the page's own pivot still throws downstream, still under `CACHE`. `/explore`'s
+own probe has the identical shape of blind spot one level up: `loadAllowlist()` succeeding says
+nothing about `dataAsOf()` or `runPivot()`, which the page calls afterward. Part A is a
+fail-safe on the query the proxy *already runs* (plus the one new query `/explore` needed to
+have *a* query at all) — it was never going to be able to predict every way a page can fail
+after its own resolution succeeds. That is what Part B evaluates: whether a route-handler entry
+point, which owns its own `Response` and can catch what the page itself throws, is small enough
+to ship for at least one page.
 
 ## Server-side Observable Plot needs no bundler configuration
 

@@ -7,6 +7,7 @@ import { airportSlugFromPath } from "@/lib/airport";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
+import { loadAllowlist } from "@/lib/db";
 
 // `proxy`, not `middleware`: Next 16 deprecated and renamed the convention
 // (node_modules/next/dist/docs/01-app/02-guides/upgrading/version-16.md, "middleware to
@@ -77,8 +78,17 @@ export async function proxy(request: NextRequest) {
   // recognized-but-non-domestic code returns 404 and is not.
   //
   // M4d generalized that from one route to four: see ENTITY_ROUTES below.
+  //
+  // M5 Task 7, Part A: `/explore` has no slug to resolve, so unlike every ENTITY_ROUTES row it
+  // ran NO database query at all -- this branch used to set CACHE unconditionally. That is the
+  // exact gap docs/architecture/hosting.md § "The gap" measured: a served build pointed at a
+  // database missing a catalog view 500s on /explore, and the response still carried
+  // `public, s-maxage=2592000, stale-while-revalidate=86400` because nothing on this path had
+  // asked the database anything before committing to that header. isDataLayerHealthy() is
+  // /explore's equivalent of an entity row's resolve() -- the proxy's own probe, run and
+  // caught BEFORE the header is chosen, never after.
   if (pathname === "/explore") {
-    response.headers.set("Cache-Control", CACHE);
+    response.headers.set("Cache-Control", (await isDataLayerHealthy()) ? CACHE : NO_STORE);
     return response;
   }
   for (const entity of ENTITY_ROUTES) {
@@ -88,6 +98,34 @@ export async function proxy(request: NextRequest) {
     break;
   }
   return response;
+}
+
+/** `/explore`'s fail-safe probe (M5 Task 7, Part A). Reuses `loadAllowlist()` rather than
+ * inventing a cheaper standalone query, for two reasons: (1) it is exactly what `ExploreView`
+ * (`app/src/app/explore/page.tsx`) calls FIRST, before its own try/catch -- which wraps only
+ * `decode()` and `runPivot()` -- so a broken `meta_pivot_dimensions` / `meta_pivot_measures`
+ * catalog view throws there today, unguarded, precisely the scenario this closes; and (2) the
+ * ENTITY_ROUTES precedent already accepts paying for a second, proxy-side copy of a query the
+ * page will also run (see isCacheable's own doc comment: "This is a SECOND resolution for the
+ * request").
+ *
+ * What this does NOT cover, and cannot from here: a throw AFTER this probe succeeds -- e.g.
+ * `dataAsOf()` failing when `loadAllowlist()` didn't, or `runPivot()` failing on a query this
+ * exact allowlist read could not have anticipated (a template bug, a value that passes
+ * `decode()`'s structural check but not the executable SQL, an OOM). Those are page-specific
+ * throws whose proxy resolution succeeded, and closing them is Part B's job, not this
+ * function's -- see docs/architecture/hosting.md § "The gap" for which exit Part B took.
+ *
+ * Errors are swallowed to `false`, matching `isCacheable`'s own reasoning below: a transient
+ * failure here would 500 a request the page might well still serve, and declining the cache is
+ * the conservative outcome regardless of cause. */
+async function isDataLayerHealthy(): Promise<boolean> {
+  try {
+    await loadAllowlist();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** One row per entity page: how to find its slug in the pathname, and how to resolve it.
