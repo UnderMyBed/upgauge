@@ -382,6 +382,45 @@ favour of a per-page mechanism if Next ever grows one; or accept a short `s-maxa
 HTML so an error self-corrects in minutes rather than a month. Recorded here so M4d inherits
 the honest version.
 
+## Server-side Observable Plot needs no bundler configuration
+
+M4c renders charts on the server: Plot draws into a jsdom `document` and the serialized SVG
+is injected (`app/src/lib/chart/svg.ts`). The risk going in was that `jsdom` would need
+`serverExternalPackages` the way `@duckdb/node-bindings` does — jsdom has dynamic requires
+and native-ish dependencies, the same shape that broke the DuckDB build above.
+
+**It does not.** Measured against Next 16.2.12 + Turbopack: `next build` compiled the server
+bundle with jsdom and `@observablehq/plot` inlined, unchanged `next.config.ts`, and the
+served build renders the SVG per request on a `force-dynamic` page. `serverExternalPackages`
+was left at its existing two DuckDB entries. Recorded because M4d mounts the same component
+on three more pages and should not re-litigate this.
+
+The one thing that *was* required is a types-only dev dependency. jsdom 29 ships no
+declarations, and `next build` runs `tsc` after a successful compile, so the build fails
+*after* reporting `✓ Compiled successfully`:
+
+```
+./src/lib/chart/svg.ts:1:23
+Type error: Could not find a declaration file for module 'jsdom'.
+'/…/node_modules/jsdom/lib/api.js' implicitly has an 'any' type.
+```
+
+`@types/jsdom` in `devDependencies` fixes it; `jsdom` itself is a production dependency
+because it runs at request time.
+
+**`var()` colour tokens survive into the served SVG**, so `globals.css` stays the single
+source for the ramp and no hex fallback is needed. Verified on a served build in *both*
+forms, which are different code paths: a constant `fill: "var(--g3)"` and — the form the
+stacked area actually uses — an ordinal colour scale whose `range` is `var()` strings.
+The served bytes carry `<path fill="var(--g1)" d="…">` and `fill="var(--g5)"` verbatim.
+
+**The SVG is emitted twice per response.** Once as markup in the HTML body and once,
+escaped, in the RSC flight payload that follows it (`self.__next_f.push`) — measured by
+counting occurrences in a served response. That is inherent to rendering into
+`dangerouslySetInnerHTML` from a Server Component, not a bug, but it doubles the byte cost
+of every chart. It is the number to watch when M4d puts this component on three more pages;
+a trivial two-mark probe page came to 18,762 bytes.
+
 ## If the Dockerfile ever adopts `output: "standalone"`
 
 Next's standalone output traces the module graph and copies only what it finds. **`sql/` is
