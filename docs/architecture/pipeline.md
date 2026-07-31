@@ -779,6 +779,17 @@ code) 404s naming the offending code; two real airports with no service in the w
 200 with an empty-state message and the widened-to-2015 offer, the same treatment `/explore`
 gives a valid query matching zero rows.
 
+That 404 names the offending **half**, not the pair — `resolveRoutePair`'s own `reason` string
+is what the branded page renders, so `/route/ZZZZ-LAX` says `unknown airport code 'ZZZZ'` and
+`/route/JFK-LHR` says `'LHR' is a recognized airport code, but this dataset is domestic-only
+(T-100 Segment) and carries no rows for it` (that distinction is what `airportCodesExist()` /
+`lookup_airport_code_exists.sql` exist for). Next's `not-found.js` accepts no props and
+`notFound()` takes no argument, so the reason cannot be handed across from `page.tsx`; the
+pathname arrives instead as a `proxy.ts` request header and `not-found.tsx` re-derives the
+reason server-side. The 200 and the 308 are long-cached, both 404s are `no-store` — mechanism,
+rationale and the served-build measurements in
+[`hosting.md` § What `proxy.ts` owns](hosting.md#what-proxyts-owns).
+
 ### The reverse lookup surfaced an `is_latest` gap M4a's own invariant didn't cover
 
 `app/src/lib/resolve.ts`'s `lookupAirportsByCode` (code → `airport_id`, the direction M4a

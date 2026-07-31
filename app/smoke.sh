@@ -152,6 +152,45 @@ check     "route: redirect targets canonical"  "$LOC"  '/route/JFK-LAX'
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/route/ZZZZ-LAX")
 check     "route: unknown code is a 404"       "$CODE" '404'
 
+# Fix wave 2, NEW-1: the cache header used to be set on EVERY /route/ response, so a 404 was
+# pinned in a shared CDN cache for 30 days -- longer than the monthly ingest that can make the
+# pair real. proxy.ts now resolves the pair BEFORE the page runs (a Next proxy cannot see the
+# downstream status) and caches only well-formed known pairs. The 200 and the 308 above must
+# stay long-cached; these three must not. Nothing but a served build can check this: the unit
+# tests never cross Next's own header plumbing.
+for P in ZZZZ-LAX JFK-LHR LAX-LAX; do
+  HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/route/${P}")
+  check_not "route: 404 (${P}) is not long-cached" "$HDRS" "s-maxage=2592000"
+  check     "route: 404 (${P}) is no-store"        "$HDRS" "no-store"
+done
+
+# Fix wave 2, Important 2: four doc sites promise a 404 "naming the offending code". The 404
+# body used to come from a Client Component reading usePathname(), which named the whole PAIR
+# and which no server test and no curl could observe -- so usePathname() returning null would
+# have degraded the page to a generic sentence with every gate green. It is now a Server
+# Component re-running routePair.ts against the real database (lib/rawPath.ts). Each case
+# asserts a phrase only ITS reason produces AND the absence of a sibling case's phrase,
+# because a single generic sentence enumerating all the causes would satisfy any lone
+# positive check -- that sentence is exactly what shipped before.
+#
+# What these checks DO and DO NOT prove. Next serves a 404 from a force-dynamic page as an
+# `<html id="__next_error__">` shell with an EMPTY <body>; the page's markup arrives in the
+# streamed React payload further down the same response and is rendered client-side. That is
+# pre-existing -- verified by building and curling d158726, before any of this fix wave -- and
+# it is why these greps read the whole response body, not a <p> tag. They still prove exactly
+# the thing the fix is about: the payload is generated on the SERVER, so a hit here means the
+# server resolved this pair and shipped this specific reason. They do NOT prove the sentence
+# is visible with JavaScript off. That gap is logged, not fixed here.
+BODY=$(curl -s --max-time 15 "${BASE}/route/ZZZZ-LAX")
+check     "route 404: names the offending code, not just the pair" "$BODY" 'unknown airport code'
+check     "route 404: still shows the requested slug"              "$BODY" 'ZZZZ-LAX'
+check     "route 404: DATA AS OF is present"                       "$BODY" 'DATA AS OF'
+check_not "route 404: does not offer every cause at once"          "$BODY" 'domestic-only'
+
+BODY=$(curl -s --max-time 15 "${BASE}/route/JFK-LHR")
+check     "route 404: a real airport outside the dataset says so"  "$BODY" 'domestic-only'
+check_not "route 404: LHR is not reported as an unknown code"      "$BODY" 'unknown airport code'
+
 echo
 if [ "$FAILED" -eq 0 ]; then echo "smoke: all checks passed"; else echo "smoke: FAILURES above"; fi
 exit "$FAILED"

@@ -78,7 +78,9 @@ format's structural `:` into `%3A` and collapses `k:a%2Cb,c` into `k%3Aa%2Cb%2Cc
 comma becomes indistinguishable from a separator. Without them **every** filtered query fails
 on **both** `/explore` and `/api/pivot`, reserved characters or not. Both entry points read
 the raw string from one header and nothing else; a page can never use `searchParams` for this.
-Full detail and the measurements: `docs/architecture/hosting.md`.
+`proxy.ts` also sets a second header (the request pathname, for `not-found.js` — which accepts
+no props) and applies the project `Cache-Control`. Full detail, and the rule that a new page
+route must be added to its matcher: `docs/architecture/hosting.md` § What `proxy.ts` owns.
 
 **No unit test can catch that class.** Five bugs on this branch had the shape "green tests,
 broken production" — `__dirname` under Turbopack, `decodeURIComponent` throwing,
@@ -116,14 +118,19 @@ surfaced a resolution gap M4a's own invariant never covered — `WHERE is_latest
 the real Austin-Bergstrom and a defunct airport closed since 1999) — fixed by scoping the
 lookup to airports present in `fct_segment_month`, which takes colliding codes to 0
 (`docs/data/invariants.md` § Entity resolution). `/route/LAX-JFK` 308-redirects to
-`/route/JFK-LAX`; `/route/ZZZZ-LAX` 404s naming the code; a real pair with no scheduled
-service in the window 200s with an empty-state message and the widened-to-2015 offer, never a
-blank panel. Full contract: `docs/architecture/pipeline.md` § M4b.
+`/route/JFK-LAX`; `/route/ZZZZ-LAX` 404s on a branded page naming the offending **half**
+(`unknown airport code 'ZZZZ'`, and `'LHR' is a recognized airport code, but this dataset is
+domestic-only` for `/route/JFK-LHR`) — server-rendered from `resolveRoutePair`'s own reason,
+not a client-side guess at the pair, and served `no-store` rather than cached for a month; a
+real pair with no scheduled service in the window 200s with an empty-state message and the
+widened-to-2015 offer, never a blank panel. Full contract:
+`docs/architecture/pipeline.md` § M4b.
 
-191 app tests green (`make app-check`); `make app-build` produces a working production
-build; `make app-smoke` builds, serves and curls real URLs, 24 checks in all — including a
-curl-verified redirect and 404 for `/route/<pair>`, since a handler returning a redirect
-object and a served app returning one are not the same claim.
+222 app tests green (`make app-check`); `make app-build` produces a working production
+build; `make app-smoke` builds, serves and curls real URLs, 37 checks in all — including a
+curl-verified redirect, 404, `Cache-Control` and 404 *body* for `/route/<pair>`, since a
+handler returning a redirect object and a served app returning one are not the same claim,
+and a 404 whose status is right tells you nothing about what it says.
 
 Not built yet: the time-series and fleet-mix charts, the arc map, `/airport`, `/carrier`,
 `/aircraft`, `/watch`, the seasonality heatmap, and OG cards — all specified in
@@ -283,9 +290,15 @@ signature element; it does not own these.
 
 - **Invariants are written as failing tests first**, before the pipeline that satisfies them.
 - Marts must rebuild from scratch reproducibly via `make`. No manual steps.
-- Every response gets `Cache-Control: public, s-maxage=2592000,
+- Every **successful** response gets `Cache-Control: public, s-maxage=2592000,
   stale-while-revalidate=86400`. Precompute leaderboards as static JSON at build time — the
-  caching is the cost control, not the hosting tier.
+  caching is the cost control, not the hosting tier. **Errors and 404s get `no-store`**: the
+  dataset is rebuilt monthly, so a 404 pinned in a shared cache outlives the condition that
+  caused it. `/api/pivot` does this in its handler; a page cannot, and a proxy cannot see the
+  downstream status — so **`proxy.ts` caches on "is this a well-formed, known entity",
+  resolved before the page runs**, which is the rule M4d's entity pages must follow too.
+  **A new page route must be added to `proxy.ts`'s matcher or it ships uncached and without
+  the raw-query and pathname headers.** Full detail: `docs/architecture/hosting.md`.
 - Build the **aircraft-type-mix chart before the load-factor chart**. Everyone does load
   factor; the gauge story is the differentiator.
 - Build the generic Top-N builder once; the `/watch` presets are saved instances of it.
