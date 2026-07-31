@@ -102,6 +102,15 @@ check "api: does not cache an error" "$HDRS" "no-store"
 BODY=$(curl -s --max-time 15 "${BASE}/")
 check_not "home: no create-next-app boilerplate" "$BODY" 'vercel.com/new'
 
+# 7. Resolution: the reader must see codes, never the catalog's ids.
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op")
+check     "explore: renders a carrier code"        "$BODY" '>DL<'
+check_not "explore: renders no bare airline id"    "$BODY" '>19790<'
+check     "explore: legend states current identity" "$BODY" 'current identity'
+
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=route&d=route&m=seats&t=2025-05:2026-04&s=-seats&n=10&g=op")
+check_not "explore: route renders no bare airport id" "$BODY" '>14747<'
+
 echo
 if [ "$FAILED" -eq 0 ]; then echo "smoke: all checks passed"; else echo "smoke: FAILURES above"; fi
 exit "$FAILED"

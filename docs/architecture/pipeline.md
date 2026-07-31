@@ -550,16 +550,6 @@ quarantined-on-page count), the Task 9 `DataTable` (reused, not rebuilt), the le
 (added in fix round 1, below), and the permalink re-encoded and displayed underneath the
 table.
 
-**Known gap: dimension columns render raw IDs, not display codes.** The `op_airline_id`
-column shows the bare `AIRLINE_ID` (e.g. `19393`), not a carrier code — `db.ts`/`render.ts`
-never read `meta_pivot_dimensions`' `join_dim`/`join_key` columns, which exist for exactly
-this resolution. This does not satisfy `CLAUDE.md`'s "Join on IDs, display `carrier_code`"
-rule. Deliberately not fixed here: resolving every dimension's join is query-layer work
-(joining `dim_carrier`/`dim_airport` per dimension key, decided per dimension since not all
-of them join to a display-label table), genuinely M4-shaped rather than a page-template
-change, and out of this task's scope. Recorded here rather than left implicit, per the
-fix-round-1 review that caught the docs marking M3b complete without saying so.
-
 **The error path is the product feature, not a fallback.** Only `decode()` is wrapped in a
 try/catch — it is the one step that validates untrusted request input against the allowlist,
 and its documented failure mode is `UrlStateError`. An unknown key, an off-allowlist
@@ -617,8 +607,12 @@ duplication this whole milestone exists to avoid:
   operating-carrier "reading this" note — minus the mockup's "Arc rendering (maps)" group,
   since this page has no map. Placed in a new `.body` grid (`minmax(0,1fr) 214px`, 24px gap,
   sticky, collapsing below 920px per `system.md`'s layout rule) alongside the table.
-- **Dimension values render raw IDs, and the docs didn't say so** — see the "Known gap"
-  paragraph above, added in this round.
+- **Dimension values rendered raw IDs, and the docs didn't say so at first.** Fixed in this
+  round by adding an explicit gap note recording that `db.ts`/`render.ts` never read
+  `meta_pivot_dimensions`' `join_dim`/`join_key` columns. The gap itself was closed in M4a
+  (`app/src/lib/resolve.ts` resolves ids to codes for `/explore`); the note that recorded it
+  has been deleted rather than amended, per this project's rule that a closed gap gets
+  removed, not left with a caveat — see `CLAUDE.md`'s Status section for what M4a shipped.
 - **`DERIVED`, a hand-copied `Set` of measure keys mirroring `is_additive: FALSE` in
   `meta_pivot_measures`, was deleted.** `allowlist.meas.get(c)?.isAdditive` already carries
   the same fact and was already loaded on the page; a derived measure added to the catalog
@@ -632,15 +626,15 @@ query (the `op_airline_id:999999999` filter above) renders the "No rows match...
 and the widened-window link, with the stat strip, `DATA AS OF` badge and legend rail all
 still present.
 
-**M3b complete**, with the one known, documented gap above. The route handler (Task 8), the
-data table with its gauge rail and reason-code gutter (Task 9), and `/explore` itself
-including the legend rail and empty-result state (Task 10 and its fix round 1) close out the
-app side of the pivot contract M3a shipped. 109 app tests green (`make app-check`), 424
-Python tests green (`make check`), `make app-build` produces a working production build. Not
-built in M3b: display-code resolution for dimension values (see above, deferred to M4), the
-time-series and fleet-mix charts, the arc map, entity pages, `/watch`, the seasonality
-heatmap, and OG cards — all specified in [`../design/system.md`](../design/system.md) and
-left to M4/M5.
+**M3b complete.** The route handler (Task 8), the data table with its gauge rail and
+reason-code gutter (Task 9), and `/explore` itself including the legend rail and
+empty-result state (Task 10 and its fix round 1) close out the app side of the pivot
+contract M3a shipped. 109 app tests green (`make app-check`), 424 Python tests green
+(`make check`), `make app-build` produces a working production build. Not built in M3b:
+display-code resolution for dimension values (closed in M4a — see `CLAUDE.md`'s Status
+section), the time-series and fleet-mix charts, the arc map, entity pages, `/watch`, the
+seasonality heatmap, and OG cards — all specified in
+[`../design/system.md`](../design/system.md) and left to M4b/M4c+ onward.
 
 ## Toolchain
 

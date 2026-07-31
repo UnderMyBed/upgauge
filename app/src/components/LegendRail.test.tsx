@@ -32,4 +32,9 @@ describe("LegendRail", () => {
     expect(screen.getByText(/regional metal/)).toBeDefined();
     expect(screen.getByText(/widebody/)).toBeDefined();
   });
+
+  it("states that codes are current identity, not point-in-time filings", () => {
+    render(<LegendRail />);
+    expect(screen.getByText(/current identity/i)).toBeDefined();
+  });
 });

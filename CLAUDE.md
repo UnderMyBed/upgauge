@@ -49,7 +49,7 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M3a and M3b COMPLETE.** M3a's Explorer pivot query contract — templates
+**M3a, M3b and M4a COMPLETE.** M3a's Explorer pivot query contract — templates
 (`sql/03_queries/pivot_segment.sql` / `pivot_route.sql`), the allowlist as catalog objects
 (`meta_pivot_dimensions` / `meta_pivot_measures`), the CI-only Python reference
 implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`), the mainline-grouping toggle,
@@ -58,7 +58,7 @@ the URL state codec, and the golden fixtures
 `sql/02_marts/` into `upgauge.duckdb` (6 catalog views + `fct_route_month` +
 `mart_route_health` + the 2 pivot-vocabulary catalog views); `make verify` proves both the
 Parquet layer and the database layer reproducible across two from-scratch builds —
-`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 424 Python tests
+`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 428 Python tests
 green, zero join orphans. `data/raw/` holds the full 2015–2026 window.
 
 M3b ported that contract into the Next.js app and wired it end to end: the TypeScript pivot
@@ -70,9 +70,9 @@ server-rendered page that decodes the URL, runs the pivot, and renders a real ta
 `DATA AS OF` badge, a stat/meta strip, the legend rail, and the permalink displayed. An
 invalid permalink renders a named error (e.g. `unknown dimension 'nope'`), never a silent
 fallback to a default view; a valid permalink matching zero rows states the query in words
-and offers the widened-to-2015 permalink, never a blank panel. 127 app tests green
+and offers the widened-to-2015 permalink, never a blank panel. 153 app tests green
 (`make app-check`); `make app-build` produces a working production build; `make app-smoke`
-builds, serves and curls 12 real URLs.
+builds, serves and curls real URLs, 16 checks in all.
 
 **`app/src/proxy.ts` + `skipProxyUrlNormalize` are load-bearing, not an optimisation.** Next
 form-encodes the query string before any page or route handler sees it, which turns the
@@ -88,19 +88,23 @@ broken production" — `__dirname` under Turbopack, `decodeURIComponent` throwin
 Every one was found by building and serving, never by the suite. That is what `make app-smoke`
 is for; run it before merging anything that touches routing, config, or the query layer.
 
-**Known gap, not yet fixed:** dimension columns in the Explorer table render the raw
-`AIRLINE_ID` / `AIRPORT_ID` the catalog is keyed on (e.g. `19393`), not a display code —
-`meta_pivot_dimensions`'s `join_dim`/`join_key` columns exist for exactly this resolution
-(`op_airline_id` → `dim_carrier.airline_id`) but nothing in `db.ts` or `render.ts` reads
-them yet. This does not satisfy this file's own "Join on IDs, display `carrier_code`" rule
-(see Hard rules, below) — it is deferred to M4, which is query-layer work (joining
-`dim_carrier`/`dim_airport` per dimension), not a page-rendering fix.
+**M4a resolves dimension ids to display codes.** `meta_pivot_dimensions`'s `join_dim`/
+`join_key` columns (`op_airline_id` → `dim_carrier.airline_id`, and so on) are now read by
+`app/src/lib/resolve.ts`: `/explore` renders `DL`, `SEA`, `B737-7` and `PDX–SEA`, never the
+bare `AIRLINE_ID`/`AIRPORT_ID` the catalog is keyed on, satisfying this file's own "Join on
+IDs, display `carrier_code`" rule (see Hard rules, below). `dim_carrier` and `dim_airport`
+carry only the *current* code (see Hard rules), so the legend rail states outright that
+codes and names are current identity, not point-in-time filings — the honesty the display
+depends on. A dimension with no code (city market) renders its name directly; an id absent
+from the catalog renders as itself, never a dash. `make app-smoke` asserts a real code
+renders and the bare id does not, on both a segment and a route query.
 
-Not in M3b: the time-series and fleet-mix charts, the arc map, entity pages (`/route`,
+Not built yet: the time-series and fleet-mix charts, the arc map, entity pages (`/route`,
 `/airport`, `/carrier`, `/aircraft`), `/watch`, the seasonality heatmap, and OG cards — all
-specified in `docs/design/system.md` and left to M4/M5.
+specified in `docs/design/system.md` and left to M4b (`/route/<pair>` and the
+aircraft-type-mix chart) and M4c+ (`/airport`, `/carrier`, `/aircraft`, the maps) onward.
 
-Next: **M4** — entity pages and charts.
+Next: **M4b** — `/route/<pair>` and the aircraft-type-mix chart.
 
 ## Architecture
 
