@@ -126,17 +126,24 @@ describe("runPivot resolves display values without altering the result shape", (
     // query itself). The real cardinality guard on dim_airport's multi-seq join lives in
     // resolve.test.ts, against resolve_airport.sql directly -- a repeated key in `resolved`
     // would just overwrite silently in a Map, which nothing here would observe.
+    // toBe, not toBeLessThanOrEqual: the pivot SQL already carries LIMIT 5, so "<= 5" holds
+    // for any row set including zero rows and can never fail. 114 carriers operated
+    // in-window (docs/data/invariants.md), so this window's op_airline_id result is truly
+    // truncated at 5 -- toBe(5) is safe and catches a truncation regression the old bound
+    // could not.
     const r = await runPivot({ ...CARRIER_QUERY, limit: 5 });
-    expect(r.rows.length).toBeLessThanOrEqual(5);
+    expect(r.rows.length).toBe(5);
   });
 
   it("leaves origin_airport_id's row set alone too, despite airports carrying multi-seq history", async () => {
     // Same caveat as above: this is a non-regression check on runPivot's own rows, not proof
     // that resolve_airport.sql's `WHERE is_latest` is intact. See resolve.test.ts for that.
+    // toBe, not toBeLessThanOrEqual, for the same reason as above -- thousands of airports
+    // are in-window, so LIMIT 10 truly truncates and toBe(10) is a real assertion.
     const r = await runPivot({
       ...CARRIER_QUERY, dimensions: ["origin_airport_id"], limit: 10,
     });
-    expect(r.rows.length).toBeLessThanOrEqual(10);
+    expect(r.rows.length).toBe(10);
     const seen = new Set(r.rows.map((x) => x.origin_airport_id));
     expect(seen.size).toBe(r.rows.length);
   });

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ExploreView } from "@/app/explore/page";
+import { loadAllowlist } from "@/lib/db";
 
 const OK = {
   v: "1",
@@ -148,6 +149,28 @@ describe("/explore displays codes, not ids", () => {
     const raw = "v=1&k=route&d=route&m=seats&t=2025-05:2026-04&s=-seats&n=5&g=op";
     render(await ExploreView({ rawQuery: raw }));
     expect(screen.getAllByText(/^[A-Z]{3}–[A-Z]{3}$/).length).toBeGreaterThan(0);
-    expect(screen.queryByText("Route key low")).toBeNull();
+    // "route_key_low" is what the header WOULD render (label fallback chain, lib/format.ts)
+    // if the __route collapse regressed and the raw fact column leaked through as its own
+    // header -- unlike "Route key low" (Title Case with a space), a string this codebase
+    // cannot emit under any code path, which asserted absence of nothing.
+    expect(screen.queryByText("route_key_low")).toBeNull();
+  });
+});
+
+// Whole-branch review, Finding 2: page.tsx's ROUTE_COLUMNS used to hand-copy
+// meta_pivot_dimensions' column_expr for `route` as a literal array. resolve.ts's
+// columnsFor() correctly reads it from the live catalog; the two halves disagreed about
+// where truth lives, and a renamed fact column would silently flip `hasRoute` false with no
+// test going red. page.tsx now derives its route columns from the live allowlist the same
+// way resolve.ts does -- which makes that derivation self-fulfilling unless something pins
+// the catalog's own shape independently. This test is that pin: same shape as db.test.ts's
+// "allowlist.fixture.ts stays in sync with the real catalog" (a hardcoded expectation
+// checked against a live query), so a `column_expr` rename or reorder in
+// meta_pivot_dimensions is caught here rather than discovered as a blank route column.
+describe("route's column_expr stays in sync with the catalog", () => {
+  it("matches meta_pivot_dimensions' declared route columns, in this order", async () => {
+    const allowlist = await loadAllowlist();
+    const expr = allowlist.dims.get("route")?.columnExpr;
+    expect(expr?.split(",").map((c) => c.trim())).toEqual(["route_key_low", "route_key_high"]);
   });
 });

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { collectIds, resolveRows, resolutionKey, displayValue } from "@/lib/resolve";
+import { collectIds, resolveRows, resolutionKey, displayValue, RESOLVER_FILE } from "@/lib/resolve";
 import { connect, loadAllowlist } from "@/lib/db";
 
 // Same anchor as db.ts's ROOT / QUERIES_DIR -- see db.ts's header comment for the full
@@ -118,6 +118,26 @@ describe("displayValue", () => {
 // is_latest). Row COUNT is what actually catches a fan-out, and nothing in resolve.test.ts or
 // db.test.ts inspects it at the SQL level. This test does: it runs resolve_airport.sql
 // directly, independent of resolveRows()'s Map-based interface, and asserts row count.
+// Whole-branch review, Finding 6: `collectIds`'s `if (!(entry.joinDim in RESOLVER_FILE))
+// continue` is the last unguarded silent-degradation path on a branch whose entire theme is
+// that silent degradation is the enemy -- a dimension whose catalog `join_dim` has no
+// matching resolver file would just keep rendering raw ids, forever, with no test noticing.
+// This closes that gap: it walks the LIVE allowlist (not a hardcoded dimension list, for the
+// same reason db.test.ts's fixture-vs-catalog test does) and asserts every distinct non-null
+// `join_dim` present in the catalog today has a RESOLVER_FILE entry.
+describe("RESOLVER_FILE is exhaustive against the live catalog", () => {
+  it("has an entry for every distinct join_dim in meta_pivot_dimensions", async () => {
+    const allowlist = await loadAllowlist();
+    const joinDims = new Set(
+      [...allowlist.dims.values()].map((d) => d.joinDim).filter((d): d is string => d !== null),
+    );
+    expect(joinDims.size).toBeGreaterThan(0);
+    for (const joinDim of joinDims) {
+      expect(RESOLVER_FILE).toHaveProperty(joinDim);
+    }
+  });
+});
+
 describe("resolve_airport.sql's cardinality guard", () => {
   it("returns exactly one row for an airport_id with multiple seq rows in dim_airport", async () => {
     const raw = readFileSync(path.join(QUERIES_DIR, "resolve_airport.sql"), "utf8");

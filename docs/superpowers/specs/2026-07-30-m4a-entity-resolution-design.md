@@ -1,6 +1,8 @@
 # M4a — entity resolution: IDs become codes
 
-**Status:** design approved 2026-07-30, not yet planned.
+**Status:** shipped 2026-07-30. Built across seven tasks plus fix rounds; see
+`docs/architecture/pipeline.md`'s M4a section and `CLAUDE.md`'s Status section for what
+landed.
 **Milestone:** M4a, the first of the decomposed M4.
 
 M4 as originally written — four entity page types, three chart families, three map
@@ -179,7 +181,7 @@ column sized for a two-letter code.
 | `origin/dest_airport_id` | `SEA` | as above |
 | `origin/dest_city_market_id` | `Seattle, WA` | no code exists — the name **is** the display value |
 | `aircraft_type` | `B737-7` | as above |
-| `route` | `PDX–SEA` | both endpoint names |
+| `route` | `PDX–SEA` | nothing — `__route` is a synthetic column with no `dimKey`, so no `abbr title` renders for it; `docs/design/system.md` describes this correctly and this row was wrong |
 
 `route` joins its two resolved codes with an en dash, matching `features.md`'s `/route/PDX-AUS`
 and the mockups' `PDX–SEA`.
@@ -264,12 +266,12 @@ Deliberately excluded, each with a reason:
 
 ## Definition of done
 
-- [ ] `resolve_{carrier,airport,city_market,aircraft_type}.sql` exist and are bound-parameter only
-- [ ] `route` has `join_dim`/`join_key` in `meta_pivot_dimensions`
-- [ ] `runPivot()` returns code and name alongside every resolvable dimension
-- [ ] `/explore` shows `DL`, `SEA`, `B737-7` — not `19790`, `14747`, `612`
-- [ ] Legend rail states codes are current identity
-- [ ] Every test in the table above passes
-- [ ] `make check`, `make app-check`, `make app-smoke`, `make verify` all green
-- [ ] All five docs updated; the known-gap notes deleted
-- [ ] Goldens byte-identical after `make goldens` — proof the M3a contract never moved
+- [x] `resolve_{carrier,airport,city_market,aircraft_type}.sql` exist and are bound-parameter only
+- [x] `route` has `join_dim`/`join_key` in `meta_pivot_dimensions`
+- [x] `runPivot()` returns code and name alongside every resolvable dimension
+- [x] `/explore` shows `DL`, `SEA`, `B737-7` — not `19790`, `14747`, `612`
+- [x] Legend rail states codes are current identity
+- [x] Every test in the table above passes
+- [x] `make check`, `make app-check`, `make app-smoke`, `make verify` all green
+- [x] All five docs updated; the known-gap notes deleted
+- [x] Goldens byte-identical after `make goldens` — proof the M3a contract never moved

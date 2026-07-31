@@ -12,8 +12,12 @@ const QUERIES_DIR = path.join(ROOT, "sql", "03_queries");
 
 /** Which resolver file serves a given dimension table. Keyed on the catalog's own
  * `join_dim`, so adding a dimension is a catalog change plus a file -- never a branch on a
- * dimension's name. */
-const RESOLVER_FILE: Record<string, string> = {
+ * dimension's name. Exported so resolve.test.ts can assert this map is exhaustive against
+ * the live allowlist's distinct `join_dim` values -- `collectIds`'s
+ * `if (!(entry.joinDim in RESOLVER_FILE)) continue` is otherwise a silent-degradation path:
+ * a dimension added to the catalog with a `join_dim` nobody wired a resolver file for would
+ * quietly keep rendering raw ids forever, with every existing test still green. */
+export const RESOLVER_FILE: Record<string, string> = {
   dim_carrier: "resolve_carrier",
   dim_airport: "resolve_airport",
   dim_city_market: "resolve_city_market",

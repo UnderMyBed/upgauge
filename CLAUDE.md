@@ -70,9 +70,9 @@ server-rendered page that decodes the URL, runs the pivot, and renders a real ta
 `DATA AS OF` badge, a stat/meta strip, the legend rail, and the permalink displayed. An
 invalid permalink renders a named error (e.g. `unknown dimension 'nope'`), never a silent
 fallback to a default view; a valid permalink matching zero rows states the query in words
-and offers the widened-to-2015 permalink, never a blank panel. 153 app tests green
+and offers the widened-to-2015 permalink, never a blank panel. 155 app tests green
 (`make app-check`); `make app-build` produces a working production build; `make app-smoke`
-builds, serves and curls real URLs, 16 checks in all.
+builds, serves and curls real URLs, 17 checks in all.
 
 **`app/src/proxy.ts` + `skipProxyUrlNormalize` are load-bearing, not an optimisation.** Next
 form-encodes the query string before any page or route handler sees it, which turns the

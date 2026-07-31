@@ -44,11 +44,24 @@ const NON_DISPLAY_COLUMNS = new Set(["quarantined_rows", "quarantine_reasons"]);
  * contract inline as `?.code ?? String(row[c] ?? "—")`, which collapsed "unresolved" and
  * "resolved with a null code" into the same raw-id fallback. That could not misfire today
  * (dim_airport.code has 0 nulls across all 20,267 rows, and route only resolves through
- * dim_airport), but it was an unenforced point-in-time fact, not an invariant. */
-const ROUTE_COLUMNS = ["route_key_low", "route_key_high"] as const;
+ * dim_airport), but it was an unenforced point-in-time fact, not an invariant.
+ *
+ * Derived from the live catalog's own `column_expr`, not hand-copied -- resolve.ts's
+ * `columnsFor()` derives the identical value the identical way. A hardcoded `["route_key_low",
+ * "route_key_high"]` here would silently stop matching a renamed fact column: `hasRoute` would
+ * go false with no test going red, and /explore would revert to two bare airport-id columns.
+ * page.test.tsx pins the catalog's `column_expr` for `route` against this exact shape, so a
+ * change here is caught at the catalog, not discovered by a blank route column in production. */
+function routeColumns(allowlist: Allowlist): string[] {
+  return allowlist.dims.get("route")?.columnExpr.split(",").map((c) => c.trim()) ?? [];
+}
 
-function routeCode(row: Record<string, unknown>, resolved: Map<string, Resolved>): string {
-  return ROUTE_COLUMNS
+function routeCode(
+  row: Record<string, unknown>,
+  resolved: Map<string, Resolved>,
+  columns: string[],
+): string {
+  return columns
     .map((c) => displayValue(resolved.get(resolutionKey(c, row[c])), row[c]))
     .join("–");
 }
@@ -191,9 +204,10 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
   // `route`'s catalog entry names two columns (route_key_low, route_key_high) that both
   // resolve through dim_airport -- collapse them into one synthetic `__route` column so the
   // reader sees one `PDX–SEA` cell instead of two bare airport ids side by side.
-  const hasRoute = ROUTE_COLUMNS.every((c) => result.columns.includes(c));
+  const routeCols = routeColumns(allowlist);
+  const hasRoute = routeCols.length > 0 && routeCols.every((c) => result.columns.includes(c));
   const displayColumns = result.columns.filter(
-    (c) => !NON_DISPLAY_COLUMNS.has(c) && !(hasRoute && (ROUTE_COLUMNS as readonly string[]).includes(c)),
+    (c) => !NON_DISPLAY_COLUMNS.has(c) && !(hasRoute && routeCols.includes(c)),
   );
 
   const columns: ColumnSpec[] = [
@@ -225,7 +239,7 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
   ];
 
   const displayRows = hasRoute
-    ? result.rows.map((r) => ({ ...r, __route: routeCode(r, result.resolved) }))
+    ? result.rows.map((r) => ({ ...r, __route: routeCode(r, result.resolved, routeCols) }))
     : result.rows;
 
   return (
