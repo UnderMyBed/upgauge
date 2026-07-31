@@ -118,14 +118,21 @@ describe("runPivot resolves display values without altering the result shape", (
     expect(r.columns).toContain("op_airline_id");
   });
 
-  it("does not change the row count -- a fan-out would inflate every total", async () => {
+  it("does not change the row count -- resolveRows runs a separate query and never touches rows", async () => {
+    // Not a fan-out guard: resolution returns a Map keyed by resolutionKey(), built from a
+    // query distinct from the one that produced `rows`, and never joins into or mutates
+    // `rows` itself. This only pins that wiring resolveRows() into runPivot() didn't
+    // introduce some OTHER change to the row set (e.g. an accidental extra join on the pivot
+    // query itself). The real cardinality guard on dim_airport's multi-seq join lives in
+    // resolve.test.ts, against resolve_airport.sql directly -- a repeated key in `resolved`
+    // would just overwrite silently in a Map, which nothing here would observe.
     const r = await runPivot({ ...CARRIER_QUERY, limit: 5 });
     expect(r.rows.length).toBeLessThanOrEqual(5);
   });
 
-  it("does not fan out on airports, which carry multi-seq history", async () => {
-    // 5,033 airport_ids have >1 seq row. Without `WHERE is_latest` this returns more rows
-    // than the LIMIT, silently multiplying seats.
+  it("leaves origin_airport_id's row set alone too, despite airports carrying multi-seq history", async () => {
+    // Same caveat as above: this is a non-regression check on runPivot's own rows, not proof
+    // that resolve_airport.sql's `WHERE is_latest` is intact. See resolve.test.ts for that.
     const r = await runPivot({
       ...CARRIER_QUERY, dimensions: ["origin_airport_id"], limit: 10,
     });

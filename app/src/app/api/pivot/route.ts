@@ -34,14 +34,16 @@ export async function GET(request: Request): Promise<Response> {
     const allowlist = await loadAllowlist();
     const query = decode(qs, allowlist);
     const result = await runPivot(query);
-    // `Response.json()` cannot serialise a Map -- spreading `result` as-is would silently
-    // emit `"resolved": {}`, which looks like data but is not. No documented API consumer
-    // needs resolution in this milestone, so it is excluded rather than mis-serialised.
-    // `_resolved` is deliberately unread: this repo's eslint config has no
-    // `no-unused-vars` ignore pattern, so the discard is spelled out with `void` rather
-    // than adding a project-wide lint exception for one call site.
-    const { resolved: _resolved, ...body } = result;
-    void _resolved;
+    // Named fields, not `...result`: `Response.json()` can't serialise a `Map`, so a bare
+    // spread would silently emit `"resolved": {}` -- data-shaped, but not data. Spelling out
+    // what's included, rather than destructuring `resolved` back out, also means a FUTURE
+    // field added to PivotResult defaults to excluded until someone deliberately adds it
+    // here -- opt-in, not opt-out-and-hope-nobody-forgets.
+    const body = {
+      columns: result.columns,
+      rows: result.rows,
+      quarantinedRowsOnPage: result.quarantinedRowsOnPage,
+    };
     return Response.json(
       { ...body, url: encode(query) },
       { headers: { "Cache-Control": CACHE } },

@@ -1,6 +1,15 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { collectIds, resolveRows, resolutionKey } from "@/lib/resolve";
-import { loadAllowlist } from "@/lib/db";
+import { connect, loadAllowlist } from "@/lib/db";
+
+// Same anchor as db.ts's ROOT / QUERIES_DIR -- see db.ts's header comment for the full
+// story. Duplicated here (rather than imported) because resolve.ts's own QUERIES_DIR isn't
+// exported, and this test deliberately reads the .sql file independently of resolve.ts's
+// code path -- see "resolve_airport.sql's cardinality guard" below for why.
+const ROOT = process.env.UPGAUGE_ROOT ?? process.cwd();
+const QUERIES_DIR = path.join(ROOT, "sql", "03_queries");
 
 describe("collectIds", () => {
   // Pure, no connect() -- these defend properties resolveRows's own tests can't: "dedup"
@@ -79,5 +88,31 @@ describe("resolveRows", () => {
     const rows = [{ op_airline_id: 19790 }, { op_airline_id: 19790 }, { op_airline_id: 19790 }];
     const map = await resolveRows(rows, allowlist);
     expect(map.size).toBe(1);
+  });
+});
+
+// resolveRows()'s own "multi-seq history" test (above) resolves airport_id 14747 and checks
+// the returned code -- but that check goes through a Map keyed by id, and Map.set() on a
+// repeated key just overwrites silently. If resolve_airport.sql's `WHERE is_latest` were
+// ever removed, that test would still pass (whichever of the 3 rows for 14747 the driver
+// returned last happens to also be coded 'SEA' -- confirmed by querying dim_airport directly:
+// airport_id 14747 has seq rows 1474701/1474702/1474703, all coded 'SEA', only 1474703 marked
+// is_latest). Row COUNT is what actually catches a fan-out, and nothing in resolve.test.ts or
+// db.test.ts inspects it at the SQL level. This test does: it runs resolve_airport.sql
+// directly, independent of resolveRows()'s Map-based interface, and asserts row count.
+describe("resolve_airport.sql's cardinality guard", () => {
+  it("returns exactly one row for an airport_id with multiple seq rows in dim_airport", async () => {
+    const raw = readFileSync(path.join(QUERIES_DIR, "resolve_airport.sql"), "utf8");
+    const statement = raw.replace("{{IDS}}", "($id0)");
+    const con = await connect();
+    const prepared = await con.prepare(statement);
+    prepared.bind({ id0: 14747 });
+    const result = await prepared.run();
+    const rows = await result.getRowObjects();
+    // airport_id 14747 (SEA) carries 3 rows in dim_airport (seq 1474701/02/03); exactly one
+    // has is_latest. This assertion fails the moment `WHERE is_latest` is removed from
+    // resolve_airport.sql, which the Map-based tests above cannot do.
+    expect(rows.length).toBe(1);
+    expect(rows[0].code).toBe("SEA");
   });
 });

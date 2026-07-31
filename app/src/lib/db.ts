@@ -181,7 +181,7 @@ export interface PivotResult {
   /** Display values for the ids on these rows, keyed by resolutionKey(). Additive and
    * display-only: `rows` still carry ids, and sorting, filtering and the permalink all
    * continue to use them. An absent key means unresolved -- render the raw id, never a
-   * dash (lib/format.ts: absence is not a measurement). */
+   * dash (lib/format.ts: "Null is absence, zero is a measurement"). */
   resolved: Map<string, Resolved>;
 }
 
