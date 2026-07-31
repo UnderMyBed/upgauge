@@ -1181,6 +1181,78 @@ is not restated here; § M4b and § M4c own it. What follows is what each page h
 itself. Full design and the entity counts:
 `docs/superpowers/specs/2026-07-31-m4d-entity-pages-design.md`.
 
+### `/airport/<code>` — an airport is both endpoints
+
+The composition is `/route`'s: title block, stat strip, full-window aircraft-mix chart,
+trailing-12 carriers table, Explorer link, legend rail. `lookup_airport_by_code.sql` (M4b) is
+reused unchanged, so the fact-presence filter and the collision guard that took `AUS` from two
+answers to one come along with it, and `AmbiguousCodeError` propagates as a loud 500 exactly as
+it does on `/route` — airport codes collide 0 times among fact-present airports (measured), so
+a catch block would be untested code on the happy path.
+
+**Every figure on this page must match `origin_airport_id = X OR dest_airport_id = X`.** An
+origin-only page is not visibly broken: it renders every stat, every carrier row and every
+chart band in the right shape, and is silently about half the airport. Measured at SEA
+(`airport_id` 14747) over 2025-05 → 2026-04:
+
+| | origin OR dest | origin only |
+|---|---|---|
+| seats | **53,373,806** | 26,710,000 |
+| passengers | **43,896,637** | 21,941,241 |
+| destinations | **143** | 140 |
+| Alaska's seats | **26,091,482** | 13,061,110 |
+| carriers | 13 | 13 |
+| aircraft types | 25 | 25 |
+
+The last two rows are why the tests are built the way they are: **carriers and aircraft types
+are identical either way**, so a suite written around "13 carriers appear" passes against the
+bug this page exists to exclude. Each assertion pins a figure the wrong query cannot produce.
+
+**The pivot vocabulary cannot express that OR, so the page assembles it as inclusion-exclusion
+over three ordinary pivots** — `origin`, `dest`, and their overlap — summed as
+`origin + dest − (origin ∧ dest)` in `app/src/app/airport/[code]/endpoints.ts`.
+`meta_pivot_dimensions` offers `origin_airport_id` and `dest_airport_id` separately,
+`render.ts` AND-s filters together, and the one composite dimension (`route`) filters whole
+route *pairs*. Adding an either-endpoint filter would mean a new catalog entry plus a second
+composite-filter semantics implemented in `render.ts` **and** `pipeline/pivot.py` in lockstep,
+which is M5's call, not a page's. The two side queries carry the *other* endpoint as a second
+dimension, so one pair of queries answers both "which carriers" and "how many destinations".
+
+**The third term is not a formality** — same-airport (`origin = dest`) filings exist in
+`fct_segment_month` and satisfy both halves; see [data/invariants.md § Route
+identity](../data/invariants.md#route-identity) for the counts. Its one exception is
+truncation: each side is a `LIMIT`-ed pivot, so a truncated side can drop rows the overlap
+query still returns, and the union then skips the subtraction instead of driving a measure
+negative (`partial`). Found by the truncation test, not by reading.
+
+**The page says outright that the Explorer cannot express its query**, and offers the two
+halves it *can* — `origin_airport_id`, `dest_airport_id` — as separate permalinks, labelled as
+halves. A single link claiming "the identical query" would be a lie about the exact thing that
+distinguishes this page from `/route`.
+
+**Cost: 54.2 ms of DB work against `/route`'s 20.2 ms**, in-process through `runPivot` /
+`fetchAircraftMix` against the built database, SEA, warm, median of 8, at DuckDB's default
+thread count. Six pivots (three per union, two grains) under one `Promise.all`; serially the
+same six are 64.3 ms. Full table: [hosting.md § What the proxy's query actually
+costs](hosting.md#what-the-proxys-query-actually-costs). That is the standing price of an OR
+the pivot layer cannot express, and the strongest argument for M5 adding one.
+
+**Two limits, both measured rather than guessed.** The per-side row limit is 5,000 against a
+measured worst case of 959 (carrier, endpoint) groups for the busiest airport in the database;
+SEA produces 374 departing and 293 arriving. The chart's three sides run under
+`fetchAircraftMix`'s own 10,000-row bound against a measured worst case of 4,118 (month, type)
+groups per side. Reaching the first discloses truncation on the page; reaching the second would
+throw, which is the fail-loud answer and is recorded in `endpoints.ts`.
+
+**An empty trailing-12 table is normal, and unlike `/route` the chart is never empty.** Every
+airport that resolves is fact-present by construction, so there is always history somewhere in
+the full window — ISN (Sloulin Field International) filed 58 months and stopped in 2019-10, and
+its window line names `2015-01 → 2019-10`, the range actually drawn.
+
+**`destinations` excludes the airport itself.** Its own same-airport filings stay in every
+measure — they are real activity — but SEA is not one of SEA's destinations: 144 distinct
+other-endpoint ids including itself, 143 without.
+
 ### `/carrier/<code>` — the page has to say what it is counting
 
 The composition is `/route`'s, one dimension over: title block, stat strip, full-window

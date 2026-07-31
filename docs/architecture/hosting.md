@@ -335,6 +335,28 @@ both in turn for no reason. Concurrent, the pair costs what its slower half cost
 saving on the page's DB work, for free.** M4d will copy whatever shape is here, so the shape
 is `Promise.all`.
 
+**`/airport/<code>` runs SIX, and that is the price of a filter the pivot cannot express.** An
+airport is both endpoints, so each of its two grains is assembled as `origin + dest −
+(origin ∧ dest)` — three pivots each (`pipeline.md` § M4d). Same method as the table above
+(in-process, warm, median of 8, default threads), on `/airport/SEA`:
+
+| Work | Rows | Warm median |
+|---|---|---|
+| one side of the carriers pivot, trailing 12 | 374 | 15.9 ms |
+| the overlap pivot (`origin = X AND dest = X`), trailing 12 | 1 | 10.3 ms |
+| the carriers union, 3 concurrent | 654 | **19.2 ms** |
+| one side of the mix pivot, full window | 2,832 | 23.9 ms |
+| the mix union, 3 concurrent | 2,886 | **42.3 ms** |
+| all six under `Promise.all` | | **54.2 ms** |
+| all six serially | | 64.3 ms |
+
+Concurrency buys much less here than on `/route` (16%, not 33%): six full scans of
+`fct_segment_month` contend for the same buffer pool, so the wave costs more than its slowest
+member. **2.7× `/route`'s DB work per page**, standing, on the pages most likely to be linked.
+A first-class either-endpoint filter in `meta_pivot_dimensions` — one pivot instead of three —
+is the M5 fix; it needs matching composite-filter semantics in `render.ts` and
+`pipeline/pivot.py`, which is why M4d did not take it on.
+
 A direct read-only measurement of the mix query alone, at `threads=2` rather than the default,
 puts it at 30–34 ms; a measurement of this query that omits its thread count and whether the
 allowlist read is inside it is not comparable to another one.

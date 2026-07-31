@@ -219,6 +219,17 @@ pivot_route.sql` itself carries only the `{{FILTERS}}` token these two renderers
 not the filter logic) instead binds `least(route_key_low, route_key_high) = $lo AND
 greatest(...) = $hi` per requested route, which cannot match a same-airport row.
 
+**Those same-airport rows are excluded from route identity, and they are NOT excluded from
+`fct_segment_month`.** The distinction only becomes load-bearing when a page asks about an
+airport rather than about a route (M4d's `/airport/<code>`), where the query is
+`origin_airport_id = X OR dest_airport_id = X` and a same-airport filing satisfies **both**
+halves. Measured over the trailing 12 months 2025-05 → 2026-04: **3,187 such rows across 359
+airports, 601,573 seats** — at SEA alone, 18 rows carrying 12,646 seats and 172 departures,
+enough to move its seat total from 53,373,806 to 53,386,452 if the two halves are simply added.
+So `/airport` computes `origin + dest − (origin ∧ dest)`, with the third term its own pivot
+(`app/src/app/airport/[code]/endpoints.ts`); the M4d design spec's claim that a segment with
+one airport at both ends "does not exist" is true of route identity above and false here.
+
 **Route storage order (by airport ID) and the alphabetical order a person would type
 disagree for 154 of 22,420 routes (0.69%, excluding the 530 same-airport "routes" just
 above, which are not routes)** — e.g. `HPN` (12197) and `BNH` (16954): id order is
