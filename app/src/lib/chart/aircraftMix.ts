@@ -88,3 +88,158 @@ export async function fetchAircraftMix(
     };
   });
 }
+
+/** The six-token monochrome ramp from app/src/app/globals.css, in ramp order. `--g0` is
+ * reserved for Other and is not assignable to a type band, which is why it is not in this
+ * list -- docs/design/system.md § Charts owns the values. */
+export const BAND_TOKENS = ["--g1", "--g2", "--g3", "--g4", "--g5"] as const;
+export type BandToken = (typeof BAND_TOKENS)[number];
+
+/** The token the Other bucket always carries: lightest, and outside the gauge ordering
+ * entirely -- Other is a mixture of metal sizes, so it has no gauge to be ordered by. */
+export const OTHER_TOKEN = "--g0";
+
+export interface SeriesPoint {
+  month: string;
+  seats: number;
+}
+
+export interface Band {
+  code: string;
+  label: string;
+  token: BandToken;
+  series: SeriesPoint[];
+}
+
+export interface OtherSummary {
+  /** How many aircraft types this bucket aggregates. Zero means there is no Other band to
+   * draw, and `series` is empty rather than a row of zeroes. */
+  typeCount: number;
+  /** Share of the route's TOTAL seats, not of the remainder. The legend rail states this out
+   * loud because Other is often not a rounding error: top-5 + Other covers a median 94.7% of
+   * seats on multi-type routes, but 1,571 of 4,618 fall below 90% and the worst is 48.2%
+   * (measured -- the spec's § "The Other band is not a rounding error"). */
+  seatShare: number;
+  series: SeriesPoint[];
+}
+
+/** Total seats and total departures per aircraft type, plus its label. */
+interface TypeTotal {
+  code: string;
+  label: string;
+  seats: number;
+  departures: number;
+}
+
+/** Seats per departure over the whole window, or `null` when nothing was flown.
+ *
+ * `null`, not 0 and not NaN, and the distinction is load-bearing. A type with no performed
+ * departures has an UNKNOWN gauge, not a small one -- aircraft type 650 (DC-9-50) appears on
+ * JFK-LAX with 0 seats and 0 departures, so the naive `seats / departures` is 0/0 = NaN, and
+ * a NaN comparator result makes Array.prototype.sort's order implementation-defined. Treating
+ * it as 0 instead would be worse than undefined behaviour: it would make an aircraft that flew
+ * nothing the LIGHTEST band on the chart, which is a claim about metal size drawn from no
+ * evidence. Unknown sorts last, matching DuckDB's own NULLS LAST default for `ORDER BY ASC`. */
+function gauge(t: TypeTotal): number | null {
+  return t.departures === 0 ? null : t.seats / t.departures;
+}
+
+/** Ascending, nulls last. */
+function byGaugeAscNullsLast(a: TypeTotal, b: TypeTotal): number {
+  const ga = gauge(a);
+  const gb = gauge(b);
+  if (ga === null && gb === null) return a.code.localeCompare(b.code);
+  if (ga === null) return 1;
+  if (gb === null) return -1;
+  // Ties are real (four types at an identical gauge is unlikely; two is not), and an
+  // unbroken tie leaves the token assignment at the mercy of input order. `code` is the only
+  // stable identity available here -- an arbitrary but deterministic tiebreak, which is the
+  // property that matters: the same data must always produce the same chart.
+  return ga - gb || a.code.localeCompare(b.code);
+}
+
+/** Descending, with the same deterministic tiebreak. */
+function bySeatsDesc(a: TypeTotal, b: TypeTotal): number {
+  return b.seats - a.seats || a.code.localeCompare(b.code);
+}
+
+/** Fold the flat (month, type) rows into stacked-area bands.
+ *
+ * TWO ORDERINGS, and they are not the same one applied twice. This is the single most
+ * important detail in M4c (the spec's § Encoding) and the easiest to collapse by accident:
+ *
+ *   - MEMBERSHIP -- which five types get their own band -- is by TOTAL SEATS, descending.
+ *     Everything else is aggregated into Other.
+ *   - SHADE -- which of `--g1`..`--g5` a band gets -- is by GAUGE, ascending, so the lightest
+ *     band is the smallest metal and an upgauge darkens the stack.
+ *
+ * On JFK-LAX the A321/LR is first by seats AND the lightest by gauge, so it alone cannot tell
+ * a correct implementation from a single-sort one; positions 2-5 disagree completely (seats:
+ * B767-3/R, B767-4, B757-2, A320-1/2 -- gauge: A320-1/2, B757-2, B767-3/R, B767-4). A chart
+ * built from one sort looks entirely plausible and encodes nothing.
+ *
+ * Returned in SHADE order, `--g1` first. That makes the array directly usable as the stack
+ * order: light at the bottom, dark on top, so the ramp reads as a gradient rather than as
+ * six unrelated greys, which is the whole reason the categories are ordered at all.
+ *
+ * Every band carries a point for EVERY month in the input, zero-filled where a type did not
+ * fly. A stacked area with gaps misaligns rather than showing a hole. */
+export function toBands(rows: MixRow[]): { bands: Band[]; other: OtherSummary } {
+  const months = [...new Set(rows.map((r) => r.month))].sort();
+
+  const totals = new Map<string, TypeTotal>();
+  for (const r of rows) {
+    const t = totals.get(r.code) ?? { code: r.code, label: r.label, seats: 0, departures: 0 };
+    t.seats += r.seats;
+    t.departures += r.departures;
+    totals.set(r.code, t);
+  }
+
+  const members = [...totals.values()].sort(bySeatsDesc).slice(0, BAND_TOKENS.length);
+  const memberCodes = new Set(members.map((t) => t.code));
+
+  // A SECOND sort, of the same five, on a different key. Not `.reverse()`, not a re-slice of
+  // the first sort -- see this function's header.
+  const shaded = [...members].sort(byGaugeAscNullsLast);
+
+  // month -> code -> seats, so a band's series is a lookup per month rather than a scan.
+  const byMonth = new Map<string, Map<string, number>>();
+  for (const r of rows) {
+    const m = byMonth.get(r.month) ?? new Map<string, number>();
+    m.set(r.code, (m.get(r.code) ?? 0) + r.seats);
+    byMonth.set(r.month, m);
+  }
+
+  const bands: Band[] = shaded.map((t, i) => ({
+    code: t.code,
+    label: t.label,
+    token: BAND_TOKENS[i],
+    series: months.map((month) => ({ month, seats: byMonth.get(month)?.get(t.code) ?? 0 })),
+  }));
+
+  const otherTypes = [...totals.values()].filter((t) => !memberCodes.has(t.code));
+  const totalSeats = [...totals.values()].reduce((a, t) => a + t.seats, 0);
+  const otherSeats = otherTypes.reduce((a, t) => a + t.seats, 0);
+
+  const other: OtherSummary = {
+    typeCount: otherTypes.length,
+    // Guarded, not because a route with zero seats is expected, but because the alternative
+    // is rendering NaN% in the legend rail under a DATA AS OF badge.
+    seatShare: totalSeats === 0 ? 0 : otherSeats / totalSeats,
+    // Empty, not zero-filled, when there is nothing to aggregate: the renderer gates on
+    // `typeCount > 0`, and an all-zero series would otherwise put an invisible band and a
+    // "0 other types" legend entry on every chart of a five-type route.
+    series:
+      otherTypes.length === 0
+        ? []
+        : months.map((month) => {
+            const m = byMonth.get(month);
+            return {
+              month,
+              seats: otherTypes.reduce((a, t) => a + (m?.get(t.code) ?? 0), 0),
+            };
+          }),
+  };
+
+  return { bands, other };
+}

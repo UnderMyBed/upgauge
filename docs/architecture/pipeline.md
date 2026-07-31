@@ -857,6 +857,55 @@ failure shape as M4b's carrier-limit disclosure, but with no row count on screen
 away. `aircraftMix.test.ts` therefore pins the returned row count *exactly* (996) and asserts
 it stays strictly below the limit, rather than trusting the arithmetic above.
 
+### Two orderings, and testing them is harder than implementing them
+
+`toBands()` sorts the same five types twice, on two different keys:
+
+| | key | direction | produces |
+|---|---|---|---|
+| **membership** | total seats | descending | which 5 types get a band; the rest → Other |
+| **shade** | gauge (Σ seats / Σ departures) | ascending | which of `--g1`…`--g5` each band gets |
+
+Measured on JFK–LAX, where they genuinely disagree — the two sorts share only their first
+element:
+
+| by seats (membership) | | by gauge (shade) | |
+|---|---|---|---|
+| 1. A321/LR | 17,485,274 | `--g1` A321/LR | 128.1 |
+| 2. B767-3/R | 7,852,109 | `--g2` A320-1/2 | 148.4 |
+| 3. B767-4 | 3,119,079 | `--g3` B757-2 | 164.2 |
+| 4. B757-2 | 2,900,388 | `--g4` B767-3/R | 216.6 |
+| 5. A320-1/2 | 2,132,256 | `--g5` B767-4 | 239.2 |
+
+Bands are returned in **shade order**, `--g1` first, so the array is directly usable as the
+stack order: light at the bottom, dark on top. That gradient is the entire reason the
+categories are ordered rather than merely distinguishable.
+
+**A two-element fixture cannot test this rule, and that is not obvious.** The task brief's own
+headline test used one — a "Small" type with the most seats and the smallest gauge, on the
+reasoning that "the largest by seats is the smallest by gauge, so the orderings are reversed."
+They are not: seats-descending and gauge-ascending both put that type first, so the two orders
+*coincide* and an implementation that sorts once and reuses the order passes. Confirmed by
+mutation, not by reading. Reversing two elements requires the type with the **most seats** to
+also have the **largest gauge**; the shipped fixture does that, and the mutation now goes red.
+
+Two derived decisions, both with their own test:
+
+- **An unknown gauge sorts last, not lightest.** A type with 0 performed departures has no
+  gauge — real, not hypothetical: type `650` (DC-9-50) appears on JFK–LAX with 0 seats and 0
+  departures, so `seats / departures` is `0/0`. `gauge()` returns `null` and nulls sort last,
+  matching DuckDB's own `NULLS LAST` default for `ORDER BY ASC`. The plausible alternative —
+  `departures === 0 ? 0 : …` — makes an aircraft that flew nothing the *lightest* band on the
+  chart, a claim about metal size drawn from no evidence.
+- **Ties break on `code`,** arbitrary but deterministic. The property that matters is that the
+  same data always produces the same chart.
+
+`OtherSummary.seatShare` is a share of the route's **total** seats, not of the remainder, and
+its series is **empty** rather than zero-filled when `typeCount === 0` — so the renderer's
+`typeCount > 0` gate never draws an invisible band. Every real band carries a point for every
+month in the window (136 on JFK–LAX), zero-filled where a type did not fly: a stacked area
+with gaps misaligns rather than showing a hole.
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command
