@@ -715,8 +715,9 @@ it out.
 M4a is built: 424 Python tests green (`make check`), the app suite green
 (`make app-check`), `make app-build` produces a working production build, and
 `make goldens` reproduces all 17 goldens byte-identical — proof the M3a contract never
-moved. See `CLAUDE.md`'s Status section for the current test counts and what M4b/M4c+ still
-owe (`/route`, `/airport`, `/carrier`, `/aircraft`, the charts, the maps, `/watch`).
+moved. See `CLAUDE.md`'s Status section for the current test counts and what M4c+ still owe
+(`/airport`, `/carrier`, `/aircraft`, the charts, the maps, `/watch`) — `/route` is the M4b
+section immediately below.
 
 ## M4b — the route page
 

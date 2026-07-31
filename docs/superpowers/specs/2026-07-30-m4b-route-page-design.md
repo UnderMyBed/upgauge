@@ -101,8 +101,14 @@ is the point.
 | Request | Response |
 |---|---|
 | `/route/JFK-LAX` | 200 — canonical (agrees both ways) |
-| `/route/LAX-JFK` | **301** → `/route/JFK-LAX` |
-| `/route/HPN-BNH` | **301** → `/route/BNH-HPN` (storage order, 154 routes) |
+| `/route/LAX-JFK` | **308** → `/route/JFK-LAX` |
+| `/route/HPN-BNH` | **308** → `/route/BNH-HPN` (storage order, 154 routes) |
+
+**308, not 301** — Next's `permanentRedirect()` is the documented API for "this IS the
+canonical URL," and it issues 308, not 301. 308 preserves the request method (a 301
+historically permitted a client to rewrite a POST to GET on redirect); 301 was this spec's
+draft-time guess and is not what shipped, so treat 308 as the correct choice, not a deviation
+to "fix" back.
 
 The query still uses IDs: codes resolve to IDs, which are then ordered by ID for
 `least`/`greatest`. Alphabetical ordering governs the URL only.
@@ -201,16 +207,16 @@ built on its own queries could not offer this.
 | Goldens, both languages | The route filter renders identical SQL from `pipeline/pivot.py` and `render.ts`; the existing 17 goldens stay byte-identical |
 | Filter correctness | JFK–LAX returns 264 rows / 3,455,820 seats — **not** the 297 / 3,474,715 the naive filter yields. This is the self-route contamination test and it must fail if `least`/`greatest` is replaced by the `IN`-both form |
 | Reverse lookup | `JFK → 12478`; an unknown code throws named; a hypothetical collision fails loudly rather than choosing |
-| Canonical redirect | `/route/LAX-JFK` → 301 → `/route/JFK-LAX`; `/route/HPN-BNH` → 301 → `/route/BNH-HPN` |
+| Canonical redirect | `/route/LAX-JFK` → 308 → `/route/JFK-LAX`; `/route/HPN-BNH` → 308 → `/route/BNH-HPN` (308, not 301: `permanentRedirect()` preserves the request method) |
 | 404 | Malformed path and unresolvable code, each naming the offence |
 | Empty state | Two real airports, no service → 200, states the finding, offers the wider window |
 | Totals | Computed from summed parts, and **fails** if changed to average the carrier rows |
 | Truncation | The limit check fires when the carrier count reaches the limit |
-| `make app-smoke` | A real served `/route/JFK-LAX` renders carrier codes and the totals; `/route/LAX-JFK` really returns 301 with the right `Location`; `/route/ZZZ-LAX` really returns 404 |
+| `make app-smoke` | A real served `/route/JFK-LAX` renders carrier codes and the totals; `/route/LAX-JFK` really returns 308 with the right `Location`; `/route/ZZZ-LAX` really returns 404 |
 
 The smoke row matters disproportionately. Six bugs in M3b, plus the `make dev` breakage found
 after it, all had the shape *green tests, broken production*. **Status codes and redirects are
-exactly what unit tests fake** — a test can assert a handler returned a 301 object while the
+exactly what unit tests fake** — a test can assert a handler returned a 308 object while the
 served app returns 200, and only a curl against a built server tells them apart.
 
 M4a shipped seven assertions that could not fail, every one caught by review rather than by the
@@ -251,7 +257,7 @@ change that would make it fail, and confirm it does.
 - [ ] The JFK–LAX filter returns 264 rows / 3,455,820 seats, and the test fails under the naive `IN`-both filter
 - [ ] Code → `airport_id` reverse lookup, failing loudly on an ambiguous code
 - [ ] `/route/JFK-LAX` renders the title block, stat strip, carriers table, Explorer link and legend rail
-- [ ] `/route/LAX-JFK` and `/route/HPN-BNH` 301 to their canonical forms
+- [ ] `/route/LAX-JFK` and `/route/HPN-BNH` 308 (`permanentRedirect()`, not 301) to their canonical forms
 - [ ] `/route/ZZZ-LAX` and `/route/JFK` 404 with named reasons
 - [ ] A no-service pair renders the 200 empty state with the widened-window offer
 - [ ] Totals are ratios of sums; the test fails if they become averages
