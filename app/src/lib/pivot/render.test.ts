@@ -143,15 +143,6 @@ describe("renderPivot rejects malformed and malicious requests", () => {
     ).toThrow(/filter/);
   });
 
-  it("rejects the multi-column route dimension used as a filter key", () => {
-    expect(() =>
-      renderPivot(q({ filters: [["route", ["JFK-LAX"]]] }), FIXTURE),
-    ).toThrow(PivotError);
-    expect(() =>
-      renderPivot(q({ filters: [["route", ["JFK-LAX"]]] }), FIXTURE),
-    ).toThrow(/multiple columns/);
-  });
-
   it("rejects an unknown sort key", () => {
     expect(() => renderPivot(q({ sort: "not_a_column" }), FIXTURE)).toThrow(PivotError);
     expect(() => renderPivot(q({ sort: "not_a_column" }), FIXTURE)).toThrow(/sort/);
@@ -170,5 +161,45 @@ describe("renderPivot rejects malformed and malicious requests", () => {
     expect(() =>
       renderPivot(q({ grouping: "Mainline" as PivotQuery["grouping"] }), FIXTURE),
     ).toThrow(/grouping/);
+  });
+});
+
+describe("composite-dimension filters", () => {
+  const BASE = {
+    grain: "segment", dimensions: ["op_airline_id"], measures: ["seats"],
+    timeFrom: "2025-05", timeTo: "2026-04", sort: null, sortDesc: true,
+    limit: 50, grouping: "operating",
+  } as unknown as PivotQuery;
+
+  it("emits least/greatest over both key columns", () => {
+    const { sql, params } = renderPivot(
+      { ...BASE, filters: [["route", ["12478-12892"]]] }, FIXTURE);
+    expect(sql).toContain(
+      "(least(route_key_low, route_key_high) = $f0_0a " +
+        "AND greatest(route_key_low, route_key_high) = $f0_0b)",
+    );
+    expect(params.f0_0a).toBe("12478");
+    expect(params.f0_0b).toBe("12892");
+  });
+
+  it("OR-joins multiple routes, keeping IN-list semantics", () => {
+    const { sql } = renderPivot(
+      { ...BASE, filters: [["route", ["12478-12892", "10140-14747"]]] }, FIXTURE);
+    expect(sql).toContain(" OR ");
+    expect(sql).toContain("$f0_1a");
+    expect(sql).toContain("$f0_1b");
+  });
+
+  it("rejects a malformed pair with a named error", () => {
+    expect(() =>
+      renderPivot({ ...BASE, filters: [["route", ["12478"]]] }, FIXTURE),
+    ).toThrow(/two ids joined by/);
+  });
+
+  it("leaves the single-column filter path untouched", () => {
+    const { sql, params } = renderPivot(
+      { ...BASE, filters: [["origin_state", ["OR", "WA"]]] }, FIXTURE);
+    expect(sql).toContain("origin_state IN ($f0_0, $f0_1)");
+    expect(params.f0_0).toBe("OR");
   });
 });

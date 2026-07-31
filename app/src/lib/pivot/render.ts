@@ -87,18 +87,55 @@ export function renderPivot(
   q.filters.forEach(([key, values], i) => {
     const entry = validateDimension(key, a, q.grain);
     const columns = dimensionColumns(entry);
-    if (columns.length !== 1) {
+    if (columns.length === 1) {
+      const placeholders = values.map((value, j) => {
+        const pname = `f${i}_${j}`;
+        params[pname] = value;
+        return `$${pname}`;
+      });
+      filterClauses.push(`${columns[0]} IN (${placeholders.join(", ")})`);
+      return;
+    }
+
+    // A composite dimension names more than one key column -- `route` is
+    // (route_key_low, route_key_high). One filter VALUE encodes one whole route as
+    // "<low>-<high>", so multiple values stay OR'd exactly like every other dimension's
+    // IN-list rather than inventing a positional pair convention that would make "a,b,c"
+    // meaningless.
+    //
+    // least()/greatest() rather than trusting stored column order: the filter must be
+    // correct however the fact row was written. Filtering the underlying columns separately
+    // -- what this branch used to tell callers to do -- is NOT equivalent and is silently
+    // wrong: `origin IN (a,b) AND dest IN (a,b)` also matches a->a and b->b, and 12,738 such
+    // same-airport filings exist across 530 airports. On JFK-LAX that inflates seats by
+    // 18,895 (docs/data/invariants.md).
+    //
+    // This must stay byte-identical to pipeline/pivot.py's emission -- the goldens are what
+    // prove it, and a divergence here is exactly the two-implementation drift M3a exists to
+    // prevent.
+    if (columns.length !== 2) {
       throw new PivotError(
-        `dimension '${key}' spans multiple columns (${entry.columnExpr}); ` +
-          "filter on the underlying columns directly, not the composite dimension",
+        `dimension '${key}' spans ${columns.length} columns; only two are supported`,
       );
     }
-    const placeholders = values.map((value, j) => {
-      const pname = `f${i}_${j}`;
-      params[pname] = value;
-      return `$${pname}`;
+    const pairClauses = values.map((value, j) => {
+      const parts = value.split("-");
+      if (parts.length !== 2 || !parts.every((p) => p.trim())) {
+        throw new PivotError(
+          `filter value '${value}' for composite dimension '${key}' must be ` +
+            "two ids joined by '-', e.g. '12478-12892'",
+        );
+      }
+      const loName = `f${i}_${j}a`;
+      const hiName = `f${i}_${j}b`;
+      params[loName] = parts[0].trim();
+      params[hiName] = parts[1].trim();
+      return (
+        `(least(${columns[0]}, ${columns[1]}) = $${loName} ` +
+        `AND greatest(${columns[0]}, ${columns[1]}) = $${hiName})`
+      );
     });
-    filterClauses.push(`${columns[0]} IN (${placeholders.join(", ")})`);
+    filterClauses.push(`(${pairClauses.join(" OR ")})`);
   });
   const filtersSql = filterClauses.length ? filterClauses.join(" AND ") : "TRUE";
 
