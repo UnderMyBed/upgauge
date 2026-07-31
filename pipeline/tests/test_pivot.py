@@ -235,13 +235,6 @@ def test_composite_filter_rejects_a_malformed_pair(con):
         render_pivot(q(filters=(("route", ("12478",)),)), con)
 
 
-def test_composite_route_filter_executes_and_excludes_self_routes(con):
-    """The point of least()/greatest(): filtering origin and dest separately also matches
-    a->a and b->b. This must render SQL the database actually accepts."""
-    sql, params = render_pivot(q(filters=(("route", ("12478-12892",)),)), con)
-    con.execute(sql, params).fetchall()  # must not raise
-
-
 def test_single_column_filter_is_unchanged(con):
     """The existing IN-list path must not move -- 17 goldens depend on it."""
     sql, params = render_pivot(q(filters=(("origin_state", ("OR", "WA")),)), con)

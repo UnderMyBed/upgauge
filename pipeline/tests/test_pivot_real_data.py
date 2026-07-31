@@ -191,3 +191,53 @@ def test_operating_grouping_leaves_carriers_alone(con):
     """The default must not silently roll anything up."""
     after = _carrier_total(con, 19690, "2024-09", "operating")
     assert 19690 in after
+
+
+def test_composite_route_filter_excludes_self_routes_the_naive_form_matches(con):
+    """least()/greatest() vs the naive `route_key_low IN (...) AND route_key_high IN (...)`
+    this task exists to replace -- both are syntactically valid SQL that execute without
+    raising, so a test that only asserts "does not raise" cannot tell them apart (that was
+    this test's earlier, non-discriminating form). This asserts the actual ROW COUNT
+    differs: the naive form additionally matches route_key_low = route_key_high self-route
+    filings at EACH endpoint airport, which least()/greatest() correctly excludes.
+
+    Measured against upgauge.duckdb, JFK-LAX (12478-12892), 2015-01..2020-12, NOT
+    is_quarantined: the composite filter renders exactly 1 group -- (12478, 12892), 21,104,715
+    seats. The naive IN/IN form additionally matches (12478, 12478) (204 seats) and
+    (12892, 12892) (2,386 seats) -- 2 extra self-route groups, 2,590 seats of inflation.
+    """
+    sql, params = render_pivot(
+        PivotQuery(
+            grain="segment", dimensions=("route",), measures=("seats",),
+            time_from="2015-01", time_to="2020-12",
+            filters=(("route", ("12478-12892",)),),
+        ),
+        con,
+    )
+    correct_rows = con.execute(sql, params).fetchall()
+
+    # Deliberately NOT derived from `sql` by string substitution: this must fail if the
+    # implementation itself regresses to the naive form, which it would not if it merely
+    # echoed back whatever `sql` already contains.
+    naive_sql = """
+        SELECT route_key_low, route_key_high,
+               SUM(seats) FILTER (WHERE NOT is_quarantined) AS seats
+        FROM fct_segment_month
+        WHERE year_month BETWEEN $time_from AND $time_to
+          AND route_key_low IN ($a, $b)
+          AND route_key_high IN ($a, $b)
+        GROUP BY route_key_low, route_key_high
+    """
+    naive_rows = con.execute(
+        naive_sql, {"time_from": "2015-01", "time_to": "2020-12", "a": 12478, "b": 12892}
+    ).fetchall()
+
+    assert len(correct_rows) != len(naive_rows), (
+        "row counts are equal -- the composite filter is no longer discriminating self-routes "
+        "from the naive IN/IN form"
+    )
+    assert len(naive_rows) > len(correct_rows), (
+        f"correct={len(correct_rows)} rows, naive={len(naive_rows)} rows -- the naive form "
+        "should match strictly MORE rows (it also matches route_key_low=route_key_high "
+        "self-routes at both endpoint airports), so it should never be the smaller count"
+    )
