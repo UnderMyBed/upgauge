@@ -80,8 +80,34 @@ table" section.
    way to present an "empty plane" claim.
 6. **Generic Top-N builder.** "Top N `<dimension>` by `<measure>` in `<period>`." The
    `/watch` presets are all saved instances of this. Build the generic thing once.
-7. **The omnibox.** One field resolving `PDX` · `Portland` · `Alaska` · `AS` · `A220` ·
-   `PDX-AUS`. Sounds trivial. It is the whole UX.
+7. **The omnibox — shipped, M5.** `/search?q=...` (`app/src/lib/search.ts`,
+   `app/src/app/search/page.tsx`, `sql/03_queries/search_by_name.sql`). One field resolving
+   `PDX` · `Portland` · `Alaska` · `AS` · `A220` · `PDX-AUS`. Sounds trivial. It is the whole
+   UX. Resolution order: a route-pair pattern (`-`, an en dash, or a space, case-insensitively)
+   → an exact code in any of the three namespaces → a name substring across all three. A
+   unique match 307-redirects (not 308 -- this is a live resolution over data that can change,
+   not a second spelling of one fixed URL); no match names the query and the namespaces
+   checked, offering the Explorer; an unbounded substring hit list discloses the cap (50) and
+   the true count rather than truncating silently.
+
+   **A code can be a real match in two namespaces at once, and the omnibox must not silently
+   pick one.** Measured, fact-present, `is_latest`-scoped: exactly three codes are both an
+   airport and a carrier -- `LNY` (Lanai Airport / Western Aircraft dba Lanai Air), `NEW`
+   (Lakefront / New England Airlines Inc.), `WST` (Westerly State / Friday Harbor Seaplanes).
+   `LNY` is the sharpest of the three: the carrier is named after the airport, so a
+   silently-chosen answer would still read as plausible -- the same failure shape as the `AUS`
+   airport-id collision and `/aircraft/CE-180`'s two-BTS-codes-one-short-name collision,
+   documented in `docs/data/invariants.md` § Entity resolution. All three codes render as a
+   two-way choice instead. Airport ∩ aircraft and carrier ∩ aircraft are both 0 today, but that
+   is a property of the current dataset, not a structural guarantee, so the guard checks every
+   namespace rather than trusting the count.
+
+   A name substring ranks a result whose name STARTS WITH the query above one that merely
+   contains it, ties broken by the underlying query's own order -- no fuzzy distance, no
+   traffic-based boost, both of which are numbers nobody could justify. `Portland` matches
+   four fact-present airports, not three -- `HIO`, `PDX`, `PWM` (Maine, not Oregon), `TTD` --
+   and `Alaska` returns 8 rows (`DUT` Unalaska Airport plus 7 carriers) where the ranking is
+   what puts `AS` Alaska Airlines ahead of the `DUT` substring false positive.
 8. **Methodology surface.** The class filter, operating-carrier keying, the lag, the
    quarantine rules. Trust feature; also free SEO content. The design session may fold this
    into the UI rather than a standalone page.
