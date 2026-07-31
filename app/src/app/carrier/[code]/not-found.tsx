@@ -1,0 +1,92 @@
+import Link from "next/link";
+import { headers } from "next/headers";
+import { dataAsOf } from "@/lib/db";
+import { rawPathFromHeaders } from "@/lib/rawPath";
+import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
+
+// Same reasoning as page.tsx's own export of this constant: DATA AS OF must never be frozen
+// at build time, even on the 404 path. proxy.ts sets `no-store` on this response for the same
+// reason one level out, at the CDN.
+export const dynamic = "force-dynamic";
+
+function Wordmark() {
+  return (
+    <span className="mark">
+      UP<span className="accent">GAUGE</span>
+    </span>
+  );
+}
+
+function TopBar({ asOf }: { asOf: string }) {
+  return (
+    <div className="top">
+      <Wordmark />
+      <span className="asof">DATA AS OF {asOf}</span>
+    </div>
+  );
+}
+
+/** The specific reason this slug is not a carrier, in `lib/carrier.ts`'s own words -- which
+ * name the offending CODE.
+ *
+ * Re-running `resolveCarrier` rather than receiving `page.tsx`'s result is forced by the
+ * framework: `notFound()` takes no argument and `not-found.js` accepts no props, so there is
+ * no channel between the two renders. It is one extra read of a dimension-sized table, on a
+ * request that has already decided it has nothing else to do. Identical shape to
+ * route/[pair]/not-found.tsx's `reasonFor`. */
+async function reasonFor(pathname: string): Promise<string | null> {
+  const slug = carrierSlugFromPath(pathname);
+  if (slug === null) return null;
+  const resolved = await resolveCarrier(slug);
+  return resolved.kind === "notFound" ? resolved.reason : null;
+}
+
+/** Next's `not-found.js` convention: rendered when `notFound()` is thrown from this route
+ * segment. Without it, Next's stock `404 | This page could not be found.` renders instead --
+ * no wordmark, no DATA AS OF, and no hint of what `resolveCarrier` already worked out.
+ *
+ * Structure matches route/[pair]/not-found.tsx and explore/page.tsx's error state so the
+ * product's three "this URL didn't work" pages read as one system, and -- like both of them --
+ * it takes its one request-derived value as a prop, so the whole page is renderable in a test
+ * without mocking a framework seam. */
+export async function NotFoundView({ pathname }: { pathname: string }) {
+  const [asOf, reason] = await Promise.all([dataAsOf(), reasonFor(pathname)]);
+  const slug = carrierSlugFromPath(pathname);
+  return (
+    <div className="wrap">
+      <TopBar asOf={asOf} />
+      <main className="error-page">
+        <h1>Carrier not found</h1>
+        <p role="alert">
+          {slug !== null && reason !== null ? (
+            <>
+              We can&rsquo;t show &lsquo;{slug}&rsquo;: {reason}.
+            </>
+          ) : (
+            <>We don&rsquo;t recognize this page.</>
+          )}
+        </p>
+        <p>
+          {/* eslint-plugin-next flags a literal <a href="/carrier/..."> against this exact
+              dynamic route ([code]) as "use next/link instead" -- it does NOT flag the
+              Explorer link below, whose href carries a query string, so only this one needed
+              the swap. Identical to route/[pair]/not-found.tsx's own note. */}
+          Try <Link href="/carrier/DL">DL, Delta Air Lines</Link>, or start from{" "}
+          <a href="/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op">
+            the Explorer
+          </a>
+          .
+        </p>
+      </main>
+    </div>
+  );
+}
+
+export default async function NotFound() {
+  const requestHeaders = await headers();
+  // Fails loudly if proxy.ts did not run. There is deliberately no fallback: a 404 page that
+  // quietly stops naming the offending code, with every gate green, is the precise failure
+  // this header was introduced to make impossible (lib/rawPath.ts). NOTE FOR THE PROXY: this
+  // means `/carrier/:code` MUST be in proxy.ts's matcher, or every carrier 404 is a 500.
+  return <NotFoundView pathname={rawPathFromHeaders(requestHeaders)} />;
+}

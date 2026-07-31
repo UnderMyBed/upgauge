@@ -528,6 +528,23 @@ one `airline_id`; scoped to the 114 airlines that actually filed a T-100 Segment
 `VX` is the `AUS` shape exactly — `airline_id` 21171 "Virgin America" (real in-window traffic)
 and 19995 "Aces Airlines" (a defunct Colombian carrier, 0 filed rows). `CP` fans out to three.
 
+**What the filter therefore makes a 404, and what `/carrier/<code>` may honestly say about it
+(M4d).** The filter is not a tie-breaker between near-equals — it removes the overwhelming
+majority of the table. **1,543 of `dim_carrier`'s 1,776 codes have no fact-present holder at
+all**, so a code that is real, recognized by BTS, and simply never filed a T-100 Segment row in
+this window is the **common** carrier 404, not the exotic one: `PA` (Pan American World Airways
+— `airline_id` 20384 and 20386, plus 20389 "Florida Coastal Airlines") reaches it by exactly
+the same path as `ZZ`, which is in `dim_carrier` not at all. There is no carrier analogue of
+`lookup_airport_code_exists.sql` to tell the two apart, so the page states the thing that is
+true of both — *nothing has filed under this code* — rather than calling Pan Am unknown. If a
+future task wants the airport-style split, it needs that second lookup first.
+
+**A resolvable carrier with an empty trailing-12 table is normal, not an error.** **45 of the
+114 fact-present airlines last filed before 2025-05** (measured, 39%) — Virgin America's last
+month is 2018-03 — which is why `/carrier/<code>` renders the full-window chart independently
+of the trailing-12 table and names the range the chart can actually draw. Same shape as the
+12,062-of-22,950 route pairs recorded under § Route identity.
+
 **For aircraft the filter is not enough, and this is where the airport result stops
 generalising.** 12 `short_name`s map to more than one `code` across `dim_aircraft_type`;
 fact-presence takes that to **1**, not to 0:

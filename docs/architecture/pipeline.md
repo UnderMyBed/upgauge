@@ -1174,6 +1174,84 @@ M4c is built: **280 app tests** green (`make app-check`), **443 Python tests** g
 `make goldens` byte-identical — this milestone touches no SQL, so any golden movement would
 have been a bug.
 
+## M4d — `/airport`, `/carrier`, `/aircraft`
+
+Three more entity pages on the composition M4b and M4c established. The shared page contract
+is not restated here; § M4b and § M4c own it. What follows is what each page had to decide for
+itself. Full design and the entity counts:
+`docs/superpowers/specs/2026-07-31-m4d-entity-pages-design.md`.
+
+### `/carrier/<code>` — the page has to say what it is counting
+
+The composition is `/route`'s, one dimension over: title block, stat strip, full-window
+aircraft-mix chart, trailing-12 table, Explorer link, legend rail. The table is **aircraft
+types operated** (17 for DL, measured) because the fleet is this product's subject; the routes
+(1,873) and airports (186) a carrier touches both want the Top-N builder, which does not exist.
+`AircraftMixChart` mounts unchanged — the page is a filter on `op_airline_id`, not a new
+dimension — so nothing in M4c had to move.
+
+**Two `CLAUDE.md` hard rules stop being background here and become the page's own claims,
+because the entity *is* the carrier.** Both read as bugs if left unsaid:
+
+- **Operating carrier is the grain.** A Delta-branded regional flown by Endeavor files as
+  `9E`, so `/carrier/DL` legitimately *excludes* it. Someone who knows the network reads DL's
+  seat count as too **low** unless the page says what it is counting. There is no
+  marketing-carrier field and none is inferred.
+- **`dim_carrier` holds the CURRENT code and name.** v0 collapses Carrier Decode to one row per
+  airline, so a 2016 month on this page is labelled with today's identity, not the one filed.
+
+`LegendRail` already states both **generically**, on every data view, and that is deliberately
+not treated as sufficient. A rail entry phrased in the abstract does not attach to the number a
+reader is looking at, so `/carrier` states both **about its own subject**, in the content
+column, above the rail — naming the carrier, its code, and the consequence (the excluded flying
+is counted, under someone else's code).
+
+That distinction is what makes the tests falsifiable rather than decorative. Each claim is
+asserted on **two** carriers (DL and AS) against the text of `.body > div` only:
+
+| the bug | what catches it |
+|---|---|
+| claim deleted | both halves fail |
+| claim hard-coded to Delta (every example in the spec is Delta) | the AS half fails |
+| claim left to the shared rail | both halves fail — `.body > div` cannot see the `<aside>` |
+| topic word present, substance absent | the assertion is on `no marketing-carrier field` and
+  `DL-branded … counted there, not here`, not on the word "operating" — which already appears
+  in this codebase's grouping toggle, its measure labels and its rail |
+
+Both sentences are built as **single template strings**, not adjacent JSX expressions. React's
+SSR emits `<!-- -->` between adjacent text nodes, so `what {name} ({code}) filed` puts comment
+markers inside the sentence in the served bytes: `textContent` skips them and every unit test
+stays green while a `smoke.sh` grep stops matching. That is M4c's window-line bug exactly, and
+these two sentences are the ones a served-build check most wants to grep.
+
+**The 404 says "nothing filed under this code", not "unknown code".** 1,543 of `dim_carrier`'s
+1,776 codes have no fact-present holder (measured), so "recognized by BTS, never filed" is the
+**common** carrier 404, not the exotic one — `PA` (Pan American World Airways, three
+`airline_id`s, zero T-100 Segment rows) reaches it by the same path as `ZZ`, which is in
+`dim_carrier` not at all. `routePair.ts` splits its two cases apart only because
+`lookup_airport_code_exists.sql` already existed to tell them apart; there is no carrier
+equivalent and this milestone adds no SQL, so the sentence shipped is the one that is **true of
+both** — it talks about filings, not about recognition. A copy-paste of the airport wording
+would state something false about Pan Am.
+
+**An empty trailing-12 table is normal here.** 45 of the 114 fact-present carriers last filed
+before the current window (measured, 39%) — Virgin America stopped in 2018-03 — so the chart is
+routinely the only panel on the page with anything in it, and the window line must name
+`2015-01 → 2018-03` rather than the window it asked for. Same rule, same reason, as M4c's
+`drawnFrom`/`drawnTo`: naming a range you are not drawing is the fabrication that section
+already forbids. Both caveats above render whether or not there is a table — they qualify the
+subject, not the rows.
+
+**`AmbiguousCodeError` is deliberately not caught here.** Carrier codes collide 0 times among
+fact-present airlines (measured), so a catch block would be untested code on the happy path; a
+loud 500 is `resolve.ts`'s documented contract and matches what `/route` does with the identical
+error. `/aircraft` is where that error is reachable on today's data and must be rendered.
+
+**`carrierSlugFromPath` lives in `app/src/lib/carrier.ts`, not beside its sibling in
+`rawPath.ts`** — three of these pages were built concurrently and `rawPath.ts` is one file three
+tasks would have been editing at once. The four copies (route, airport, carrier, aircraft)
+should collapse into one `entitySlugFromPath(pathname, prefix)` now that they all exist.
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command
