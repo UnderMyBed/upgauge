@@ -233,7 +233,19 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
 
   const columns: ColumnSpec[] = [
     ...(hasRoute
-      ? [{ key: "__route", label: allowlist.dims.get("route")?.label ?? "Route", kind: "identifier" as const }]
+      ? [
+          {
+            key: "__route",
+            label: allowlist.dims.get("route")?.label ?? "Route",
+            kind: "identifier" as const,
+            // Typed accessor, not a naming convention on row data: __route spans two
+            // columns that both resolve through dim_airport, so it's never a DimensionCell
+            // (entityHref can't express a composite id) -- this is the one place that knows
+            // both halves resolved, so it hands DataTable a per-row function instead of a
+            // magic-string row field.
+            href: (row: Record<string, unknown>) => routeHref(row, result.resolved, routeCols),
+          },
+        ]
       : []),
     ...displayColumns.map((c) => ({
       key: c,
@@ -260,11 +272,7 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
   ];
 
   const displayRows = hasRoute
-    ? result.rows.map((r) => ({
-        ...r,
-        __route: routeCode(r, result.resolved, routeCols),
-        __routeHref: routeHref(r, result.resolved, routeCols),
-      }))
+    ? result.rows.map((r) => ({ ...r, __route: routeCode(r, result.resolved, routeCols) }))
     : result.rows;
 
   return (

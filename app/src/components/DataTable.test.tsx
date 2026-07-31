@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
@@ -184,30 +187,66 @@ describe("DataTable renders resolved display values", () => {
 });
 
 describe("DataTable: non-dimension identifier cells (e.g. explore's synthetic __route)", () => {
-  // Step 3's IdentifierCell mechanism: a plain identifier column (no dimKey, so it never goes
-  // through DimensionCell/entityHref at all -- route's column_expr spans two columns, so it
-  // is not a single-dimension resolution) links via a sibling row field named `<key>Href`,
-  // read directly off the row rather than re-derived from the displayed string.
-  const COLS: ColumnSpec[] = [{ key: "__route", label: "Route", kind: "identifier" }];
+  // Fix round 1, Important 2: IdentifierCell's link is a typed `ColumnSpec.href` accessor,
+  // not a naming convention on row data (`row["${key}Href"]`) -- there is nothing to spell
+  // wrong and no collision surface with a row's own fields. route's column_expr spans two
+  // columns, so it is not a single-dimension resolution and never goes through
+  // DimensionCell/entityHref at all.
+  const linkedCols: ColumnSpec[] = [
+    {
+      key: "__route",
+      label: "Route",
+      kind: "identifier",
+      href: (row) => (row.__route === "IFP–IAH" ? "/route/IAH-IFP" : null),
+    },
+  ];
 
-  it("links when the row carries a `<key>Href` sibling field", () => {
-    const rows = [{ __route: "IFP–IAH", __routeHref: "/route/IAH-IFP" }];
-    const { container } = render(<DataTable columns={COLS} rows={rows} />);
+  it("links via the column's href accessor", () => {
+    const rows = [{ __route: "IFP–IAH" }];
+    const { container } = render(<DataTable columns={linkedCols} rows={rows} />);
     const link = container.querySelector('a[href="/route/IAH-IFP"]');
     expect(link?.textContent).toBe("IFP–IAH");
   });
 
-  it("renders plain text, exactly as before, when no sibling href field is present", () => {
-    const rows = [{ __route: "PDX–SEA" }];
-    const { container } = render(<DataTable columns={COLS} rows={rows} />);
-    expect(screen.getByText("PDX–SEA")).toBeDefined();
-    expect(container.querySelector("a")).toBeNull();
-  });
-
-  it("renders plain text when the sibling href field is null (one half didn't resolve)", () => {
-    const rows = [{ __route: "19790–SEA", __routeHref: null }];
-    const { container } = render(<DataTable columns={COLS} rows={rows} />);
+  it("renders plain text when the accessor returns null for this row (one half didn't resolve)", () => {
+    const rows = [{ __route: "19790–SEA" }];
+    const { container } = render(<DataTable columns={linkedCols} rows={rows} />);
     expect(screen.getByText("19790–SEA")).toBeDefined();
     expect(container.querySelector("a")).toBeNull();
   });
+
+  it("renders plain text, exactly as before, for a column with no href accessor at all", () => {
+    const bareCols: ColumnSpec[] = [{ key: "__route", label: "Route", kind: "identifier" }];
+    const rows = [{ __route: "PDX–SEA" }];
+    const { container } = render(<DataTable columns={bareCols} rows={rows} />);
+    expect(screen.getByText("PDX–SEA")).toBeDefined();
+    expect(container.querySelector("a")).toBeNull();
+  });
+});
+
+// Fix round 1, Important 1: Tailwind's preflight resets `a { color: inherit; text-decoration:
+// inherit }`, so a new <a> in a data-table cell is pixel-identical to plain text without an
+// explicit rule -- jsdom computes no styles (no layout engine), so nothing above this line can
+// catch that CSS rule being deleted or never written; this test cannot see the rendered
+// pixels either, only the source text. It is deliberately weak, stated here rather than
+// implied: it proves the selector and a non-colour channel are IN THE STYLESHEET, not that a
+// browser paints them as intended. That is still worth having -- it turns a silent CSS
+// deletion into a red test instead of a link only a screen reader or a diff of globals.css
+// would notice.
+it("globals.css styles a data-table link with a non-colour channel, not colour alone", () => {
+  // Relative to THIS file, not process.cwd() -- vitest.setup.ts chdirs the test process to
+  // the repo root (UPGAUGE_ROOT), not app/, so a cwd-relative path would silently resolve
+  // one directory short and this test would need to know that setup detail to pass.
+  const globalsCssPath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../app/globals.css",
+  );
+  const css = readFileSync(globalsCssPath, "utf8");
+  const rule = css.match(/\.data-table td\.id a\s*\{[^}]*\}/);
+  expect(rule).not.toBeNull();
+  const body = rule![0];
+  expect(body).toMatch(/color:\s*var\(--signal\)/);
+  // Colour is never the sole channel (docs/design/system.md, Quality floor) -- underline is
+  // the second.
+  expect(body).toMatch(/text-decoration:\s*underline/);
 });

@@ -167,14 +167,23 @@ resolved, and for a resolution with no code — the same three cases that alread
 The `<abbr>` carrying the name nests **inside** the `<a>` rather than being replaced by it —
 it is the only place a keyboard user reaches the expansion, linked cell or not.
 
+**The link is styled with two channels, not one.** Tailwind's preflight resets `a { color:
+inherit; text-decoration: inherit }`, so an unstyled `<a>` in a data-table cell renders
+pixel-identical to the plain text it replaced — `.data-table td.id a` (`globals.css`) sets both
+`color: var(--signal)` **and** `text-decoration: underline`, because colour is never the sole
+channel for a distinction (Quality floor) and a link that only differs from body text by hue
+fails that for a colour-blind or grayscale reader the same way an uncoloured gauge tick would.
+
 `route`'s cell is the one exception, and it is not a `DimensionCell` at all: its `column_expr`
 spans two columns that both resolve through `dim_airport`, so there is no single id to hand
-`entityHref`. `/explore` builds its href separately (`routeHref` in `explore/page.tsx`),
-reading the two `Resolved` hits directly rather than the joined display string, and passes it
-across as a sibling row field (`__routeHref`) that a small generalization of the same
-component — `IdentifierCell` — checks for on any non-dimension identifier column. **The href
-is the code-alphabetical pair, never the displayed (airport-id) order**: `/explore` renders
-`route_key_low, route_key_high` — airport-id order — and `routeHrefFromCodes` re-sorts
+`entityHref`. `/explore` builds its href separately (`routeHref` in `explore/page.tsx`), reading
+the two `Resolved` hits directly rather than the joined display string, and passes it as a
+**typed `ColumnSpec.href` accessor** (`(row) => string | null`) — not a sibling-field naming
+convention on `Record<string, unknown>` (rejected in review: stringly-typed, no compile-time
+guard, and wider than the one caller needs) — that `IdentifierCell`, a small generalization of
+the same component, calls per row for any non-dimension identifier column that sets one.
+**The href is the code-alphabetical pair, never the displayed (airport-id) order**: `/explore`
+renders `route_key_low, route_key_high` — airport-id order — and `routeHrefFromCodes` re-sorts
 alphabetically by code before building `/route/<pair>`, because the two orderings disagree for
 154 of 22,420 pairs (measured; `CLAUDE.md`, M4b). Reusing the displayed order would be wrong
 for every one of those 154 — IFP/IAH is one of them: airport-id order displays `IFP–IAH`, but

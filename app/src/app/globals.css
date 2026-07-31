@@ -94,6 +94,17 @@ body { background: var(--panel); color: var(--ink); }
   font-weight: 500;
   letter-spacing: 0.01em;
 }
+/* M5 "connect the graph": a dimension cell that resolves to an entity page links to it
+   (docs/design/system.md "The data table"). Tailwind's preflight resets `a` to
+   `color: inherit; text-decoration: inherit`, so this is required, not cosmetic -- without
+   it every new link is pixel-identical to the plain-text cell it replaced. Colour is never
+   the sole channel (Quality floor): the underline is the second, so the link still reads as
+   a link in grayscale or for a colour-blind reader. */
+.data-table td.id a {
+  color: var(--signal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
 /* Rows below the 30-departure floor are rendered, never hidden: dashed rule, --ink-2 text.
    Sorted to the bottom and excluded from ranking, not from sight. */
