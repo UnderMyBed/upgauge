@@ -193,6 +193,33 @@ body { background: var(--panel); color: var(--ink); }
   margin-left: auto;
 }
 
+/* ---------- entity header (docs/design/mockups/entity-route.html: .entity/.code/.ename)
+   -- only the header portion. The route page (M4b) has no chart/fleet-mix content yet
+   (M4/M5); this is enough for the code + names above the carrier table. ---------- */
+.entity {
+  display: flex;
+  align-items: baseline;
+  gap: 11px;
+  padding: 15px 0 8px;
+  flex-wrap: wrap;
+}
+.entity .code {
+  font-family: var(--font-mono);
+  font-size: 34px;
+  font-weight: 600;
+  line-height: 1;
+}
+.entity .ename {
+  font-size: 13px;
+  color: var(--ink-2);
+}
+.window {
+  font-size: 11px;
+  color: var(--ink-2);
+  padding: 6px 0 14px;
+  margin: 0;
+}
+
 /* ---------- stat / meta strip (docs/design/system.md "Stat strip") ---------- */
 .stats {
   display: flex;
