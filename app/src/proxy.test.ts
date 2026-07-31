@@ -26,6 +26,16 @@ describe("proxy", () => {
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
 
+  it("sets the project's Cache-Control on /route/<pair>", () => {
+    // Critical fix, final whole-branch review: the matcher used to omit /route/<pair>
+    // entirely, so page.tsx's own `force-dynamic` export made Next emit `no-store` for
+    // every shared /route permalink -- the exact bug this file exists to prevent, just on a
+    // different path. Fails if the matcher regresses to ["/explore", "/api/pivot"] or the
+    // pathname check reverts to an exact `=== "/explore"`.
+    const res = proxy(new NextRequest("http://localhost/route/JFK-LAX"));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
   it("leaves /api/pivot's own Cache-Control alone", () => {
     // route.ts sets `no-store` on errors and the long cache on success; overriding here would
     // make every 400 publicly cacheable for a month.

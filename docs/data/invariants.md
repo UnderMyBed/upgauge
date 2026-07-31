@@ -213,13 +213,15 @@ exist across 530 airports.** Measured on JFK–LAX over 2025-05 → 2026-04:
 | The actual undirected route (`least`/`greatest` on the airport-id pair) | 264 | **3,455,820** |
 
 The gap — 33 same-airport rows (2 JFK→JFK, 31 LAX→LAX) — inflates this one route by **18,895
-seats** under a `DATA AS OF` badge. `sql/03_queries/pivot_route.sql`'s composite-dimension
-filter (M4b, `app/src/lib/pivot/render.ts` and `pipeline/pivot.py` in lockstep) instead binds
-`least(route_key_low, route_key_high) = $lo AND greatest(...) = $hi` per requested route, which
-cannot match a same-airport row.
+seats** under a `DATA AS OF` badge. The composite-dimension filter built by
+`app/src/lib/pivot/render.ts` and `pipeline/pivot.py` (M4b, in lockstep — `sql/03_queries/
+pivot_route.sql` itself carries only the `{{FILTERS}}` token these two renderers fill in,
+not the filter logic) instead binds `least(route_key_low, route_key_high) = $lo AND
+greatest(...) = $hi` per requested route, which cannot match a same-airport row.
 
 **Route storage order (by airport ID) and the alphabetical order a person would type
-disagree for 154 of 22,950 routes (0.7%)** — e.g. `HPN` (12197) and `BNH` (16954): id order is
+disagree for 154 of 22,420 routes (0.69%, excluding the 530 same-airport "routes" just
+above, which are not routes)** — e.g. `HPN` (12197) and `BNH` (16954): id order is
 `HPN-BNH`, but the alphabetical form — used as `/route/<pair>`'s canonical URL — is `BNH-HPN`.
 `/route/<pair>` (`app/src/lib/routePair.ts`) computes both explicitly rather than assuming one
 predicts the other: the URL is alphabetical (predictable from the two codes alone, no database

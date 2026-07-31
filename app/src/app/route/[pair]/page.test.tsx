@@ -43,6 +43,23 @@ describe("/route/<pair>", () => {
     expect(codes.every((c) => /^[A-Z0-9]{2}$/.test(c ?? ""))).toBe(true);
   });
 
+  it("shows the passengers stat", async () => {
+    // Important 3, final whole-branch review: `routeTotals` already computed `passengers`
+    // (it's the load-factor numerator) but nothing rendered it, though four docs -- CLAUDE.md,
+    // features.md, system.md, and this spec's own mockup -- all listed it. Measured for this
+    // route and window (same query the page runs): seats=3,455,820 pax=2,998,796. Fails if
+    // the Passengers stat is removed, or if it's ever rendered from a different column
+    // (e.g. seats again).
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }),
+    );
+    // Scoped to .stats: the carriers table below also has a "Passengers" column, so an
+    // unscoped getByText would match twice and throw.
+    const stats = container.querySelector(".stats");
+    expect(stats?.textContent).toContain("Passengers");
+    expect(stats?.textContent).toContain("2,998,796");
+  });
+
   it("computes totals from summed parts, not by averaging the carrier rows", async () => {
     // The whole point: Sum(pax)/Sum(seats), never mean(per-carrier lf). Measured for this
     // route and window: seats 3,455,820, pax 2,998,796 -> 86.78%. A mean of the carrier
@@ -88,6 +105,24 @@ describe("/route/<pair>", () => {
     render(await RoutePage({ params: Promise.resolve({ pair: "BNH-JFK" }) }));
     expect(screen.getByText(/no scheduled service/i)).toBeDefined();
     expect(screen.getByRole("link", { name: /2015-01/ })).toBeDefined();
+  });
+
+  it("names the airports in the empty state in the same order as the header, not id order", async () => {
+    // Minor, final whole-branch review: BNH-JFK is one of the 154 routes where id order
+    // (JFK's airport_id is lower, so low=JFK/high=BNH) disagrees with the alphabetical
+    // canonical order the header uses (BNH first). The empty-state prose used to be built
+    // from low/high (id order), so it read "...John F Kennedy (JFK) and ... (BNH)" directly
+    // under a header reading "BNH–JFK" -- backwards. Fails if RouteEmptyState reverts to
+    // low/high instead of the alphabetically-matched a/b.
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "BNH-JFK" }) }),
+    );
+    const text = container.textContent ?? "";
+    const bnhInEmptyState = text.indexOf("(BNH)");
+    const jfkInEmptyState = text.indexOf("(JFK)");
+    expect(bnhInEmptyState).toBeGreaterThan(-1);
+    expect(jfkInEmptyState).toBeGreaterThan(-1);
+    expect(bnhInEmptyState).toBeLessThan(jfkInEmptyState);
   });
 });
 

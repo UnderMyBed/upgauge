@@ -99,8 +99,9 @@ renders and the bare id does not, on both a segment and a route query.
 
 **M4b ships the first entity page, `/route/<pair>`** (`app/src/app/route/[pair]/page.tsx`),
 composed on the same pivot layer M3/M4a already built — a title block, a stat strip (seats,
-passengers, load factor, avg gauge, departures, carrier count, computed as ratios of summed
-rows, never averaged), the carriers table, an Explorer link for the identical query, and the
+passengers, load factor, avg gauge, departures, carrier count, quarantined count — load
+factor and avg gauge computed as ratios of summed rows, never averaged), the carriers table,
+an Explorer link for the identical query, and the
 legend rail. Getting there required two changes to the pivot layer itself, made in
 `app/src/lib/pivot/render.ts` and `pipeline/pivot.py` in lockstep (the 17 existing goldens
 stayed byte-identical): **composite-dimension filtering**, so `route` — whose `column_expr`

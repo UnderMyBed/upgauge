@@ -170,6 +170,38 @@ export async function lookupAirportsByCode(codes: string[]): Promise<Map<string,
   return out;
 }
 
+/** Existence-only check, deliberately weaker than `lookupAirportsByCode`: a code coming back
+ * in the returned set means it appears in `dim_airport`'s current (`is_latest`) roster, and
+ * says nothing about whether it has any domestic segment data -- callers must not treat a hit
+ * here as resolved. The one caller, `routePair.ts`, uses it only to choose a 404 reason: a
+ * code that fails `lookupAirportsByCode` but appears here is a real, recognized airport this
+ * domestic-only dataset (T-100 Segment, CLAUDE.md's "Segment only" rule) simply has no rows
+ * for -- LHR, CDG, NRT are the measured examples -- which reads very differently from a typo
+ * and would otherwise render the identical "unknown airport code" 404 either way. */
+export async function airportCodesExist(codes: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  const wanted = [...new Set(codes.map((c) => c.toUpperCase()))].filter((c) => c.length > 0);
+  if (wanted.length === 0) return out;
+
+  const names = wanted.map((_, i) => `$id${i}`);
+  const raw = readFileSync(path.join(QUERIES_DIR, "lookup_airport_code_exists.sql"), "utf8");
+  const statement = substituteIds(raw, "lookup_airport_code_exists", `(${names.join(", ")})`);
+
+  const params: Record<string, DuckDBValue> = {};
+  wanted.forEach((c, i) => {
+    params[`id${i}`] = c as DuckDBValue;
+  });
+
+  const con = await connect();
+  const prepared = await con.prepare(statement);
+  prepared.bind(params);
+  const result = await prepared.run();
+  for (const r of await result.getRowObjects()) {
+    out.add(String(r.code));
+  }
+  return out;
+}
+
 export async function resolveRows(
   rows: Record<string, unknown>[],
   allowlist: Allowlist,

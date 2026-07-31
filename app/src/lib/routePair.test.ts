@@ -44,6 +44,23 @@ describe("resolveRoutePair", () => {
     expect(r.kind).toBe("notFound");
     if (r.kind !== "notFound") return;
     expect(r.reason).toContain("ZZZZ");
+    expect(r.reason).toContain("unknown airport code");
+  });
+
+  it("404s a recognized-but-non-domestic code, distinguishing it from a typo", async () => {
+    // LHR is a real airport in dim_airport's own reference table (BTS's master list is
+    // global), but T-100 Segment is domestic-only (CLAUDE.md's "Segment only" rule) so it
+    // never carries a fct_segment_month row and fails lookupAirportsByCode -- the same
+    // failure mode as a genuine typo like ZZZZ, but a different fact. Fails if the
+    // domestic-only branch is dropped (reason would read "unknown airport code 'LHR'"
+    // instead) or if LHR ever gains domestic segment data (would then resolve, not 404 at
+    // all) -- both are real, checkable regressions, not just a rephrasing.
+    const r = await resolveRoutePair("JFK-LHR");
+    expect(r.kind).toBe("notFound");
+    if (r.kind !== "notFound") return;
+    expect(r.reason).toContain("LHR");
+    expect(r.reason).toContain("domestic-only");
+    expect(r.reason).not.toContain("unknown airport code 'LHR'");
   });
 
   it("404s a slug that is not two codes", async () => {

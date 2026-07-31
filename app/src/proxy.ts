@@ -34,12 +34,21 @@ export function proxy(request: NextRequest) {
   // CLAUDE.md: "Every response gets Cache-Control: public, s-maxage=2592000,
   // stale-while-revalidate=86400" -- the caching IS the cost control, not the hosting tier
   // (docs/architecture/hosting.md). /api/pivot sets its own on the JSON response, including
-  // `no-store` on errors, so it must not be overridden here. /explore had none: it exports
-  // `dynamic = "force-dynamic"`, so Next emits its own no-store for the HTML and every shared
-  // permalink -- the growth mechanic, and the cold-start path the always-on box is sized
-  // around -- hit DuckDB with the CDN doing nothing. Setting it on the proxy response is what
-  // makes it stick regardless of the route segment config.
-  if (new URL(request.url).pathname === "/explore") {
+  // `no-store` on errors, so it must not be overridden here. /explore and /route/<pair> both
+  // export `dynamic = "force-dynamic"` (each page's own header comment explains why: their
+  // content depends on live warehouse state), so Next emits its own no-store for the HTML and
+  // every shared permalink -- the growth mechanic, and the cold-start path the always-on box
+  // is sized around -- hit DuckDB with the CDN doing nothing. Setting it on the proxy response
+  // is what makes it stick regardless of the route segment config.
+  //
+  // CRITICAL fix (final whole-branch review): the matcher below used to list only "/explore"
+  // and "/api/pivot", so `/route/<pair>` -- M4b's headline SEO-canonical permalink page --
+  // shipped `private, no-cache, no-store, max-age=0, must-revalidate`, reproducing the exact
+  // bug this file exists to fix. `startsWith("/route/")`, not an exact match: the matcher
+  // below only forwards the literal `/route/:pair` shape (one dynamic segment), so this can't
+  // accidentally net `/api/pivot` or some future unrelated top-level route.
+  const pathname = new URL(request.url).pathname;
+  if (pathname === "/explore" || pathname.startsWith("/route/")) {
     response.headers.set("Cache-Control", CACHE);
   }
   return response;
@@ -48,9 +57,11 @@ export function proxy(request: NextRequest) {
 const CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 
 // Without a matcher, proxy runs on every request including _next/static and public assets.
-// Both entry points need the header: /api/pivot's own `new URL(request.url).search` is
-// normalized too -- measured, every filtered API query returned `malformed filter
-// 'origin_state%3AOR'` before this. They now read the identical raw string from one source.
+// All three entry points need the header (or, for /api/pivot, the raw-query passthrough only
+// -- see above): /api/pivot's own `new URL(request.url).search` is normalized too -- measured,
+// every filtered API query returned `malformed filter 'origin_state%3AOR'` before this. They
+// now read the identical raw string from one source. `/route/:pair` covers every
+// `/route/<anything>` request, matching the dynamic segment `app/route/[pair]/page.tsx` owns.
 export const config = {
-  matcher: ["/explore", "/api/pivot"],
+  matcher: ["/explore", "/api/pivot", "/route/:pair"],
 };

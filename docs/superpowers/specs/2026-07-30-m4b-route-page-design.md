@@ -115,14 +115,38 @@ The query still uses IDs: codes resolve to IDs, which are then ordered by ID for
 
 ### Reverse lookup
 
-The M4a resolver run backwards: code → `airport_id`. This is where M4a's zero-in-window-collision
-invariant earns its keep — **0 airport codes collide among in-window airports** (60 collide across
-all of `dim_airport`'s history), which is what makes `JFK → 12478` a function.
+The M4a resolver run backwards: code → `airport_id`. **This is not as simple as "the M4a
+invariant already covers it"** — that framing is what actually shipped wrong on this branch
+and is corrected here to match `docs/data/invariants.md` § Entity resolution (M4a), which
+this note now defers to rather than restating a stale version of.
 
-If a future refresh introduces a collision, the resolver **fails loudly** rather than picking
-one. A silently-chosen airport would render a page about the wrong one, under a `DATA AS OF`
-badge. `pipeline/tests/test_resolution_invariants.py` already pins the invariant; this is the
-consumer that makes breaking it matter.
+Airport-code collisions are three different populations, and conflating them is exactly the
+bug M4b's own fix round 1 caught after ship:
+
+| Population | Colliding airport codes |
+|---|---|
+| All of `dim_airport`'s history (every `airport_seq_id` row, `is_latest` or not) | 60 |
+| `is_latest = TRUE` rows only, **not** scoped to what flew in-window | **36** |
+| `is_latest = TRUE` **and** the `airport_id` appears in `fct_segment_month` | 0 |
+
+M4a's own invariant test measures the two extremes (all-history and in-window-only) and both
+are 0 — but `WHERE is_latest` alone is a *third*, untested population that neither extreme
+covers, and it does **not** make a code unique: it is scoped per `airport_id`'s own seq
+chain, not per code, so two different `airport_id`s sharing a code can each carry their own
+`is_latest = TRUE` row. **36 codes do.** `AUS` is the measured example: `airport_id` 10423
+("Austin - Bergstrom International", real traffic) and `airport_id` 16440 ("Robert Mueller
+Municipal", closed since 1999, zero traffic) both come back `is_latest = TRUE` — a naive
+`WHERE is_latest` reverse lookup would let the query driver's row order silently decide which
+one `JFK → 12478`-style resolution returns, and Robert Mueller could win.
+
+`lookup_airport_by_code.sql`'s `EXISTS`-in-`fct_segment_month` clause is what actually takes
+colliding codes from 36 to 0, not `is_latest` by itself — that clause is load-bearing, not
+redundant with it. If a future refresh introduces a collision even after that clause (a
+newly-closed airport reusing a still-open one's code, for instance), the resolver **fails
+loudly** rather than picking one. A silently-chosen airport would render a page about the
+wrong one, under a `DATA AS OF` badge. `pipeline/tests/test_resolution_invariants.py` pins
+the in-window and all-history extremes; `app/src/lib/resolve.test.ts` pins the `is_latest`-
+alone gap and the `EXISTS` clause that closes it.
 
 ### Error taxonomy
 
@@ -151,8 +175,8 @@ UPGAUGE                                    DATA AS OF 2026-04
 JFK–LAX     John F Kennedy Intl · Los Angeles Intl
             2,475 mi · 4 carriers · 2025-05 → 2026-04
 
-  SEATS      PASSENGERS   LOAD FACTOR   AVG GAUGE   DEPARTURES
-  3,455,820  2,998,796    86.78%        170.4       20,283
+  SEATS      PASSENGERS   LOAD FACTOR   AVG GAUGE   DEPARTURES  CARRIERS  QUARANTINED
+  3,455,820  2,998,796    86.78%        170.4       20,283      5         0
 ─────────────────────────────────────────────────────────────
   [ carriers table — DataTable, one row per operating carrier ]
   ⌄ See these rows in the Explorer

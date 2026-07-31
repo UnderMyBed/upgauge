@@ -761,7 +761,8 @@ pin the emitted SQL identical between the two languages).
 ```
 
 `app/src/lib/routePair.ts`'s `resolveRoutePair` computes two orderings of the same pair
-explicitly, because they disagree for **154 of 22,950 routes (0.7%)**:
+explicitly, because they disagree for **154 of 22,420 routes (0.69%, excluding the 530
+same-airport "routes" that are not routes)**:
 
 - **`canonical` (the URL)** — alphabetical by code. Storage order is an implementation
   detail that should not leak into a URL, and alphabetical is predictable from the two codes

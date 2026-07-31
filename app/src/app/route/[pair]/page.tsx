@@ -201,7 +201,8 @@ export async function RouteView({
   const columns = buildColumns(allowlist, result.columns);
 
   // canonical is ALPHABETICAL (routePair.ts); low/high are ordered by ID and can disagree
-  // with it (154 of 22,950 routes do). Pairing each half of `canonical` back to its airport
+  // with it (154 of 22,420 routes do -- 0.69%, excluding the 530 same-airport "routes" that
+  // are not routes). Pairing each half of `canonical` back to its airport
   // by CODE, rather than assuming canonical.split("-") lines up with [low, high], keeps the
   // displayed name attached to the code it is actually under even when the two orderings
   // differ.
@@ -222,6 +223,7 @@ export async function RouteView({
         </div>
         <div className="stats">
           <Stat label="Seats" value={formatSeats(totals.seats)} />
+          <Stat label="Passengers" value={formatSeats(totals.passengers)} />
           <Stat label="Load factor" value={formatLoadFactor(totals.loadFactor)} derived />
           <Stat label="Avg gauge" value={formatGauge(totals.avgGauge)} derived />
           <Stat label="Departures" value={formatCount(totals.departures)} />
@@ -234,7 +236,12 @@ export async function RouteView({
         <div className="body">
           <div>
             {isEmpty ? (
-              <RouteEmptyState query={query} low={low} high={high} />
+              // `a`/`b` (alphabetical, same order as the header above), NOT `low`/`high`
+              // (id order) -- Minor, final whole-branch review: for the 154 routes where the
+              // two orderings disagree (BNH-JFK is one: id order is JFK,BNH but the header
+              // reads "BNH–JFK"), passing low/high here made the empty-state prose name the
+              // airports in the OPPOSITE order from the header immediately above it.
+              <RouteEmptyState query={query} low={a} high={b} />
             ) : (
               <DataTable columns={columns} rows={result.rows} resolved={result.resolved} />
             )}

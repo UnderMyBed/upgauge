@@ -187,17 +187,6 @@ describe("lookupAirportsByCode", () => {
     expect(m.get("LAX")?.id).toBe(12892);
   });
 
-  it("returns exactly one airport per code despite multi-seq history", async () => {
-    // NOTE: this assertion does NOT actually detect a missing `WHERE is_latest`. JFK's 5
-    // seq rows all carry the identical code and airport_id, so a Map keyed by code
-    // overwrites with an identical value regardless of how many rows the query returns --
-    // map.size stays 1 either way. The real guard against that regression is the direct-SQL
-    // row-count test in "lookup_airport_by_code.sql's cardinality guard" below; this test is
-    // kept only because the brief specifies it, not because it is load-bearing.
-    const m = await lookupAirportsByCode(["JFK"]);
-    expect(m.size).toBe(1);
-  });
-
   it("resolves AUS to Austin-Bergstrom, not the closed Robert Mueller Municipal", async () => {
     // Fix round 1, Critical: `is_latest` is scoped per airport_id's OWN seq chain, not per
     // code, so two DIFFERENT airport_ids sharing a code can each be is_latest = TRUE at once.
@@ -268,17 +257,21 @@ describe("insertAirportRow", () => {
   });
 });
 
-// The brief's own "multi-seq history" test above (map.size === 1) cannot actually detect a
-// missing `WHERE is_latest`: JFK's 5 seq rows (1247801-05, confirmed against dim_airport
-// directly while building this file) all carry the SAME code ('JFK') and the SAME
-// airport_id (12478), so a Map keyed by uppercased CODE collapses them to one entry via
-// plain overwrite regardless of how many rows the query returns -- exactly the same blind
-// spot resolve.test.ts's own comment calls out for resolveRows()'s id-keyed map, just one
-// level removed (there it's Map.set on a repeated id; here every one of JFK's rows would
-// produce the identical (key, value) pair, so even a "did the value change" check wouldn't
-// catch it). Row COUNT is the only thing that actually distinguishes "one row" from "five
-// identical rows", so this test runs lookup_airport_by_code.sql directly, the same way
-// "resolve_airport.sql's cardinality guard" above does for the id -> code direction.
+// A Map-based test built on lookupAirportsByCode() itself CANNOT detect a missing `WHERE
+// is_latest` here, and the brief's own version of that test (asserting `m.size === 1` for
+// JFK) was deleted rather than kept (Minor, final whole-branch review: an assertion that
+// cannot fail is worse than no assertion -- it reports green). JFK's 5 seq rows (1247801-05,
+// confirmed against dim_airport directly while building this file) all carry the SAME code
+// ('JFK') and the SAME airport_id (12478), so a Map keyed by uppercased CODE collapses them
+// to one entry via plain overwrite regardless of how many rows the underlying query returns
+// -- exactly the same blind spot resolve.test.ts's own comment calls out for resolveRows()'s
+// id-keyed map, just one level removed (there it's Map.set on a repeated id; here every one
+// of JFK's rows would produce the identical (key, value) pair, so even a "did the value
+// change" check wouldn't catch it). Row COUNT is the only thing that actually distinguishes
+// "one row" from "five identical rows", so this test runs lookup_airport_by_code.sql
+// directly, the same way "resolve_airport.sql's cardinality guard" above does for the
+// id -> code direction -- this IS the real guard for the multi-seq-history invariant on the
+// code -> id direction, not a supplement to a Map-based one.
 describe("lookup_airport_by_code.sql's cardinality guard", () => {
   it("returns exactly one row for a code with multiple seq rows in dim_airport", async () => {
     const raw = readFileSync(path.join(QUERIES_DIR, "lookup_airport_by_code.sql"), "utf8");

@@ -237,6 +237,24 @@ def test_composite_filter_rejects_a_malformed_pair(con):
         render_pivot(q(filters=(("route", ("12478",)),)), con)
 
 
+def test_composite_filter_rejects_a_non_numeric_pair(con):
+    """'JFK-LAX' has two non-empty dash-separated parts, so the length/non-empty check alone
+    let it through to a bound string param -- DuckDB then threw an unhandled Conversion Error
+    deep inside execution, which the TypeScript call sites only guarded PivotError against.
+    Fails if the digit check is dropped, or narrowed to reject only non-ASCII digits."""
+    with pytest.raises(PivotError, match="two ids joined by"):
+        render_pivot(q(filters=(("route", ("JFK-LAX",)),)), con)
+
+
+def test_composite_filter_strips_ascii_whitespace(con):
+    """Pins the ASCII whitespace set app/src/lib/pivot/render.ts's stripAsciiWhitespace
+    mirrors -- not bare .strip()/.trim(), which disagree on non-ASCII whitespace (documented,
+    not asserted here: no golden exercises that edge)."""
+    _, params = render_pivot(q(filters=(("route", (" 12478 - 12892\t",)),)), con)
+    assert params["f0_0a"] == "12478"
+    assert params["f0_0b"] == "12892"
+
+
 def test_single_column_filter_is_unchanged(con):
     """The existing IN-list path must not move -- 17 goldens depend on it."""
     sql, params = render_pivot(q(filters=(("origin_state", ("OR", "WA")),)), con)

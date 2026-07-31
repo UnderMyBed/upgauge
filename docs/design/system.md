@@ -310,11 +310,11 @@ same `DATA AS OF` badge, same data table, same legend rail:
 ```
 UPGAUGE                                    DATA AS OF 2026-04
 ─────────────────────────────────────────────────────────────
-JFK–LAX     John F Kennedy Intl · Los Angeles Intl
+JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
             2025-05 → 2026-04
 
-  SEATS      PASSENGERS   LOAD FACTOR   AVG GAUGE   DEPARTURES  CARRIERS
-  3,455,820  2,998,796    86.78%        170.4       20,283      5
+  SEATS      PASSENGERS   LOAD FACTOR   AVG GAUGE   DEPARTURES  CARRIERS  QUARANTINED
+  3,455,820  2,998,796    86.78%        170.4       20,283      5         0
 ─────────────────────────────────────────────────────────────
   [ carriers table — DataTable, one row per operating carrier, sorted by seats desc ]
   Open in the Explorer →

@@ -137,9 +137,16 @@ check     "route: renders a carrier code"      "$BODY" '>DL<'
 check     "route: DATA AS OF is present"       "$BODY" 'DATA AS OF'
 check     "route: links to the Explorer"       "$BODY" '/explore?'
 
+# Critical fix, final whole-branch review: this section copied the body checks above but not
+# a header check, which is exactly why /route shipped `no-store` -- every OTHER check here
+# passes whether or not the Cache-Control header is set. See proxy.ts and CLAUDE.md's "every
+# response gets Cache-Control" rule.
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/route/JFK-LAX")
+check     "route: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/route/LAX-JFK")
 LOC=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/route/LAX-JFK" | grep -i '^location:' | tr -d '\r')
-check     "route: reversed pair redirects"     "$CODE" '30'
+check     "route: reversed pair redirects"     "$CODE" '308'
 check     "route: redirect targets canonical"  "$LOC"  '/route/JFK-LAX'
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/route/ZZZZ-LAX")

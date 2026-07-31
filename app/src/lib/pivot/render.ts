@@ -18,6 +18,19 @@ import type { Allowlist, DimensionEntry } from "@/lib/pivot/allowlist";
 const QUERIES_DIR = path.join(process.env.UPGAUGE_ROOT ?? process.cwd(), "sql", "03_queries");
 const MAINLINE_CARRIER_EXPR = "coalesce(m.parent_airline_id, f.op_airline_id)";
 
+// Minor, final whole-branch review: JS's `String.trim()` and Python's `str.strip()` are NOT
+// the same whitespace set -- `trim()` strips U+FEFF (ZWNBSP/BOM, added to the WhiteSpace
+// production in ES2015), which Python's `.strip()` does not; `.strip()` strips \x1c-\x1f
+// (the Unicode "File/Group/Record/Unit Separator" control codes, category Cc but treated as
+// space-adjacent by Python's `str.isspace()`), which JS's `\s`/`trim()` does not. No golden
+// exercises either edge, so this was free to silently diverge between the two composite-
+// filter-value implementations. An explicit ASCII whitespace set is the only strip both
+// languages can express identically -- mirrored in pipeline/pivot.py as `_ASCII_WS`.
+const ASCII_WHITESPACE_RE = /^[ \t\n\r\f\v]+|[ \t\n\r\f\v]+$/g;
+function stripAsciiWhitespace(s: string): string {
+  return s.replace(ASCII_WHITESPACE_RE, "");
+}
+
 function validateDimension(key: string, a: Allowlist, grain: string): DimensionEntry {
   const entry = a.dims.get(key);
   if (!entry) throw new PivotError(`unknown dimension '${key}'`);
@@ -119,8 +132,25 @@ export function renderPivot(
       );
     }
     const pairClauses = values.map((value, j) => {
-      const parts = value.split("-");
-      if (parts.length !== 2 || !parts.every((p) => p.trim())) {
+      // ASCII-only strip, not `.trim()`: JS's `trim()` and Python's `.strip()` disagree on
+      // which characters count as whitespace (JS strips U+FEFF ZWNBSP; Python's `.strip()`
+      // additionally strips \x1c-\x1f). An explicit ASCII whitespace set is the only strip
+      // both languages can implement identically -- see stripAsciiWhitespace's own comment.
+      const parts = value.split("-").map(stripAsciiWhitespace);
+      // Every composite dimension in the catalog today (just `route`) resolves through an
+      // INTEGER id column (route_key_low/high -> AIRPORT_ID -- CLAUDE.md's "Key on
+      // AIRLINE_ID and AIRPORT_ID" rule), and the error message below has always promised
+      // "must be two ids". Requiring digits is enforcing that promise, not duplicating
+      // DuckDB's type system (pipeline/pivot.py's module docstring draws that line at
+      // value-DOMAIN mismatches, e.g. an id that is well-typed but doesn't exist -- this is
+      // a structural format check, cheap and allowlist-adjacent, exactly what render_pivot
+      // already rejects elsewhere). Closes a real gap: 'route:JFK-LAX' used to pass this
+      // check (two non-empty parts) and only fail deep inside DuckDB with a raw "Conversion
+      // Error: Could not convert string 'JFK' to INT32" that neither /explore nor /api/pivot
+      // handled (Important 4, final whole-branch review) -- verified against a running
+      // build before this fix.
+      const isIntegerPair = parts.length === 2 && parts.every((p) => /^\d+$/.test(p));
+      if (!isIntegerPair) {
         throw new PivotError(
           `filter value '${value}' for composite dimension '${key}' must be ` +
             "two ids joined by '-', e.g. '12478-12892'",
@@ -128,8 +158,8 @@ export function renderPivot(
       }
       const loName = `f${i}_${j}a`;
       const hiName = `f${i}_${j}b`;
-      params[loName] = parts[0].trim();
-      params[hiName] = parts[1].trim();
+      params[loName] = parts[0];
+      params[hiName] = parts[1];
       return (
         `(least(${columns[0]}, ${columns[1]}) = $${loName} ` +
         `AND greatest(${columns[0]}, ${columns[1]}) = $${hiName})`

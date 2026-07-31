@@ -1,4 +1,5 @@
 import { decode, encode, UrlStateError } from "@/lib/pivot/urlstate";
+import { PivotError } from "@/lib/pivot/types";
 import { loadAllowlist, runPivot } from "@/lib/db";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
 
@@ -49,20 +50,29 @@ export async function GET(request: Request): Promise<Response> {
       { headers: { "Cache-Control": CACHE } },
     );
   } catch (e) {
-    if (e instanceof UrlStateError) {
+    // UrlStateError (decode()'s own documented exception) AND PivotError (thrown by
+    // renderPivot() when runPivot() re-derives the executable SQL, e.g. a composite filter
+    // value shaped like an id pair but not numeric -- `f=route:JFK-LAX`) are both "this
+    // request could never produce valid SQL" -- a client mistake, not a server fault.
+    // Important 4, final whole-branch review: PivotError does not extend UrlStateError, so
+    // before this it fell through to the catch-all below and came back as an opaque
+    // `{"error":"internal error"}` 500 instead of a named 400 -- verified against a running
+    // build before this fix.
+    if (e instanceof UrlStateError || e instanceof PivotError) {
       return Response.json(
         { error: e.message },
         { status: 400, headers: { "Cache-Control": "no-store" } },
       );
     }
-    // decode() documents UrlStateError as the exception it validates with, but a crafted
-    // URL -- or a failure elsewhere in this block, e.g. the catalog read or the DuckDB call
-    // inside runPivot() -- can still surface a different error type here. This is
-    // deliberately a catch-all, not a rethrow: an uncaught exception would either leak a
-    // Next.js stack trace (with real filesystem paths -- QUERIES_DIR, DB_PATH) to the client
-    // or, worse, be swallowed into a default 200 by some outer layer. Neither is acceptable
-    // for a validation boundary, so log the real error server-side for operators and return
-    // a generic, uncached 500 that carries no query-specific or path-specific detail.
+    // decode() documents UrlStateError (and, as of the above, PivotError) as the exceptions
+    // it validates with, but a crafted URL -- or a failure elsewhere in this block, e.g. the
+    // catalog read or the DuckDB call inside runPivot() -- can still surface a different
+    // error type here. This is deliberately a catch-all, not a rethrow: an uncaught
+    // exception would either leak a Next.js stack trace (with real filesystem paths --
+    // QUERIES_DIR, DB_PATH) to the client or, worse, be swallowed into a default 200 by some
+    // outer layer. Neither is acceptable for a validation boundary, so log the real error
+    // server-side for operators and return a generic, uncached 500 that carries no
+    // query-specific or path-specific detail.
     console.error("GET /api/pivot: unexpected error", e);
     return Response.json(
       { error: "internal error" },

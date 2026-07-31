@@ -198,6 +198,35 @@ describe("composite-dimension filters", () => {
     ).toThrow(/two ids joined by/);
   });
 
+  it("rejects a non-numeric pair with a named PivotError instead of reaching DuckDB", () => {
+    // Important 4, final whole-branch review: 'JFK-LAX' has two non-empty dash-separated
+    // parts, so the OLD check (length === 2, both non-empty) passed it straight through to
+    // a bound string param -- DuckDB then threw an unhandled "Conversion Error: Could not
+    // convert string 'JFK' to INT32" deep inside runPivot(), which decode()'s own PivotError
+    // guard never saw. Verified against a running build before this fix. Fails if the digit
+    // check is dropped, or narrowed to reject only non-ASCII digits.
+    expect(() =>
+      renderPivot({ ...BASE, filters: [["route", ["JFK-LAX"]]] }, FIXTURE),
+    ).toThrow(PivotError);
+    expect(() =>
+      renderPivot({ ...BASE, filters: [["route", ["JFK-LAX"]]] }, FIXTURE),
+    ).toThrow(/two ids joined by/);
+  });
+
+  it("strips ASCII whitespace around each id, matching pipeline/pivot.py's strip set", () => {
+    // Not `.trim()`/`.strip()` directly (JS and Python disagree on non-ASCII whitespace --
+    // see stripAsciiWhitespace's header comment) -- this pins the ASCII case both language's
+    // explicit sets agree on, so a regression to either language's native trim/strip would
+    // still pass this specific test (by design: the divergence is in the NON-ASCII set,
+    // which no golden exercises either -- documented as a known gap, not asserted here).
+    const { params } = renderPivot(
+      { ...BASE, filters: [["route", [" 12478 - 12892\t"]]] },
+      FIXTURE,
+    );
+    expect(params.f0_0a).toBe("12478");
+    expect(params.f0_0b).toBe("12892");
+  });
+
   it("leaves the single-column filter path untouched", () => {
     const { sql, params } = renderPivot(
       { ...BASE, filters: [["origin_state", ["OR", "WA"]]] }, FIXTURE);

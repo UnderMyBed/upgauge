@@ -22,17 +22,36 @@ casting/binding to reject. Duplicating DuckDB's type system in Python would be e
 over-engineering the project's rules forbid elsewhere. The boundary: PivotError for "this
 request could never produce valid SQL," DuckDB for "this request produced valid SQL that
 doesn't match any data."
+
+One structural check that boundary DOES cover (M4b, final whole-branch review Important 4):
+a composite filter value must be two INTEGER ids joined by '-' -- every composite dimension
+today resolves through an id column (CLAUDE.md: "Key on AIRLINE_ID and AIRPORT_ID"), and the
+error message has always promised "two ids". Rejecting 'JFK-LAX' here is enforcing that
+promise as a format check, not validating whether either id actually exists (that half stays
+DuckDB's job) -- before this, 'route:JFK-LAX' passed this function's checks and only failed
+deep inside DuckDB with an unhandled "Conversion Error", which neither TypeScript call site
+was written to catch since they only guarded against `PivotError`.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
 
 QUERIES_DIR = Path(__file__).parents[1] / "sql" / "03_queries"
+
+# Minor, final whole-branch review: Python's `str.strip()` and JS's `String.trim()` disagree
+# on which characters count as whitespace -- `.strip()` additionally strips \x1c-\x1f (the
+# Unicode separator control codes), which JS's `trim()` does not; `trim()` additionally strips
+# U+FEFF (ZWNBSP/BOM), which `.strip()` does not. An explicit ASCII whitespace set is the only
+# strip both languages can express identically -- mirrored in app/src/lib/pivot/render.ts as
+# `ASCII_WHITESPACE_RE`/`stripAsciiWhitespace`.
+_ASCII_WHITESPACE = " \t\n\r\f\v"
+_INTEGER_RE = re.compile(r"\A[0-9]+\Z")
 MAINLINE_JOIN_PATH = QUERIES_DIR / "pivot_mainline_join.sql"
 GOLDENS_DIR = QUERIES_DIR / "goldens"
 PIVOT_GOLDENS_PATH = GOLDENS_DIR / "pivot.json"
@@ -286,15 +305,15 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
             )
         pair_clauses = []
         for j, value in enumerate(values):
-            parts = value.split("-")
-            if len(parts) != 2 or not all(p.strip() for p in parts):
+            parts = [p.strip(_ASCII_WHITESPACE) for p in value.split("-")]
+            if len(parts) != 2 or not all(_INTEGER_RE.match(p) for p in parts):
                 raise PivotError(
                     f"filter value {value!r} for composite dimension {key!r} must be "
                     "two ids joined by '-', e.g. '12478-12892'"
                 )
             lo_name, hi_name = f"f{i}_{j}a", f"f{i}_{j}b"
-            params[lo_name] = parts[0].strip()
-            params[hi_name] = parts[1].strip()
+            params[lo_name] = parts[0]
+            params[hi_name] = parts[1]
             pair_clauses.append(
                 f"(least({columns[0]}, {columns[1]}) = ${lo_name} "
                 f"AND greatest({columns[0]}, {columns[1]}) = ${hi_name})"
