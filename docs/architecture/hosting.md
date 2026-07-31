@@ -90,6 +90,23 @@ excluded, trailing 12 (2025-05 → 2026-04) and all-time (2015-01 → 2026-04):
 | carriers | 70 | 114 |
 | aircraft types | 74 | 110 |
 
+**These `all-time` numbers are quarantine-EXCLUDED, and that makes them the wrong universe for
+the sitemap** — do not quote them as "how many entity pages exist." A quarantined row
+(`load_factor > 1.0`, CLAUDE.md) is still a real filing and its page still 200s, so excluding
+it silently undercounts. `docs/product/scope.md` § D2 has the number that actually answers
+"how many entity pages get indexed" — M5's `/sitemap.xml`, **quarantine-INCLUDED**: 1,045
+airports, 114 carriers, 110 aircraft, 22,420 routes (23,689 total). Airports and carriers here
+happen to be close to those figures (1,041 vs. 1,045; 114 both ways — no fact-present carrier's
+entire row history is quarantined), but **aircraft types' `110` here is a different count
+entirely and its match to the sitemap's `110` is coincidence, not agreement**: this row counts
+distinct BTS `aircraft_type` CODES with quarantine excluded (112 codes all-time, 110 once
+quarantine-only codes drop out), while the sitemap counts distinct URL-routable SLUGS with
+quarantine included (112 fact-present codes → 111 distinct short names → 110 once the one
+ambiguous short name, `CE-180`, is excluded — `sql/03_queries/sitemap_aircraft.sql`). Neither
+this table nor a future prerender build should key its build list on this row's counts without
+re-deriving them the way the sitemap does; they were computed independently and drift the
+moment either changes.
+
 The three page types together are ~1,265 all-time URLs, three orders of magnitude below the
 20,000-file cap above and nowhere near a build-time problem. The route pages are the set that
 is not finite in the same sense — 22,950 pairs — which is why the split is entity pages static,
@@ -641,15 +658,17 @@ have taken this with them.
 
 ## Environment variables
 
-The server (`app/src/lib/db.ts`) reads two. Both are optional — production sets neither and
-gets the defaults below, which are what the Portability test and the WORKDIR contract
-assume.
+The server (`app/src/lib/db.ts`) reads two, and M5's sitemap (`app/src/app/sitemap.ts`,
+`app/src/app/robots.ts`) reads a third. All three are optional — production sets none and gets
+the defaults below, which are what the Portability test and the WORKDIR contract assume.
 
 | Var | Default | What it's for | What breaks if it's wrong |
 |---|---|---|---|
 | `UPGAUGE_ROOT` | `process.cwd()` | The directory containing `data/` and `sql/` — anchors both `upgauge.duckdb`'s default location and every `.sql` file read (`sql/03_queries/*.sql`). Also passed to DuckDB as `file_search_path`, so the catalog's relative Parquet globs (`read_parquet('data/parquet/...')`) resolve against it regardless of the process's actual OS working directory. | Set to the wrong directory: every `.sql` file read fails with ENOENT, and every query against a Parquet-backed view fails with `IO Error: No files found that match the pattern "data/parquet/..."` — the exact failure the Portability test section above describes, just triggered by a bad env var instead of a bad `WORKDIR`. |
 | `UPGAUGE_DB` | `${UPGAUGE_ROOT}/upgauge.duckdb` | Overrides the `.duckdb` file path directly, independent of `UPGAUGE_ROOT` — for a deploy that keeps the database file somewhere other than the repo-root default (e.g. a mounted volume). | Set to a path that doesn't exist or isn't a valid DuckDB file: `DuckDBInstance.create()` rejects and every route handler 500s. Note this does NOT relocate `data/parquet/` — that's still resolved via `UPGAUGE_ROOT`'s `file_search_path`, so pointing `UPGAUGE_DB` at a database file whose Parquet tree lives elsewhere still needs `UPGAUGE_ROOT` set to match. |
+| `UPGAUGE_BASE_URL` | `http://localhost:3000` | The scheme+host every `<loc>` in `/sitemap.xml` and the `Sitemap:` line in `/robots.txt` are prefixed with — the sitemap protocol requires a fully-qualified URL, and `sitemapEntries()` (`app/src/lib/sitemap.ts`) itself only ever returns a site-relative path, on purpose (CLAUDE.md's portability rule: no hardcoded hostname, Docker + env vars only). | Left at the default in a real deploy: the sitemap validates and crawls fine locally but every submitted `<loc>` points at `localhost`, so a crawler resolves none of them. |
 
-Neither is a substitute for the WORKDIR contract — they exist so the default (WORKDIR ==
-repo root, both vars unset) needs no configuration, while still giving an operator an escape
-hatch if a deploy's directory layout genuinely can't match it.
+Neither of the first two is a substitute for the WORKDIR contract — they exist so the default
+(WORKDIR == repo root, both vars unset) needs no configuration, while still giving an operator
+an escape hatch if a deploy's directory layout genuinely can't match it. `UPGAUGE_BASE_URL` is
+unrelated to that contract; it exists only because a sitemap's `<loc>` cannot be relative.
