@@ -265,6 +265,60 @@ bands: **how many types Other aggregates and its share of seats are stated on th
 itself**, not in the legend rail. That number is per-subject — it differs for every route — and
 the rail is static; putting it in both places is how two copies of one measurement drift.
 
+#### The same chart, stacked by something else (M4d)
+
+**The stacking dimension is a parameter, and the words that describe the ramp travel with it.**
+`/aircraft/<slug>` is a page that *is* one aircraft type, so the type stack is degenerate there:
+one band, whose gauge ordering encodes nothing. It stacks by **operating carrier** instead, which
+answers the better question — who adopted this type, and when. `/route`, `/airport` and
+`/carrier` keep the type stack.
+
+**The ramp still encodes something, and that is measured, not assumed.** Carriers configure the
+same airframe very differently, so ordering carrier bands by seats per departure is a real
+encoding rather than a decorative reuse:
+
+**Over the full window `2015-01 → 2026-04`, which is the window `/aircraft` actually draws:**
+
+| type | lightest | darkest | spread |
+|---|---|---|---|
+| A321/LR | B6 176.0 | F9 230.0 | **54.0 seats (31%)** |
+| A320-1/2 | MX 129.3 | G4 181.7 | 52.4 |
+| B737-8 | AS 159.8 | XP 187.7 | 27.9 |
+
+**Over the trailing 12 months `2025-05 → 2026-04`** — the window originally measured here, and
+the source of the `172.3 → 230.0` pair quoted in prose elsewhere in this repo:
+
+| type | lightest | darkest | spread |
+|---|---|---|---|
+| A321/LR | B6 172.3 | F9 230.0 | **57.7 seats (33%)** |
+| A320-1/2 | AA 150.0 | F9 184.1 | 34.1 |
+| B737-8 | AS 159.5 | SY 186.0 | 26.5 |
+
+Both are given because neither alone is the whole claim: the table justifies an encoding the
+chart draws over the **full** window, while the figure everyone quotes was measured over the
+**trailing 12**, where SY rather than XP tops the B737-8. The spread survives either way, which
+is the point — but an unlabelled row is not evidence (`docs/data/invariants.md` § Route identity
+records the same lesson about the same-airport counts).
+
+**But it is not the same claim, so it must not carry the same words.** Across aircraft types a
+darker band is *bigger metal*. Across carriers of one type it is the *same* metal fitted denser —
+on `/aircraft` the ramp isolates **configuration** choice from **fleet** choice, which `/route`
+cannot separate. So the chart's key reads "lightest is the least dense cabin" and the legend
+rail's swatches read "less dense cabin" / "denser cabin" and "the five **carriers** with the most
+seats get a band". A rail explaining metal size next to a chart whose bands are all one airframe
+is the stale "how to read this" the rail exists to replace, one level down.
+
+`app/src/lib/chart/aircraftMix.ts`'s `MixDimension` holds the pivot key **and** those sentences
+in one object, deliberately: splitting them is how a chart ends up stacked by carrier under a
+title and a legend that both say "aircraft type".
+
+**The two orderings do not become one just because the bands changed.** On the 737-800 they are
+exact *reverses* — Southwest flies the most of them **and** the densest cabin (593.6 M seats,
+175.0 seats/departure), Alaska the fewest and the least dense (104.2 M, 159.8) — so a single sort
+mislabels all five swatches rather than four of five. That is the fixture the implementation is
+pinned against, precisely because M4c's own version of this test had the two orders coincide and
+a single sort passed it.
+
 ### Multi-series lines
 
 **No hue at all.** Series are distinguished by weight, dash, and a direct end-label:
@@ -412,9 +466,10 @@ catalog appears without a front-end change.
 
 ---
 
-## Entity pages: `/route/<pair>` — shipped, M4b + M4c
+## Entity pages — all four shipped: `/route` (M4b + M4c), `/airport` · `/carrier` · `/aircraft` (M4d)
 
-The first entity page, and the shape the rest (`/airport`, `/carrier`, `/aircraft`) follow.
+The first entity page, and the shape the other three follow — the differences are tabulated at
+the end of this section.
 Composes components already specified above rather than inventing new ones — same top bar,
 same `DATA AS OF` badge, same data table, same legend rail:
 
@@ -464,6 +519,35 @@ JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
 Canonical-URL handling (redirect, 404, en-dash rendering) is a routing concern, not a design
 one — full contract in
 [`../architecture/pipeline.md` § M4b](../architecture/pipeline.md#m4b--the-route-page).
+
+### The other three, shipped M4d — what each one changes and what it must not
+
+`/airport/<code>`, `/carrier/<code>` and `/aircraft/<slug>` are the layout above with the
+subject swapped, deliberately: four entity pages that read as one system is worth more than four
+pages each optimised alone. Same top bar, same title block (`.code` + `.ename`), same stat strip
+with the derived marker on load factor and avg gauge, same chart-above-table, same two window
+lines, same empty state, same rail. What differs is only what the subject forces:
+
+| | Stat strip changes | Table rows | Chart stack | The sentence it must carry |
+|---|---|---|---|---|
+| `/airport` | `Carriers` **+ `Destinations`** | operating carriers | aircraft type | every figure counts this airport at **both** endpoints |
+| `/carrier` | `Carriers` → `Aircraft types` | aircraft types | aircraft type | operated, not marketed · code and name are current identity |
+| `/aircraft` | `Carriers` | operating carriers | **operating carrier** | — |
+
+Three design consequences worth pinning, because each is somewhere a page could quietly stop
+being honest:
+
+- **`/airport`'s Explorer link is two links, and says so.** The pivot cannot express
+  `origin OR dest`, so the page offers `departures from SEA` and `arrivals into SEA` as
+  *halves*. Linking one silently would half-satisfy "every insight row is one click from the raw
+  rows" while pointing at a query that is not the page's.
+- **`/carrier`'s two caveats render whether or not there is a table.** They qualify the
+  *subject*, not the rows, and 39% of carriers have no rows in the trailing 12. They also sit in
+  the content column, not the rail: the rail already carries a generic version on every data
+  view, and a page-specific claim hidden among generic ones is not a claim.
+- **`/aircraft`'s ramp means something else, so it says something else.** Covered in
+  § Charts above: "less dense cabin" / "denser cabin", never "smaller metal", or the rail is the
+  stale "how to read this" it exists to replace.
 
 ---
 

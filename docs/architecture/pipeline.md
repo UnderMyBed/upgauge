@@ -737,7 +737,9 @@ The pivot had no way to filter on `route` — a dimension whose `column_expr` na
 columns (`route_key_low`, `route_key_high`) rather than one. The obvious workaround —
 `origin_airport_id IN (a,b) AND dest_airport_id IN (a,b)` — is not equivalent to "the route
 between a and b": it also matches same-airport filings (`a→a`, `b→b`), which are not a
-curiosity — 12,738 of them exist across 530 airports. On JFK–LAX that workaround inflates
+curiosity — 12,738 of them exist across 530 airports (full window 2015-01 → 2026-04,
+quarantined rows included; `docs/data/invariants.md` § Route identity tabulates all four
+window × quarantine answers). On JFK–LAX that workaround inflates
 seats by 18,895 under a `DATA AS OF` badge. Full measurement:
 [`docs/data/invariants.md` § Route identity](../data/invariants.md#route-identity).
 
@@ -812,6 +814,19 @@ diffs the shipped file against the `EXISTS` form over every `is_latest` code —
 the rejected variants and the mutation that fails it are in
 [`invariants.md` § Entity resolution](../data/invariants.md) and
 [`hosting.md` § What the proxy's query actually costs](hosting.md#what-the-proxys-query-actually-costs).
+
+**M4d added the other two reverse lookups — and the aircraft one does not land where this one
+did.** `lookup_carrier_by_code.sql` behaves identically to the airport file: the fact-presence
+clause is what makes the slug a key (112 colliding `carrier_code`s unscoped, 0 among the 114
+airlines that filed). `lookup_aircraft_by_name.sql` does not: fact-presence takes colliding
+`short_name`s from 12 to **1**, not to 0, because `CE-180` names two BTS codes that *both*
+really flew. So for aircraft the fail-loud guard is the entire defence rather than a
+belt-and-braces backstop, and a colliding slug throws `AmbiguousCodeError` carrying every
+candidate id — `/aircraft/CE-180` is a reachable URL whose page must name both airframes, not
+pick one. Why no scoping fixes it, why narrowing to the trailing 12 months would be the worst
+available "fix", the two surviving mutants recorded rather than papered over, and the 16
+short names that are not URL path segments:
+[`invariants.md` § The other two reverse lookups](../data/invariants.md#entity-resolution-m4a).
 
 ### Page composition and truncation
 
@@ -1160,6 +1175,282 @@ M4c is built: **280 app tests** green (`make app-check`), **443 Python tests** g
 (`make check`), `make app-build` clean, `make app-smoke` green at **55 checks**, and
 `make goldens` byte-identical — this milestone touches no SQL, so any golden movement would
 have been a bug.
+
+## M4d — `/airport`, `/carrier`, `/aircraft`
+
+Three more entity pages on the composition M4b and M4c established. The shared page contract
+is not restated here; § M4b and § M4c own it. What follows is what each page had to decide for
+itself. Full design and the entity counts:
+`docs/superpowers/specs/2026-07-31-m4d-entity-pages-design.md`.
+
+### `/airport/<code>` — an airport is both endpoints
+
+The composition is `/route`'s: title block, stat strip, full-window aircraft-mix chart,
+trailing-12 carriers table, Explorer link, legend rail. `lookup_airport_by_code.sql` (M4b) is
+reused unchanged, so the fact-presence filter and the collision guard that took `AUS` from two
+answers to one come along with it, and `AmbiguousCodeError` propagates as a loud 500 exactly as
+it does on `/route` — airport codes collide 0 times among fact-present airports (measured), so
+a catch block would be untested code on the happy path.
+
+**Every figure on this page must match `origin_airport_id = X OR dest_airport_id = X`.** An
+origin-only page is not visibly broken: it renders every stat, every carrier row and every
+chart band in the right shape, and is silently about half the airport. Measured at SEA
+(`airport_id` 14747) over 2025-05 → 2026-04:
+
+| | origin OR dest | origin only |
+|---|---|---|
+| seats | **53,373,806** | 26,710,000 |
+| passengers | **43,896,637** | 21,941,241 |
+| destinations | **143** | 140 |
+| Alaska's seats | **26,091,482** | 13,061,110 |
+| carriers | 13 | 13 |
+| aircraft types | 25 | 25 |
+
+The last two rows are why the tests are built the way they are: **carriers and aircraft types
+are identical either way**, so a suite written around "13 carriers appear" passes against the
+bug this page exists to exclude. Each assertion pins a figure the wrong query cannot produce.
+
+**The pivot vocabulary cannot express that OR, so the page assembles it as inclusion-exclusion
+over three ordinary pivots** — `origin`, `dest`, and their overlap — summed as
+`origin + dest − (origin ∧ dest)` in `app/src/app/airport/[code]/endpoints.ts`.
+`meta_pivot_dimensions` offers `origin_airport_id` and `dest_airport_id` separately,
+`render.ts` AND-s filters together, and the one composite dimension (`route`) filters whole
+route *pairs*. Adding an either-endpoint filter would mean a new catalog entry plus a second
+composite-filter semantics implemented in `render.ts` **and** `pipeline/pivot.py` in lockstep,
+which is M5's call, not a page's. The two side queries carry the *other* endpoint as a second
+dimension, so one pair of queries answers both "which carriers" and "how many destinations".
+
+**The third term is not a formality** — same-airport (`origin = dest`) filings exist in
+`fct_segment_month` and satisfy both halves; see [data/invariants.md § Route
+identity](../data/invariants.md#route-identity) for the counts. Its one exception is
+truncation: each side is a `LIMIT`-ed pivot, so a truncated side can drop rows the overlap
+query still returns, and the union then skips the subtraction instead of driving a measure
+negative (`partial`). Found by the truncation test, not by reading.
+
+**The page says outright that the Explorer cannot express its query**, and offers the two
+halves it *can* — `origin_airport_id`, `dest_airport_id` — as separate permalinks, labelled as
+halves. A single link claiming "the identical query" would be a lie about the exact thing that
+distinguishes this page from `/route`.
+
+**Cost: 54.2 ms of DB work against `/route`'s 20.2 ms**, in-process through `runPivot` /
+`fetchAircraftMix` against the built database, SEA, warm, median of 8, at DuckDB's default
+thread count. Six pivots (three per union, two grains) under one `Promise.all`; serially the
+same six are 64.3 ms. Full table: [hosting.md § What the proxy's query actually
+costs](hosting.md#what-the-proxys-query-actually-costs). That is the standing price of an OR
+the pivot layer cannot express, and the strongest argument for M5 adding one.
+
+**Two limits, both measured rather than guessed — and both figures were mis-attributed until
+M4d's final review.** Every count below is per side unless the row says otherwise; the union of
+the two sides is always larger, and quoting a union as a per-side bound understates the headroom.
+
+| Bound | Worst airport | origin side | dest side | union | limit |
+|---|---|---|---|---|---|
+| (carrier, other endpoint) groups, trailing 12 (2025-05 → 2026-04) | ORD (13930) | 879 | 855 | 959 | 5,000 |
+| (month, aircraft type) groups, full window (2015-01 → 2026-04) | ORD (13930) | 4,094 | 4,089 | 4,118 | 10,000 |
+
+SEA produces 374 departing and 293 arriving on the first, and 2,832 / 2,801 (union 2,886) on the
+second; ATL — which `smoke.sh` weighed as "the worst case" — is 3,561 / 3,572 on the second, well
+under ORD. **Reaching either limit now discloses truncation on the page rather than throwing.**
+The chart's union originally called `unionMix` with no options, so a truncated side that dropped
+a cell the overlap query still returned reached `inclusionExclusion`'s throw — a 500 on a
+response the proxy had already stamped `public, s-maxage=2592000`, i.e. a 500 pinned in a shared
+CDN cache for thirty days on a page that would serve fine the moment the limit was raised. Both
+unions now thread `partial`, and `endpoints.test.ts` asserts ORD comes back **untruncated**, so a
+refresh that approaches the bound fails a test rather than degrading a page.
+
+**An empty trailing-12 table is normal, and unlike `/route` the chart is never empty.** Every
+airport that resolves is fact-present by construction, so there is always history somewhere in
+the full window — ISN (Sloulin Field International) filed 58 months and stopped in 2019-10, and
+its window line names `2015-01 → 2019-10`, the range actually drawn.
+
+**`destinations` excludes the airport itself.** Its own same-airport filings stay in every
+measure — they are real activity — but SEA is not one of SEA's destinations: 144 distinct
+other-endpoint ids including itself, 143 without.
+
+### `/carrier/<code>` — the page has to say what it is counting
+
+The composition is `/route`'s, one dimension over: title block, stat strip, full-window
+aircraft-mix chart, trailing-12 table, Explorer link, legend rail. The table is **aircraft
+types operated** (17 for DL, measured) because the fleet is this product's subject; the routes
+(1,873) and airports (186) a carrier touches both want the Top-N builder, which does not exist.
+`AircraftMixChart` mounts unchanged — the page is a filter on `op_airline_id`, not a new
+dimension — so nothing in M4c had to move.
+
+**Two `CLAUDE.md` hard rules stop being background here and become the page's own claims,
+because the entity *is* the carrier.** Both read as bugs if left unsaid:
+
+- **Operating carrier is the grain.** A Delta-branded regional flown by Endeavor files as
+  `9E`, so `/carrier/DL` legitimately *excludes* it. Someone who knows the network reads DL's
+  seat count as too **low** unless the page says what it is counting. There is no
+  marketing-carrier field and none is inferred.
+- **`dim_carrier` holds the CURRENT code and name.** v0 collapses Carrier Decode to one row per
+  airline, so a 2016 month on this page is labelled with today's identity, not the one filed.
+
+`LegendRail` already states both **generically**, on every data view, and that is deliberately
+not treated as sufficient. A rail entry phrased in the abstract does not attach to the number a
+reader is looking at, so `/carrier` states both **about its own subject**, in the content
+column, above the rail — naming the carrier, its code, and the consequence (the excluded flying
+is counted, under someone else's code).
+
+That distinction is what makes the tests falsifiable rather than decorative. Each claim is
+asserted on **two** carriers (DL and AS) against the text of `.body > div` only:
+
+| the bug | what catches it |
+|---|---|
+| claim deleted | both halves fail |
+| claim hard-coded to Delta (every example in the spec is Delta) | the AS half fails |
+| claim left to the shared rail | both halves fail — `.body > div` cannot see the `<aside>` |
+| topic word present, substance absent | the assertion is on `no marketing-carrier field` and
+  `DL-branded … counted there, not here`, not on the word "operating" — which already appears
+  in this codebase's grouping toggle, its measure labels and its rail |
+
+Both sentences are built as **single template strings**, not adjacent JSX expressions. React's
+SSR emits `<!-- -->` between adjacent text nodes, so `what {name} ({code}) filed` puts comment
+markers inside the sentence in the served bytes: `textContent` skips them and every unit test
+stays green while a `smoke.sh` grep stops matching. That is M4c's window-line bug exactly, and
+these two sentences are the ones a served-build check most wants to grep.
+
+**The 404 says "nothing filed under this code", not "unknown code".** 1,543 of `dim_carrier`'s
+**1,657 distinct** codes have no fact-present holder (measured — 1,776 is the table's *row*
+count, one per `airline_id`; 1,657 − 114 fact-present carriers = 1,543), so "recognized by BTS, never filed" is the
+**common** carrier 404, not the exotic one — `PA` (Pan American World Airways, three
+`airline_id`s, zero T-100 Segment rows) reaches it by the same path as `ZZ`, which is in
+`dim_carrier` not at all. `routePair.ts` splits its two cases apart only because
+`lookup_airport_code_exists.sql` already existed to tell them apart; there is no carrier
+equivalent and this milestone adds no SQL, so the sentence shipped is the one that is **true of
+both** — it talks about filings, not about recognition. A copy-paste of the airport wording
+would state something false about Pan Am.
+
+**An empty trailing-12 table is normal here.** 45 of the 114 fact-present carriers last filed
+before the current window (measured, 39%) — Virgin America stopped in 2018-03 — so the chart is
+routinely the only panel on the page with anything in it, and the window line must name
+`2015-01 → 2018-03` rather than the window it asked for. Same rule, same reason, as M4c's
+`drawnFrom`/`drawnTo`: naming a range you are not drawing is the fabrication that section
+already forbids. Both caveats above render whether or not there is a table — they qualify the
+subject, not the rows.
+
+**`AmbiguousCodeError` is deliberately not caught here.** Carrier codes collide 0 times among
+fact-present airlines (measured), so a catch block would be untested code on the happy path; a
+loud 500 is `resolve.ts`'s documented contract and matches what `/route` does with the identical
+error. `/aircraft` is where that error is reachable on today's data and must be rendered.
+
+**`carrierSlugFromPath` lives in `app/src/lib/carrier.ts`, not beside its sibling in
+`rawPath.ts`** — three of these pages were built concurrently and `rawPath.ts` is one file three
+tasks would have been editing at once. The four copies (route, airport, carrier, aircraft)
+should collapse into one `entitySlugFromPath(pathname, prefix)` now that they all exist.
+
+### `/aircraft/<slug>` — the slug is not a key, and the chart is not the same chart
+
+Two things are different here from the other two entity pages, and both were forced by the data
+rather than chosen.
+
+**The slug is a transform of `short_name`, not `short_name`.** 16 of the 112 fact-present short
+names carry a `/` or a space (`docs/data/invariants.md` § Entity resolution), so
+`/aircraft/A321/LR` parses as *two* path segments and can never match a single dynamic segment —
+the design spec's own worked example was unroutable. `app/src/lib/aircraftSlug.ts`'s `slugFor()`
+replaces both characters with `-` and uppercases; `/aircraft/a321-lr` 308s to `/aircraft/A321-LR`,
+never to the unroutable raw name.
+
+That transform is many-to-one, so resolving a slug means **expanding it back into every
+`short_name` it could have come from** — each `-` was a `-`, a `/`, or a space — and handing the
+whole set to Task 1's `lookup_aircraft_by_name.sql`. The alternative, rewriting that file's
+`WHERE` to compare slugs, would make its name a lie and would move the collision guard out from
+under `insertUniqueByCode`, which keys on the short name. The expansion is `3^n`, so it is
+**capped at 4 separators** (81 candidates) and refused above that: the measured maximum over all
+111 fact-present slugs is 2, and without a cap `/aircraft/-------------------` asks DuckDB to
+bind `3^19` parameters. `aircraftSlug.test.ts` pins that maximum against the live catalog, so a
+BTS refresh that ships a five-separator type fails a test rather than a request.
+
+**`/aircraft/CE-180` is a reachable URL with no answer, and it renders one anyway.** `CE-180`
+names BTS code `030` (CESSNA 180) *and* `031` (CESSNA 180A/B); both really flew and no scoping
+resolves it. It is a **404** — literally true, no entity lives at that URL, and a 404 gets
+`no-store`, which is right for an answer that changes when the dataset does. But the 404 body is
+not an apology: `not-found.tsx` re-runs the resolution, catches `AmbiguousCodeError`, resolves
+both codes to their full designations through the ordinary resolver, and renders each with a
+working Explorer permalink — the Explorer is keyed on the BTS code, so it can show what this page
+cannot. Candidates are sorted by code; the error preserves driver row order by design, which is
+right for a message and wrong for a page that would otherwise list them differently across
+restarts.
+
+**The chart stacks by carrier.** `AircraftMixChart` and `fetchAircraftMix` now take a
+`MixDimension` as a trailing, defaulted argument, so `/route`, `/airport` and `/carrier` are
+untouched. Why, what the ramp then means, and the measured configuration spreads that justify it:
+`docs/design/system.md` § Charts. `pipeline/pivot.py` and `app/src/lib/pivot/render.ts` were not
+touched and `make goldens` leaves `sql/03_queries/goldens/` byte-identical — the generalization is
+entirely in the query *composition* layer, which is what M4c's "the chart adds no SQL" property
+bought.
+
+**Two derived-measure traps this page has and `/route` does not.** An aircraft type *has* a
+nominal seat count, so averaging the carrier rows' `avg_gauge` looks like it would recover it. It
+would not: it weights Sun Country's 186-seat 737-800 equally with Southwest's 175-seat one
+regardless of how many either flew. And the filter value is the BTS `code` as a **string** — 13
+fact-present types carry a leading zero, and `Number('036')` renders an empty page for a type that
+filed in 120 months. `/aircraft/SKYHAWK` is the test that catches it; every other type this page
+is tested on (614, 655, 699) survives an int-parse unchanged.
+
+### Routing and cacheability — the step none of the three pages could take for itself
+
+All three pages above were built, unit-tested and merged **while being reachable from no
+matcher entry at all**, which is the same shape as M4c's chart being green from no route: the
+tier that decides what a served response says about itself is invisible to every gate except
+`app/smoke.sh`. This is where M4b's Critical lived, and by M4d the cost of repeating it had
+grown — each new `not-found.tsx` reads the pathname header `proxy.ts` sets and throws without
+it, so a missing matcher entry does not merely mis-cache a page, it **strips the entire message
+off every 404 on it** (measured; the full before/after table is in
+[hosting.md](hosting.md#what-omitting-one-actually-costs--measured-not-assumed)).
+
+`proxy.ts` therefore stopped being a chain of `else if`s and became **one table,
+`ENTITY_ROUTES`** — a `slugFromPath` prefix reader plus a resolver per page — next to a matcher
+list it has to agree with. A table because the failure being defended against is a fifth page
+whose author copies three lines out of four; a table puts both halves in one screen. At most one
+resolution runs per request (prefix test, break on first match), so four entity pages cost what
+one did.
+
+**The predicate changed from `!== "notFound"` to an allow-list of kinds, and that is the whole
+finding.** `resolveAircraftSlug` has four outcomes; `/aircraft/CE-180` is `ambiguous`, renders a
+404, and would have been long-cached by the shape `/route` uses. Full reasoning, the airport
+case-redirect asymmetry, the served-build cache table and the five mutants that pin it:
+[hosting.md § `Cache-Control` lives here](hosting.md#cache-control-lives-here-and-it-is-status-blind-by-construction).
+
+**`app/smoke.sh` gained one section per page, each asserting the same five things in the same
+order** — the page renders; its `Cache-Control` is the project one; a real code renders and a
+bare id does not; the chart's `<svg>` and its `<path fill="var(--gN)" d=` ramp fills are in the
+served bytes; and its 404 names the code *and* is `no-store` while its 308 keeps the long cache.
+The order is written into the file as a checklist for the next page, because M4b's bug was
+precisely that this file copied `/explore`'s body checks and not its header check. Three needles
+are worth noting as choices rather than obvious:
+
+- `>14747<`, not a bare `14747`, for "no raw `AIRPORT_ID`". SEA's id legitimately appears in the
+  page's two Explorer permalinks (`f=origin_airport_id:14747`), so the literal form of the
+  handoff note would have been a permanently red check. The claim that matters is that no *cell*
+  renders the id.
+- `53,373,806` on `/airport/SEA` — the both-endpoints seat total. Carrier and aircraft-type
+  counts are identical either way (13 and 25), so only the seat/passenger/destination figures
+  can tell an origin-only regression from a correct page.
+- `Seats by aircraft type` is asserted **present** on `/airport/SEA` and **absent** on
+  `/aircraft/B737-8`. An absence check whose needle no page in the app serves is an absence
+  check that can never fire.
+
+Page weight on the served build, recorded rather than thresholded (M4c's `/route/JFK-LAX` was
+32,087 bytes before its chart and 96,153 after):
+
+| URL | bytes of HTML |
+|---|---|
+| `/route/JFK-LAX` | 96,153 |
+| `/aircraft/B737-8` | 103,019 |
+| `/airport/SEA` | 119,126 |
+| `/carrier/DL` | 127,688 |
+| `/airport/ATL` | 130,435 — 3,561 / 3,572 (month, type) cells per side, union 3,592 |
+| `/airport/ORD` | **139,520** — the true worst case, 4,094 / 4,089 per side, union 4,118 |
+
+`/airport/ATL` was recorded here and in `smoke.sh` as "the worst case in the database, 4,118
+cells per side". It is neither: 4,118 is **ORD's union**, and ORD is denser than ATL on both
+sides. `smoke.sh` now weighs both.
+
+Nothing in the harness holds a fixed response buffer — the bodies land in shell variables — but
+the `grep -q`/`SIGPIPE` hazard the file's header describes was invisible until a page crossed
+64 KB, and every page in this milestone is now past 100 KB, so the numbers are kept where the
+next person will see them.
 
 ## Toolchain
 

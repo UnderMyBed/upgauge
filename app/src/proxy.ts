@@ -3,6 +3,9 @@ import type { NextRequest } from "next/server";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { RAW_PATH_HEADER, routeSlugFromPath } from "@/lib/rawPath";
 import { resolveRoutePair } from "@/lib/routePair";
+import { airportSlugFromPath, resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
+import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
+import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
 
 // `proxy`, not `middleware`: Next 16 deprecated and renamed the convention
 // (node_modules/next/dist/docs/01-app/02-guides/upgrading/version-16.md, "middleware to
@@ -71,30 +74,90 @@ export async function proxy(request: NextRequest) {
   // well-formed known pair returns 200 (including the empty-state 200) or a 308 -- both
   // stable, both worth caching. A malformed slug, an unknown code, a self-route or a
   // recognized-but-non-domestic code returns 404 and is not.
-  const slug = routeSlugFromPath(pathname);
+  //
+  // M4d generalized that from one route to four: see ENTITY_ROUTES below.
   if (pathname === "/explore") {
     response.headers.set("Cache-Control", CACHE);
-  } else if (slug !== null) {
-    response.headers.set("Cache-Control", (await isKnownPair(slug)) ? CACHE : NO_STORE);
+    return response;
+  }
+  for (const entity of ENTITY_ROUTES) {
+    const slug = entity.slugFromPath(pathname);
+    if (slug === null) continue;
+    response.headers.set("Cache-Control", (await isCacheable(entity, slug)) ? CACHE : NO_STORE);
+    break;
   }
   return response;
 }
 
-/** The proxy runs on the Node.js runtime -- Next 16's docs are explicit that "Proxy defaults
+/** One row per entity page: how to find its slug in the pathname, and how to resolve it.
+ *
+ * M4d added three pages to a mechanism that had shipped broken once already by being invisible
+ * to whoever added a route -- M4b's `/route/<pair>` served
+ * `private, no-cache, no-store, max-age=0, must-revalidate` for a whole branch because the
+ * matcher listed only `/explore` and `/api/pivot`. Since then the omission costs more than a
+ * mis-cache: all four `not-found.tsx` files read RAW_PATH_HEADER and throw
+ * `MissingRawPathError` without it, so **a page missing from the matcher turns every 404 on it
+ * into a 500.**
+ *
+ * A table rather than four `else if` branches, because the failure mode being defended against
+ * is a fifth page whose author reads this file and copies three lines out of four. Adding an
+ * entity is one row here plus one `matcher` entry, and both are in view at once.
+ *
+ * The `slugFromPath` readers deliberately live in four different modules (`lib/rawPath.ts`,
+ * `app/airport/[code]/resolveAirport.ts`, `lib/carrier.ts`, `lib/aircraftSlug.ts`): the three
+ * M4d pages were built concurrently, and one shared file is three agents editing one file. They
+ * should collapse into a single `entitySlugFromPath(pathname, prefix)` -- see CLAUDE.md's M5
+ * list. This table is the one place that would have to change. */
+const ENTITY_ROUTES: ReadonlyArray<{
+  slugFromPath: (pathname: string) => string | null;
+  resolve: (slug: string) => Promise<{ kind: string }>;
+}> = [
+  { slugFromPath: routeSlugFromPath, resolve: resolveRoutePair },
+  { slugFromPath: airportSlugFromPath, resolve: resolveAirportCode },
+  { slugFromPath: carrierSlugFromPath, resolve: resolveCarrier },
+  { slugFromPath: aircraftSlugFromPath, resolve: resolveAircraftSlug },
+];
+
+/** The cacheable outcomes, stated as an ALLOW-list of kinds rather than as `!== "notFound"`.
+ *
+ * That is not a stylistic preference. `resolveAircraftSlug` has **four** outcomes, not three:
+ * `/aircraft/CE-180` resolves to `ambiguous` (BTS codes 030 CESSNA 180 and 031 CESSNA 180A/B
+ * share one short name), which the page renders as a 404. A `!== "notFound"` test -- the shape
+ * `/route` used, and the obvious thing to copy -- would have pinned that 404 in a shared CDN
+ * cache for 30 days. An allow-list gets a new outcome wrong in the safe direction: an
+ * unrecognized kind declines the cache, which costs a cache miss instead of a month of a wrong
+ * answer.
+ *
+ * `redirect` IS cacheable, for all four. A 308 target is derived from the slug alone -- an
+ * uppercasing, a re-ordering of two airport codes, `dim_carrier`'s own spelling of the code --
+ * so it is exactly as stable as the 200 it points at and cannot be invalidated by an ingest.
+ * Note `/airport/zzzz` therefore gets a long-cached 308 to `/airport/ZZZZ`, which then 404s
+ * `no-store`: `resolveAirportCode` redirects on case before it looks anything up. That is
+ * correct rather than merely tolerable -- `toUpperCase()` does not consult the dataset, so the
+ * redirect can never become the wrong answer, and the 404 that follows is the one that has to
+ * stay uncached.
+ *
+ * Errors are swallowed to `false`, deliberately: a transient DuckDB failure inside a PROXY
+ * would 500 a request that the page itself might well have served, and `false` is the
+ * conservative outcome anyway (decline to cache something we could not vouch for). Nothing is
+ * hidden by this -- `page.tsx` immediately runs the same resolution unguarded, so a real
+ * database failure still surfaces as a loud error from the page.
+ *
+ * The proxy runs on the Node.js runtime -- Next 16's docs are explicit that "Proxy defaults
  * to using the Node.js runtime" and that the `runtime` config option is not available here
  * (.../03-file-conventions/proxy.md:221-223) -- so `lib/db.ts`'s in-process DuckDB is
  * reachable from this file. That was NOT assumed: it was established by building and serving
  * (`make app-smoke`), because this branch has five bugs whose shape was "green tests, broken
  * production" and every one of them was found only by curling a real server.
  *
- * This is a second `resolveRoutePair` for the request -- `page.tsx` runs its own, because the
+ * This is a SECOND resolution for the request -- each `page.tsx` runs its own, because the
  * proxy has no channel to hand a resolved object to a Server Component. The alternative
  * (serialising the resolution into a header) would make the page's correctness depend on the
  * proxy having agreed with it, which is a worse trade than one small query.
  *
  * WHAT IT COSTS, measured, because the first version of this comment guessed and guessed
  * WRONG in the expensive direction -- it called this "one extra read of dimension-sized
- * tables ... on a request that is about to run a much larger pivot", and M4d is told to copy
+ * tables ... on a request that is about to run a much larger pivot", and M4d was told to copy
  * this pattern for /airport, /carrier and /aircraft. It is not a dimension read:
  * `lookup_airport_by_code.sql` filters `dim_airport` by presence in `fct_segment_month`
  * (3.36 M rows), and at 6a6b11c that filter was a correlated EXISTS with an OR across two
@@ -106,21 +169,26 @@ export async function proxy(request: NextRequest) {
  * single query on the route path; deliberately kept, because the cheap alternatives are all
  * wrong (see docs/architecture/hosting.md).
  *
- * NOTE the memo it uses is on `globalThis`, not a module-level `let`, and this file is why:
- * Turbopack emits `lib/db.ts` into a separate chunk per entry graph, so the proxy's copy of
+ * WHAT FOUR ENTITIES COST TOGETHER: nothing extra, because at most ONE runs. Every
+ * `slugFromPath` is a prefix test and the loop above breaks on the first match, so a request
+ * pays exactly one resolution -- the same one `/route` has always paid. M4d's two new lookups
+ * are cheaper than the airport one (3.6 ms carrier, 4.6 ms aircraft: both probe a single fact
+ * column rather than a union of two), and `/airport`'s page then runs SIX pivots at 54.2 ms,
+ * so the proxy's share of that page is smaller than its share of `/route`, not larger.
+ *
+ * NOTE the memo `lib/db.ts` uses is on `globalThis`, not a module-level `let`, and this file is
+ * why: Turbopack emits `lib/db.ts` into a separate chunk per entry graph, so the proxy's copy of
  * that module is NOT the page's copy. With a module-level memo the process held three
  * DuckDBInstances (measured), and the proxy's could hold a different snapshot of the
  * database file than the page's -- which is a route straight back to the bug this branch
- * fixed, since the proxy's answer would then be about a file the page is no longer reading.
- *
- * Errors are swallowed to `false`, deliberately: a transient DuckDB failure inside a PROXY
- * would 500 a request that the page itself might well have served, and `false` is the
- * conservative outcome anyway (decline to cache something we could not vouch for). Nothing
- * is hidden by this -- `page.tsx` immediately runs the same resolution unguarded, so a real
- * database failure still surfaces as a loud error from the page. */
-async function isKnownPair(slug: string): Promise<boolean> {
+ * fixed, since the proxy's answer would then be about a file the page is no longer reading. */
+async function isCacheable(
+  entity: { resolve: (slug: string) => Promise<{ kind: string }> },
+  slug: string,
+): Promise<boolean> {
   try {
-    return (await resolveRoutePair(slug)).kind !== "notFound";
+    const { kind } = await entity.resolve(slug);
+    return kind === "ok" || kind === "redirect";
   } catch {
     return false;
   }
@@ -132,11 +200,29 @@ const CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 const NO_STORE = "no-store";
 
 // Without a matcher, proxy runs on every request including _next/static and public assets.
-// All three entry points need the header (or, for /api/pivot, the raw-query passthrough only
+// Every entry point needs the header (or, for /api/pivot, the raw-query passthrough only
 // -- see above): /api/pivot's own `new URL(request.url).search` is normalized too -- measured,
 // every filtered API query returned `malformed filter 'origin_state%3AOR'` before this. They
-// now read the identical raw string from one source. `/route/:pair` covers every
-// `/route/<anything>` request, matching the dynamic segment `app/route/[pair]/page.tsx` owns.
+// now read the identical raw string from one source.
+//
+// Each `/<entity>/:slug` entry covers every `/<entity>/<anything>` request with exactly ONE
+// dynamic segment, matching the segment its `app/<entity>/[x]/page.tsx` owns -- a prefix test in
+// spirit, but narrow enough that it cannot accidentally net `/api/pivot` or a future unrelated
+// top-level route.
+//
+// THIS LIST AND `ENTITY_ROUTES` MUST AGREE. A row here without a row there ships an entity page
+// that is long-cached on its 404s; a row there without a row here ships a page with no
+// Cache-Control at all AND turns each of its 404s into a 500 (`not-found.tsx` throws
+// `MissingRawPathError` when the pathname header is absent). Neither asymmetry is visible in a
+// build, a unit test, or a rendered page -- only `app/smoke.sh` sees them, which is why every
+// row here has a served-build header assertion and a served-build `no-store` assertion there.
 export const config = {
-  matcher: ["/explore", "/api/pivot", "/route/:pair"],
+  matcher: [
+    "/explore",
+    "/api/pivot",
+    "/route/:pair",
+    "/airport/:code",
+    "/carrier/:code",
+    "/aircraft/:name",
+  ],
 };

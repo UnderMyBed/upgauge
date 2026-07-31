@@ -69,7 +69,8 @@ describe("resolveRoutePair", () => {
   });
 
   it("404s a route from an airport to itself", async () => {
-    // Same-airport filings exist (12,738 across 530 airports) but they are not a route
+    // Same-airport filings exist (12,738 across 530 airports, full window, quarantined
+    // included) but they are not a route
     // between two places, and /route/XXX-XXX would render a page about a non-route. This is
     // checked before the lookup (rawA === rawB, both known or not), so it fails for the
     // self-route reason specifically -- confirmed by the "reason" text, not just kind, so a

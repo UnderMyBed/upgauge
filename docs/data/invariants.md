@@ -205,7 +205,10 @@ the two airport IDs sorted, so it is stable regardless of filing order.
 
 **A route filter must not become `origin IN (a,b) AND dest IN (a,b)`.** That form also
 matches same-airport filings (`a→a`, `b→b`), and those are not a curiosity: **12,738 of them
-exist across 530 airports.** Measured on JFK–LAX over 2025-05 → 2026-04:
+exist across 530 airports** — full window (2015-01 → 2026-04), *including* quarantined rows,
+which is the right pair of qualifiers here because a filter matches a row whether or not that
+row's measures are counted. See the table below for the other three answers. Measured on
+JFK–LAX over 2025-05 → 2026-04:
 
 | Filter | Rows | Seats |
 |---|---|---|
@@ -218,6 +221,36 @@ seats** under a `DATA AS OF` badge. The composite-dimension filter built by
 pivot_route.sql` itself carries only the `{{FILTERS}}` token these two renderers fill in,
 not the filter logic) instead binds `least(route_key_low, route_key_high) = $lo AND
 greatest(...) = $hi` per requested route, which cannot match a same-airport row.
+
+**Those same-airport rows are excluded from route identity, and they are NOT excluded from
+`fct_segment_month`.** The distinction only becomes load-bearing when a page asks about an
+airport rather than about a route (M4d's `/airport/<code>`), where the query is
+`origin_airport_id = X OR dest_airport_id = X` and a same-airport filing satisfies **both**
+halves.
+
+**Every count of these rows must name its window AND whether quarantined rows are in it.**
+There are four true answers and they differ by up to 4x, so an unlabelled one is not evidence —
+it is a number the next milestone will pin an acceptance criterion to. Measured against
+`upgauge.duckdb` at `DATA AS OF 2026-04`:
+
+| Window | Quarantined | Rows | Airports | Seats |
+|---|---|---|---|---|
+| trailing 12 (2025-05 → 2026-04) | excluded | 3,182 | 358 | 601,565 |
+| trailing 12 (2025-05 → 2026-04) | **included** | **3,187** | **359** | **601,573** |
+| full window (2015-01 → 2026-04) | excluded | 12,696 | 530 | 1,887,193 |
+| full window (2015-01 → 2026-04) | **included** | **12,738** | **530** | **1,887,424** |
+
+The bolded rows are the ones quoted elsewhere in this repo, because the question everywhere else
+is *which rows a filter matches* — quarantine changes what a row **contributes**, never whether
+it is **matched**. The M4d design spec quoted the trailing-12 excluding-quarantined triple
+(3,182 / 358 / 601,565) and labelled it only "in-window", which is how the same claim came to
+have two spellings; it is labelled there now.
+
+At SEA the trailing-12 overlap is 18 rows carrying 12,646 seats and 172 departures, enough to
+move its seat total from 53,373,806 to 53,386,452 if the two halves are simply added.
+So `/airport` computes `origin + dest − (origin ∧ dest)`, with the third term its own pivot
+(`app/src/app/airport/[code]/endpoints.ts`); the M4d design spec's claim that a segment with
+one airport at both ends "does not exist" is true of route identity above and false here.
 
 **Route storage order (by airport ID) and the alphabetical order a person would type
 disagree for 154 of 22,420 routes (0.69%, excluding the 530 same-airport "routes" just
@@ -505,6 +538,118 @@ but the same test rejects a plausible near-miss: an `origin`-only predicate lose
 destination-only airports. Two other rewrites were measured and rejected: `id IN (origins) OR
 id IN (dests)` is 80 ms (two mark joins, no shared scan), and `UNION ALL` in place of `UNION`
 is 21–22 ms (6.7 M probe values instead of 1,045 distinct ones).
+
+### The other two reverse lookups (M4d)
+
+`/carrier/<code>` and `/aircraft/<short_name>` need the same code → id direction, via
+`sql/03_queries/lookup_carrier_by_code.sql` and `lookup_aircraft_by_name.sql`. Both are
+modelled on the airport file and both carry its fact-presence semi-join, measured warm and
+read-only against the correlated `EXISTS` form they replace:
+
+| lookup | correlated `EXISTS` | plain `IN (SELECT col …)` | shipped (`IN (SELECT DISTINCT col …)`) |
+|---|---|---|---|
+| carrier | 15.1–15.8 ms | 4.6–5.6 ms | **3.5–4.0 ms** |
+| aircraft | 23.2–24.5 ms | 4.9–5.1 ms | **4.5–4.6 ms** |
+
+Neither needs an `is_latest` analogue, and that is measured rather than assumed: `dim_carrier`
+is one row per `airline_id` and `dim_aircraft_type` one row per `code` (0 ids with more than
+one row, either table), so there is no seq chain to collapse and nothing to fan out.
+
+**For carriers the fact-presence filter is the *whole* of what makes a code a key**, since
+there is no `is_latest` to share the load. Unscoped, **112** `carrier_code`s map to more than
+one `airline_id`; scoped to the 114 airlines that actually filed a T-100 Segment row, **0** do.
+`VX` is the `AUS` shape exactly — `airline_id` 21171 "Virgin America" (real in-window traffic)
+and 19995 "Aces Airlines" (a defunct Colombian carrier, 0 filed rows). `CP` fans out to three.
+
+**What the filter therefore makes a 404, and what `/carrier/<code>` may honestly say about it
+(M4d).** The filter is not a tie-breaker between near-equals — it removes the overwhelming
+majority of the table. **1,543 of `dim_carrier`'s 1,657 distinct codes have no fact-present
+holder at all** — 1,657 is the count of DISTINCT `carrier_code`s; 1,776 is the table's row
+count, one per `airline_id`, and 1,657 − 114 fact-present carriers = 1,543 exactly. So a code
+that is real, recognized by BTS, and simply never filed a T-100 Segment row in this window is the **common** carrier 404, not the exotic one: `PA` (Pan American World Airways
+— `airline_id` 20384 and 20386, plus 20389 "Florida Coastal Airlines") reaches it by exactly
+the same path as `ZZ`, which is in `dim_carrier` not at all. There is no carrier analogue of
+`lookup_airport_code_exists.sql` to tell the two apart, so the page states the thing that is
+true of both — *nothing has filed under this code* — rather than calling Pan Am unknown. If a
+future task wants the airport-style split, it needs that second lookup first.
+
+**A resolvable carrier with an empty trailing-12 table is normal, not an error.** **45 of the
+114 fact-present airlines last filed before 2025-05** (measured, 39%) — Virgin America's last
+month is 2018-03 — which is why `/carrier/<code>` renders the full-window chart independently
+of the trailing-12 table and names the range the chart can actually draw. Same shape as the
+12,062-of-22,950 route pairs recorded under § Route identity.
+
+**For aircraft the filter is not enough, and this is where the airport result stops
+generalising.** 12 `short_name`s map to more than one `code` across `dim_aircraft_type`;
+fact-presence takes that to **1**, not to 0:
+
+| `short_name` | code | designation | rows | seats | departures | filed |
+|---|---|---|---|---|---|---|
+| `CE-180` | `030` | CESSNA 180 | 183 | 994 | 441 | 2015-01 → 2024-07 |
+| `CE-180` | `031` | CESSNA 180A/B | 131 | 557 | 189 | 2016-05 → 2025-11 |
+
+Both really flew, so **no scoping resolves this and neither code is the right answer**.
+Restricting to the trailing 12 months makes the collision vanish *today* — only `031` filed in
+the current window, which is why the M4d brief records in-window collisions as 0 — and brings
+it back the first month both types file. That would be the worst available failure shape: a
+production error on a URL that worked last month, arriving as data rather than as a code
+change. The scope stays all-time.
+
+**So the decision is: a colliding slug fails loudly, and carries its candidates.**
+`app/src/lib/resolve.ts`'s `insertUniqueByCode` refuses to fold a repeated slug into its map
+and throws `AmbiguousCodeError`, which is a distinct class rather than a bare `Error` for one
+reason — for aircraft this is not a should-never-happen, so `/aircraft/CE-180` is a *reachable*
+URL and the page for it must name both airframes. The error therefore carries `code` and the
+full `ids` list, so a caller renders a disambiguation instead of re-parsing a message. Nothing
+is left in the map on collision: a half-populated map is how "fail loudly" decays back into
+the arbitrary first-row-wins answer the guard exists to refuse.
+
+**`AmbiguousCodeError` names exactly two ids, and that is a documented bound rather than a
+general one.** `insertUniqueByCode` throws on the *second* colliding row, carrying
+`[existing.id, row.id]`, so a three-way collision would surface as two — and `/aircraft`'s
+ambiguity 404, which renders one named airframe and one Explorer permalink per id, would omit
+the third in silence. Unreachable today: exactly one fact-present short-name collision exists
+(`CE-180`), with exactly two codes. But three-way collisions are not hypothetical in this
+catalog — unscoped `CP` returns **three** airlines (above), and only the fact-presence clause
+takes that to one. Accumulating every colliding row before throwing is the general fix; it is
+deliberately **not** taken, because the delete-on-collision semantics above (nothing is left in
+the map) is what stops a caught error from leaving a first-row-wins map behind, and changing
+both at once for an unreachable case buys nothing. If a fact-presence filter ever stops
+delivering uniqueness, this is the line to revisit first.
+
+The alarm for a *new* collision is
+`test_aircraft_reverse_lookup_collides_on_exactly_the_known_CE_180_pair`, which pins the
+colliding set **exactly** — `[("CE-180", ["030", "031"])]` — rather than asserting `<= 1` or
+excluding `CE-180`. A second ambiguous short name would pass any weaker assertion in silence
+and then surface as a 500 nobody signed off on. This is the M4a lesson applied deliberately:
+that milestone's collision test could not see the `AUS` pair because of how it was scoped.
+
+**One gap is recorded rather than closed.** The column-side `upper()` in both new lookups is
+inert against today's data — 0 lower-case `carrier_code`s, and the single lower-case
+`short_name` (`330-9neo`, code 824) has never filed a row, so the fact-presence clause removes
+the only row that would notice. Mutation-tested: removing either `upper()` kills no test. Both
+are kept, because the day BTS files an A330-900neo that fold is the only thing making
+`/aircraft/330-9NEO` resolve, and its absence would be a silent 404. Case-insensitivity that
+*is* exercised lives in `runSlugLookup`'s input fold (removing it reddens three tests).
+
+**16 fact-present `short_name`s are not URL path segments**: `A321/LR`, `A320-1/2`, `B767-2/R`,
+`B767-3/R`, `CE-206/7`, `CL-604/5`, `CRJ-2/4`, `RJ100/ER`, `SF-340/B`, `FLT/AMPH` carry a `/`,
+and `AS350 B2`, `DO-328 J`, `MAX 8`, `MAX 8-20`, `MAX 9`, `METRO 23` carry a space. Percent-
+encoding is not an option here — `app/src/proxy.ts` exists because Next re-encodes the query
+string, and `%2F` in a path is its own hazard. Replacing both characters with `-` **is
+injective over all 111 fact-present short names** (0 collisions, measured), so it is a safe
+slug scheme; `test_aircraft_short_names_survive_a_url_path_segment` pins that so a future
+refresh that makes it unsafe fails a test rather than a route.
+
+**M4d adopted it, and re-pins the measurement from the app side too.** `slugFor()` in
+`app/src/lib/aircraftSlug.ts` is that transform; `aircraftSlug.test.ts` enumerates every
+fact-present type through the ordinary pivot and asserts **112 codes → 111 distinct slugs, with
+`CE-180` the only repeat and that repeat being the short name colliding with itself** rather than
+two names flattened together. The distinction matters: a future BTS refresh could collide two
+*distinct* names (the transform maps two characters onto one that already occurs in `B737-8`), and
+that would be a new failure, not this one. The separator count is pinned in the same test — **max
+2 across all 111 slugs** — because resolving a slug expands it back into `3^n` candidate short
+names, which is capped at 4 separators (`docs/architecture/pipeline.md` § M4d).
 
 ---
 

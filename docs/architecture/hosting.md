@@ -145,12 +145,36 @@ being invisible to whoever added a route:
 | The project `Cache-Control` | Set on the proxy's own response | *Cache-Control lives here*, below |
 
 > **Adding a page route? You must add it to `config.matcher` in `proxy.ts`, or it ships
-> uncached and without either header.** This is not optional and nothing else enforces it: a
-> route missing from the matcher builds, serves, and looks correct. `/route/<pair>` shipped
+> uncached, without either header, and with its 404 page destroyed.** This is not optional and
+> nothing else enforces it: a route missing from the matcher builds, serves, typechecks, passes
+> its unit tests, and looks correct in a browser. `/route/<pair>` shipped
 > `private, no-cache, no-store, max-age=0, must-revalidate` for exactly this reason — the
-> matcher listed only `/explore` and `/api/pivot`, and every gate stayed green. M4d's
-> `/airport`, `/carrier` and `/aircraft` each need the same three lines: a matcher entry, a
-> `Cache-Control` branch, and a header assertion in `app/smoke.sh`.
+> matcher listed only `/explore` and `/api/pivot`, and every gate stayed green.
+>
+> **Three lines per page, and all three are load-bearing:** a `matcher` entry, a row in
+> `ENTITY_ROUTES`, and *both* a header assertion and a `no-store` assertion in `app/smoke.sh`.
+> M4d added `/airport/:code`, `/carrier/:code` and `/aircraft/:name` on that pattern, so the
+> matcher now carries **six** entries: `/explore`, `/api/pivot`, and the four entity pages.
+
+### What omitting one actually costs — measured, not assumed
+
+M4d's three page tasks each predicted that a missing matcher entry would make every 404 on
+their page a **500**, because `not-found.tsx` reads `x-upgauge-path` and throws
+`MissingRawPathError` without it. Measured against a served build with `/airport/:code`
+deliberately removed from the matcher, the truth is narrower and worth stating exactly:
+
+| | With the matcher entry | Without it |
+|---|---|---|
+| `/airport/SEA` | 200, `public, s-maxage=2592000, …` | 200, `private, no-cache, no-store, max-age=0, must-revalidate` |
+| `/airport/sea` | 308, long-cached | 308, `private, no-cache…` |
+| `/airport/ZZZZ` | 404, `no-store`, names the code | **404**, `private, no-cache…`, **7,740-byte `<html id="__next_error__">` shell** |
+
+So the status stays 404 — Next catches the throw inside the 404 render — but the page is gone:
+no reason, no code named, no `DATA AS OF`, no recovery link, and `MissingRawPathError` in the
+server log with a digest. **A 404 that has lost its entire message, on every unknown code, with
+nothing red anywhere else.** That is worse than the 500 the reports expected, because a 500 is
+loud. `app/smoke.sh`'s per-page 404-body checks are what catch it; the three matcher-removal
+mutants below each turned exactly those checks red.
 
 ## `proxy.ts` is load-bearing — both query entry points break without it
 
@@ -225,6 +249,12 @@ case's phrase together with the **absence** of a sibling case's phrase — a sin
 sentence enumerating all the causes would satisfy any lone positive check, and that sentence
 is precisely what shipped before.
 
+**Four `not-found.tsx` files depend on this header now** (`/route`, `/airport`, `/carrier`,
+`/aircraft`), each re-running its own resolver against the pathname, so the matcher rule above
+is not a caching concern with a 404 side-effect — it is the other way round on three of the four
+pages. The `/aircraft` one does the most with it: it catches `AmbiguousCodeError`, resolves both
+colliding BTS codes to their full designations, and renders each with an Explorer permalink.
+
 > **Known gap, pre-existing and not fixed by this:** Next serves a 404 from a `force-dynamic`
 > page as an `<html id="__next_error__">` shell with an **empty `<body>`** — the page's markup
 > arrives in the streamed React payload further down the same response and is rendered
@@ -262,11 +292,46 @@ The rule that does have an implementation:
 > **Cache-worthiness is not "did it return 200". It is "is this a well-formed, known entity",
 > which the proxy *can* determine before the page runs.**
 
-For `/route/<pair>` that is `resolveRoutePair(slug).kind !== "notFound"` — a known pair
-returns 200 (including the empty-state 200) or a 308, both stable and both worth caching;
-a malformed slug, an unknown code, a self-route or a recognized-but-non-domestic code returns
-404 and gets `no-store`. **This is the pattern M4d's entity pages should follow**: resolve the
-identity in the proxy, cache only what resolves.
+M4b implemented that for `/route/<pair>` as `resolveRoutePair(slug).kind !== "notFound"`. M4d
+generalized it to four entity pages — `ENTITY_ROUTES` in `proxy.ts` is one row per page, a
+`slugFromPath` prefix reader plus a resolver — and **changed the predicate to an allow-list of
+outcomes, which is not a style preference:**
+
+```ts
+kind === "ok" || kind === "redirect"      // cacheable
+```
+
+`resolveAircraftSlug` has **four** outcomes, not three. `/aircraft/CE-180` resolves to
+`ambiguous` — BTS codes `030` (CESSNA 180) and `031` (CESSNA 180A/B) share one `short_name`,
+both really flew, and the page renders a 404 naming both. It is not `notFound`, so copying
+`/route`'s `!== "notFound"` shape — the obvious thing to do, and the thing M4d's plan warned
+about — would have pinned that 404 in a shared CDN cache for 30 days. An allow-list also fails
+safe for the *next* outcome anyone adds: an unrecognized kind declines the cache, which costs a
+cache miss instead of a month of a wrong answer.
+
+**`redirect` is cacheable for all four.** A 308 target is derived from the slug alone — an
+uppercasing, the alphabetical re-ordering of two airport codes, `dim_carrier`'s own spelling —
+so it is exactly as stable as the 200 it points at and no ingest can invalidate it.
+
+One asymmetry worth knowing before it looks like a bug: `resolveAirportCode` redirects on **case
+before it looks anything up**, so `/airport/zzzz` gets a *long-cached* 308 to `/airport/ZZZZ`,
+which then 404s `no-store`. That is correct rather than merely tolerable — `toUpperCase()` never
+consults the dataset, so the redirect can never become the wrong answer, and the 404 that
+follows is the response that has to stay uncached. `resolveCarrier` and `resolveAircraftSlug`
+resolve first and redirect second, so they have no equivalent case.
+
+**The cost side of that same fact, which is worth knowing on a project whose cost control *is*
+the caching:** because the redirect precedes the lookup, *every* lower-case path under
+`/airport/` mints a long-cached 308 — `/airport/aaaa`, `/airport/aaab`, and so on without bound.
+A crawler walking random lower-case strings therefore creates an attacker-controllable family of
+30-day CDN entries. Nothing is *wrong*: each response is correct, and each is the cheapest
+response in the app (no DB work at all, § What the proxy's query actually costs). The other
+three resolvers consult the dataset first, so an unknown slug there gets `no-store` regardless
+of case and has no equivalent. Cloudflare's rate limiting is the mitigation and is already in
+the architecture; this is recorded so nobody discovers the shape from a cache-fill graph.
+
+At most **one** resolution runs per request: every `slugFromPath` is a prefix test and the loop
+breaks on the first match, so four entity pages cost what one did.
 
 Two things this depends on, both established by building and serving rather than assumed:
 
@@ -281,15 +346,38 @@ Two things this depends on, both established by building and serving rather than
   loudly.
 
 Measured against a served production build. `make app-smoke` curls the `Cache-Control` on
-every row below; the status on the 308 and on `/route/ZZZZ-LAX`.
+every row below, and the status on every 308 and 404.
 
-| URL | Status | `Cache-Control` |
-|---|---|---|
-| `/route/JFK-LAX` | 200 | `public, s-maxage=2592000, stale-while-revalidate=86400` |
-| `/route/LAX-JFK` | 308 | `public, s-maxage=2592000, stale-while-revalidate=86400` |
-| `/route/ZZZZ-LAX` | 404 | `no-store` |
-| `/route/JFK-LHR` | 404 | `no-store` |
-| `/route/LAX-LAX` | 404 | `no-store` |
+| URL | Status | `Cache-Control` | Why |
+|---|---|---|---|
+| `/route/JFK-LAX` | 200 | long cache | known pair |
+| `/route/LAX-JFK` | 308 | long cache | re-ordering, derived from the two codes |
+| `/route/ZZZZ-LAX` · `/route/JFK-LHR` · `/route/LAX-LAX` | 404 | `no-store` | unknown code · non-domestic · self-route |
+| `/airport/SEA` | 200 | long cache | fact-present airport |
+| `/airport/sea` | 308 | long cache | `toUpperCase()`, no lookup involved |
+| `/airport/ZZZZ` · `/airport/LHR` | 404 | `no-store` | unknown code · recognized but domestic-only |
+| `/carrier/DL` | 200 | long cache | fact-present carrier |
+| `/carrier/dl` | 308 | long cache | canonical is `dim_carrier`'s own spelling |
+| `/carrier/ZZ` · `/carrier/PA` | 404 | `no-store` | not in the catalog · in it, never filed |
+| `/aircraft/B737-8` · `/aircraft/A321-LR` | 200 | long cache | fact-present type; the second exercises the slug transform |
+| `/aircraft/a321-lr` | 308 | long cache | to the **slug**, never to the unroutable `A321/LR` |
+| `/aircraft/NOPE-1` | 404 | `no-store` | unknown type |
+| **`/aircraft/CE-180`** | **404** | **`no-store`** | **`ambiguous`, not `notFound` — the allow-list is for this row** |
+
+**Verified by mutation on a served build, because a `check_not` that cannot fire is worse than
+no check** (M4c's final review found exactly one of those). Five mutants, each applied to
+`proxy.ts` alone, `make app-smoke` run, then reverted:
+
+| Mutant | Result |
+|---|---|
+| drop `/airport/:code` from the matcher | 4 red: the 200's header, the 308's header, and both airport 404 *body* checks |
+| drop `/carrier/:code` | 5 red: the same shape, plus the slug-as-typed check |
+| drop `/aircraft/:name` | 7 red: both 200 headers, the 308's, and all four 404-body checks |
+| `isCacheable` → `kind !== "notFound"` | **exactly 2 red, both on `/aircraft/CE-180`**, everything else green — the bug, isolated |
+| `isCacheable` → `return true` | 18 red: every `no-store` and every `s-maxage` absence check across all four entities |
+
+The last one is the proof that the absence checks are live rather than decorative; the
+fourth is the proof that they are specific.
 
 ### What the proxy's query actually costs
 
@@ -305,6 +393,14 @@ server runs with — `db.ts` never sets `threads`) and, in brackets, capped to `
 | `lookup_airport_by_code.sql` (the proxy's, and the page's) | 43–51 ms [same] | **8 ms** [17 ms] | filters `dim_airport` by presence in `fct_segment_month` — 3.36 M rows, not a dimension read |
 | `lookup_airport_code_exists.sql` (404 reason only) | 1.8–2.4 ms | unchanged | genuinely dimension-only |
 | A `/route/JFK-LAX` carriers pivot | ~7–9 ms | unchanged | the query the lookup precedes |
+| `lookup_carrier_by_code.sql` (M4d, `/carrier/*`) | — | **3.6–3.7 ms** | same method; correlated `EXISTS` was 15.1–15.8 ms |
+| `lookup_aircraft_by_name.sql` (M4d, `/aircraft/*`) | — | **4.6–4.8 ms** | same method; correlated `EXISTS` was 23.2–24.5 ms |
+
+The two M4d rows were measured in the same run as the `lookup_airport_by_code.sql` row above,
+which reproduced at 8.5–9.1 ms — so they are comparable rather than merely adjacent. Both are
+cheaper than the airport lookup because they probe a single fact column instead of a union of
+two; both use `IN (SELECT DISTINCT col …)` rather than the plain `IN (SELECT col …)` for the
+same reason `UNION` beat `UNION ALL` there — 114 and 112 distinct probe values against 3.36 M.
 
 **`/route` runs TWO pivots, and the second one is the larger.** M4c mounted the aircraft-mix
 chart on this page without updating this table, which is the table that exists because M4d is
@@ -326,6 +422,28 @@ own `DuckDBConnection` off the single memoized instance — so the serial form w
 both in turn for no reason. Concurrent, the pair costs what its slower half costs: **a 33%
 saving on the page's DB work, for free.** M4d will copy whatever shape is here, so the shape
 is `Promise.all`.
+
+**`/airport/<code>` runs SIX, and that is the price of a filter the pivot cannot express.** An
+airport is both endpoints, so each of its two grains is assembled as `origin + dest −
+(origin ∧ dest)` — three pivots each (`pipeline.md` § M4d). Same method as the table above
+(in-process, warm, median of 8, default threads), on `/airport/SEA`:
+
+| Work | Rows | Warm median |
+|---|---|---|
+| one side of the carriers pivot, trailing 12 | 374 | 15.9 ms |
+| the overlap pivot (`origin = X AND dest = X`), trailing 12 | 1 | 10.3 ms |
+| the carriers union, 3 concurrent | 654 | **19.2 ms** |
+| one side of the mix pivot, full window | 2,832 | 23.9 ms |
+| the mix union, 3 concurrent | 2,886 | **42.3 ms** |
+| all six under `Promise.all` | | **54.2 ms** |
+| all six serially | | 64.3 ms |
+
+Concurrency buys much less here than on `/route` (16%, not 33%): six full scans of
+`fct_segment_month` contend for the same buffer pool, so the wave costs more than its slowest
+member. **2.7× `/route`'s DB work per page**, standing, on the pages most likely to be linked.
+A first-class either-endpoint filter in `meta_pivot_dimensions` — one pivot instead of three —
+is the M5 fix; it needs matching composite-filter semantics in `render.ts` and
+`pipeline/pivot.py`, which is why M4d did not take it on.
 
 A direct read-only measurement of the mix query alone, at `threads=2` rather than the default,
 puts it at 30–34 ms; a measurement of this query that omits its thread count and whether the
@@ -404,8 +522,12 @@ still writable". `/api/pivot` escapes only because a route handler builds its ow
 What *would* fix it, none of them small and none of them M4b: give the pages a route-handler
 entry point that can set headers per outcome; or drop the proxy's blanket `Cache-Control` in
 favour of a per-page mechanism if Next ever grows one; or accept a short `s-maxage` for the
-HTML so an error self-corrects in minutes rather than a month. Recorded here so M4d inherits
-the honest version.
+HTML so an error self-corrects in minutes rather than a month.
+
+**M4d inherited it unchanged and widened its blast radius from one page to four.** `/airport`
+is the worst of them: it runs six pivots (below), so it has the most ways to throw, and its
+proxy resolution succeeds first. Still not fixable from the proxy, still recorded rather than
+papered over — it is on CLAUDE.md's M5 list.
 
 ## Server-side Observable Plot needs no bundler configuration
 

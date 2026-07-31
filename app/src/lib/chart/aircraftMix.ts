@@ -2,12 +2,14 @@ import { runPivot } from "@/lib/db";
 import { displayValue, resolutionKey } from "@/lib/resolve";
 import type { PivotQuery } from "@/lib/pivot/types";
 
-/** One (month, aircraft type) cell of the mix, with the type already resolved for display.
+/** One (month, band) cell of the mix, with the band's id already resolved for display.
  *
- * `code` is the raw BTS AIRCRAFT_TYPE key -- a zero-padded VARCHAR ('079'), never a number
- * (CLAUDE.md: int-parsing it breaks the join silently). It stays on the row because it is the
- * identity the pivot, and any drill-down permalink, is keyed on. `label` is what a reader
- * sees ('A321/LR'), and the two must not be confused: '612' is the 737-700, not the A321.
+ * `code` is the raw warehouse id of whatever the stack is broken down by -- a zero-padded BTS
+ * AIRCRAFT_TYPE VARCHAR ('079') under the default stack, an AIRLINE_ID under the carrier stack.
+ * Never a number (CLAUDE.md: int-parsing '079' breaks the join silently), and never the display
+ * form: it is the identity the pivot, and any drill-down permalink, is keyed on. `label` is what
+ * a reader sees ('A321/LR', 'WN'), and the two must not be confused: '612' is the 737-700, not
+ * the A321.
  *
  * `departures` is here for one reason: the chart's shade ordering is by gauge
  * (seats / departures), which is a different ordering from band membership (total seats).
@@ -21,6 +23,79 @@ export interface MixRow {
   departures: number;
 }
 
+/** WHAT THE STACK IS BROKEN DOWN BY, and everything a reader has to be told about that choice.
+ *
+ * M4c hard-coded `aircraft_type`. M4d needs a second answer, because `/aircraft/<slug>` is a
+ * page that IS one aircraft type: stacking it by type draws a single band whose gauge ordering
+ * encodes nothing at all. Stacking by OPERATING CARRIER answers the better question -- who
+ * adopted this type, and when -- and, critically, the ramp keeps meaning something, which is
+ * measured rather than assumed (see BY_CARRIER).
+ *
+ * The prose fields are here, next to `key`, and not spread across the component: a dimension
+ * and the sentences that describe its ramp are one decision. Splitting them is how a chart ends
+ * up stacked by carrier under a title and a legend that both say "aircraft type" -- the failure
+ * this whole type exists to make unrepresentable. */
+export interface MixDimension {
+  /** The pivot dimension key. Also the result column and the resolution key: every dimension in
+   * `meta_pivot_dimensions` whose `column_expr` is a single column has all three equal, which
+   * both of these are (`route`, the one composite, is not stackable here for that reason). */
+  key: string;
+  /** In the chart's own title: "Seats by aircraft type". */
+  title: string;
+  /** One band, singular, for the Other swatch's count: "2 types" / "2 carriers". */
+  unit: string;
+  /** The empty-frame sentence: "No aircraft-type filings in this window." */
+  absent: string;
+  /** What the two ends of the ramp MEAN for this stack, and they are not the same claim.
+   * Across aircraft types, a darker band is bigger metal. Across carriers of ONE type it is
+   * the same metal fitted denser -- Frontier's A321 carries 230.0 seats to JetBlue's 172.3 --
+   * so a rail saying "larger metal" on `/aircraft` would be describing an encoding the chart
+   * is not drawing. */
+  rampLight: string;
+  rampDark: string;
+  /** The one-line note under the colour key, in the chart's own voice. */
+  rampNote: string;
+}
+
+/** The M4c stack, and the default: seats by aircraft type. `/route`, `/airport` and `/carrier`
+ * all take it, which is why it is a default rather than a required argument -- their three-
+ * argument calls mean in M4d exactly what they meant in M4c. */
+export const BY_AIRCRAFT_TYPE: MixDimension = {
+  key: "aircraft_type",
+  title: "aircraft type",
+  unit: "type",
+  absent: "aircraft-type",
+  rampLight: "smaller metal",
+  rampDark: "larger metal",
+  rampNote: "← lightest is the smallest metal, by seats per departure",
+};
+
+/** The `/aircraft` stack: seats by operating carrier.
+ *
+ * THE RAMP STILL ENCODES SOMETHING, MEASURED -- and every figure below names its WINDOW,
+ * because they differ and this page draws the full one. Over 2015-01..2026-04, which is what
+ * /aircraft fetches: the A321/LR spans B6 176.0 -> F9 230.0 (54.0 seats, 31%, on identical
+ * metal), the A320-1/2 spans MX 129.3 -> G4 181.7, and the B737-8 spans AS 159.8 -> XP 187.7.
+ * Over the trailing 12 months alone the same three read B6 172.3 -> F9 230.0 (57.7, 33%),
+ * AA 150.0 -> F9 184.1, and AS 159.5 -> SY 186.0 -- the source of the 172.3/230.0 pair quoted
+ * in prose elsewhere in this repo, and the reason this comment used to name SY as the densest
+ * B737-8 operator on a chart that draws a window in which XP is. The spread survives either
+ * window, which is the claim; the unlabelled figure was not evidence for it. On this page the
+ * ramp isolates CONFIGURATION choice from FLEET choice, which `/route` cannot separate.
+ *
+ * `op_airline_id` and not a mainline rollup: the query keeps `grouping: "operating"` (CLAUDE.md
+ * -- the operating carrier is the grain and the truth), because rolling Endeavor into Delta
+ * would rewrite who "adopted" a type, which is precisely the question this chart answers. */
+export const BY_CARRIER: MixDimension = {
+  key: "op_airline_id",
+  title: "operating carrier",
+  unit: "carrier",
+  absent: "carrier",
+  rampLight: "less dense cabin",
+  rampDark: "denser cabin",
+  rampNote: "← lightest is the least dense cabin, by seats per departure",
+};
+
 /** High enough that the chart is never silently truncated, and low enough to stay a bound.
  *
  * Measured against the built warehouse over the full 2015-01..2026-04 window: the worst-case
@@ -29,16 +104,30 @@ export interface MixRow {
  * example -- returns 996. 10,000 clears the measured worst case 5x and the structural ceiling
  * 2x. A truncated chart would not look broken, it would look like an airline stopped flying,
  * which is precisely the failure this headroom exists to avoid; aircraftMix.test.ts pins the
- * returned count strictly below this bound rather than trusting the arithmetic. */
-const AIRCRAFT_MIX_LIMIT = 10000;
+ * returned count strictly below this bound rather than trusting the arithmetic.
+ *
+ * M4d re-measured it for the CARRIER stack rather than assuming the type figure covered it,
+ * since the bound is now shared: the worst-case aircraft type produces 1,915 (month, carrier)
+ * groups (type 035, the CESSNA 172) and the most carriers any one type carries is 25 (type
+ * 416) -- 3,400 absolute. The 737-800 this page's tests use returns 952. Same headroom.
+ *
+ * EXPORTED because /airport unions THREE of these queries and has to know whether any side came
+ * back at the bound: a truncated side can drop a cell the overlap query still returns, and the
+ * union's subset invariant then throws -- a 500 the proxy has already marked cacheable for
+ * thirty days. See endpoints.ts's fetchAirportMix. */
+export const AIRCRAFT_MIX_LIMIT = 10000;
 
 /** The pivot the chart is drawn from. No new SQL and no new catalog entries: the existing
  * segment-grain pivot answers this directly (the spec's § Data).
  *
- * `aircraft_type` is segment-grain only in meta_pivot_dimensions, so `grain` is not a choice.
+ * `grain: "segment"` is not a choice under either stack. `aircraft_type` is segment-grain only
+ * in meta_pivot_dimensions, and the carrier stack is only ever asked for alongside an
+ * aircraft-type FILTER, which is segment-grain for the same reason.
+ *
  * `grouping: "operating"` because the operating carrier is the grain and the truth
- * (CLAUDE.md) -- rolling Endeavor into Delta would not change a single seat here, but it is
- * not the filing this chart describes.
+ * (CLAUDE.md) -- under the type stack rolling Endeavor into Delta would not change a single
+ * seat, but it is not the filing this chart describes; under the CARRIER stack it would change
+ * the bands themselves, merging a regional's adoption of a type into its mainline's.
  *
  * `sort: null` with `sortDesc: true` is the normalized form of "no explicit sort"
  * (normalizeQuery in lib/pivot/types.ts -- the other combination is unrepresentable in the
@@ -47,22 +136,29 @@ const AIRCRAFT_MIX_LIMIT = 10000;
  *
  * Quarantined rows are already excluded by the measure expressions
  * (`SUM(seats) FILTER (WHERE NOT is_quarantined)`); this layer inherits that and must never
- * re-filter. */
+ * re-filter.
+ *
+ * `dimension` and `limit` are LAST and defaulted, so every M4c call site keeps its meaning
+ * untouched. `limit` is an argument for the same reason RouteView's row limit is: nothing in
+ * production data reaches 10,000, so a caller's truncation handling would otherwise be
+ * unreachable and therefore untestable. */
 export function aircraftMixQuery(
   filters: [string, string[]][],
   timeFrom: string,
   timeTo: string,
+  dimension: MixDimension = BY_AIRCRAFT_TYPE,
+  limit: number = AIRCRAFT_MIX_LIMIT,
 ): PivotQuery {
   return {
     grain: "segment",
-    dimensions: ["year_month", "aircraft_type"],
+    dimensions: ["year_month", dimension.key],
     measures: ["seats", "departures_performed"],
     timeFrom,
     timeTo,
     filters,
     sort: null,
     sortDesc: true,
-    limit: AIRCRAFT_MIX_LIMIT,
+    limit,
     grouping: "operating",
   };
 }
@@ -71,10 +167,16 @@ export async function fetchAircraftMix(
   filters: [string, string[]][],
   timeFrom: string,
   timeTo: string,
+  dimension: MixDimension = BY_AIRCRAFT_TYPE,
+  limit: number = AIRCRAFT_MIX_LIMIT,
 ): Promise<MixRow[]> {
-  const result = await runPivot(aircraftMixQuery(filters, timeFrom, timeTo));
+  const result = await runPivot(aircraftMixQuery(filters, timeFrom, timeTo, dimension, limit));
   return result.rows.map((r) => {
-    const code = String(r.aircraft_type);
+    // `dimension.key` reads BOTH the result column and the resolution key -- see MixDimension.
+    // Reading a literal column name here is the hard-coded-dimension regression: the carrier
+    // pivot's rows carry no `aircraft_type` column at all, so every row would collapse to the
+    // single code "undefined" and the chart would draw one band.
+    const code = String(r[dimension.key]);
     return {
       month: String(r.year_month),
       code,
@@ -82,7 +184,7 @@ export async function fetchAircraftMix(
       // (absent -> raw id, resolved-without-a-code -> the name, resolved -> the code) lives
       // in exactly one place, and re-deriving it locally is how the two copies drift --
       // lib/resolve.ts's own header records that having happened once already.
-      label: displayValue(result.resolved.get(resolutionKey("aircraft_type", code)), code),
+      label: displayValue(result.resolved.get(resolutionKey(dimension.key, code)), code),
       seats: Number(r.seats ?? 0),
       departures: Number(r.departures_performed ?? 0),
     };
@@ -189,8 +291,11 @@ export interface Band {
 }
 
 export interface OtherSummary {
-  /** How many aircraft types this bucket aggregates. Zero means there is no Other band to
-   * draw, and `series` is empty rather than a row of zeroes. */
+  /** How many BANDS this bucket aggregates -- aircraft types under the default stack, operating
+   * carriers under BY_CARRIER. The name is M4c's and is kept because `toBands` and every caller
+   * of it are the only readers; what a band IS comes from the caller's `MixDimension.unit`, which
+   * is what the swatch is actually written from ("2 types" / "2 carriers"). Zero means there is
+   * no Other band to draw, and `series` is empty rather than a row of zeroes. */
   typeCount: number;
   /** Share of the route's TOTAL seats, not of the remainder. The legend rail states this out
    * loud because Other is often not a rounding error: top-5 + Other covers a median 94.7% of

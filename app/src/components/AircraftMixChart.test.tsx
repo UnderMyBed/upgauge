@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
-import type { MixRow } from "@/lib/chart/aircraftMix";
+import { BY_CARRIER, type MixDimension, type MixRow } from "@/lib/chart/aircraftMix";
 
 // ---------------------------------------------------------------------------------------
 // Fixtures
@@ -113,8 +113,10 @@ function crossoverAt(year: number): MixRow[] {
 // Readers over the serialized SVG
 // ---------------------------------------------------------------------------------------
 
-function chart(rowSet: MixRow[], title = "JFK–LAX") {
-  const { container } = render(<AircraftMixChart rows={rowSet} title={title} />);
+function chart(rowSet: MixRow[], title = "JFK–LAX", dimension?: MixDimension) {
+  const { container } = render(
+    <AircraftMixChart rows={rowSet} title={title} dimension={dimension} />,
+  );
   return container;
 }
 
@@ -432,5 +434,108 @@ describe("AircraftMixChart", () => {
     const container = chart(FLEET, "Alaska Airlines");
     expect(container.textContent).toContain("Alaska Airlines");
     expect(container.textContent).not.toMatch(/route/i);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// M4d: the same component, stacked by a different dimension.
+//
+// `/aircraft/<slug>` is a page that IS one aircraft type, so the type stack is degenerate
+// there -- one band, whose gauge ordering encodes nothing. It stacks by OPERATING CARRIER.
+//
+// The fixture is modelled on the real 737-800 (measured, see aircraftMix.test.ts) and sharpened
+// so the two orderings are EXACT reverses at every position rather than at four of five: the
+// carrier with the most seats also flies the densest cabin, so a single sort -- by either key --
+// mislabels all five swatches instead of four.
+//
+//   code   label  seats/mo  dep/mo  gauge    seats rank   gauge rank (shade)
+//   19393  WN       59000     300   196.7        1            5  --g5
+//   19805  AA       55000     300   183.3        2            4  --g4
+//   19977  UA       22000     125   176.0        3            3  --g3
+//   19790  DL       13500      80   168.8        4            2  --g2
+//   19930  AS        9500      60   158.3        5            1  --g1
+//   20422  SY        4000      22   181.8        6         Other
+//   20207  XP        2000      11   181.8        7         Other
+//
+// SY and XP are the second- and third-densest cabins in the fixture and are still in Other:
+// membership is a seats question and never a gauge one, on either stack.
+// ---------------------------------------------------------------------------------------
+
+const CARRIERS: TypeSpec[] = [
+  { code: "19393", label: "WN", ...flat(59000, 300) },
+  { code: "19805", label: "AA", ...flat(55000, 300) },
+  { code: "19977", label: "UA", ...flat(22000, 125) },
+  { code: "19790", label: "DL", ...flat(13500, 80) },
+  { code: "19930", label: "AS", ...flat(9500, 60) },
+  { code: "20422", label: "SY", ...flat(4000, 22) },
+  { code: "20207", label: "XP", ...flat(2000, 11) },
+];
+
+/** Ascending gauge, i.e. the order `--g1`..`--g5` must be assigned in -- and the exact reverse
+ * of the seats ordering (WN, AA, UA, DL, AS). */
+const CARRIER_SHADE_ORDER = ["AS", "DL", "UA", "AA", "WN"];
+
+const FLEET_BY_CARRIER = rows(CARRIERS);
+
+describe("AircraftMixChart stacked by operating carrier", () => {
+  it("assigns each shade to the carrier whose cabin density earns it, not to its seat rank", () => {
+    // THE test of this task. Breaks if the component (or toBands) collapses the two orderings
+    // into one sort: seats-descending gives WN --g1 through AS --g5, the exact reverse of this
+    // list, so all five assertions fail rather than the one that a coinciding first position
+    // would leave. The M4c fixture that was meant to catch this bug had the two orders
+    // coincide, and `const shaded = members` passed it -- hence the reversal here.
+    const container = chart(FLEET_BY_CARRIER, "B737-8", BY_CARRIER);
+    for (const [i, token] of RAMP.entries()) {
+      const swatch = container.querySelector(`.ckey [data-token="${token}"]`);
+      expect(swatch?.textContent).toContain(CARRIER_SHADE_ORDER[i]);
+    }
+  });
+
+  it("titles the chart with the dimension it is actually stacked by", () => {
+    // Breaks if "Seats by aircraft type" stays hard-coded in the frame -- the shape of this
+    // milestone's most likely regression, and one that leaves a completely plausible-looking
+    // chart claiming to break down by a dimension it is not broken down by.
+    expect(chart(FLEET_BY_CARRIER, "B737-8", BY_CARRIER).querySelector(".ctitle")?.textContent)
+      .toBe("Seats by operating carrier");
+    // Paired: the default is unchanged, so /route, /airport and /carrier keep their title.
+    expect(chart(FLEET).querySelector(".ctitle")?.textContent).toBe("Seats by aircraft type");
+  });
+
+  it("counts the Other bucket in the stack's own unit", () => {
+    // Breaks if `plural(n, "type")` stays hard-coded: "2 types" on a chart whose bands are
+    // airlines. 6,000 of 165,000 seats a month = 3.6%.
+    const other = chart(FLEET_BY_CARRIER, "B737-8", BY_CARRIER).querySelector(
+      '.ckey [data-token="--g0"]',
+    )!;
+    expect(other.textContent).toContain("2 carriers");
+    expect(other.textContent).toContain("3.6%");
+  });
+
+  it("says what the ramp means for THIS stack, which is not what it means across types", () => {
+    // Across aircraft types a darker band is bigger metal. Across carriers of ONE type it is
+    // the SAME metal fitted denser -- measured, F9 fits 230.0 seats into the A321 to B6's
+    // 172.3. Breaks if the key's note stays "smallest metal", which would describe an encoding
+    // this chart is not drawing.
+    const key = chart(FLEET_BY_CARRIER, "B737-8", BY_CARRIER).querySelector(".ckey")!.textContent;
+    expect(key).toContain("least dense cabin");
+    expect(key).not.toContain("smallest metal");
+    // Paired, so a component that simply reworded the constant fails: the type stack keeps
+    // saying "smallest metal", which is the true claim there.
+    expect(chart(FLEET).querySelector(".ckey")!.textContent).toContain("smallest metal");
+  });
+
+  it("describes the stack it drew to a screen reader, not the one it used to draw", () => {
+    // `role="img"` means the aria-label is the ONLY thing announced, so a stale noun here is
+    // the whole chart misdescribed for a reader who cannot see it.
+    const label = svgOf(chart(FLEET_BY_CARRIER, "B737-8", BY_CARRIER)).getAttribute("aria-label")!;
+    expect(label).toContain("monthly seats by operating carrier");
+    expect(label).not.toContain("aircraft type");
+    for (const code of CARRIER_SHADE_ORDER) expect(label).toContain(code);
+  });
+
+  it("states an absence in the stack's own words rather than drawing an empty frame", () => {
+    // Breaks if the empty sentence keeps naming aircraft types on a carrier-stacked page.
+    expect(chart([], "B737-8", BY_CARRIER).textContent).toContain("No carrier filings");
+    expect(chart([]).textContent).toContain("No aircraft-type filings");
   });
 });

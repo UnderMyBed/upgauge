@@ -1,0 +1,78 @@
+-- Reverse of resolve_aircraft_type.sql: a short name -> the BTS aircraft type it identifies.
+-- Feeds /aircraft/<short_name>.
+--
+-- The slug is `short_name` ('B737-8', 'ERJ-175'), NEVER the BTS `code`. 612 is the 737-700,
+-- not the A321, and nobody pastes /aircraft/614 -- same reasoning as resolve_aircraft_type
+-- .sql, which is why `id` and `code` are swapped relative to the other lookups: the fact
+-- table's join key IS the BTS code, so that is what comes back as `id`.
+--
+-- The id stays a zero-padded VARCHAR. CLAUDE.md: '036' becomes 36 if int-parsed and every
+-- downstream join breaks silently. 13 fact-present types have a leading zero, so the caller
+-- must not coerce -- app/src/lib/resolve.ts's AircraftRef types `id` as string for this
+-- reason alone, where AirportRef and CarrierRef use number.
+--
+-- No `is_latest` clause, for the same reason lookup_carrier_by_code.sql has none:
+-- dim_aircraft_type is one row per code (measured, 0 codes carry more than one row), so
+-- there is no seq chain to collapse.
+--
+-- ** THIS SLUG IS NOT UNIQUE, AND NO SCOPING MAKES IT UNIQUE. ** That is what separates this
+-- file from the other two reverse lookups, and it is the single most important thing to know
+-- before editing it. 12 short names map to more than one code across dim_aircraft_type. The
+-- fact-presence clause below takes that to ONE, not to zero: `CE-180` names code 030
+-- "CESSNA 180" (183 filed rows, 994 seats, 441 departures, 2015-01..2024-07) AND code 031
+-- "CESSNA 180A/B" (131 rows, 557 seats, 189 departures, 2016-05..2025-11). Both really flew.
+-- Neither is the right answer, so this query returns BOTH ROWS on purpose and
+-- app/src/lib/resolve.ts refuses to fold them into one map entry -- it throws
+-- AmbiguousCodeError naming both codes, and the entity page renders that as a named
+-- disambiguation rather than a silently-chosen airframe.
+--
+-- Do NOT "fix" this by narrowing the scope. Restricting to the trailing 12 months makes the
+-- collision disappear TODAY (only 031 flew in the current window, which is why the milestone
+-- brief records in-window collisions as 0) and brings it back the first month both types
+-- file -- the worst possible failure shape, since it would arrive as a production 500 on a
+-- URL that worked last month. pipeline's
+-- test_aircraft_reverse_lookup_collides_on_exactly_the_known_CE_180_pair pins the colliding
+-- set exactly, so a NEW ambiguous short name fails a test rather than a page.
+--
+-- The fact-presence clause still earns its place even though it does not deliver uniqueness:
+-- it is what takes 12 collisions to 1, and it keeps types BTS has never had a filing for
+-- (`BEECH KING AIR C-90` under `KINGAIR`, `RAYTHEON BEECHCRAFT BARON B-58` under `BARON`)
+-- out of a page that would then be entirely empty. Measured warm and read-only, this DISTINCT
+-- semi-join is 4.5-4.6 ms against 23.2-24.5 ms for the correlated
+-- `EXISTS (... WHERE f.aircraft_type = code)` form, which re-scans 3.36 M fact rows per
+-- candidate; pipeline's test_new_reverse_lookups_select_exactly_the_fact_present_entities
+-- diffs the two result sets over every short name rather than asserting the equivalence.
+--
+-- Matching is case-insensitive so /aircraft/b737-8 resolves; the caller uppercases for the
+-- canonical URL. Honest accounting of what each half of that does, because a mutation run
+-- measured it rather than assuming: the INPUT fold lives in resolve.ts's runSlugLookup and is
+-- load-bearing (removing it reddens three tests). The COLUMN-side `upper()` here is INERT
+-- against today's data and no test kills its removal -- dim_aircraft_type carries exactly one
+-- lower-case short name, '330-9neo' (code 824, AIRBUS A330-900neo), and 824 has never filed a
+-- T-100 Segment row, so the fact-presence clause below removes the only row that would notice.
+-- It is kept anyway, and deliberately: the day BTS files an A330-900neo the fold is the only
+-- thing that makes /aircraft/330-9NEO resolve, and its absence would be a silent 404 rather
+-- than an error. Same situation in lookup_carrier_by_code.sql, where 0 codes are lower-case.
+--
+-- 16 fact-present short names contain a `/` or a space ('A321/LR', 'MAX 8', 'FLT/AMPH'), so
+-- they are not expressible as a single URL path segment as-is. That is the entity page's
+-- decision, not this file's; the measurement it needs is in docs/data/invariants.md
+-- § Entity resolution (replacing both with `-` is injective over all 111 fact-present short
+-- names) and is pinned by test_aircraft_short_names_survive_a_url_path_segment.
+--
+-- The placeholder in the WHERE clause below is substituted with a parenthesised list of
+-- BOUND parameter names, e.g. ($id0, $id1) -- never with values. The token must appear
+-- exactly once per file, including in comments: the substitution replaces only the first
+-- occurrence.
+SELECT
+    code       AS id,
+    short_name AS code,
+    name       AS name
+FROM dim_aircraft_type
+WHERE upper(short_name) IN {{IDS}}
+  -- FACT-PRESENCE FILTER. Everything below this marker line is what app/src/lib/
+  -- resolve.test.ts truncates away to reproduce the un-scoped query and prove the collisions
+  -- it closes are real rather than assumed. Keep this the LAST clause in the file, and keep
+  -- the marker text unique -- that test asserts it appears exactly once and fails loudly if
+  -- it does not, rather than silently comparing a statement against itself.
+  AND code IN (SELECT DISTINCT aircraft_type FROM fct_segment_month)
