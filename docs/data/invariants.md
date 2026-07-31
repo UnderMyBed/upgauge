@@ -562,16 +562,34 @@ one `airline_id`; scoped to the 114 airlines that actually filed a T-100 Segment
 and 19995 "Aces Airlines" (a defunct Colombian carrier, 0 filed rows). `CP` fans out to three.
 
 **What the filter therefore makes a 404, and what `/carrier/<code>` may honestly say about it
-(M4d).** The filter is not a tie-breaker between near-equals — it removes the overwhelming
-majority of the table. **1,543 of `dim_carrier`'s 1,657 distinct codes have no fact-present
-holder at all** — 1,657 is the count of DISTINCT `carrier_code`s; 1,776 is the table's row
-count, one per `airline_id`, and 1,657 − 114 fact-present carriers = 1,543 exactly. So a code
-that is real, recognized by BTS, and simply never filed a T-100 Segment row in this window is the **common** carrier 404, not the exotic one: `PA` (Pan American World Airways
-— `airline_id` 20384 and 20386, plus 20389 "Florida Coastal Airlines") reaches it by exactly
-the same path as `ZZ`, which is in `dim_carrier` not at all. There is no carrier analogue of
-`lookup_airport_code_exists.sql` to tell the two apart, so the page states the thing that is
-true of both — *nothing has filed under this code* — rather than calling Pan Am unknown. If a
-future task wants the airport-style split, it needs that second lookup first.
+(M4d, split by M5 Task 6).** The filter is not a tie-breaker between near-equals — it removes
+the overwhelming majority of the table. **1,543 of `dim_carrier`'s 1,657 distinct codes have no
+fact-present holder at all** — 1,657 is the count of DISTINCT `carrier_code`s; 1,776 is the
+table's row count, one per `airline_id`, and 1,657 − 114 fact-present carriers = 1,543 exactly.
+So a code that is real, recognized by BTS, and simply never filed a T-100 Segment row in this
+window is the **common** carrier 404, not the exotic one: `PA` (Pan American World Airways —
+`airline_id` 20384 and 20386, plus 20389 "Florida Coastal Airlines") reaches it by exactly the
+same path as `ZZ`, which is in `dim_carrier` not at all.
+
+M4d had no carrier analogue of `lookup_airport_code_exists.sql` to tell the two apart, so the
+page stated the thing true of both — *nothing has filed under this code* — rather than calling
+Pan Am unknown, and this section said the airport-style split needed that second lookup first.
+**M5 Task 6 is that lookup** (`sql/03_queries/lookup_carrier_code_exists.sql`, mirroring the
+airport file's existence-only shape but returning `id`/`name` as well as `code`), and
+`/carrier/<code>` now makes the same two-way split `/route/<pair>` always has: `ZZ` 404s
+"unknown carrier code"; `PA` 404s "recognized by BTS ... none of which has filed a T-100
+Segment row", naming every holder.
+
+**Naming "every holder" is load-bearing, not cosmetic — a carrier code can hold more than one
+airline_id, same as an airport code can hold more than one `airport_id`.** Of the 1,543
+never-filed codes, **94 name MORE THAN ONE airline** (1,643 total `dim_carrier` rows sit behind
+those 1,543 codes; worst case is 3). `PA` is that worst case: two rows both named "Pan American
+World Airways" (20384, 20386) plus a *third*, "Florida Coastal Airlines" (20389) — a genuinely
+unrelated carrier that happens to share the code. A 404 reading "`PA` is Pan American" — this
+file's own phrasing before this measurement — silently picks one of three, which is the exact
+`AUS` failure shape one dimension over: whichever holder a template happened to name first would
+be an arbitrary, confident answer about the wrong airline. `app/src/lib/carrier.ts`'s
+`carrierNotFoundReason` lists every one of `carrierHoldersByCode`'s rows instead.
 
 **A resolvable carrier with an empty trailing-12 table is normal, not an error.** **45 of the
 114 fact-present airlines last filed before 2025-05** (measured, 39%) — Virgin America's last

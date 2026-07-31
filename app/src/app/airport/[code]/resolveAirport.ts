@@ -1,32 +1,14 @@
 import { airportCodesExist, lookupAirportsByCode, type AirportRef } from "@/lib/resolve";
+import { AIRPORT_PREFIX, airportSlugFromPath } from "@/lib/airport";
 
-/** Where an airport page's slug starts. Shared by `not-found.tsx` (which has no props and no
- * route params, so it re-derives the slug from proxy.ts's RAW_PATH_HEADER -- see
- * lib/rawPath.ts) and, once M4d Task 5 wires it, by `proxy.ts` itself, which must resolve the
- * entity before the page runs to decide whether the response is cacheable. One constant, so
- * the two can never disagree about where the code begins. */
-export const AIRPORT_PREFIX = "/airport/";
-
-/** The `<code>` half of an `/airport/<code>` pathname, or null if this is not an airport page.
- *
- * Deliberately a local twin of `lib/rawPath.ts`'s `routeSlugFromPath` rather than an edit to
- * it: Tasks 2, 3 and 4 of M4d run in parallel and all three need exactly this, so three
- * simultaneous edits to one shared file is a merge conflict by construction. The
- * generalization -- one `slugFromPath(prefix, pathname)` in lib/rawPath.ts -- belongs to
- * whichever task lands last, and is noted in this task's report. */
-export function airportSlugFromPath(pathname: string): string | null {
-  if (!pathname.startsWith(AIRPORT_PREFIX)) return null;
-  const raw = pathname.slice(AIRPORT_PREFIX.length);
-  if (raw.length === 0) return null;
-  // `decodeURIComponent` THROWS on a malformed escape ('%zz') -- bug #2 on smoke.sh's list of
-  // production-only failures, found once and never by a unit test -- so a malformed escape
-  // falls back to the raw text, which resolveAirportCode then rejects by name. Never uncaught.
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
-}
+// Both used to be DEFINED here (M4d Task 5 built them as a local twin of lib/rawPath.ts's
+// routeSlugFromPath, because three M4d tasks ran in parallel and one shared file is three
+// agents editing one file). M5 Task 6 collapsed all four entity readers into
+// lib/entitySlug.ts's entitySlugFromPath and moved this pair to lib/airport.ts -- a lib
+// importing from an app route directory (proxy.ts, lib/entityLink.ts) was the smell that move
+// exists to remove. Re-exported here, unchanged in name and behaviour, so this file's own
+// existing importers (not-found.tsx, not-found.test.tsx) need no edit.
+export { AIRPORT_PREFIX, airportSlugFromPath };
 
 export type AirportResult =
   | { kind: "ok"; airport: AirportRef }

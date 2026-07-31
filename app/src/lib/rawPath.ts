@@ -1,3 +1,5 @@
+import { entitySlugFromPath } from "@/lib/entitySlug";
+
 /** The request header `proxy.ts` uses to hand the app the request's pathname.
  *
  * Sibling of `rawQuery.ts`'s `RAW_QUERY_HEADER`, and it exists for a different reason than
@@ -50,17 +52,11 @@ export function rawPathFromHeaders(headers: { get(name: string): string | null }
  * about where the slug starts. */
 export const ROUTE_PREFIX = "/route/";
 
+// A one-line wrapper around lib/entitySlug.ts's entitySlugFromPath -- M5 Task 6 collapsed this
+// and its three siblings (airportSlugFromPath, carrierSlugFromPath, aircraftSlugFromPath),
+// which used to each carry their own copy of the decode-guard below, into that one function.
+// This wrapper (and ROUTE_PREFIX above) stays, unchanged in name and behaviour, so nothing
+// importing routeSlugFromPath needs an edit.
 export function routeSlugFromPath(pathname: string): string | null {
-  if (!pathname.startsWith(ROUTE_PREFIX)) return null;
-  const raw = pathname.slice(ROUTE_PREFIX.length);
-  // The page receives `params.pair` already percent-decoded, so decode here too or the two
-  // would disagree about a slug like `JFK%2DLAX`. `decodeURIComponent` THROWS on a malformed
-  // escape (`%zz`) -- that is bug #2 on smoke.sh's list of production-only failures, found
-  // exactly once and never by a unit test -- so a malformed escape falls back to the raw
-  // text, which resolveRoutePair then rejects as an unknown code. Never uncaught.
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
+  return entitySlugFromPath(pathname, ROUTE_PREFIX);
 }

@@ -236,6 +236,18 @@ describe("aircraftSlugFromPath", () => {
     // production-only failures -- found once, never by a unit test -- and an uncaught throw in
     // a not-found render is a 500 where a 404 was already the answer.
     expect(aircraftSlugFromPath("/aircraft/%zz")).toBe("%zz");
+    expect(aircraftSlugFromPath("/aircraft/%E0%A4%A")).toBe("%E0%A4%A");
     expect(aircraftSlugFromPath("/aircraft/MAX%208")).toBe("MAX 8");
+  });
+
+  // M5 Task 6: aircraftSlugFromPath is now a one-line wrapper around lib/entitySlug.ts's
+  // entitySlugFromPath. Pinned here so the collapse cannot smuggle in a behaviour change --
+  // unlike airportSlugFromPath, this reader never special-cased an empty slug or a nested path.
+  it("returns the empty string for a bare trailing slash, not null", () => {
+    expect(aircraftSlugFromPath("/aircraft/")).toBe("");
+  });
+
+  it("returns whatever follows the prefix verbatim on a nested path", () => {
+    expect(aircraftSlugFromPath("/aircraft/B737-8/extra")).toBe("B737-8/extra");
   });
 });

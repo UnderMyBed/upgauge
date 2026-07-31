@@ -3,7 +3,8 @@ import type { NextRequest } from "next/server";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { RAW_PATH_HEADER, routeSlugFromPath } from "@/lib/rawPath";
 import { resolveRoutePair } from "@/lib/routePair";
-import { airportSlugFromPath, resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
+import { airportSlugFromPath } from "@/lib/airport";
+import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
 
@@ -103,11 +104,15 @@ export async function proxy(request: NextRequest) {
  * is a fifth page whose author reads this file and copies three lines out of four. Adding an
  * entity is one row here plus one `matcher` entry, and both are in view at once.
  *
- * The `slugFromPath` readers deliberately live in four different modules (`lib/rawPath.ts`,
- * `app/airport/[code]/resolveAirport.ts`, `lib/carrier.ts`, `lib/aircraftSlug.ts`): the three
- * M4d pages were built concurrently, and one shared file is three agents editing one file. They
- * should collapse into a single `entitySlugFromPath(pathname, prefix)` -- see CLAUDE.md's M5
- * list. This table is the one place that would have to change. */
+ * The `slugFromPath` readers used to be four independent copies of the same decode guard, one
+ * per entity module (`lib/rawPath.ts`, `app/airport/[code]/resolveAirport.ts`, `lib/carrier.ts`,
+ * `lib/aircraftSlug.ts`) -- deliberately, at the time: the three M4d pages were built
+ * concurrently, and one shared file is three agents editing one file. M5 Task 6 is the collapse
+ * this comment used to point at: all four now delegate to `lib/entitySlug.ts`'s
+ * `entitySlugFromPath(pathname, prefix)`, and each module still exports its own one-line
+ * wrapper under its original name, so this table -- true to what this comment predicted -- is
+ * the only call site that changed (the airport import moved from the route directory to
+ * `lib/airport.ts`, alongside `AIRPORT_PREFIX`; see that file and `lib/entityLink.ts`). */
 const ENTITY_ROUTES: ReadonlyArray<{
   slugFromPath: (pathname: string) => string | null;
   resolve: (slug: string) => Promise<{ kind: string }>;

@@ -336,6 +336,34 @@ export async function airportCodesExist(codes: string[]): Promise<Set<string>> {
   return out;
 }
 
+/** The carrier-side twin of `airportCodesExist`, one dimension over -- except a carrier code
+ * can name MORE THAN ONE `airline_id` (112 unscoped, per `lookup_carrier_by_code.sql`'s
+ * header), so this returns every holder rather than a bare `Set`. Deliberately weaker than
+ * `lookupCarriersByCode`, the same way: a code coming back here means it appears in
+ * `dim_carrier`'s reference table, and says nothing about whether any of its holders ever
+ * filed a T-100 Segment row -- callers must not treat a hit as resolved.
+ *
+ * The one caller, `carrier.ts`'s `resolveCarrier`, uses it only to choose a 404 reason: `PA`
+ * alone has three holders (`airline_id` 20384 and 20386, both "Pan American World Airways",
+ * plus 20389 "Florida Coastal Airlines", an unrelated carrier that happens to share the code),
+ * and the 404 must name all three or it is the same silent-pick failure the `AUS` lookup
+ * exists to refuse. 94 of the 1,543 codes with no fact-present holder name more than one
+ * airline this way; worst case is `PA`'s 3 (docs/data/invariants.md § Entity resolution).
+ *
+ * Holders are appended in driver row order, not deduplicated or sorted -- unlike
+ * `insertUniqueByCode`'s maps, a repeated code here is the entire point, not a collision to
+ * refuse. */
+export async function carrierHoldersByCode(codes: string[]): Promise<Map<string, CarrierRef[]>> {
+  const out = new Map<string, CarrierRef[]>();
+  for (const r of await runSlugLookup("lookup_carrier_code_exists", codes)) {
+    const code = String(r.code).toUpperCase();
+    const holders = out.get(code) ?? [];
+    holders.push({ id: Number(r.id), code: String(r.code), name: String(r.name) });
+    out.set(code, holders);
+  }
+  return out;
+}
+
 export async function resolveRows(
   rows: Record<string, unknown>[],
   allowlist: Allowlist,

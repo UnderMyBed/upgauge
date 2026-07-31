@@ -272,25 +272,32 @@ Next: **M5.** What it owes, each identified by the work above rather than guesse
    three on `/airport`, and the same shape a future `/city-market` needs. It needs composite
    filter semantics in `render.ts` **and** `pipeline/pivot.py` in lockstep, plus a golden; that
    is a milestone-sized change, which is why M4d assembled the OR arithmetically instead.
-2. **`lookup_carrier_code_exists.sql`** (~15 lines, mirroring the airport one) so the carrier
-   404 can make the split the airport 404 already makes. **1,543 of `dim_carrier`'s 1,657
-   *distinct* codes have no fact-present holder** (1,776 is the *row* count, one per
-   `airline_id`; 1,657 − 114 fact-present = 1,543), so "recognized by BTS, never filed a segment row" is the
-   *majority* carrier 404, not a corner: `/carrier/PA` is Pan American, and today it reads the
-   same as a typo.
-3. **Collapse the four `<entity>SlugFromPath` readers into one
-   `entitySlugFromPath(pathname, prefix)`.** Four copies of the same `decodeURIComponent`-throws
-   guard is a guard that will be dropped from one of them. `ENTITY_ROUTES` is the only caller
-   that has to change.
-4. **The 5xx cache gap**, inherited from M3b and now spanning four pages: the proxy writes the
+2. **The 5xx cache gap**, inherited from M3b and now spanning four pages: the proxy writes the
    long cache before the page can throw, so a 500 is publicly cacheable for a month. Not fixable
    from a proxy — see `docs/architecture/hosting.md` for the three things that would fix it.
-5. **`/airport`'s truncation arithmetic** skips the overlap term rather than correcting it, so a
+3. **`/airport`'s truncation arithmetic** skips the overlap term rather than correcting it, so a
    truncated page's totals are approximate (disclosed on the page, on the table and the chart
    separately). No airport reaches either limit today — measured **per-side** worst cases are 879
    (carrier, endpoint) groups against 5,000 and 4,094 (month, type) cells against 10,000, both at
    ORD — so this is a latent semantic, not a live bug. The 959 and 4,118 this file used to quote
    "per side" are ORD's *unions*, so the real headroom is wider than was claimed.
+
+**M5 Task 6 shipped both of the structural debts this list used to carry.**
+`sql/03_queries/lookup_carrier_code_exists.sql` mirrors the airport existence-only lookup (it
+also returns `id`/`name`, which the airport version does not need to), so `/carrier/<code>`'s
+404 now makes the same split `/route/<pair>` always has: `ZZ` 404s "unknown carrier code";
+`PA` 404s "recognized by BTS ... none of which has filed a T-100 Segment row" — and names
+*every* holder, not just the first, because `PA` alone holds three `airline_id`s (20384 and
+20386 both "Pan American World Airways", plus 20389 "Florida Coastal Airlines", an unrelated
+carrier), and 94 of the 1,543 never-filed codes are multi-holder the same way (worst case 3;
+`docs/data/invariants.md` § Entity resolution). `/carrier/PA` is **not** simply "Pan American" —
+that phrasing, upthread in an earlier revision of this file, was the exact silent-pick failure
+the split exists to refuse. Separately, the four `<entity>SlugFromPath` readers
+(`routeSlugFromPath`, `airportSlugFromPath`, `carrierSlugFromPath`, `aircraftSlugFromPath`) are
+now one-line wrappers around `app/src/lib/entitySlug.ts`'s `entitySlugFromPath(pathname,
+prefix)`; `AIRPORT_PREFIX` moved out of `app/airport/[code]/resolveAirport.ts` into
+`app/src/lib/airport.ts` alongside it, so `proxy.ts` and `lib/entityLink.ts` no longer import
+from a route directory.
 
 ## Architecture
 

@@ -1,4 +1,4 @@
-import { AIRPORT_PREFIX } from "@/app/airport/[code]/resolveAirport";
+import { AIRPORT_PREFIX } from "@/lib/airport";
 import { AIRCRAFT_PREFIX, slugFor } from "@/lib/aircraftSlug";
 import { CARRIER_PREFIX } from "@/lib/carrier";
 import { ROUTE_PREFIX } from "@/lib/rawPath";
