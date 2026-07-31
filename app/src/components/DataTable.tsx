@@ -1,7 +1,7 @@
 import { formatSeats, formatLoadFactor, formatGauge, formatCount } from "@/lib/format";
 import { GaugeRail } from "@/components/GaugeRail";
 import { ReasonCode, type Reason } from "@/components/ReasonCode";
-import { resolutionKey, type Resolved } from "@/lib/resolve";
+import { resolutionKey, displayValue, type Resolved } from "@/lib/resolve";
 
 export interface ColumnSpec {
   key: string;
@@ -37,7 +37,10 @@ function format(kind: ColumnSpec["kind"], v: unknown): string {
 /** A dimension cell shows the CODE; the name is the abbreviation's expansion. The table is
  * dense by rule (system.md) and a full carrier name per row would swamp a column sized for
  * two letters. Where a dimension has no code -- city markets -- the name IS the value, so it
- * renders directly rather than hiding in a title no keyboard user can reach. */
+ * renders directly rather than hiding in a title no keyboard user can reach. The three-way
+ * value selection itself (raw id / name / code) is `displayValue()` in lib/resolve.ts, shared
+ * with explore/page.tsx's `routeCode` -- only the `abbr` wrapping is specific to this
+ * component. */
 function DimensionCell({ spec, row, resolved }: {
   spec: ColumnSpec;
   row: Record<string, unknown>;
@@ -45,9 +48,11 @@ function DimensionCell({ spec, row, resolved }: {
 }) {
   const raw = row[spec.key];
   const hit = spec.dimKey ? resolved?.get(resolutionKey(spec.dimKey, raw)) : undefined;
-  if (hit === undefined) return <>{raw === null || raw === undefined ? "—" : String(raw)}</>;
-  if (hit.code === null) return <>{hit.name ?? String(raw)}</>;
-  return hit.name ? <abbr title={hit.name}>{hit.code}</abbr> : <>{hit.code}</>;
+  const value = displayValue(hit, raw);
+  if (hit !== undefined && hit.code !== null && hit.name) {
+    return <abbr title={hit.name}>{value}</abbr>;
+  }
+  return <>{value}</>;
 }
 
 function isQuarantined(row: Record<string, unknown>): boolean {

@@ -31,6 +31,25 @@ export function resolutionKey(dimensionKey: string, id: unknown): string {
   return `${dimensionKey}\u0000${String(id)}`;
 }
 
+/** The one place the three-way display contract lives. `hit` is `resolved.get(resolutionKey(...))`
+ * for a given cell; `rawId` is the id that produced that lookup.
+ *   - key absent from the map (`hit === undefined`) -> unresolved: the raw id, never a dash.
+ *     Absence of a NAME is not absence of DATA (lib/format.ts's opening rule).
+ *   - resolved but no code (`hit.code === null`, e.g. dim_city_market) -> the name IS the
+ *     value.
+ *   - resolved with a code -> the code (callers that also want the name, e.g. for an `abbr`
+ *     title, read `hit.name` themselves).
+ * Every caller that renders a resolved id -- DataTable's DimensionCell, explore/page.tsx's
+ * routeCode -- must go through this, not re-derive the three-way split locally: two
+ * independent copies of the same contract is how one of them silently drifts (fix round 1,
+ * Finding 1 -- routeCode's own `?.code ?? String(rawId)` collapsed "absent" and "code: null"
+ * into the same fallback). */
+export function displayValue(hit: Resolved | undefined, rawId: unknown): string {
+  if (hit === undefined) return rawId === null || rawId === undefined ? "—" : String(rawId);
+  if (hit.code === null) return hit.name ?? String(rawId);
+  return hit.code;
+}
+
 /** The row columns a dimension occupies. Every dimension is its own key EXCEPT `route`,
  * whose column_expr names two columns that both resolve through dim_airport. Read from the
  * catalog, not hardcoded -- Task 1 exists so this can be data. */

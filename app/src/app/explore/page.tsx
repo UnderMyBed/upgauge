@@ -4,7 +4,7 @@ import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { formatCount } from "@/lib/format";
-import { resolutionKey, type Resolved } from "@/lib/resolve";
+import { resolutionKey, displayValue, type Resolved } from "@/lib/resolve";
 import { LegendRail } from "@/components/LegendRail";
 import type { PivotQuery } from "@/lib/pivot/types";
 import type { Allowlist } from "@/lib/pivot/allowlist";
@@ -38,12 +38,18 @@ const NON_DISPLAY_COLUMNS = new Set(["quarantined_rows", "quarantine_reasons"]);
 
 /** The route dimension's column_expr names two columns; the reader wants one cell. Both
  * resolve through dim_airport, so this renders the pair as `PDX–SEA` -- the form
- * features.md's /route/PDX-AUS and the mockups both use. */
+ * features.md's /route/PDX-AUS and the mockups both use. Value selection per key goes through
+ * `displayValue()` (lib/resolve.ts), the same function DataTable's DimensionCell uses --
+ * fix round 1, Finding 1: an earlier version of this function re-derived the three-way
+ * contract inline as `?.code ?? String(row[c] ?? "—")`, which collapsed "unresolved" and
+ * "resolved with a null code" into the same raw-id fallback. That could not misfire today
+ * (dim_airport.code has 0 nulls across all 20,267 rows, and route only resolves through
+ * dim_airport), but it was an unenforced point-in-time fact, not an invariant. */
 const ROUTE_COLUMNS = ["route_key_low", "route_key_high"] as const;
 
 function routeCode(row: Record<string, unknown>, resolved: Map<string, Resolved>): string {
   return ROUTE_COLUMNS
-    .map((c) => resolved.get(resolutionKey(c, row[c]))?.code ?? String(row[c] ?? "—"))
+    .map((c) => displayValue(resolved.get(resolutionKey(c, row[c])), row[c]))
     .join("–");
 }
 

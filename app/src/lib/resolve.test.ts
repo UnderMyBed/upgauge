@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { collectIds, resolveRows, resolutionKey } from "@/lib/resolve";
+import { collectIds, resolveRows, resolutionKey, displayValue } from "@/lib/resolve";
 import { connect, loadAllowlist } from "@/lib/db";
 
 // Same anchor as db.ts's ROOT / QUERIES_DIR -- see db.ts's header comment for the full
@@ -88,6 +88,24 @@ describe("resolveRows", () => {
     const rows = [{ op_airline_id: 19790 }, { op_airline_id: 19790 }, { op_airline_id: 19790 }];
     const map = await resolveRows(rows, allowlist);
     expect(map.size).toBe(1);
+  });
+});
+
+// Fix round 1, Finding 1: DataTable.tsx's DimensionCell and explore/page.tsx's routeCode each
+// implemented this three-way contract independently, and one of the two copies (routeCode)
+// collapsed "unresolved" and "resolved with a null code" into the same fallback. displayValue
+// is the single place the contract now lives; both callers just select from its result.
+describe("displayValue", () => {
+  it("renders the raw id when the key is absent from the map -- unresolved, not un-coded", () => {
+    expect(displayValue(undefined, 19790)).toBe("19790");
+  });
+
+  it("renders the name when resolved but the dimension has no code (e.g. a city market)", () => {
+    expect(displayValue({ code: null, name: "Seattle, WA" }, 30559)).toBe("Seattle, WA");
+  });
+
+  it("renders the code when resolved and a code exists", () => {
+    expect(displayValue({ code: "DL", name: "Delta Air Lines Inc." }, 19790)).toBe("DL");
   });
 });
 

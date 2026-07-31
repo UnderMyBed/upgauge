@@ -128,10 +128,20 @@ describe("/explore permalink fidelity across the Next request boundary", () => {
 });
 
 describe("/explore displays codes, not ids", () => {
-  it("renders a carrier code and no bare airline id", async () => {
-    render(await ExploreView({ rawQuery: qs(OK) }));
-    expect(screen.queryByText("19790")).toBeNull();
-    expect(screen.getAllByText(/^[A-Z0-9]{2}$/).length).toBeGreaterThan(0);
+  // Fix round 1, Finding 2: `getAllByText(/^[A-Z0-9]{2}$/)` scanned the whole page, and
+  // Wordmark's `<span className="mark">UP<span className="accent">GAUGE</span></span>` has
+  // own-text exactly "UP" (Testing Library's getNodeText reads only a node's direct child
+  // text, so the nested "GAUGE" span doesn't count) -- a two-character uppercase match on
+  // every render, table or no table. Scoped to `tbody td.id` and pinned to the actual top
+  // carrier by seats over this window (Southwest, WN -- confirmed against the real warehouse
+  // query), this fails the moment DimensionCell renders `hit.name` instead of `hit.code`.
+  it("renders the top carrier's code, not its name or the raw id, in the table body", async () => {
+    const { container } = render(await ExploreView({ rawQuery: qs(OK) }));
+    const idCells = Array.from(container.querySelectorAll("tbody td.id")).map(
+      (c) => c.textContent,
+    );
+    expect(idCells).not.toContain("19790");
+    expect(idCells[0]).toBe("WN");
   });
 
   it("renders a route as two codes joined by an en dash", async () => {
