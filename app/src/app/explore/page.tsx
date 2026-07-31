@@ -4,6 +4,7 @@ import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { formatCount } from "@/lib/format";
+import { resolutionKey, type Resolved } from "@/lib/resolve";
 import { LegendRail } from "@/components/LegendRail";
 import type { PivotQuery } from "@/lib/pivot/types";
 import type { Allowlist } from "@/lib/pivot/allowlist";
@@ -34,6 +35,17 @@ const KIND: Record<string, ColumnSpec["kind"]> = {
 // gutter/foot text surfaces them, but they are not columns of the pivot vocabulary and must
 // never appear as a DataTable column.
 const NON_DISPLAY_COLUMNS = new Set(["quarantined_rows", "quarantine_reasons"]);
+
+/** The route dimension's column_expr names two columns; the reader wants one cell. Both
+ * resolve through dim_airport, so this renders the pair as `PDX–SEA` -- the form
+ * features.md's /route/PDX-AUS and the mockups both use. */
+const ROUTE_COLUMNS = ["route_key_low", "route_key_high"] as const;
+
+function routeCode(row: Record<string, unknown>, resolved: Map<string, Resolved>): string {
+  return ROUTE_COLUMNS
+    .map((c) => resolved.get(resolutionKey(c, row[c]))?.code ?? String(row[c] ?? "—"))
+    .join("–");
+}
 
 // data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- this is the
 // widest time window any query against this database can have, so it is what "offer the
@@ -170,9 +182,19 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
   const result: PivotResult = await runPivot(query);
   const isEmpty = result.rows.length === 0;
 
-  const columns: ColumnSpec[] = result.columns
-    .filter((c) => !NON_DISPLAY_COLUMNS.has(c))
-    .map((c) => ({
+  // `route`'s catalog entry names two columns (route_key_low, route_key_high) that both
+  // resolve through dim_airport -- collapse them into one synthetic `__route` column so the
+  // reader sees one `PDX–SEA` cell instead of two bare airport ids side by side.
+  const hasRoute = ROUTE_COLUMNS.every((c) => result.columns.includes(c));
+  const displayColumns = result.columns.filter(
+    (c) => !NON_DISPLAY_COLUMNS.has(c) && !(hasRoute && (ROUTE_COLUMNS as readonly string[]).includes(c)),
+  );
+
+  const columns: ColumnSpec[] = [
+    ...(hasRoute
+      ? [{ key: "__route", label: allowlist.dims.get("route")?.label ?? "Route", kind: "identifier" as const }]
+      : []),
+    ...displayColumns.map((c) => ({
       key: c,
       label: allowlist.meas.get(c)?.label ?? allowlist.dims.get(c)?.label ?? c,
       // KIND is an OVERRIDE map, not the source of truth. Anything the catalog knows is a
@@ -189,7 +211,16 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
       // entry at all (allowlist.meas.get() on a dimension key returns undefined), so they
       // fall through to `false` rather than colliding with `undefined !== false`.
       derived: allowlist.meas.get(c)?.isAdditive === false,
-    }));
+      // Present only for columns the catalog identifies as a joinable dimension -- this is
+      // what tells DataTable's DimensionCell to resolve a code/name instead of rendering the
+      // raw id. Measures and non-joining dimensions (already-readable strings) get undefined.
+      dimKey: allowlist.dims.get(c)?.joinDim ? c : undefined,
+    })),
+  ];
+
+  const displayRows = hasRoute
+    ? result.rows.map((r) => ({ ...r, __route: routeCode(r, result.resolved) }))
+    : result.rows;
 
   return (
     <div className="wrap">
@@ -207,7 +238,7 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
             {isEmpty ? (
               <EmptyState query={query} allowlist={allowlist} />
             ) : (
-              <DataTable columns={columns} rows={result.rows} />
+              <DataTable columns={columns} rows={displayRows} resolved={result.resolved} />
             )}
             <p className="foot">
               {result.quarantinedRowsOnPage} quarantined row

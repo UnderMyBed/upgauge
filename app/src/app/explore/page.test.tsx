@@ -126,3 +126,18 @@ describe("/explore permalink fidelity across the Next request boundary", () => {
     expect(screen.getByText(/14%2C771/)).toBeDefined();
   });
 });
+
+describe("/explore displays codes, not ids", () => {
+  it("renders a carrier code and no bare airline id", async () => {
+    render(await ExploreView({ rawQuery: qs(OK) }));
+    expect(screen.queryByText("19790")).toBeNull();
+    expect(screen.getAllByText(/^[A-Z0-9]{2}$/).length).toBeGreaterThan(0);
+  });
+
+  it("renders a route as two codes joined by an en dash", async () => {
+    const raw = "v=1&k=route&d=route&m=seats&t=2025-05:2026-04&s=-seats&n=5&g=op";
+    render(await ExploreView({ rawQuery: raw }));
+    expect(screen.getAllByText(/^[A-Z]{3}–[A-Z]{3}$/).length).toBeGreaterThan(0);
+    expect(screen.queryByText("Route key low")).toBeNull();
+  });
+});
