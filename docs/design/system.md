@@ -449,9 +449,10 @@ catalog appears without a front-end change.
 
 ---
 
-## Entity pages: `/route/<pair>` — shipped, M4b + M4c
+## Entity pages — all four shipped: `/route` (M4b + M4c), `/airport` · `/carrier` · `/aircraft` (M4d)
 
-The first entity page, and the shape the rest (`/airport`, `/carrier`, `/aircraft`) follow.
+The first entity page, and the shape the other three follow — the differences are tabulated at
+the end of this section.
 Composes components already specified above rather than inventing new ones — same top bar,
 same `DATA AS OF` badge, same data table, same legend rail:
 
@@ -501,6 +502,35 @@ JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
 Canonical-URL handling (redirect, 404, en-dash rendering) is a routing concern, not a design
 one — full contract in
 [`../architecture/pipeline.md` § M4b](../architecture/pipeline.md#m4b--the-route-page).
+
+### The other three, shipped M4d — what each one changes and what it must not
+
+`/airport/<code>`, `/carrier/<code>` and `/aircraft/<slug>` are the layout above with the
+subject swapped, deliberately: four entity pages that read as one system is worth more than four
+pages each optimised alone. Same top bar, same title block (`.code` + `.ename`), same stat strip
+with the derived marker on load factor and avg gauge, same chart-above-table, same two window
+lines, same empty state, same rail. What differs is only what the subject forces:
+
+| | Stat strip changes | Table rows | Chart stack | The sentence it must carry |
+|---|---|---|---|---|
+| `/airport` | `Carriers` **+ `Destinations`** | operating carriers | aircraft type | every figure counts this airport at **both** endpoints |
+| `/carrier` | `Carriers` → `Aircraft types` | aircraft types | aircraft type | operated, not marketed · code and name are current identity |
+| `/aircraft` | `Carriers` | operating carriers | **operating carrier** | — |
+
+Three design consequences worth pinning, because each is somewhere a page could quietly stop
+being honest:
+
+- **`/airport`'s Explorer link is two links, and says so.** The pivot cannot express
+  `origin OR dest`, so the page offers `departures from SEA` and `arrivals into SEA` as
+  *halves*. Linking one silently would half-satisfy "every insight row is one click from the raw
+  rows" while pointing at a query that is not the page's.
+- **`/carrier`'s two caveats render whether or not there is a table.** They qualify the
+  *subject*, not the rows, and 39% of carriers have no rows in the trailing 12. They also sit in
+  the content column, not the rail: the rail already carries a generic version on every data
+  view, and a page-specific claim hidden among generic ones is not a claim.
+- **`/aircraft`'s ramp means something else, so it says something else.** Covered in
+  § Charts above: "less dense cabin" / "denser cabin", never "smaller metal", or the rail is the
+  stale "how to read this" it exists to replace.
 
 ---
 

@@ -70,6 +70,79 @@ describe("proxy", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
+  // M4d. Three more entity pages, one row each in proxy.ts's ENTITY_ROUTES and one each in its
+  // matcher. These tests cannot see the matcher at all -- they call `proxy()` directly, so a
+  // matcher entry could be missing and every one of them would still pass. That gap is the whole
+  // reason `app/smoke.sh` asserts the same header against a served build; see the file header.
+  it.each([
+    ["a real airport", "/airport/SEA"],
+    ["a real carrier", "/carrier/DL"],
+    ["a real aircraft type", "/aircraft/B737-8"],
+    ["an aircraft slug whose name carries a '/'", "/aircraft/A321-LR"],
+  ])("sets the project's Cache-Control on %s", async (_label, path) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it.each([
+    ["a lower-case airport code", "/airport/sea"],
+    ["a lower-case carrier code", "/carrier/dl"],
+    ["a lower-case aircraft slug", "/aircraft/a321-lr"],
+  ])("caches the 308 from %s, because its target is derived from the slug alone", async (
+    _label,
+    path,
+  ) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it.each([
+    ["an unknown airport code", "/airport/ZZZZ"],
+    ["an airport outside this domestic-only dataset", "/airport/LHR"],
+    ["a carrier code nothing has filed under", "/carrier/ZZ"],
+    ["a BTS carrier that never filed a segment row", "/carrier/PA"],
+    ["an unknown aircraft slug", "/aircraft/NOPE-1"],
+    ["an over-separated aircraft slug", "/aircraft/A-B-C-D-E-F"],
+  ])("does not long-cache a 404 from %s", async (_label, path) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // THE M4d TRAP, and the reason `isCacheable` is an allow-list of kinds rather than
+  // `!== "notFound"`. `resolveAircraftSlug` has FOUR outcomes: `/aircraft/CE-180` names BTS codes
+  // 030 (CESSNA 180) and 031 (CESSNA 180A/B), resolves to `ambiguous`, and the page renders it as
+  // a 404. Copying `/route`'s `!== "notFound"` shape -- the obvious thing to do -- would pin that
+  // 404 in a shared CDN cache for 30 days. Fails the moment the predicate is written that way.
+  it("does not long-cache the ambiguous-slug 404, which is not a 'notFound'", async () => {
+    const res = await proxy(new NextRequest("http://localhost/aircraft/CE-180"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // The header the three M4d not-found.tsx files read. Without a matcher entry it is absent and
+  // each of them throws MissingRawPathError -- a 500 where a 404 was the answer -- so this is a
+  // 500-vs-404 test, not a cosmetic one. (Again: only smoke.sh can see the matcher itself.)
+  it.each([
+    ["/airport/ZZZZ"],
+    ["/carrier/ZZ"],
+    ["/aircraft/NOPE-1"],
+  ])("copies the pathname for %s, without which its not-found.tsx throws", async (path) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(getReqHeader(res, RAW_PATH_HEADER)).toBe(path);
+  });
+
+  // The prefix readers must not net each other, or a request would be resolved by the wrong
+  // entity's lookup -- and `/aircraft/...` sits under a prefix that shares its first four
+  // characters with nothing else here only by luck of naming.
+  it.each([
+    ["/", null],
+    ["/routes/JFK-LAX", null],
+    ["/airports/SEA", null],
+    ["/carrierz/DL", null],
+  ])("sets no Cache-Control on %s, which is not an entity page", async (path) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBeNull();
+  });
+
   it("leaves /api/pivot's own Cache-Control alone", async () => {
     // route.ts sets `no-store` on errors and the long cache on success; overriding here would
     // make every 400 publicly cacheable for a month.

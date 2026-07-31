@@ -1373,6 +1373,65 @@ fact-present types carry a leading zero, and `Number('036')` renders an empty pa
 filed in 120 months. `/aircraft/SKYHAWK` is the test that catches it; every other type this page
 is tested on (614, 655, 699) survives an int-parse unchanged.
 
+### Routing and cacheability — the step none of the three pages could take for itself
+
+All three pages above were built, unit-tested and merged **while being reachable from no
+matcher entry at all**, which is the same shape as M4c's chart being green from no route: the
+tier that decides what a served response says about itself is invisible to every gate except
+`app/smoke.sh`. This is where M4b's Critical lived, and by M4d the cost of repeating it had
+grown — each new `not-found.tsx` reads the pathname header `proxy.ts` sets and throws without
+it, so a missing matcher entry does not merely mis-cache a page, it **strips the entire message
+off every 404 on it** (measured; the full before/after table is in
+[hosting.md](hosting.md#what-omitting-one-actually-costs--measured-not-assumed)).
+
+`proxy.ts` therefore stopped being a chain of `else if`s and became **one table,
+`ENTITY_ROUTES`** — a `slugFromPath` prefix reader plus a resolver per page — next to a matcher
+list it has to agree with. A table because the failure being defended against is a fifth page
+whose author copies three lines out of four; a table puts both halves in one screen. At most one
+resolution runs per request (prefix test, break on first match), so four entity pages cost what
+one did.
+
+**The predicate changed from `!== "notFound"` to an allow-list of kinds, and that is the whole
+finding.** `resolveAircraftSlug` has four outcomes; `/aircraft/CE-180` is `ambiguous`, renders a
+404, and would have been long-cached by the shape `/route` uses. Full reasoning, the airport
+case-redirect asymmetry, the served-build cache table and the five mutants that pin it:
+[hosting.md § `Cache-Control` lives here](hosting.md#cache-control-lives-here-and-it-is-status-blind-by-construction).
+
+**`app/smoke.sh` gained one section per page, each asserting the same five things in the same
+order** — the page renders; its `Cache-Control` is the project one; a real code renders and a
+bare id does not; the chart's `<svg>` and its `<path fill="var(--gN)" d=` ramp fills are in the
+served bytes; and its 404 names the code *and* is `no-store` while its 308 keeps the long cache.
+The order is written into the file as a checklist for the next page, because M4b's bug was
+precisely that this file copied `/explore`'s body checks and not its header check. Three needles
+are worth noting as choices rather than obvious:
+
+- `>14747<`, not a bare `14747`, for "no raw `AIRPORT_ID`". SEA's id legitimately appears in the
+  page's two Explorer permalinks (`f=origin_airport_id:14747`), so the literal form of the
+  handoff note would have been a permanently red check. The claim that matters is that no *cell*
+  renders the id.
+- `53,373,806` on `/airport/SEA` — the both-endpoints seat total. Carrier and aircraft-type
+  counts are identical either way (13 and 25), so only the seat/passenger/destination figures
+  can tell an origin-only regression from a correct page.
+- `Seats by aircraft type` is asserted **present** on `/airport/SEA` and **absent** on
+  `/aircraft/B737-8`. An absence check whose needle no page in the app serves is an absence
+  check that can never fire.
+
+Page weight on the served build, recorded rather than thresholded (M4c's `/route/JFK-LAX` was
+32,087 bytes before its chart and 96,153 after):
+
+| URL | bytes of HTML |
+|---|---|
+| `/route/JFK-LAX` | 96,153 |
+| `/aircraft/B737-8` | 103,019 |
+| `/airport/SEA` | 119,120 |
+| `/carrier/DL` | 127,688 |
+| `/airport/ATL` | **130,429** — the worst case in the database, 4,118 (month, type) cells per side |
+
+Nothing in the harness holds a fixed response buffer — the bodies land in shell variables — but
+the `grep -q`/`SIGPIPE` hazard the file's header describes was invisible until a page crossed
+64 KB, and every page in this milestone is now past 100 KB, so the numbers are kept where the
+next person will see them.
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command

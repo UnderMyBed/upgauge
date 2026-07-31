@@ -335,6 +335,220 @@ check_not "chart: ...and does not claim the full window there"            "$BODY
 printf '  note %s bytes of HTML for /route/JFK-LAX (32,087 before the chart, M4c task 6)\n' \
   "$(curl -s --max-time 30 "${BASE}/route/JFK-LAX" | wc -c)"
 
+# ---------------------------------------------------------------------------------------------
+# 10-12. M4d: /airport, /carrier, /aircraft -- the three entity pages, and the routing tier
+#        that none of them could wire up for itself.
+#
+# READ THIS BEFORE ADDING A PAGE. Each of the three sections below asserts the SAME FIVE THINGS,
+# in the same order, and the order is not decorative:
+#
+#   a. the page renders                       (a positive on content only this page produces)
+#   b. its Cache-Control is the project one   <-- M4b's Critical. THE ONE THAT WAS MISSING.
+#   c. a real code renders, a bare id doesn't (M4a's rule, per page)
+#   d. the chart's <svg> and ramp fills are in the SERVED bytes (M4c's gate, per page)
+#   e. its 404 names the code AND is no-store, and its 308 keeps the long cache
+#
+# (b) and (e) exist because `proxy.ts`'s matcher is invisible to every other gate in this repo.
+# A page missing from it builds, serves, renders and passes (a), (c) and (d) -- while shipping
+# `private, no-cache, no-store` on the 200 AND turning every 404 on that page into a **500**
+# (each `not-found.tsx` reads the pathname header the proxy sets, and throws without it). M4b
+# shipped exactly that on /route because this file copied /explore's BODY checks and not its
+# HEADER check. Both halves are mandatory for any page added after this one.
+#
+# Verified by mutation on a served build, not by inspection (M4d task 5): removing
+# `/airport/:code` from the matcher turns (b) red and takes the airport 404s to 500; widening
+# `isCacheable` to `!== "notFound"` turns exactly the CE-180 no-store check red.
+
+# 10. /airport/<code> -- the airport is both endpoints.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA")
+check     "airport: renders the code"        "$BODY" '>SEA<'
+check     "airport: DATA AS OF is present"   "$BODY" 'DATA AS OF'
+# The one figure that distinguishes this page's implementation from the plausible wrong one.
+# `origin OR dest` at SEA over 2025-05..2026-04 is 53,373,806 seats; an origin-only page renders
+# every stat, row and band in the right shape and reads 26,710,000. Carrier and aircraft-type
+# COUNTS are identical either way (13 and 25), so they are not discriminators -- see
+# pipeline.md § M4d. Dropping the inclusion-exclusion overlap term instead reads 53,386,452.
+check     "airport: counts BOTH endpoints, not just departures" "$BODY" '53,373,806'
+check     "airport: says so in words"        "$BODY" 'at <b>both</b> endpoints'
+# `>14747<`, not a bare `14747`: SEA's airport_id legitimately appears in this page's two
+# Explorer permalinks (`f=origin_airport_id:14747`), which is why the task-2 handoff's "must not
+# contain 14747" cannot be taken literally. The claim is that no CELL renders the raw id.
+check_not "airport: renders no bare AIRPORT_ID" "$BODY" '>14747<'
+check     "airport: the chart SVG is in the served HTML" "$BODY" '<svg role="img"'
+check     "airport: ramp tokens reach the area fills (lightest)" "$BODY" '<path fill="var(--g0)" d='
+check     "airport: ramp tokens reach the area fills (darkest)"  "$BODY" '<path fill="var(--g5)" d='
+# The positive half of /aircraft's "not by aircraft type" below. An absence check whose needle
+# is served by no page in the app is an absence check that can never fire; this is the page that
+# proves the string exists and reaches the served bytes.
+check     "airport: the chart stacks by aircraft type" "$BODY" 'Seats by aircraft type'
+
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/airport/SEA")
+check     "airport: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/airport/sea")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/sea")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check     "airport: lower-case code redirects"  "$CODE" '308'
+check     "airport: redirect targets canonical" "$LOC"  '/airport/SEA'
+# The 308 target here is `toUpperCase()` and nothing else -- resolveAirportCode redirects on case
+# BEFORE it looks anything up -- so it cannot be invalidated by an ingest and stays long-cached,
+# same as /route's. (`/airport/zzzz` therefore gets a cached 308 to `/airport/ZZZZ`, which then
+# 404s no-store. That is the correct split: the redirect is a fact about the string.)
+check     "airport: 308 keeps the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+
+for A in ZZZZ LHR; do
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/airport/${A}")
+  HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/${A}")
+  check     "airport: ${A} is a 404"                 "$CODE" '404'
+  check_not "airport: 404 (${A}) is not long-cached" "$HDRS" "s-maxage=2592000"
+  check     "airport: 404 (${A}) is no-store"        "$HDRS" "no-store"
+done
+# 404 body, paired the way /route's is: each case asserts a phrase only ITS reason produces AND
+# the absence of the sibling case's, because one generic sentence listing every cause would
+# satisfy any lone positive. A 500 from a missing matcher entry fails all four.
+BODY=$(curl -s --max-time 15 "${BASE}/airport/ZZZZ")
+check     "airport 404: names the offending code"       "$BODY" "unknown airport code 'ZZZZ'"
+check_not "airport 404: not every cause at once"        "$BODY" 'domestic-only'
+BODY=$(curl -s --max-time 15 "${BASE}/airport/LHR")
+check     "airport 404: a real airport outside the dataset says so" "$BODY" 'domestic-only'
+check_not "airport 404: LHR is not reported as unknown"             "$BODY" 'unknown airport code'
+
+# 11. /carrier/<code> -- the page has to say what it is counting.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL")
+check     "carrier: renders the code"        "$BODY" '>DL<'
+check     "carrier: DATA AS OF is present"   "$BODY" 'DATA AS OF'
+# The two standing caveats, in the served bytes. Both are built as SINGLE template literals in
+# page.tsx precisely so a raw-bytes grep can find them: React's SSR emits `<!-- -->` between
+# adjacent JSX expressions, which is M4c's window-line bug and would make them ungreppable here
+# while every unit test (which reads textContent, skipping comment nodes) stayed green.
+check     "carrier: states operating-carrier grain"  "$BODY" 'Operated, not marketed.'
+check     "carrier: names the absent field"          "$BODY" 'no marketing-carrier field'
+check     "carrier: states codes are current identity" "$BODY" 'current identity in BTS'
+# Resolution, per M4a: the table's rows are aircraft types, so a real short name must render and
+# the BTS code must not. `888` appears in this page's Explorer permalink; only a CELL is checked.
+check     "carrier: renders a real aircraft short name" "$BODY" '>B737-9ER<'
+check_not "carrier: renders no bare aircraft code"      "$BODY" '>888<'
+check     "carrier: the chart SVG is in the served HTML" "$BODY" '<svg role="img"'
+check     "carrier: ramp tokens reach the area fills (lightest)" "$BODY" '<path fill="var(--g0)" d='
+check     "carrier: ramp tokens reach the area fills (darkest)"  "$BODY" '<path fill="var(--g5)" d='
+check     "carrier: the page states the chart's own window" "$BODY" 'chart: the full window · 2015-01 → 2026-04'
+
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL")
+check     "carrier: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+
+# The other branch of the window line, and the negative half of the pair. VX (Virgin America)
+# stopped filing in 2018-03; the chart is fetched over the full window and can only draw to
+# there, so naming the REQUESTED window would put "the full window · … → 2026-04" over a chart
+# that ends in 2018 -- M4c's bug, one page over. Both caveats render here too, with no table.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX")
+check     "carrier: a carrier that stopped filing names ITS range" "$BODY" 'chart: 2015-01 → 2018-03'
+check_not "carrier: ...and does not claim the full window there"   "$BODY" 'chart: the full window'
+check     "carrier: the caveats render without a table"            "$BODY" 'Operated, not marketed.'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/carrier/dl")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/carrier/dl")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check     "carrier: lower-case code redirects"  "$CODE" '308'
+check     "carrier: redirect targets canonical" "$LOC"  '/carrier/DL'
+check     "carrier: 308 keeps the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+
+# ZZ is in dim_carrier not at all; PA (Pan American) is in it three times and has filed zero
+# T-100 Segment rows. Both 404 by the same path, which is why the reason talks about FILINGS
+# rather than recognition -- 1,543 of dim_carrier's 1,776 codes land in PA's bucket, so a
+# "unknown carrier code 'PA'" wording would be false about the majority 404 (pipeline.md § M4d).
+for C in ZZ PA; do
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/carrier/${C}")
+  HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/carrier/${C}")
+  BODY=$(curl -s --max-time 15 "${BASE}/carrier/${C}")
+  check     "carrier: ${C} is a 404"                 "$CODE" '404'
+  check_not "carrier: 404 (${C}) is not long-cached" "$HDRS" "s-maxage=2592000"
+  check     "carrier: 404 (${C}) is no-store"        "$HDRS" "no-store"
+  check     "carrier 404: names the offending code (${C})" "$BODY" "no carrier with code '${C}' has filed"
+done
+# The lower-case slug is echoed as TYPED while the reason names the upper-cased code -- the only
+# input that tells a real echo apart from a re-read of the reason string. Task 3 found two of its
+# own tests reading the reason and calling it the slug; this is that finding, in the served bytes.
+BODY=$(curl -s --max-time 15 "${BASE}/carrier/zz")
+check_re  "carrier 404: the SENTENCE carries the slug as typed" "$BODY" 'We can.{1,3}t show .{1,12}zz'
+
+# 12. /aircraft/<slug> -- the slug is not a key, and the chart stacks by carrier.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8")
+check     "aircraft: renders the short name" "$BODY" '>B737-8<'
+check     "aircraft: renders the full designation" "$BODY" 'BOEING 737-800'
+check     "aircraft: DATA AS OF is present"  "$BODY" 'DATA AS OF'
+check     "aircraft: renders a carrier code" "$BODY" '>WN<'
+check_not "aircraft: renders no bare AIRLINE_ID" "$BODY" '>19393<'
+check     "aircraft: the chart SVG is in the served HTML" "$BODY" '<svg role="img"'
+check     "aircraft: ramp tokens reach the area fills (lightest)" "$BODY" '<path fill="var(--g0)" d='
+check     "aircraft: ramp tokens reach the area fills (darkest)"  "$BODY" '<path fill="var(--g5)" d='
+# The stack is CARRIERS here, not aircraft types -- this page IS one type, so a type stack would
+# be one band whose shading encodes nothing (system.md § Charts). Built as one template literal
+# for the same reason as the carrier caveats above.
+check     "aircraft: the chart stacks by carrier"        "$BODY" 'Seats by operating carrier'
+check_not "aircraft: ...not by aircraft type"            "$BODY" 'Seats by aircraft type'
+
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8")
+check     "aircraft: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+
+# The slug transform, end to end. 16 of the 112 fact-present short names carry a `/` or a space,
+# so `/aircraft/A321/LR` is TWO path segments and can never match this route -- the design spec's
+# own worked example was unroutable. `A321-LR` must resolve to the name `A321/LR` and render it.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/A321-LR")
+check     "aircraft: a slugged name resolves and renders unslugged" "$BODY" '>A321/LR<'
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/A321-LR")
+check     "aircraft: sets the project Cache-Control on a slugged name" "$HDRS" "$CACHE_EXPECTED"
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/aircraft/a321-lr")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/aircraft/a321-lr")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check     "aircraft: lower-case slug redirects"  "$CODE" '308'
+# To the SLUG, never to `/aircraft/A321/LR`, which is unroutable.
+check     "aircraft: redirect targets the canonical slug" "$LOC" '/aircraft/A321-LR'
+check_not "aircraft: redirect does not target the unroutable raw name" "$LOC" '/aircraft/A321/LR'
+check     "aircraft: 308 keeps the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/aircraft/NOPE-1")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/aircraft/NOPE-1")
+BODY=$(curl -s --max-time 15 "${BASE}/aircraft/NOPE-1")
+check     "aircraft: an unknown slug is a 404"      "$CODE" '404'
+check_not "aircraft: 404 is not long-cached"        "$HDRS" "s-maxage=2592000"
+check     "aircraft: 404 is no-store"               "$HDRS" "no-store"
+check     "aircraft 404: names the offending slug"  "$BODY" "unknown aircraft type 'NOPE-1'"
+
+# THE ONE THIS SECTION EXISTS FOR. `resolveAircraftSlug` has FOUR outcomes, not three:
+# `/aircraft/CE-180` names BTS codes 030 (CESSNA 180) and 031 (CESSNA 180A/B), both of which
+# really flew, and no scoping resolves it. It is a 404 -- and it is NOT `kind: "notFound"`, so
+# the `!== "notFound"` predicate /route uses (the obvious thing to copy) would have pinned this
+# 404 in a shared CDN cache for 30 days. `isCacheable` is an allow-list of kinds because of
+# this URL. Verified by mutation on a served build: widening the predicate turns the no-store
+# check below red and leaves every other check in this file green.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/aircraft/CE-180")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/aircraft/CE-180")
+BODY=$(curl -s --max-time 15 "${BASE}/aircraft/CE-180")
+check     "aircraft: the ambiguous slug is a 404"            "$CODE" '404'
+check_not "aircraft: the ambiguous 404 is not long-cached"   "$HDRS" "s-maxage=2592000"
+check     "aircraft: the ambiguous 404 is no-store"          "$HDRS" "no-store"
+# Both airframes NAMED, each with its BTS code, sorted by code -- not a bare refusal. The needle
+# spans name and id because 'CESSNA 180' alone is a substring of 'CESSNA 180A/B', so a page that
+# listed the second one twice would satisfy a naive pair of checks.
+check     "aircraft 404: names the first airframe"  "$BODY" 'CESSNA 180 — BTS aircraft type 030'
+check     "aircraft 404: names the second airframe" "$BODY" 'CESSNA 180A/B — BTS aircraft type 031'
+# Regex over the apostrophe, not a literal: page.tsx writes `won&rsquo;t`, JSX decodes HTML
+# entities at COMPILE time, and React escapes only & < > " ' -- so U+2019 goes out as raw UTF-8
+# and the literal `won&rsquo;t` is never in the response. That exact mistake printed `ok`
+# unconditionally in this file until M4c's final review (see the /explore note above).
+check_re  "aircraft 404: refuses to pick one"       "$BODY" 'We won.{1,3}t pick one for you'
+
+# Page weight for the three new pages, recorded not asserted -- same reasoning as /route above.
+# /airport/ATL is the worst case in the database: its full-window mix is 4,118 (month, type)
+# cells per side against JFK-LAX's 996, so it is the page that would find any fixed buffer.
+# There is no fixed buffer here -- these bodies land in shell variables -- but the `grep -q`
+# hazard at the top of this file was invisible until a page crossed 64 KB, so the numbers are
+# kept where the next person will see them.
+for U in /airport/SEA /airport/ATL /carrier/DL /aircraft/B737-8; do
+  printf '  note %8s bytes of HTML for %s\n' "$(curl -s --max-time 30 "${BASE}${U}" | wc -c)" "$U"
+done
+
 # Fix wave 3, item 2: ONE DuckDBInstance for the whole server, not one per entry point.
 # Turbopack emits lib/db.ts into three separate server chunks (proxy, page SSR, route
 # handler), so its memo was three memos and this process opened upgauge.duckdb three times --
