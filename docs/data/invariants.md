@@ -203,6 +203,29 @@ join — *silently*, because codes without leading zeros still match.
 Store both directional (`PDX→AUS`) and undirected (`AUS-PDX`) keys. The undirected key is
 the two airport IDs sorted, so it is stable regardless of filing order.
 
+**A route filter must not become `origin IN (a,b) AND dest IN (a,b)`.** That form also
+matches same-airport filings (`a→a`, `b→b`), and those are not a curiosity: **12,738 of them
+exist across 530 airports.** Measured on JFK–LAX over 2025-05 → 2026-04:
+
+| Filter | Rows | Seats |
+|---|---|---|
+| `origin IN (JFK,LAX) AND dest IN (JFK,LAX)` | 297 | 3,474,715 |
+| The actual undirected route (`least`/`greatest` on the airport-id pair) | 264 | **3,455,820** |
+
+The gap — 33 same-airport rows (2 JFK→JFK, 31 LAX→LAX) — inflates this one route by **18,895
+seats** under a `DATA AS OF` badge. `sql/03_queries/pivot_route.sql`'s composite-dimension
+filter (M4b, `app/src/lib/pivot/render.ts` and `pipeline/pivot.py` in lockstep) instead binds
+`least(route_key_low, route_key_high) = $lo AND greatest(...) = $hi` per requested route, which
+cannot match a same-airport row.
+
+**Route storage order (by airport ID) and the alphabetical order a person would type
+disagree for 154 of 22,950 routes (0.7%)** — e.g. `HPN` (12197) and `BNH` (16954): id order is
+`HPN-BNH`, but the alphabetical form — used as `/route/<pair>`'s canonical URL — is `BNH-HPN`.
+`/route/<pair>` (`app/src/lib/routePair.ts`) computes both explicitly rather than assuming one
+predicts the other: the URL is alphabetical (predictable from the two codes alone, no database
+lookup needed), the query filter is by ID (matching `route_key_low`/`route_key_high`).
+Conflating them would query the wrong route for that 0.7%, or mint a URL nobody would type.
+
 ## `fct_route_month` must carry `year`/`quarter`/`month` as GROUP BY keys, not `any_value()`
 
 `any_value()` output is opaque to DuckDB's optimizer: a `WHERE year = 2017` on top of the
@@ -427,13 +450,38 @@ unfiltered join fans out and multiplies result rows — a wrong total rendered u
 a dimension row. An unresolvable id still degrades to the raw id rather than `—`: absence
 of a *name* is not absence of *data*.
 
-**Code collisions are an M4b concern, not M4a.** `carrier_code` is reused — **112 codes map
-to more than one `airline_id`** across `dim_carrier`, and 60 airport codes collide
-table-wide (distinct `(airport_id, code)` pairs across all of `dim_airport`'s history, not
-just the current `is_latest` row). Scoped to what actually flew in-window, **both are 0**
-(114 carriers, i.e. distinct `op_airline_id` values in `fct_segment_month`). `id → code` is
-a function, so collisions cannot affect display; they break only the *reverse* lookup that
-M4b needs for `/carrier/DL`. Asserted now so a refresh cannot break it quietly.
+**Code collisions were flagged in M4a as an M4b concern, and M4b's reverse lookup
+(`/route/<pair>`, `sql/03_queries/lookup_airport_by_code.sql`) is what actually hit one.**
+`carrier_code` is reused — **112 codes map to more than one `airline_id`** across
+`dim_carrier`, and 60 airport codes collide table-wide (distinct `(airport_id, code)` pairs
+across **all** of `dim_airport`'s history, not just the current `is_latest` row). Scoped to
+what actually flew in-window, **both are 0** (114 carriers, i.e. distinct `op_airline_id`
+values in `fct_segment_month`). `id → code` is a function, so collisions cannot affect
+*display*; they only ever break the *reverse* lookup, code → id.
+
+These are three different populations, and it matters which one a given count describes —
+the M4a figures above measure the two extremes (all history vs. in-window-only); M4b found a
+third, in between, that neither extreme covers:
+
+| Population | Colliding airport codes |
+|---|---|
+| All of `dim_airport`'s history (every `airport_seq_id` row, `is_latest` or not) | 60 |
+| `is_latest = TRUE` rows only, **not** scoped to what flew in-window | **36** |
+| `is_latest = TRUE` **and** the `airport_id` appears in `fct_segment_month` | 0 |
+
+**`WHERE is_latest` alone does not make a code unique** — it is scoped per `airport_id`'s own
+seq chain, not per code, so two *different* `airport_id`s that happen to share a code can
+each carry their own `is_latest = TRUE` row at the same time: 36 codes do. `AUS` is one —
+`airport_id` 10423 "Austin - Bergstrom International" (69,132 traffic rows) **and**
+`airport_id` 16440 "Robert Mueller Municipal" (closed since 1999, 0 traffic rows) both come
+back `is_latest = TRUE`. Fix round 1 on M4b Task 4 caught this after ship: without a
+fact-presence filter, whichever row the driver returns last wins the reverse-lookup map in
+`app/src/lib/resolve.ts` silently — Robert Mueller today, for a page that says `DATA AS OF`
+this month. Restricting to `airport_id`s that actually appear in `fct_segment_month`
+(`lookup_airport_by_code.sql`'s `EXISTS` clause) is what takes colliding codes from 36 to 0,
+which is why the reverse lookup needs that clause and `is_latest` is not sufficient alone —
+`pipeline.tests.test_resolution_invariants`'s in-window scoping already matched this, which
+is why it never caught the gap here.
 
 ---
 

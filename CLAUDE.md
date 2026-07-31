@@ -49,7 +49,7 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M3a, M3b and M4a COMPLETE.** M3a's Explorer pivot query contract — templates
+**M3a, M3b, M4a and M4b COMPLETE.** M3a's Explorer pivot query contract — templates
 (`sql/03_queries/pivot_segment.sql` / `pivot_route.sql`), the allowlist as catalog objects
 (`meta_pivot_dimensions` / `meta_pivot_measures`), the CI-only Python reference
 implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`), the mainline-grouping toggle,
@@ -58,7 +58,7 @@ the URL state codec, and the golden fixtures
 `sql/02_marts/` into `upgauge.duckdb` (6 catalog views + `fct_route_month` +
 `mart_route_health` + the 2 pivot-vocabulary catalog views); `make verify` proves both the
 Parquet layer and the database layer reproducible across two from-scratch builds —
-`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 428 Python tests
+`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 439 Python tests
 green, zero join orphans. `data/raw/` holds the full 2015–2026 window.
 
 M3b ported that contract into the Next.js app and wired it end to end: the TypeScript pivot
@@ -70,9 +70,7 @@ server-rendered page that decodes the URL, runs the pivot, and renders a real ta
 `DATA AS OF` badge, a stat/meta strip, the legend rail, and the permalink displayed. An
 invalid permalink renders a named error (e.g. `unknown dimension 'nope'`), never a silent
 fallback to a default view; a valid permalink matching zero rows states the query in words
-and offers the widened-to-2015 permalink, never a blank panel. 155 app tests green
-(`make app-check`); `make app-build` produces a working production build; `make app-smoke`
-builds, serves and curls real URLs, 17 checks in all.
+and offers the widened-to-2015 permalink, never a blank panel.
 
 **`app/src/proxy.ts` + `skipProxyUrlNormalize` are load-bearing, not an optimisation.** Next
 form-encodes the query string before any page or route handler sees it, which turns the
@@ -99,12 +97,40 @@ depends on. A dimension with no code (city market) renders its name directly; an
 from the catalog renders as itself, never a dash. `make app-smoke` asserts a real code
 renders and the bare id does not, on both a segment and a route query.
 
-Not built yet: the time-series and fleet-mix charts, the arc map, entity pages (`/route`,
-`/airport`, `/carrier`, `/aircraft`), `/watch`, the seasonality heatmap, and OG cards — all
-specified in `docs/design/system.md` and left to M4b (`/route/<pair>` and the
-aircraft-type-mix chart) and M4c+ (`/airport`, `/carrier`, `/aircraft`, the maps) onward.
+**M4b ships the first entity page, `/route/<pair>`** (`app/src/app/route/[pair]/page.tsx`),
+composed on the same pivot layer M3/M4a already built — a title block, a stat strip (seats,
+passengers, load factor, avg gauge, departures, carrier count, computed as ratios of summed
+rows, never averaged), the carriers table, an Explorer link for the identical query, and the
+legend rail. Getting there required two changes to the pivot layer itself, made in
+`app/src/lib/pivot/render.ts` and `pipeline/pivot.py` in lockstep (the 17 existing goldens
+stayed byte-identical): **composite-dimension filtering**, so `route` — whose `column_expr`
+spans two columns — can be filtered at all, using `least`/`greatest` on the airport-id pair
+rather than the naive `origin IN (...) AND dest IN (...)` form, which is silently wrong (a
+measured 18,895-seat inflation on JFK–LAX — `docs/data/invariants.md` § Route identity); and
+`app/src/lib/routePair.ts`'s reverse lookup, code → `airport_id`, which computes the URL's
+alphabetical canonical form and the query's id-ordered filter as two explicit, separately
+computed values (they disagree for 154 of 22,950 routes, 0.7%). That reverse lookup also
+surfaced a resolution gap M4a's own invariant never covered — `WHERE is_latest` is scoped per
+`airport_id`, not per code, so 36 codes had more than one `is_latest` row (`AUS` returned both
+the real Austin-Bergstrom and a defunct airport closed since 1999) — fixed by scoping the
+lookup to airports present in `fct_segment_month`, which takes colliding codes to 0
+(`docs/data/invariants.md` § Entity resolution). `/route/LAX-JFK` 308-redirects to
+`/route/JFK-LAX`; `/route/ZZZZ-LAX` 404s naming the code; a real pair with no scheduled
+service in the window 200s with an empty-state message and the widened-to-2015 offer, never a
+blank panel. Full contract: `docs/architecture/pipeline.md` § M4b.
 
-Next: **M4b** — `/route/<pair>` and the aircraft-type-mix chart.
+191 app tests green (`make app-check`); `make app-build` produces a working production
+build; `make app-smoke` builds, serves and curls real URLs, 24 checks in all — including a
+curl-verified redirect and 404 for `/route/<pair>`, since a handler returning a redirect
+object and a served app returning one are not the same claim.
+
+Not built yet: the time-series and fleet-mix charts, the arc map, `/airport`, `/carrier`,
+`/aircraft`, `/watch`, the seasonality heatmap, and OG cards — all specified in
+`docs/design/system.md` and left to M4c (the aircraft-type-mix chart, deliberately kept out
+of M4b's first entity page since no chart library is installed yet) and M4d+ (`/airport`,
+`/carrier`, `/aircraft`, the maps) onward.
+
+Next: **M4c** — the aircraft-type-mix chart.
 
 ## Architecture
 

@@ -130,6 +130,21 @@ BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=route&d=route&m=seats&t=2025
 check_re     "explore: route renders as two resolved codes"  "$BODY" '>[A-Z]{3}–[A-Z]{3}<'
 check_not_re "explore: route renders no raw airport ids"     "$BODY" '>[0-9]{4,5}–[0-9]{4,5}<'
 
+# 8. The route entity page, served for real.
+BODY=$(curl -s --max-time 15 "${BASE}/route/JFK-LAX")
+check     "route: renders the pair"            "$BODY" 'JFK–LAX'
+check     "route: renders a carrier code"      "$BODY" '>DL<'
+check     "route: DATA AS OF is present"       "$BODY" 'DATA AS OF'
+check     "route: links to the Explorer"       "$BODY" '/explore?'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/route/LAX-JFK")
+LOC=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/route/LAX-JFK" | grep -i '^location:' | tr -d '\r')
+check     "route: reversed pair redirects"     "$CODE" '30'
+check     "route: redirect targets canonical"  "$LOC"  '/route/JFK-LAX'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/route/ZZZZ-LAX")
+check     "route: unknown code is a 404"       "$CODE" '404'
+
 echo
 if [ "$FAILED" -eq 0 ]; then echo "smoke: all checks passed"; else echo "smoke: FAILURES above"; fi
 exit "$FAILED"

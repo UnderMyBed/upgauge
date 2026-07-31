@@ -718,6 +718,93 @@ M4a is built: 424 Python tests green (`make check`), the app suite green
 moved. See `CLAUDE.md`'s Status section for the current test counts and what M4b/M4c+ still
 owe (`/route`, `/airport`, `/carrier`, `/aircraft`, the charts, the maps, `/watch`).
 
+## M4b — the route page
+
+`/route/<pair>` is the first entity page: `/route/JFK-LAX` is a saved pivot query (segment
+grain, grouped by operating carrier, filtered to one undirected route) composed on top of the
+same pivot layer M3/M4a already built, deliberately reusing `DataTable` / `LegendRail` and
+the resolution layer rather than writing bespoke SQL. That reuse is also what makes the
+Explorer link free: the page's query *is* a `PivotQuery`, so `encode()` yields the permalink
+directly. No chart (that's M4c) and no new dependency.
+
+### Composite-dimension filtering, added in lockstep
+
+The pivot had no way to filter on `route` — a dimension whose `column_expr` names two
+columns (`route_key_low`, `route_key_high`) rather than one. The obvious workaround —
+`origin_airport_id IN (a,b) AND dest_airport_id IN (a,b)` — is not equivalent to "the route
+between a and b": it also matches same-airport filings (`a→a`, `b→b`), which are not a
+curiosity — 12,738 of them exist across 530 airports. On JFK–LAX that workaround inflates
+seats by 18,895 under a `DATA AS OF` badge. Full measurement:
+[`docs/data/invariants.md` § Route identity](../data/invariants.md#route-identity).
+
+Real support was added instead, to `app/src/lib/pivot/render.ts` and `pipeline/pivot.py` **in
+the same commit** (`2c3939b`/`0e78317`/`08ee485`) — a change to one renderer without the
+other is exactly the drift the goldens exist to catch. One filter value encodes one whole
+route as `"<low-id>-<high-id>"` (`f=route:12478-12892`), and multiple values still OR
+together exactly like every other dimension's IN-list — a positional two-values-make-one-pair
+convention was rejected because it would make `f=route:a,b,c` ambiguous. The emitted SQL uses
+`least`/`greatest` on the pair, never trusting stored column order:
+
+```sql
+(least(route_key_low, route_key_high) = $f0_0a AND greatest(route_key_low, route_key_high) = $f0_0b)
+```
+
+Both operands are bound, never interpolated — same discipline as every other filter value.
+The existing 17 goldens stayed byte-identical; this only added cases (new golden entries
+pin the emitted SQL identical between the two languages).
+
+### URL resolution: two orderings that are not the same thing
+
+```
+/route/JFK-LAX  ->  parse two codes  ->  reverse-lookup to ids  ->  order by id  ->  canonical check
+```
+
+`app/src/lib/routePair.ts`'s `resolveRoutePair` computes two orderings of the same pair
+explicitly, because they disagree for **154 of 22,950 routes (0.7%)**:
+
+- **`canonical` (the URL)** — alphabetical by code. Storage order is an implementation
+  detail that should not leak into a URL, and alphabetical is predictable from the two codes
+  alone without a database round trip.
+- **`filterValue` (the query)** — by airport ID, matching `route_key_low`/`route_key_high`,
+  fed straight into the composite filter above.
+
+`HPN` (12197) / `BNH` (16954) is the measured example: id order is `HPN-BNH`, but the
+alphabetical canonical is `BNH-HPN`. Conflating the two orderings would either query the
+wrong route for that 0.7%, or mint a canonical URL nobody would type. `/route/LAX-JFK`
+(non-canonical, both codes valid) 308s (`permanentRedirect` — this *is* the canonical URL for
+the pair, not a temporary relocation) to `/route/JFK-LAX`; `/route/ZZZZ-LAX` (an unresolvable
+code) 404s naming the offending code; two real airports with no service in the window is a
+200 with an empty-state message and the widened-to-2015 offer, the same treatment `/explore`
+gives a valid query matching zero rows.
+
+### The reverse lookup surfaced an `is_latest` gap M4a's own invariant didn't cover
+
+`app/src/lib/resolve.ts`'s `lookupAirportsByCode` (code → `airport_id`, the direction M4a
+never needed) is served by `sql/03_queries/lookup_airport_by_code.sql`. `WHERE is_latest`
+alone is **not** sufficient to make a code unique: it is scoped per `airport_id`'s own seq
+chain, not per code, so two different `airport_id`s sharing a code can each carry their own
+`is_latest = TRUE` row. Measured: 36 codes do (`AUS` returns both the real
+Austin-Bergstrom and Robert Mueller Municipal, closed since 1999). Task 4's fix round 1
+added an `EXISTS`-in-`fct_segment_month` clause, which takes colliding codes from 36 to 0 —
+full accounting, including why M4a's own in-window invariant test didn't already catch
+this: [`docs/data/invariants.md` § Code collisions](../data/invariants.md#entity-resolution-m4a).
+
+### Page composition and truncation
+
+The stat strip's `LOAD FACTOR` and `AVG GAUGE` are computed in TypeScript from the summed
+additive measures the same query already returns (`Σ passengers / Σ seats`, `Σ seats / Σ
+departures_performed`) — CLAUDE.md's derived-measure rule applied to a page total, not just a
+table cell. The carrier limit (50) is a measured guarantee, not a guess: the busiest route
+carries 16 distinct operating carriers over a trailing 12 months, 99th percentile 8 — but the
+page checks whether the result hit the limit and discloses truncation rather than silently
+under-reporting a route's totals if a future refresh ever exceeds it.
+
+M4b is built: composite filtering identical in both languages (goldens unmoved), the reverse
+lookup fixed to 0 collisions among in-window airports, `/route/<pair>` rendering the title
+block, stat strip, carriers table, Explorer link and legend rail, and `make app-smoke`
+curling a real served page for the redirect and 404 status codes — see `CLAUDE.md`'s Status
+section for current test counts.
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command

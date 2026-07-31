@@ -301,6 +301,51 @@ catalog appears without a front-end change.
 
 ---
 
+## Entity pages: `/route/<pair>` — shipped, M4b
+
+The first entity page, and the shape the rest (`/airport`, `/carrier`, `/aircraft`) follow.
+Composes components already specified above rather than inventing new ones — same top bar,
+same `DATA AS OF` badge, same data table, same legend rail:
+
+```
+UPGAUGE                                    DATA AS OF 2026-04
+─────────────────────────────────────────────────────────────
+JFK–LAX     John F Kennedy Intl · Los Angeles Intl
+            2025-05 → 2026-04
+
+  SEATS      PASSENGERS   LOAD FACTOR   AVG GAUGE   DEPARTURES  CARRIERS
+  3,455,820  2,998,796    86.78%        170.4       20,283      5
+─────────────────────────────────────────────────────────────
+  [ carriers table — DataTable, one row per operating carrier, sorted by seats desc ]
+  Open in the Explorer →
+─────────────────────────────────────────────────────────────
+  [ legend rail ]
+```
+
+- **Title block.** The pair, rendered with an **en dash** (`JFK–LAX`, U+2013 — never a
+  hyphen: the URL's `-` is a path separator, the display glyph is typographic), followed by
+  both airport names joined with `↔`.
+- **Stat strip** (reuses the Stat strip component above). `LOAD FACTOR` and `AVG GAUGE`
+  carry the derived marker (dashed, `--ink-2`) and are computed from the summed `SEATS` /
+  `PASSENGERS` / `DEPARTURES` of the rows below, never averaged from a per-carrier column —
+  the same rule the data table itself follows, applied to a page total. If the carrier count
+  ever reaches the page's limit, a disclosure line states the totals cover the listed
+  carriers only, rather than silently under-reporting.
+- **Table.** The standard data table, one row per operating carrier, trailing 12 months,
+  sorted by seats descending. Empty state (two real airports, no scheduled service in the
+  window) keeps the title block and stat strip, states the finding in words, and offers the
+  widened-to-2015 window — the entity-page version of the Explorer's own empty state, above.
+- **Explorer link.** The page's query is an ordinary `PivotQuery`, so the link is the same
+  permalink encoder the Explorer itself uses — "every insight row is one click from the raw
+  rows that produced it" applied to the whole page, not just a row.
+- **Legend rail**, unchanged from the Explorer's.
+
+Canonical-URL handling (redirect, 404, en-dash rendering) is a routing concern, not a design
+one — full contract in
+[`../architecture/pipeline.md` § M4b](../architecture/pipeline.md#m4b--the-route-page).
+
+---
+
 ## States
 
 A table that only looks right when full is a table that looks broken most of the time. All
