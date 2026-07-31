@@ -34,8 +34,16 @@ export async function GET(request: Request): Promise<Response> {
     const allowlist = await loadAllowlist();
     const query = decode(qs, allowlist);
     const result = await runPivot(query);
+    // `Response.json()` cannot serialise a Map -- spreading `result` as-is would silently
+    // emit `"resolved": {}`, which looks like data but is not. No documented API consumer
+    // needs resolution in this milestone, so it is excluded rather than mis-serialised.
+    // `_resolved` is deliberately unread: this repo's eslint config has no
+    // `no-unused-vars` ignore pattern, so the discard is spelled out with `void` rather
+    // than adding a project-wide lint exception for one call site.
+    const { resolved: _resolved, ...body } = result;
+    void _resolved;
     return Response.json(
-      { ...result, url: encode(query) },
+      { ...body, url: encode(query) },
       { headers: { "Cache-Control": CACHE } },
     );
   } catch (e) {

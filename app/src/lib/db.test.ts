@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { connect, dataAsOf, demoteBigInts, loadAllowlist, runPivot } from "@/lib/db";
+import { resolutionKey } from "@/lib/resolve";
 import { FIXTURE } from "@/lib/pivot/allowlist.fixture";
+import type { PivotQuery } from "@/lib/pivot/types";
 
 describe("the query layer runs against the real database", () => {
   it("loads the allowlist from the catalog views", async () => {
@@ -90,6 +92,46 @@ describe("demoteBigInts", () => {
   it("throws instead of silently losing precision above Number.MAX_SAFE_INTEGER", () => {
     const tooBig = BigInt(Number.MAX_SAFE_INTEGER) + BigInt(1);
     expect(() => demoteBigInts({ quarantined_rows: tooBig })).toThrow(/MAX_SAFE_INTEGER/);
+  });
+});
+
+describe("runPivot resolves display values without altering the result shape", () => {
+  // Typed as PivotQuery (not `as const`) so runPivot's `string[]` fields accept the object
+  // as-is -- a readonly-tuple-inferring `as const` fails typecheck against a mutable field.
+  const CARRIER_QUERY: PivotQuery = {
+    grain: "segment", dimensions: ["op_airline_id"], measures: ["seats"],
+    timeFrom: "2025-05", timeTo: "2026-04", sort: null, sortDesc: true,
+    limit: 5, grouping: "operating", filters: [],
+  };
+
+  it("attaches a code for every returned id", async () => {
+    const r = await runPivot({ ...CARRIER_QUERY });
+    expect(r.rows.length).toBeGreaterThan(0);
+    for (const row of r.rows) {
+      expect(r.resolved.get(resolutionKey("op_airline_id", row.op_airline_id))?.code).toBeTruthy();
+    }
+  });
+
+  it("leaves the id on the row -- sorting and permalinks still use it", async () => {
+    const r = await runPivot({ ...CARRIER_QUERY });
+    expect(typeof r.rows[0].op_airline_id).toBe("number");
+    expect(r.columns).toContain("op_airline_id");
+  });
+
+  it("does not change the row count -- a fan-out would inflate every total", async () => {
+    const r = await runPivot({ ...CARRIER_QUERY, limit: 5 });
+    expect(r.rows.length).toBeLessThanOrEqual(5);
+  });
+
+  it("does not fan out on airports, which carry multi-seq history", async () => {
+    // 5,033 airport_ids have >1 seq row. Without `WHERE is_latest` this returns more rows
+    // than the LIMIT, silently multiplying seats.
+    const r = await runPivot({
+      ...CARRIER_QUERY, dimensions: ["origin_airport_id"], limit: 10,
+    });
+    expect(r.rows.length).toBeLessThanOrEqual(10);
+    const seen = new Set(r.rows.map((x) => x.origin_airport_id));
+    expect(seen.size).toBe(r.rows.length);
   });
 });
 
