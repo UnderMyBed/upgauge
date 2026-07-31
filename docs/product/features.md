@@ -114,6 +114,19 @@ statement about the current dataset and the dataset is rebuilt monthly
 ([`../architecture/hosting.md`](../architecture/hosting.md)). The carrier 404 is the one that
 cannot yet make the distinction the others make — see the M5 note in `CLAUDE.md`.
 
+**The pages cross-link (M5).** Every resolved dimension cell in every table — `/explore` and
+all four entity pages, since they share the one `DataTable` component — links to the entity
+page it resolves to: `/route/JFK-LAX` names Delta and now links to `/carrier/DL`, `/carrier/DL`
+names an aircraft type and links to `/aircraft/<slug>`, and so on. A cell links only when it
+resolved to a real code and that dimension has a page — a city market, an unresolved id, or a
+bare `year_month` never gains a fake link. `/explore`'s route cell is the one dimension that is
+not a single id (its `column_expr` spans two airport columns), so its link is built and checked
+separately, and it is the one place the milestone's sharpest trap lives: the cell displays the
+two codes in **airport-id** order but the canonical `/route/` URL is alphabetical by **code**,
+and those two orderings disagree for 154 of 22,420 pairs (`CLAUDE.md`, M4b) — reusing the
+displayed order as the link would be silently wrong for every one of the 154. Full mechanics:
+`docs/design/system.md` § The data table.
+
 > **Build the aircraft-type-mix chart before the load-factor chart.** Everyone does load
 > factor. The gauge story is what makes this yours.
 

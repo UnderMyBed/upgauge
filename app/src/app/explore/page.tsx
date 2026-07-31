@@ -6,6 +6,7 @@ import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { formatCount } from "@/lib/format";
 import { resolutionKey, displayValue, type Resolved } from "@/lib/resolve";
+import { routeHrefFromCodes } from "@/lib/entityLink";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import type { PivotQuery } from "@/lib/pivot/types";
@@ -58,14 +59,43 @@ function routeColumns(allowlist: Allowlist): string[] {
   return allowlist.dims.get("route")?.columnExpr.split(",").map((c) => c.trim()) ?? [];
 }
 
+/** The two resolved codes for a route row, in the order the columns hold them (airport-id
+ * order). The DISPLAY joins these with an en dash; the HREF must re-sort them alphabetically
+ * by code -- routeHrefFromCodes owns that, because the two orderings disagree for 154 of
+ * 22,420 pairs and reusing the display order is wrong for every one of them. Shared with
+ * `routeHref` below so the display string and the link read the same two `displayValue()`
+ * calls rather than two independently maintained copies. */
+function routeCodes(
+  row: Record<string, unknown>,
+  resolved: Map<string, Resolved>,
+  columns: string[],
+): string[] {
+  return columns.map((c) => displayValue(resolved.get(resolutionKey(c, row[c])), row[c]));
+}
+
 function routeCode(
   row: Record<string, unknown>,
   resolved: Map<string, Resolved>,
   columns: string[],
 ): string {
-  return columns
-    .map((c) => displayValue(resolved.get(resolutionKey(c, row[c])), row[c]))
-    .join("–");
+  return routeCodes(row, resolved, columns).join("–");
+}
+
+/** The `/route/<pair>` href for a route row, or `null` when either half didn't resolve to a
+ * real code -- a row where one half rendered a bare id (unresolved, or resolved with no code)
+ * has no URL to build, exactly `DimensionCell`'s own rule for a single dimension. Reads the
+ * two `Resolved` hits directly rather than `routeCodes`'s display strings: a bare-id fallback
+ * string is indistinguishable from a real code once stringified, so only the `Resolved` value
+ * itself can tell "unresolved" apart from "resolved". */
+function routeHref(
+  row: Record<string, unknown>,
+  resolved: Map<string, Resolved>,
+  columns: string[],
+): string | null {
+  const hits = columns.map((c) => resolved.get(resolutionKey(c, row[c])));
+  if (hits.some((h) => h === undefined || h.code === null)) return null;
+  const [a, b] = hits as Resolved[];
+  return routeHrefFromCodes(a.code as string, b.code as string);
 }
 
 // data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- this is the
@@ -230,7 +260,11 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
   ];
 
   const displayRows = hasRoute
-    ? result.rows.map((r) => ({ ...r, __route: routeCode(r, result.resolved, routeCols) }))
+    ? result.rows.map((r) => ({
+        ...r,
+        __route: routeCode(r, result.resolved, routeCols),
+        __routeHref: routeHref(r, result.resolved, routeCols),
+      }))
     : result.rows;
 
   return (

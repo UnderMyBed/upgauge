@@ -2,6 +2,7 @@ import { formatSeats, formatLoadFactor, formatGauge, formatCount } from "@/lib/f
 import { GaugeRail } from "@/components/GaugeRail";
 import { ReasonCode, type Reason } from "@/components/ReasonCode";
 import { resolutionKey, displayValue, type Resolved } from "@/lib/resolve";
+import { entityHref } from "@/lib/entityLink";
 
 export interface ColumnSpec {
   key: string;
@@ -40,7 +41,16 @@ function format(kind: ColumnSpec["kind"], v: unknown): string {
  * renders directly rather than hiding in a title no keyboard user can reach. The three-way
  * value selection itself (raw id / name / code) is `displayValue()` in lib/resolve.ts, shared
  * with explore/page.tsx's `routeCode` -- only the `abbr` wrapping is specific to this
- * component. */
+ * component.
+ *
+ * This is the chokepoint every table in the product renders its dimension cells through
+ * (M5, "connect the graph"): `/explore` and all four entity pages build their columns with
+ * the same `dimKey: allowlist.dims.get(c)?.joinDim ? c : undefined` expression, so wrapping
+ * the cell in an `<a>` here links every one of them at once. `entityHref` -- not a second,
+ * locally-derived URL -- decides linkability: it returns `null` for a dimension with no
+ * entity page, an unresolved id, or a resolution with no code, and the `<abbr>` nests INSIDE
+ * the `<a>` rather than being replaced by it, so the keyboard-reachable full name survives on
+ * every linked cell too. */
 function DimensionCell({ spec, row, resolved }: {
   spec: ColumnSpec;
   row: Record<string, unknown>;
@@ -49,10 +59,28 @@ function DimensionCell({ spec, row, resolved }: {
   const raw = row[spec.key];
   const hit = spec.dimKey ? resolved?.get(resolutionKey(spec.dimKey, raw)) : undefined;
   const value = displayValue(hit, raw);
-  if (hit !== undefined && hit.code !== null && hit.name) {
-    return <abbr title={hit.name}>{value}</abbr>;
-  }
-  return <>{value}</>;
+  const href = spec.dimKey ? entityHref(spec.dimKey, hit) : null;
+  const inner =
+    hit !== undefined && hit.code !== null && hit.name ? (
+      <abbr title={hit.name}>{value}</abbr>
+    ) : (
+      <>{value}</>
+    );
+  return href ? <a href={href}>{inner}</a> : inner;
+}
+
+/** A non-dimension identifier column -- explore's synthetic `__route` cell is the one case
+ * today -- may carry a pre-computed href in a sibling row field named `<key>Href`. `route`'s
+ * `column_expr` spans two columns that both resolve through `dim_airport`, so it is never a
+ * `DimensionCell` (see `entityLink.ts`'s own docstring: "Use `routeHrefFromCodes` for it") --
+ * the page that assembles the row is the only place that knows both halves resolved, so it
+ * computes the href itself and hands it across as plain row data rather than this component
+ * re-deriving it. Absent or non-string, this renders exactly what `format()` alone would --
+ * every other identifier column is unaffected. */
+function IdentifierCell({ spec, row }: { spec: ColumnSpec; row: Record<string, unknown> }) {
+  const text = format(spec.kind, row[spec.key]);
+  const href = row[`${spec.key}Href`];
+  return typeof href === "string" ? <a href={href}>{text}</a> : <>{text}</>;
 }
 
 function isQuarantined(row: Record<string, unknown>): boolean {
@@ -136,7 +164,7 @@ export function DataTable({
                   {c.dimKey ? (
                     <DimensionCell spec={c} row={row} resolved={resolved} />
                   ) : (
-                    format(c.kind, row[c.key])
+                    <IdentifierCell spec={c} row={row} />
                   )}
                 </td>
               ))}

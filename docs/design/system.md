@@ -155,6 +155,33 @@ present-day code (`docs/data/invariants.md`'s "Entity resolution" section) — s
 rail states this on every view rather than letting a resolved code masquerade as a
 historical fact.
 
+**Every dimension cell that resolves to a page links to it (M5).** `DataTable`'s
+`DimensionCell` is the one chokepoint all five surfaces — `/explore` and the four entity
+pages — render their columns through, since they all build `dimKey` the same way
+(`allowlist.dims.get(c)?.joinDim ? c : undefined`). Wrapping the cell there in `<a href={
+entityHref(dimKey, hit) }>` links every table in the product from one change.
+`entityHref` (`app/src/lib/entityLink.ts`) is the single source of truth for whether a cell
+links: `null` for a dimension with no entity page (both city markets, `year_month`, `quarter`,
+`year`, `origin_state`, `dest_state`, `distance_group`, `aircraft_group`), for an id that never
+resolved, and for a resolution with no code — the same three cases that already render bare.
+The `<abbr>` carrying the name nests **inside** the `<a>` rather than being replaced by it —
+it is the only place a keyboard user reaches the expansion, linked cell or not.
+
+`route`'s cell is the one exception, and it is not a `DimensionCell` at all: its `column_expr`
+spans two columns that both resolve through `dim_airport`, so there is no single id to hand
+`entityHref`. `/explore` builds its href separately (`routeHref` in `explore/page.tsx`),
+reading the two `Resolved` hits directly rather than the joined display string, and passes it
+across as a sibling row field (`__routeHref`) that a small generalization of the same
+component — `IdentifierCell` — checks for on any non-dimension identifier column. **The href
+is the code-alphabetical pair, never the displayed (airport-id) order**: `/explore` renders
+`route_key_low, route_key_high` — airport-id order — and `routeHrefFromCodes` re-sorts
+alphabetically by code before building `/route/<pair>`, because the two orderings disagree for
+154 of 22,420 pairs (measured; `CLAUDE.md`, M4b). Reusing the displayed order would be wrong
+for every one of those 154 — IFP/IAH is one of them: airport-id order displays `IFP–IAH`, but
+the canonical `/route/` URL is `/route/IAH-IFP`, the reverse. A fixture built on an
+order-agreeing pair like JFK–LAX (22,266 of 22,420) cannot catch that class of bug — both
+orderings produce the same, coincidentally correct, href.
+
 ### The gauge rail — signature, 1 of 3
 
 A fixed **0–260 seats-per-departure** axis rendered in every row, with grid lines at 50s and

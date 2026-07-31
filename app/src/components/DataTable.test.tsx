@@ -156,5 +156,58 @@ describe("DataTable renders resolved display values", () => {
     ]);
     render(<DataTable columns={cols} rows={[{ origin_city_market_id: 30559 }]} resolved={resolved} />);
     expect(screen.getByText("Seattle, WA")).toBeDefined();
+    // City market has no entity page (entityLink.ts's ENTITY_PREFIX carries no city-market
+    // entry), so the name must render bare, not as the label of a link to nowhere.
+    expect(document.querySelector("a")).toBeNull();
+  });
+
+  // M5 "connect the graph", Step 1(a): a linkable dimension cell wraps the CODE in an <a
+  // href>, and the abbr carrying the full name nests INSIDE that anchor rather than being
+  // replaced by it -- a keyboard user reaches the name through the abbr's title regardless of
+  // whether the cell also links. One assertion covers both facts: the anchor exists at the
+  // href entityHref would compute (CARRIER_PREFIX + code) AND its content is the abbr with
+  // the expected title.
+  it("wraps a linkable cell's code in <a href>, nesting the abbr name expansion inside it", () => {
+    const { container } = render(<DataTable columns={COLS} rows={ROWS} resolved={RESOLVED} />);
+    const link = container.querySelector('a[href="/carrier/DL"]');
+    expect(link?.querySelector("abbr[title='Delta Air Lines Inc.']")?.textContent).toBe("DL");
+  });
+
+  // Step 1(b): a non-linkable cell renders exactly what it renders today -- no <a> for an
+  // unresolved id (there is no code to build a URL from, even though the dimension itself has
+  // an entity page).
+  it("does not link an unresolved id, even though op_airline_id has an entity page", () => {
+    const { container } = render(<DataTable columns={COLS} rows={ROWS} resolved={new Map()} />);
+    expect(screen.getByText("19790")).toBeDefined();
+    expect(container.querySelector("a")).toBeNull();
+  });
+});
+
+describe("DataTable: non-dimension identifier cells (e.g. explore's synthetic __route)", () => {
+  // Step 3's IdentifierCell mechanism: a plain identifier column (no dimKey, so it never goes
+  // through DimensionCell/entityHref at all -- route's column_expr spans two columns, so it
+  // is not a single-dimension resolution) links via a sibling row field named `<key>Href`,
+  // read directly off the row rather than re-derived from the displayed string.
+  const COLS: ColumnSpec[] = [{ key: "__route", label: "Route", kind: "identifier" }];
+
+  it("links when the row carries a `<key>Href` sibling field", () => {
+    const rows = [{ __route: "IFP–IAH", __routeHref: "/route/IAH-IFP" }];
+    const { container } = render(<DataTable columns={COLS} rows={rows} />);
+    const link = container.querySelector('a[href="/route/IAH-IFP"]');
+    expect(link?.textContent).toBe("IFP–IAH");
+  });
+
+  it("renders plain text, exactly as before, when no sibling href field is present", () => {
+    const rows = [{ __route: "PDX–SEA" }];
+    const { container } = render(<DataTable columns={COLS} rows={rows} />);
+    expect(screen.getByText("PDX–SEA")).toBeDefined();
+    expect(container.querySelector("a")).toBeNull();
+  });
+
+  it("renders plain text when the sibling href field is null (one half didn't resolve)", () => {
+    const rows = [{ __route: "19790–SEA", __routeHref: null }];
+    const { container } = render(<DataTable columns={COLS} rows={rows} />);
+    expect(screen.getByText("19790–SEA")).toBeDefined();
+    expect(container.querySelector("a")).toBeNull();
   });
 });
