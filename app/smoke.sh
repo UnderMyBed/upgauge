@@ -32,8 +32,28 @@ cap() { # run under a memory cap when systemd-run is available, plainly otherwis
   fi
 }
 
+# NEVER `grep -q` in these helpers, and never take the -q back.
+#
+# `set -o pipefail` is on (it has to be: these pipelines start with a curl whose failure must
+# not be swallowed). `grep -q` exits the instant it matches -- so on any body larger than the
+# 64 KB pipe buffer, the `printf` still feeding it dies of SIGPIPE and the PIPELINE's status is
+# 141 even though the needle was found. `check` then reports a false FAIL, and -- far worse --
+# `check_not` reports a silent false **ok** for a needle that IS present, because 141 sends it
+# down the else branch. A gate that passes for the wrong reason is exactly what this file
+# exists to prevent.
+#
+# Latent since M3b and invisible while every response stayed under 64 KB. Mounting the M4c
+# chart took /route/JFK-LAX from 32,087 to 96,112 bytes and it fired immediately: measured on
+# the served build, needles at byte offsets 1,489 and 2,723 returned 141 while identical
+# lookups for needles at 6,773 and beyond returned 0 -- i.e. the results depended on WHERE in
+# the page the string sat. Without -q, grep reads its input to the end, so printf always
+# completes and the status is grep's own. stdout goes to /dev/null because these bodies are one
+# enormous line.
+has()     { printf '%s' "$1" | grep -F  -- "$2" >/dev/null; }
+has_re()  { printf '%s' "$1" | grep -E  -- "$2" >/dev/null; }
+
 check() { # check <name> <haystack> <needle>
-  if printf '%s' "$2" | grep -qF -- "$3"; then
+  if has "$2" "$3"; then
     printf '  ok   %s\n' "$1"
   else
     printf '  FAIL %s\n       expected to find: %s\n       got: %.300s\n' "$1" "$3" "$2"
@@ -42,7 +62,7 @@ check() { # check <name> <haystack> <needle>
 }
 
 check_not() {
-  if printf '%s' "$2" | grep -qF -- "$3"; then
+  if has "$2" "$3"; then
     printf '  FAIL %s\n       expected NOT to find: %s\n' "$1" "$3"
     FAILED=1
   else
@@ -51,7 +71,7 @@ check_not() {
 }
 
 check_re() {   # check_re <name> <haystack> <extended-regex>
-  if printf '%s' "$2" | grep -qE -- "$3"; then
+  if has_re "$2" "$3"; then
     printf '  ok   %s\n' "$1"
   else
     printf '  FAIL %s\n       expected to match: %s\n       got: %.300s\n' "$1" "$3" "$2"
@@ -60,7 +80,7 @@ check_re() {   # check_re <name> <haystack> <extended-regex>
 }
 
 check_not_re() {
-  if printf '%s' "$2" | grep -qE -- "$3"; then
+  if has_re "$2" "$3"; then
     printf '  FAIL %s\n       expected NOT to match: %s\n' "$1" "$3"
     FAILED=1
   else
@@ -206,6 +226,53 @@ check_not "route 404: does not offer every cause at once"          "$BODY" 'dome
 BODY=$(curl -s --max-time 15 "${BASE}/route/JFK-LHR")
 check     "route 404: a real airport outside the dataset says so"  "$BODY" 'domestic-only'
 check_not "route 404: LHR is not reported as an unknown code"      "$BODY" 'unknown airport code'
+
+# 9. M4c: the aircraft-mix chart, in the SERVED HTML.
+#
+# This is the section the milestone exists to produce. Before it, `AircraftMixChart` had 262
+# green unit tests and a clean `next build` while being reachable from no route at all: nothing
+# in CI ever executed its Plot path, so a bundler or serverExternalPackages regression would
+# have shipped with every gate green -- the exact shape of the five M3b bugs at the top of this
+# file. Plot + jsdom + Next's server bundler is a seam no unit test crosses by construction.
+BODY=$(curl -s --max-time 30 "${BASE}/route/JFK-LAX")
+check "chart: the SVG is in the served HTML, not an empty client-side container" "$BODY" '<svg role="img"'
+check "chart: the aria-label describes the series, not the word 'chart'" "$BODY" 'Stacked area of monthly seats by aircraft type'
+# `var(--gN)` has to survive Plot's ordinal colour scale, jsdom's serializer AND React's HTML
+# escaping to reach the browser. globals.css is the single source for the ramp only if it does;
+# the spec's fallback was hardcoded hex, which this check is what rules out. Both ends, because
+# a range collapsed to one colour still emits a fill.
+#
+# `<path fill=... d=`, not the bare `fill="var(--g5)"` this was first written as: mutating the
+# chart out of the page left that weaker needle GREEN, because the legend rail's own fleet
+# swatch is a `<rect fill="var(--g5)">` drawn from the same token. Anchoring to a path WITH
+# geometry is what makes this a claim about the chart rather than about the rail beside it.
+check "chart: the ramp tokens reach the SVG area fills (lightest)" "$BODY" '<path fill="var(--g0)" d='
+check "chart: the ramp tokens reach the SVG area fills (darkest)"  "$BODY" '<path fill="var(--g5)" d='
+check "chart: COVID is drawn and labelled, not smoothed away" "$BODY" 'COVID — in window on purpose.'
+check "chart: the page states the chart's own window"         "$BODY" 'chart: the full window'
+check "chart: the rail explains what the ramp encodes"        "$BODY" 'ordered by seats per departure'
+# The pre-existing server-side text of this page, re-checked AFTER the chart mounted above it:
+# a chart that threw during render would take the whole Server Component down, and every check
+# in section 8 runs against a body fetched before this one.
+check "chart: the rest of the page still server-renders"      "$BODY" '>DL<'
+
+# The annotation, as a FALSIFIABLE PAIR. Absence alone would be satisfied by a component that
+# never renders an annotation at all, and presence alone by one that manufactures one on every
+# chart -- which is the specific failure the spec forbids ("it must never fall back to
+# labelling the largest type"). Both routes are measured against the built warehouse:
+# JFK-LAX's A321/LR leads every year 2015-2026 (no crossover, 46% of routes are like this),
+# and ATL-MCO's leader goes A321/LR -> B757-2 in 2018. If a data refresh moves ATL-MCO's
+# crossover this check fails loudly and is re-measured; that is the point of pinning the
+# derived string rather than the word.
+check_not "chart: a route with no crossover gets NO annotation (JFK-LAX)" "$BODY" 'overtakes'
+BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-MCO")
+check "chart: a route with one gets the derived annotation (ATL-MCO)" "$BODY" 'B757-2 overtakes A321/LR · 2018'
+
+# Page weight, recorded rather than asserted: the chart is ~136 months x 6 bands of path data
+# on a force-dynamic page, and M4d mounts this same component on three more pages. A threshold
+# here would be a number invented in a shell script; the measurement is the useful part.
+printf '  note %s bytes of HTML for /route/JFK-LAX (32,087 before the chart, M4c task 6)\n' \
+  "$(curl -s --max-time 30 "${BASE}/route/JFK-LAX" | wc -c)"
 
 # Fix wave 3, item 2: ONE DuckDBInstance for the whole server, not one per entry point.
 # Turbopack emits lib/db.ts into three separate server chunks (proxy, page SSR, route

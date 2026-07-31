@@ -194,8 +194,9 @@ body { background: var(--panel); color: var(--ink); }
 }
 
 /* ---------- entity header (docs/design/mockups/entity-route.html: .entity/.code/.ename)
-   -- only the header portion. The route page (M4b) has no chart/fleet-mix content yet
-   (M4/M5); this is enough for the code + names above the carrier table. ---------- */
+   -- the code + names above the chart and the carrier table. The mockup's remaining chart
+   blocks (the multi-series load-factor lines and the seasonality heatmap) are still unbuilt;
+   the aircraft-mix chart landed in M4c and is styled by `.chart` below. ---------- */
 .entity {
   display: flex;
   align-items: baseline;

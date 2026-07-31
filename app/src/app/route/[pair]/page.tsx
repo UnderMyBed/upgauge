@@ -3,6 +3,8 @@ import { resolveRoutePair } from "@/lib/routePair";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
+import { AircraftMixChart } from "@/components/AircraftMixChart";
+import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { encode } from "@/lib/pivot/urlstate";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
 import type { AirportRef } from "@/lib/resolve";
@@ -194,9 +196,18 @@ export async function RouteView({
   };
 
   const result: PivotResult = await runPivot(query);
+
+  // The FULL window, not `query`'s trailing 12. A trend is the whole point of the chart, and a
+  // twelve-point stacked area of a route's fleet mix says almost nothing -- the A321's rise on
+  // JFK-LAX takes eight years to read. The two windows are therefore genuinely different, which
+  // is why the `.window` line below has to name both: a page that showed 2015-2026 under a line
+  // reading "trailing 12 months" would be claiming a window it is not drawing.
+  const mix = await fetchAircraftMix([["route", [filterValue]]], EARLIEST_MONTH, asOf);
+
   const totals = routeTotals(result.rows);
   const truncated = result.rows.length >= limit;
   const isEmpty = result.rows.length === 0;
+  const hasMix = mix.length > 0;
 
   const columns = buildColumns(allowlist, result.columns);
 
@@ -211,12 +222,16 @@ export async function RouteView({
   const a = airports.find((x) => x.code === codeA) ?? low;
   const b = airports.find((x) => x.code === codeB) ?? high;
 
+  // The subject line, shared by the entity header and the chart's own subtitle so the two can
+  // never name the pair differently. En dash, matching the header the chart sits under.
+  const title = canonical.replace("-", "–");
+
   return (
     <div className="wrap">
       <TopBar asOf={asOf} />
       <main>
         <div className="entity">
-          <div className="code">{canonical.replace("-", "–")}</div>
+          <div className="code">{title}</div>
           <div className="ename">
             {a.name} ↔ {b.name}
           </div>
@@ -231,10 +246,27 @@ export async function RouteView({
           <Stat label="Quarantined" value={formatCount(result.quarantinedRowsOnPage)} />
         </div>
         <p className="window">
-          Trailing 12 months · {query.timeFrom} → {query.timeTo}
+          Table: trailing 12 months · {query.timeFrom} → {query.timeTo}
+          {hasMix ? (
+            <>
+              {" "}
+              · chart: the full window · {EARLIEST_MONTH} → {asOf}
+            </>
+          ) : null}
         </p>
         <div className="body">
           <div>
+            {/* Above the table, in the content column, mirroring
+                docs/design/mockups/entity-route.html. Rendered whenever there is anything to
+                draw -- INCLUDING when the trailing-12 table below is empty, which is not a
+                corner case: 12,062 of the 22,950 route pairs in this database last filed
+                before 2025-05 (measured), so for over half of them the chart is the only thing
+                on the page with anything in it, and the empty state under it is what says the
+                service has stopped. When there is nothing in the full window either (BNH-JFK),
+                nothing is drawn and nothing is claimed: the empty state below already states
+                that finding in words, and a second panel repeating it in the chart's own voice
+                would be the card soup CLAUDE.md's density rule rules out. */}
+            {hasMix ? <AircraftMixChart rows={mix} title={title} /> : null}
             {isEmpty ? (
               // `a`/`b` (alphabetical, same order as the header above), NOT `low`/`high`
               // (id order) -- Minor, final whole-branch review: for the 154 routes where the
@@ -263,7 +295,10 @@ export async function RouteView({
               every row above is one click from the raw rows that produced it.
             </p>
           </div>
-          <LegendRail />
+          {/* The rail describes the encodings THIS page uses and no others -- the same reason
+              LegendRail's own header gives for leaving the mockup's map group out of /explore.
+              The fleet-shading group is asked for only when a chart is actually drawn. */}
+          <LegendRail fleetMix={hasMix} />
         </div>
       </main>
     </div>

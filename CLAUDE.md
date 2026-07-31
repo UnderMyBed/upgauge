@@ -49,7 +49,7 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M3a, M3b, M4a and M4b COMPLETE.** M3a's Explorer pivot query contract — templates
+**M3a, M3b, M4a, M4b and M4c COMPLETE.** M3a's Explorer pivot query contract — templates
 (`sql/03_queries/pivot_segment.sql` / `pivot_route.sql`), the allowlist as catalog objects
 (`meta_pivot_dimensions` / `meta_pivot_measures`), the CI-only Python reference
 implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`), the mainline-grouping toggle,
@@ -137,19 +137,61 @@ real pair with no scheduled service in the window 200s with an empty-state messa
 widened-to-2015 offer, never a blank panel. Full contract:
 `docs/architecture/pipeline.md` § M4b.
 
-222 app tests green (`make app-check`); `make app-build` produces a working production
-build; `make app-smoke` builds, serves and curls real URLs, 39 checks in all — including a
+**M4c ships the project's first chart, on `/route/<pair>`** — a **server-rendered** stacked
+area of monthly seats by aircraft type (`app/src/components/AircraftMixChart.tsx`,
+`app/src/lib/chart/`). Observable Plot draws into a jsdom `document` and the serialized SVG is
+injected, so the chart is in the served HTML and visible with JS off — no client-side chart,
+no empty container. It adds **no SQL and no catalog entries**: it composes the existing
+segment-grain pivot (`year_month` × `aircraft_type`, seats + departures) through M4b's
+composite `route` filter.
+
+The encoding is `docs/design/system.md` § Charts, and **its one trap is that band membership
+and band shade are two different orderings**: membership by total seats, shade by gauge
+(Σ seats / Σ departures), so the lightest band is the smallest metal and **an upgauge darkens
+the stack**. On JFK–LAX the two sorts share only their first element; a single sort produces a
+chart that looks plausible and encodes nothing. A type that flew nothing has an *unknown*
+gauge and sorts last, never lightest. `--g0` is Other, whose per-route type count and seat
+share are stated on its own swatch (measured: top-5 + Other is a median 94.7% of seats but
+1,571 of 4,618 multi-type routes fall below 90%, worst 48.2% — not a rounding error). COVID is
+drawn, and the crossover annotation is **derived or absent**, never manufactured: 46% of routes
+never change their #1 type and JFK–LAX is one of them.
+
+The chart takes the **full** 2015-01 → `asOf` window while the carriers table keeps its
+trailing 12, and the page states both — a decade drawn under a line reading "Trailing 12
+months" would claim a window it is not showing. It is drawn from the wider window's rows, so a
+route whose table is empty still gets its history (12,062 of 22,950 pairs last filed before the
+current trailing-12 window); a pair with nothing in either window gets no chart at all rather
+than a second panel repeating the empty state. The legend rail's fleet-shading group is opt-in
+(`<LegendRail fleetMix />`) — `/explore` has no chart and must not be told how to read one.
+Full contract: `docs/architecture/pipeline.md` § M4c.
+
+**M4c is also the clearest case yet for `make app-smoke`.** The component reached 262 green
+unit tests and a clean `make app-build` while being reachable from **no route at all** —
+nothing in CI executed its Plot path, so a bundler or `serverExternalPackages` regression would
+have shipped with every gate green. `smoke.sh` now curls the built page for the `<svg
+role="img">`, for `fill="var(--g0)"`/`var(--g5)` surviving Plot → jsdom → React (which is what
+keeps `globals.css` the single source for the ramp), for the COVID label, and for the
+annotation as a **falsifiable pair**: absent on JFK–LAX, present and exact on ATL–MCO. Either
+half alone is vacuous.
+
+273 app tests green (`make app-check`); `make app-build` produces a working production
+build; `make app-smoke` builds, serves and curls real URLs, 49 checks in all — including a
 curl-verified redirect, 404, `Cache-Control` and 404 *body* for `/route/<pair>`, since a
 handler returning a redirect object and a served app returning one are not the same claim,
-and a 404 whose status is right tells you nothing about what it says.
+and a 404 whose status is right tells you nothing about what it says. `/route/JFK-LAX` grew
+from **32,087 to 96,112 bytes** of HTML with the chart on it, +64,025 (it ships twice per
+response, body + RSC payload) — the input to M4d's decision, since M4d mounts this component
+three more times. **That size crossing 64 KB also exposed a latent `smoke.sh` bug**:
+`set -o pipefail` plus `grep -q` made every check's result depend on where in the page the
+needle sat, and made `check_not` report a silent **ok** for a string that was present. Fixed;
+see `docs/architecture/pipeline.md` § M4c.
 
-Not built yet: the time-series and fleet-mix charts, the arc map, `/airport`, `/carrier`,
+Not built yet: the load-factor time-series chart, the arc map, `/airport`, `/carrier`,
 `/aircraft`, `/watch`, the seasonality heatmap, and OG cards — all specified in
-`docs/design/system.md` and left to M4c (the aircraft-type-mix chart, deliberately kept out
-of M4b's first entity page since no chart library is installed yet) and M4d+ (`/airport`,
-`/carrier`, `/aircraft`, the maps) onward.
+`docs/design/system.md` and left to M4d+ (`/airport`, `/carrier`, `/aircraft`, which reuse
+`AircraftMixChart` unchanged, and the maps) onward.
 
-Next: **M4c** — the aircraft-type-mix chart.
+Next: **M4d** — `/airport`, `/carrier` and `/aircraft`.
 
 ## Architecture
 
@@ -300,6 +342,22 @@ signature element; it does not own these.
 ## Workflow
 
 - **Invariants are written as failing tests first**, before the pipeline that satisfies them.
+- **Run the mutant. A test that has never been red proves nothing.** Across M4c *four* tests
+  written into the plan could not fail for the reason they claimed — including the one written
+  expressly to catch the two-orderings bug. The pattern was identical every time: **asserting
+  an outcome the buggy implementation also produces, instead of varying the input that
+  distinguishes correct from buggy.** The two-sort fixture used a type that was both largest by
+  seats and smallest by gauge, so both orderings put it first and a single sort passed; the tie
+  fixture happened to break its tie toward the previous year's leader, so a flapping
+  implementation returned the right answer by accident of row order. Reading the test does not
+  reveal this — every one of them was found by breaking the implementation and watching the
+  named test stay green. So: **for each test, name the bug it exists to catch, introduce that
+  exact bug, and confirm THAT test goes red.** M4c's Task 5 sharpened it further: reversing the
+  stack order still emits six paths with six correct fills, so an assertion over the fill list
+  passes and only a *geometry* assertion catches it — when the property is an ordering, a
+  position, or a window, assert the ordering, the position, or the window, never the set of
+  things that happen to be present. Record the mutants run; "tests pass" is not the claim,
+  "these mutants died" is.
 - Marts must rebuild from scratch reproducibly via `make`. No manual steps.
 - Every **successful** response gets `Cache-Control: public, s-maxage=2592000,
   stale-while-revalidate=86400`. Precompute leaderboards as static JSON at build time — the

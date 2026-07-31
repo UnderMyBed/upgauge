@@ -185,6 +185,18 @@ grain explanation in the last group.
 This is the methodology surface (content-inventory item 8) folded into the product. There is
 no separate "how to read this" page to go stale.
 
+**Each group is opt-in per view — the rail describes the encodings the page in front of you
+actually uses, and no others.** `/explore` gets no arc group because it has no map, and got no
+fleet-shading group until M4c put a chart on `/route`. A rail that explains a monochrome gauge
+ramp on a page with no ramp is exactly the stale "how to read this" this element exists to
+replace, and it costs the reader trust in the groups that *are* relevant.
+
+**The rail carries methodology, never per-subject numbers.** The fleet-shading group states
+that one ramp is ordered by seats per departure, that a darkening stack is an upgauge, and
+that membership is a *different* ordering — but not how many types "Other" holds on this
+route, which belongs on the chart's own swatch. The rail is static and cannot know the
+subject; stating a measurement in two places is how the two copies drift.
+
 ### Stat strip
 
 Label above value, no borders between, separated by 22px gaps, bounded by `--rule-2`
@@ -206,6 +218,9 @@ Observable Plot under the hood. These are encoding rules, not library configurat
 
 ### Aircraft-type mix — build this before the load-factor chart
 
+**Shipped M4c** on `/route/<pair>`; `/airport`, `/carrier` and `/aircraft` reuse the same
+component in M4d. What follows is the encoding rule plus what implementing it taught.
+
 Stacked area, monthly. The six-category problem collides with "hue is reserved", and the
 resolution is that **these categories are ordered**: shade the bands along one ramp sorted
 by seats per departure, smallest metal lightest.
@@ -216,6 +231,31 @@ by seats per departure, smallest metal lightest.
 **An upgauge therefore darkens the stack.** On `PDX–DFW`/AA the MD-80s and 737-800s give way
 to A321s and then A321neos, and the transition is legible without reading the legend. A
 monochrome ramp is grayscale-safe by definition.
+
+**Two orderings, not one.** *Which* five types get a band is by **total seats**, descending.
+*Which shade* each band gets is by **gauge**, ascending. These are different sorts of the same
+five rows and they genuinely disagree — on JFK–LAX they share only their first element (seats:
+A321/LR, B767-3/R, B767-4, B757-2, A320-1/2; gauge: A321/LR, A320-1/2, B757-2, B767-3/R,
+B767-4). Collapsing them into one sort produces a chart that looks entirely plausible and
+encodes nothing, which is why it is worth stating as a design rule and not only as a code
+comment. Bands are stacked in shade order, lightest at the bottom, so the ramp reads as one
+gradient rather than six unrelated greys — that gradient is the whole reason the categories are
+ordered rather than merely distinguishable. `--g0` is reserved for Other and never assignable
+to a type.
+
+**A type that flew nothing has an unknown gauge, and unknown sorts last — never lightest.**
+Real, not hypothetical: aircraft type `650` appears on JFK–LAX with 0 seats and 0 departures.
+The plausible shortcut (`departures === 0 ? 0 : …`) makes the aircraft that flew nothing the
+smallest metal on the chart, a claim about size drawn from no evidence.
+
+**"Other" is not a rounding error, so the chart must disclose it.** Measured over the full
+window: top-5 + Other covers a median **94.7%** of seats on routes with more than five types,
+but **1,571 of those 4,618 routes fall below 90%, worst case 48.2%**. On roughly a third of
+multi-type routes Other is a substantial slice, and on some of them half the area is in the
+lightest band. The ramp is fixed at six tokens, so the resolution is honesty rather than more
+bands: **how many types Other aggregates and its share of seats are stated on the swatch
+itself**, not in the legend rail. That number is per-subject — it differs for every route — and
+the rail is static; putting it in both places is how two copies of one measurement drift.
 
 ### Multi-series lines
 
@@ -230,10 +270,26 @@ filing breaks the line rather than interpolating across the absence.
 
 - **COVID is drawn, not hidden.** A `--panel-2` band across 2020-03 → 2021-06, labelled
   *"COVID — in window on purpose."* The window includes it deliberately; the chart should
-  say so.
+  say so. Implementing it (M4c) settled two details: the band's edges land **on** the 2020-03
+  and 2021-06 samples rather than bracketing them — every month is plotted at its first day, so
+  a band stopping at 2021-05-31 visibly falls short of the month it names — and it is clamped
+  to the chart's own window and **dropped entirely** when the two are disjoint, so a chart
+  starting after 2021 never carries a `--panel-2` slab at a meaningless x.
 - **Annotations must be derived, never hand-written.** The mockup's *"A321 overtakes
   737-800 · 2018"* is computed from the yearly mix (2017: 84% vs 15%; 2018: 51% vs 48%). A
   hand-typed annotation rots silently the first month the data moves.
+  **No annotation is a designed state, not a gap.** Measured: only **12,416 of 22,919 routes
+  (54%)** ever change their #1 type, and JFK–LAX — the flagship example — is not one of them.
+  So nearly half of all charts carry none, and the chart must never manufacture one, never fall
+  back to labelling the largest type (that is not an event, it would appear on every chart, and
+  it teaches readers to ignore annotations), and never break a tie to produce one. Three rules
+  decide what counts, all of them suppressive: **a tie has no leader** (breaking it gives the
+  annotation a direction the reader cannot see, which flips when the row order changes); **a
+  leader must have flown** (T-100's zero-seat no-service filings are ordinary, and "X overtakes
+  Y" drawn from two zeroes is a claim about nothing); and **a year with no leader is skipped,
+  not treated as a wall** — A, then a tied year, then B is a genuine crossover, it is what one
+  looks like mid-transition, and it is reported against the later year. Full derivation:
+  [`../architecture/pipeline.md` § M4c](../architecture/pipeline.md).
 
 ---
 
@@ -301,7 +357,7 @@ catalog appears without a front-end change.
 
 ---
 
-## Entity pages: `/route/<pair>` — shipped, M4b
+## Entity pages: `/route/<pair>` — shipped, M4b + M4c
 
 The first entity page, and the shape the rest (`/airport`, `/carrier`, `/aircraft`) follow.
 Composes components already specified above rather than inventing new ones — same top bar,
@@ -311,11 +367,13 @@ same `DATA AS OF` badge, same data table, same legend rail:
 UPGAUGE                                    DATA AS OF 2026-04
 ─────────────────────────────────────────────────────────────
 JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
-            2025-05 → 2026-04
 
   SEATS      PASSENGERS   LOAD FACTOR   AVG GAUGE   DEPARTURES  CARRIERS  QUARANTINED
   3,455,820  2,998,796    86.78%        170.4       20,283      5         0
+
+  Table: trailing 12 months · 2025-05 → 2026-04 · chart: the full window · 2015-01 → 2026-04
 ─────────────────────────────────────────────────────────────
+  [ aircraft-type mix — stacked area, full window, shaded by seats per departure ]
   [ carriers table — DataTable, one row per operating carrier, sorted by seats desc ]
   Open in the Explorer →
 ─────────────────────────────────────────────────────────────
@@ -331,6 +389,13 @@ JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
   the same rule the data table itself follows, applied to a page total. If the carrier count
   ever reaches the page's limit, a disclosure line states the totals cover the listed
   carriers only, rather than silently under-reporting.
+- **Chart** (M4c). The aircraft-type mix, above the table, over the **full** window — not the
+  table's trailing 12. The two windows differ because a twelve-point fleet-mix stack shows
+  nothing, and **the page states both**: a decade drawn under a line reading "Trailing 12
+  months" claims a window it is not showing. It is drawn whenever the *full* window has
+  filings, including when the trailing-12 table below is empty (12,062 of 22,950 pairs last
+  filed before the current trailing-12 window — the majority, not an edge case); when neither
+  window has anything, no chart is drawn and the empty state below carries the finding alone.
 - **Table.** The standard data table, one row per operating carrier, trailing 12 months,
   sorted by seats descending. Empty state (two real airports, no scheduled service in the
   window) keeps the title block and stat strip, states the finding in words, and offers the
@@ -338,7 +403,8 @@ JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
 - **Explorer link.** The page's query is an ordinary `PivotQuery`, so the link is the same
   permalink encoder the Explorer itself uses — "every insight row is one click from the raw
   rows that produced it" applied to the whole page, not just a row.
-- **Legend rail**, unchanged from the Explorer's.
+- **Legend rail**, the Explorer's plus one group: fleet shading, which only a page with a
+  chart on it gets (see below).
 
 Canonical-URL handling (redirect, 404, en-dash rendering) is a routing concern, not a design
 one — full contract in

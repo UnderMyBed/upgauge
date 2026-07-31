@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import RoutePage, { RouteView } from "@/app/route/[pair]/page";
 import { decode } from "@/lib/pivot/urlstate";
-import { loadAllowlist } from "@/lib/db";
+import { dataAsOf, loadAllowlist } from "@/lib/db";
 import { resolveRoutePair } from "@/lib/routePair";
 
 /** `permanentRedirect`/`notFound` throw rather than return -- calling `RoutePage` on a slug
@@ -24,8 +24,15 @@ async function catchDigest(pair: string): Promise<string> {
 
 describe("/route/<pair>", () => {
   it("renders the route title and both airport names", async () => {
-    render(await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }));
-    expect(screen.getByText(/JFK–LAX/)).toBeDefined();
+    // Scoped to `.entity .code` since M4c: the chart's subtitle names the same pair ("JFK–LAX ·
+    // monthly · shaded by seats per departure"), so an unscoped getByText now matches twice and
+    // throws. The header is what this test is about, and asserting on it directly is stricter
+    // than the old any-match -- a page that rendered the pair only inside the chart would now
+    // fail here rather than pass.
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }),
+    );
+    expect(container.querySelector(".entity .code")?.textContent).toBe("JFK–LAX");
     expect(screen.getByText(/Kennedy/i)).toBeDefined();
   });
 
@@ -98,6 +105,16 @@ describe("/route/<pair>", () => {
   it("shows the legend rail", async () => {
     render(await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }));
     expect(screen.getByText("Chart legend")).toBeDefined();
+  });
+
+  it("carries the fleet-shading methodology in the rail when a chart is drawn", async () => {
+    // The rail is opt-in per encoding (LegendRail's own header): /explore draws no chart and
+    // must not get this group, so the page has to ask for it. Fails if `fleetMix` is dropped
+    // from the <LegendRail> call here, or if it is passed a constant `false`. The per-route
+    // numbers (how many types Other holds, its share) are deliberately NOT here -- they are on
+    // the chart's own key, next to the swatch they describe.
+    render(await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }));
+    expect(screen.getByText(/darkening stack is an upgauge/i)).toBeDefined();
   });
 
   it("states the finding for two real airports with no service", async () => {
@@ -209,5 +226,94 @@ describe("/route/<pair> truncation disclosure", () => {
       }),
     );
     expect(screen.queryByText(/top \d+ carriers/i)).toBeNull();
+  });
+});
+
+// M4c, Task 6: the mount. `AircraftMixChart` and everything under it had 262 green tests and a
+// clean production build while being reachable from no route at all -- these tests, and the
+// served-build checks in app/smoke.sh, are what make the component part of the product rather
+// than part of the repository. What is asserted here is the WIRING: where the chart sits, which
+// window it is given, and when it is drawn at all. The encoding itself (band membership vs
+// shade, the COVID band, the annotation) belongs to AircraftMixChart.test.tsx and is not
+// re-asserted through a live database render.
+describe("/route/<pair> aircraft-mix chart", () => {
+  it("draws the chart above the carriers table, not below it", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }),
+    );
+    const svg = container.querySelector(".chart svg[role='img']");
+    const table = container.querySelector("table");
+    expect(svg).not.toBeNull();
+    expect(table).not.toBeNull();
+    // Position, not mere presence: a chart mounted under the table would satisfy every
+    // existence check on this page while inverting the reading order the mockup and the
+    // design system specify (the shape, then the rows that make it). DOCUMENT_POSITION_
+    // FOLLOWING means `table` comes after `svg` in document order.
+    expect(svg!.compareDocumentPosition(table!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it("gives the chart the FULL window, not the table's trailing 12 months", async () => {
+    // The one wiring bug this mount can have that still looks completely fine on screen: a
+    // chart drawn over `query.timeFrom` (2025-05) instead of 2015-01 renders a perfectly
+    // plausible twelve-point stacked area under a page that claims a decade. The chart's own
+    // aria-label names the window it actually drew, so it is the honest witness -- read here
+    // rather than counting paths, which a shorter window would not change. Fails if
+    // `fetchAircraftMix` is handed TRAILING_12_FROM.
+    const asOf = await dataAsOf();
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }),
+    );
+    const label = container.querySelector(".chart svg[role='img']")?.getAttribute("aria-label");
+    expect(label).toContain(`2015-01 to ${asOf}`);
+  });
+
+  it("states both windows in the window line, since the page now shows two", async () => {
+    // The `.window` line used to read "Trailing 12 months · ..." full stop, which became a
+    // false claim the moment a 2015-2026 chart appeared above it. Fails if either range is
+    // dropped from the line, and (unlike a check for the word "chart") it fails if the chart's
+    // range is stated as anything other than the window the chart is actually given.
+    const asOf = await dataAsOf();
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }),
+    );
+    const line = container.querySelector(".window")?.textContent ?? "";
+    expect(line).toMatch(/trailing 12 months/i);
+    expect(line).toContain(`2015-01 → ${asOf}`);
+    expect(line).toMatch(/2025-\d\d → /);
+  });
+
+  it("still draws the history when the trailing-12 table is empty", async () => {
+    // ATL-CAK: 67 months of filings, none since 2022-06 (measured). 12,062 of this database's
+    // route pairs last filed before the current trailing-12 window, so this is over half of
+    // them, not an oddity. Gating the chart on `!isEmpty` -- the obvious way to write the
+    // mount -- would blank the only panel on the page with anything in it, and would pass
+    // every other test in this file.
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "ATL-CAK" }) }),
+    );
+    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(screen.getByText(/no scheduled service/i)).toBeDefined();
+  });
+
+  it("draws no chart at all when there is nothing in the full window either", async () => {
+    // BNH-JFK: zero rows over 2015-2026 (measured). The empty state below already states that
+    // finding in words and offers the widened permalink; a chart frame saying "no aircraft-type
+    // filings" under it would be a second panel making the same claim. Fails if the mount
+    // becomes unconditional -- which the ATL-CAK test above cannot catch, since an
+    // unconditional mount passes it.
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "BNH-JFK" }) }),
+    );
+    expect(container.querySelector(".chart")).toBeNull();
+    expect(screen.getByText(/no scheduled service/i)).toBeDefined();
+  });
+
+  it("omits the fleet-shading legend group when no chart is drawn", async () => {
+    // Same page, same rail: the methodology group must follow the chart, not the route. Fails
+    // if `fleetMix` is hardcoded true.
+    render(await RoutePage({ params: Promise.resolve({ pair: "BNH-JFK" }) }));
+    expect(screen.queryByText(/darkening stack is an upgauge/i)).toBeNull();
   });
 });
