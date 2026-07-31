@@ -259,17 +259,47 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     for i, (key, values) in enumerate(q.filters):
         entry = _validate_dimension(key, dims, q.grain)
         columns = _dimension_columns(entry)
-        if len(columns) != 1:
+        if len(columns) == 1:
+            placeholders = []
+            for j, value in enumerate(values):
+                pname = f"f{i}_{j}"
+                params[pname] = value
+                placeholders.append(f"${pname}")
+            filter_clauses.append(f"{columns[0]} IN ({', '.join(placeholders)})")
+            continue
+
+        # A composite dimension names more than one key column -- `route` is
+        # (route_key_low, route_key_high). One filter VALUE encodes one whole route as
+        # "<low>-<high>", so multiple values stay OR'd exactly like every other dimension's
+        # IN-list rather than inventing a positional pair convention that would make
+        # "a,b,c" meaningless.
+        #
+        # least()/greatest() rather than trusting stored column order: the filter must be
+        # correct however the fact row was written. Filtering the underlying columns
+        # separately -- what this branch used to tell callers to do -- is NOT equivalent and
+        # is silently wrong: `origin IN (a,b) AND dest IN (a,b)` also matches a->a and b->b,
+        # and 12,738 such same-airport filings exist across 530 airports. On JFK-LAX that
+        # inflates seats by 18,895 (docs/data/invariants.md).
+        if len(columns) != 2:
             raise PivotError(
-                f"dimension {key!r} spans multiple columns ({entry['column_expr']}); "
-                "filter on the underlying columns directly, not the composite dimension"
+                f"dimension {key!r} spans {len(columns)} columns; only two are supported"
             )
-        placeholders = []
+        pair_clauses = []
         for j, value in enumerate(values):
-            pname = f"f{i}_{j}"
-            params[pname] = value
-            placeholders.append(f"${pname}")
-        filter_clauses.append(f"{columns[0]} IN ({', '.join(placeholders)})")
+            parts = value.split("-")
+            if len(parts) != 2 or not all(p.strip() for p in parts):
+                raise PivotError(
+                    f"filter value {value!r} for composite dimension {key!r} must be "
+                    "two ids joined by '-', e.g. '12478-12892'"
+                )
+            lo_name, hi_name = f"f{i}_{j}a", f"f{i}_{j}b"
+            params[lo_name] = parts[0].strip()
+            params[hi_name] = parts[1].strip()
+            pair_clauses.append(
+                f"(least({columns[0]}, {columns[1]}) = ${lo_name} "
+                f"AND greatest({columns[0]}, {columns[1]}) = ${hi_name})"
+            )
+        filter_clauses.append(f"({' OR '.join(pair_clauses)})")
     filters_sql = " AND ".join(filter_clauses) if filter_clauses else "TRUE"
 
     # Sortable identifiers are exactly what's in the SELECT list: single-column dimensions by
