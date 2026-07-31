@@ -211,6 +211,57 @@ def test_sort_desc_normalizes_to_true_when_sort_is_none():
     )
 
 
+def test_composite_dimension_filter_emits_least_greatest(con):
+    sql, params = render_pivot(q(filters=(("route", ("12478-12892",)),)), con)
+    assert (
+        "(least(route_key_low, route_key_high) = $f0_0a "
+        "AND greatest(route_key_low, route_key_high) = $f0_0b)"
+    ) in sql
+    assert params["f0_0a"] == "12478"
+    assert params["f0_0b"] == "12892"
+
+
+def test_composite_filter_values_are_or_joined(con):
+    """Multiple values keep the IN-list semantics every other dimension has: either route."""
+    sql, params = render_pivot(
+        q(filters=(("route", ("12478-12892", "10140-14747")),)), con
+    )
+    assert " OR " in sql
+    assert "$f0_1a" in sql and "$f0_1b" in sql
+    assert params["f0_1a"] == "10140"
+    assert params["f0_1b"] == "14747"
+
+
+def test_composite_filter_rejects_a_malformed_pair(con):
+    with pytest.raises(PivotError, match="two ids joined by"):
+        render_pivot(q(filters=(("route", ("12478",)),)), con)
+
+
+def test_composite_filter_rejects_a_non_numeric_pair(con):
+    """'JFK-LAX' has two non-empty dash-separated parts, so the length/non-empty check alone
+    let it through to a bound string param -- DuckDB then threw an unhandled Conversion Error
+    deep inside execution, which the TypeScript call sites only guarded PivotError against.
+    Fails if the digit check is dropped, or narrowed to reject only non-ASCII digits."""
+    with pytest.raises(PivotError, match="two ids joined by"):
+        render_pivot(q(filters=(("route", ("JFK-LAX",)),)), con)
+
+
+def test_composite_filter_strips_ascii_whitespace(con):
+    """Pins the ASCII whitespace set app/src/lib/pivot/render.ts's stripAsciiWhitespace
+    mirrors -- not bare .strip()/.trim(), which disagree on non-ASCII whitespace (documented,
+    not asserted here: no golden exercises that edge)."""
+    _, params = render_pivot(q(filters=(("route", (" 12478 - 12892\t",)),)), con)
+    assert params["f0_0a"] == "12478"
+    assert params["f0_0b"] == "12892"
+
+
+def test_single_column_filter_is_unchanged(con):
+    """The existing IN-list path must not move -- 17 goldens depend on it."""
+    sql, params = render_pivot(q(filters=(("origin_state", ("OR", "WA")),)), con)
+    assert "origin_state IN ($f0_0, $f0_1)" in sql
+    assert params["f0_0"] == "OR" and params["f0_1"] == "WA"
+
+
 def test_output_column_names_match_across_grouping_modes(con):
     """A client (including M3b's TypeScript port) must be able to key a pivot's results by
     column name regardless of which grouping mode was requested."""

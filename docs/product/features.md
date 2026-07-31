@@ -90,10 +90,19 @@ table" section.
 
 | Route | Contents |
 |---|---|
-| `/route/PDX-AUS` | LF over time by carrier · seats & departures · **aircraft type mix over time (stacked area)** · competitor list |
+| **`/route/PDX-AUS` — shipped, M4b** | Title block (both airport names), a stat strip (seats, passengers, load factor, avg gauge, departures, carrier count, quarantined count — load factor and avg gauge computed as ratios of the summed rows, never averaged), a carriers table (one row per operating carrier over the trailing 12 months, resolved to codes, not ids), a link into the Explorer for the identical query, and the legend rail. **Aircraft type mix over time (stacked area) is M4c**, not this milestone — deliberately: no chart library is installed yet, and proving one renders server-side is its own risk, kept out of the page's first outing. |
 | `/airport/PDX` | Route map · top routes by seats · capacity YoY · carrier share · routes added/dropped last 12mo |
 | `/carrier/DL` | Network map · fleet mix over time · capacity trend · biggest gainers/losers. Offers the **operating vs. mainline-group toggle**: default shows DL metal; grouped shows DL + Endeavor, labeled *"mainline + wholly-owned subsidiaries."* Note `/carrier/OO` (SkyWest) is operating metal across *all* the mainlines it flies for — label clearly, and it is never rolled into any group. **`/carrier/AS` is the one to get right:** its group composition changes twice in-window (VX from 2016-12, HA from 2024-09), so the grouped series must annotate both boundaries as ownership events. |
 | `/aircraft/A220` | **Underserved. Possibly the real differentiator.** Where it flies, who flies it, stage length, is it growing? Pure T-100, nobody does it well. |
+
+**`/route/<pair>`'s URL is alphabetical by airport code** (`/route/BNH-HPN`, not the storage
+order `HPN-BNH`) — predictable from the two codes alone, no database lookup needed. A
+non-canonical but resolvable pair (`/route/LAX-JFK`, `/route/HPN-BNH`) 308-redirects to the
+canonical form; an unresolvable code 404s naming it; two real airports with no scheduled
+service in the window render a 200 with the finding stated in words and the widened-to-2015
+window offered, never a blank panel or a silent fallback. Full mechanics, including why the
+naive `origin/dest IN (...)` filter is wrong (18,895-seat inflation, measured on JFK–LAX):
+[`../architecture/pipeline.md` § M4b](../architecture/pipeline.md#m4b--the-route-page).
 
 > **Build the aircraft-type-mix chart before the load-factor chart.** Everyone does load
 > factor. The gauge story is what makes this yours.

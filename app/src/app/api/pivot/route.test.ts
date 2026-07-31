@@ -1,17 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
 
-// Partial mock: wraps the REAL loadAllowlist so every test except the one that opts in via
-// `mockRejectedValueOnce` still exercises the real DuckDB catalog read, matching the rest of
-// this codebase's real-database integration-test style (db.test.ts has no mocks at all).
-// Only `loadAllowlist` needs a hook -- it is the first thing GET() calls, so failing it is
-// enough to reach the handler's catch-all branch without also needing to fail runPivot().
+// Partial mock: wraps the REAL loadAllowlist/runPivot so every test except the ones that opt
+// in via `mockRejectedValueOnce` still exercises the real DuckDB catalog read, matching the
+// rest of this codebase's real-database integration-test style (db.test.ts has no mocks at
+// all). `runPivot` is also wrapped (Important 4, final whole-branch review) so a test can
+// simulate a PivotError surfacing from INSIDE runPivot() specifically -- distinct from
+// decode()'s own guard, which converts the same error class before this handler ever sees it
+// for any input decode() itself can validate.
 vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
-  return { ...actual, loadAllowlist: vi.fn(actual.loadAllowlist) };
+  return {
+    ...actual,
+    loadAllowlist: vi.fn(actual.loadAllowlist),
+    runPivot: vi.fn(actual.runPivot),
+  };
 });
 
 import { GET } from "@/app/api/pivot/route";
-import { loadAllowlist } from "@/lib/db";
+import { loadAllowlist, runPivot } from "@/lib/db";
+import { PivotError } from "@/lib/pivot/types";
 
 const OK = "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=5&g=op";
 
@@ -56,6 +63,42 @@ describe("GET /api/pivot", () => {
     );
     expect(res.status).toBe(400);
     expect((await res.json()).error).toMatch(/unknown dimension/i);
+  });
+
+  it("rejects a non-numeric composite filter value with 400, not 500", async () => {
+    // End-to-end regression: a malformed composite filter must never 500. As of the render.ts
+    // fix (Important 4) this specific input is actually caught one level up, by decode()'s
+    // own renderPivot-based validation (which now also rejects non-numeric ids) -- so this
+    // proves the OUTCOME (400, named message, no leak) without pinning which of the two guard
+    // layers below is responsible. Fails if the composite-value digit check in render.ts
+    // regresses to accept non-numeric ids again.
+    const res = await GET(
+      req("v=1&k=route&d=route&m=seats&t=2025-05:2026-04&f=route:JFK-LAX&n=5&g=op"),
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toMatch(/two ids joined by/);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("treats a PivotError thrown from inside runPivot() the same as a UrlStateError", async () => {
+    // The specific gap Important 4 (final whole-branch review) named: PivotError does not
+    // extend UrlStateError, and until this fix, decode()'s own guard was the ONLY thing
+    // standing between a PivotError and an unhandled 500 -- anything that made it past
+    // decode() (a TOCTOU catalog change between decode()'s loadAllowlist() call and
+    // runPivot()'s own internal one, or any future PivotError source not ALSO checked by
+    // decode()'s validation pass) would 500 as an opaque "internal error". Bypasses decode()
+    // entirely by making the (separately mocked) runPivot() throw directly, so this fails if
+    // the `e instanceof PivotError` branch in route.ts's catch is ever removed, independent
+    // of whatever decode() itself does or doesn't catch.
+    vi.mocked(runPivot).mockRejectedValueOnce(
+      new PivotError("unknown dimension 'simulated-catalog-race'"),
+    );
+    const res = await GET(req(OK));
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.error).toBe("unknown dimension 'simulated-catalog-race'");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
   it("does not cache an error response", async () => {

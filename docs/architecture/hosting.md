@@ -133,6 +133,25 @@ not build on provider-specific runtimes** (Workers, D1, KV). This must stay a no
 > This constraint earned its keep: swapping the original Fly pick for Hetzner was a one-line
 > change precisely because nothing depended on the provider.
 
+## What `proxy.ts` owns
+
+`app/src/proxy.ts` does **three** jobs, and each of them has already shipped broken once by
+being invisible to whoever added a route:
+
+| Job | Mechanism | Read the section |
+|---|---|---|
+| Raw query string → the app | `x-upgauge-raw-query` request header (`lib/rawQuery.ts`) | *load-bearing*, below |
+| Request pathname → the app | `x-upgauge-path` request header (`lib/rawPath.ts`) | *the pathname header*, below |
+| The project `Cache-Control` | Set on the proxy's own response | *Cache-Control lives here*, below |
+
+> **Adding a page route? You must add it to `config.matcher` in `proxy.ts`, or it ships
+> uncached and without either header.** This is not optional and nothing else enforces it: a
+> route missing from the matcher builds, serves, and looks correct. `/route/<pair>` shipped
+> `private, no-cache, no-store, max-age=0, must-revalidate` for exactly this reason — the
+> matcher listed only `/explore` and `/api/pivot`, and every gate stayed green. M4d's
+> `/airport`, `/carrier` and `/aircraft` each need the same three lines: a matcher entry, a
+> `Cache-Control` branch, and a header assertion in `app/smoke.sh`.
+
 ## `proxy.ts` is load-bearing — both query entry points break without it
 
 **`app/src/proxy.ts` and `next.config.ts`'s `skipProxyUrlNormalize: true` are one mechanism,
@@ -178,6 +197,190 @@ else.
 **No unit test can catch a regression here.** The tests never construct a `NextRequest` and
 never cross Next's normalization; both times this bug appeared it was found only by building,
 serving, and curling. See [pipeline.md](pipeline.md) on the missing `app-smoke` gate.
+
+## The pathname header — how a `not-found.js` names what was requested
+
+`proxy.ts` sets a second request header, `x-upgauge-path` (`app/src/lib/rawPath.ts`), carrying
+the request's pathname. Unlike the raw-query header, nothing is being rescued from Next's URL
+normalization here. It exists because **Next's `not-found.js` convention accepts no props**
+(`node_modules/next/dist/docs/.../file-conventions/not-found.md:131`) and gets no route
+params, so `app/route/[pair]/not-found.tsx` has no framework channel telling it which slug
+failed — and `notFound()` takes no argument, so `page.tsx` cannot pass its resolution either.
+
+The same docs (`:181`) point at a Client Component reading `usePathname()`, and that is what
+M4b shipped first. It was replaced because it named only the *pair*, where four doc sites
+promise a 404 **naming the offending code**, and because it put the one value the page's whole
+message depends on behind a client boundary that no server test and no `curl` can observe:
+`usePathname()` returning null would have degraded the page to a generic sentence with every
+gate green. That is this branch's signature failure class.
+
+The same file's Data Fetching example (`:135-152`) shows an `async not-found.tsx` calling
+`headers()`. So the pathname arrives server-side, `not-found.tsx` re-runs `resolveRoutePair()`
+against it, and renders that function's own `reason` — `unknown airport code 'ZZZZ'`, or
+`'LHR' is a recognized airport code, but this dataset is domestic-only …`. Absent header →
+`MissingRawPathError`, same fail-loud discipline as `MissingRawQueryError`, no fallback.
+
+`app/smoke.sh` asserts the *rendered sentence*, not just the 404 status, and asserts each
+case's phrase together with the **absence** of a sibling case's phrase — a single generic
+sentence enumerating all the causes would satisfy any lone positive check, and that sentence
+is precisely what shipped before.
+
+> **Known gap, pre-existing and not fixed by this:** Next serves a 404 from a `force-dynamic`
+> page as an `<html id="__next_error__">` shell with an **empty `<body>`** — the page's markup
+> arrives in the streamed React payload further down the same response and is rendered
+> client-side. Verified by building and curling `d158726`, before the fix wave that moved this
+> page to the server, so it is a property of the framework's 404 path and not of the page. The
+> smoke checks therefore grep the whole response body. That still proves what matters here —
+> the payload is server-generated, so a hit means the *server* resolved the pair and shipped
+> that reason — but the 404's text is not visible with JavaScript disabled. Fixing it means
+> changing how the 404 renders, which nothing in M4b required.
+
+## `Cache-Control` lives here, and it is status-blind by construction
+
+CLAUDE.md's *"every response gets `public, s-maxage=2592000, stale-while-revalidate=86400`"*
+is applied in `proxy.ts`, on the proxy's own response — not in the pages. It has to be:
+`/explore` and `/route/<pair>` both export `dynamic = "force-dynamic"` (their content depends
+on live warehouse state), so Next emits its own `no-store` for the HTML, and every shared
+permalink — the growth mechanic — would hit DuckDB with the CDN doing nothing. Setting it on
+the proxy response is what makes it stick regardless of route segment config.
+
+`/api/pivot` is deliberately excluded: its route handler sets its own header, `no-store` on
+errors and the long cache on success, and overriding here would make every 400 publicly
+cacheable for a month.
+
+**A proxy cannot see the downstream status.** `NextResponse.next()` is a passthrough sentinel
+created *before* the page runs, and a Server Component cannot set response headers, so "exempt
+404s" — the rule `/api/pivot` gets for free in its handler — has no direct implementation on a
+page route. The naive consequence shipped: a `/route/<pair>` 404 was pinned in a shared CDN
+cache for 30 days. The dataset is rebuilt monthly, so `/route/XYZ-JFK` 404ing today because
+`XYZ` has no `fct_segment_month` rows keeps 404ing for up to another 30 days *after* the
+ingest that makes it real — `stale-while-revalidate` only applies once `s-maxage` has expired,
+so the page cannot self-correct.
+
+The rule that does have an implementation:
+
+> **Cache-worthiness is not "did it return 200". It is "is this a well-formed, known entity",
+> which the proxy *can* determine before the page runs.**
+
+For `/route/<pair>` that is `resolveRoutePair(slug).kind !== "notFound"` — a known pair
+returns 200 (including the empty-state 200) or a 308, both stable and both worth caching;
+a malformed slug, an unknown code, a self-route or a recognized-but-non-domestic code returns
+404 and gets `no-store`. **This is the pattern M4d's entity pages should follow**: resolve the
+identity in the proxy, cache only what resolves.
+
+Two things this depends on, both established by building and serving rather than assumed:
+
+- **DuckDB is reachable from inside `proxy.ts`.** Next 16 runs the proxy on the Node.js
+  runtime and the `runtime` config option is not available there
+  (`.../file-conventions/proxy.md:221-223`), so `lib/db.ts` works unchanged — confirmed by
+  `make app-smoke`, which is the only evidence that counts for this class.
+- **The proxy's resolution is advisory, never authoritative.** It is wrapped in a `try`
+  returning `false`: a transient DuckDB failure inside a proxy would 500 a request the page
+  might well have served, and declining to cache is the conservative outcome. The page runs
+  its own resolution unguarded a moment later, so a real database failure still surfaces
+  loudly.
+
+Measured against a served production build. `make app-smoke` curls the `Cache-Control` on
+every row below; the status on the 308 and on `/route/ZZZZ-LAX`.
+
+| URL | Status | `Cache-Control` |
+|---|---|---|
+| `/route/JFK-LAX` | 200 | `public, s-maxage=2592000, stale-while-revalidate=86400` |
+| `/route/LAX-JFK` | 308 | `public, s-maxage=2592000, stale-while-revalidate=86400` |
+| `/route/ZZZZ-LAX` | 404 | `no-store` |
+| `/route/JFK-LHR` | 404 | `no-store` |
+| `/route/LAX-LAX` | 404 | `no-store` |
+
+### What the proxy's query actually costs
+
+The first version of this section called it *"one extra read of dimension-sized tables …
+on a request that is about to run a much larger pivot"*. **That was wrong by roughly an
+order of magnitude, and in the direction that matters** — M4d is told above to copy this
+pattern three more times. The corrected numbers, read-only against the built database,
+`memory_limit=1GB`, five warm runs, at DuckDB's default thread count (which is what the
+server runs with — `db.ts` never sets `threads`) and, in brackets, capped to `threads=2`:
+
+| Query | At `6a6b11c` | Now | Note |
+|---|---|---|---|
+| `lookup_airport_by_code.sql` (the proxy's, and the page's) | 43–51 ms [same] | **8 ms** [17 ms] | filters `dim_airport` by presence in `fct_segment_month` — 3.36 M rows, not a dimension read |
+| `lookup_airport_code_exists.sql` (404 reason only) | 1.8–2.4 ms | unchanged | genuinely dimension-only |
+| A `/route/JFK-LAX` carriers pivot | ~7–9 ms | unchanged | the query the lookup precedes |
+
+The old form is **identical at 2 threads and at 12** — it does not parallelise, which is
+itself the tell that it was re-scanning rather than probing. Both figures reproduce; a
+measurement of this query that omits its thread count is not comparable to another one.
+
+The lookup ran a correlated `EXISTS (… WHERE f.origin_airport_id = id OR f.dest_airport_id
+= id)`. The `OR` across two columns defeats a hash semi-join, so DuckDB re-scanned the fact
+table per candidate row. Rewriting it as a semi-join against `origin ∪ dest` is 5.5× faster
+(2.7× at two threads) and selects exactly the same airports — proven exhaustively over every `is_latest` code
+against the real database, not sampled: `pipeline/tests/test_resolution_invariants.py`'s
+`test_reverse_lookup_selects_exactly_the_fact_present_current_airports` diffs the shipped
+file's result set against the `EXISTS` form's, both directions, and a mutation that drops
+only destination-only airports fails it by 50 rows.
+
+**It is still the largest single query on the route path**, and a 404 runs it twice (proxy,
+then `not-found.tsx`'s reason) with no CDN absorption, over an unbounded URL space.
+Cloudflare rate limiting is the front door for that (CLAUDE.md § Architecture). Do not
+"optimise" it by dropping the fact-presence filter: that filter is what takes colliding
+airport codes from 36 to 0, and `AUS` resolves to an airport closed since 1999 without it
+([invariants.md § Entity resolution](../data/invariants.md)).
+
+### One `DuckDBInstance` per process — and it takes `globalThis` to get there
+
+This section used to say the proxy's query runs "against an already-memoized
+`DuckDBInstance`". **It did not.** Turbopack emits `lib/db.ts` into a separate server chunk
+per entry graph, and each chunk carries its own copy of the module's state, so a
+module-level `let instance` was **three** memos. Measured against `next build` output:
+`access_mode` — a string that occurs only in `getInstance()` — appears in three emitted
+chunks (proxy, page SSR, route handler), and open fds on `upgauge.duckdb` in the single
+`next-server` process climbed **1 → 2 → 3** as `/`, `/route/JFK-LAX` and `/api/pivot` were
+each hit for the first time.
+
+Two consequences, one of them a live route back to the bug above:
+
+1. **Three snapshots.** The three instances open at three different moments and each pins
+   an inode for the process's life. If the database file were replaced between the proxy's
+   open and the page's, a pair present in the proxy's snapshot and absent from the page's
+   would get `s-maxage=2592000` on a 404.
+2. **Three buffer pools**, each defaulting to ~80% of system RAM, with no coordination
+   between them, on an 8 GB box.
+
+`db.ts` now memoizes on `globalThis` instead. The three chunks are plain `require`s in one
+Node process, not vm contexts, so they share it: the same fd count stays at **1** after all
+three entry points are hit. `app/smoke.sh` asserts that against a served build — no unit
+test can, because a test has one module graph by construction. If a future Next isolates the
+proxy into its own realm, this degrades to exactly the old behaviour (one memo per realm)
+rather than breaking, and that smoke check is what would say so.
+
+### The gap: a **5xx** still gets the 30-day header
+
+CLAUDE.md's rule is *"404s get `no-store`"* and that is deliberately narrow. **A 500 does
+not.** The proxy resolves the pair, writes the long cache, and only then does the page throw
+— `dataAsOf()`, `loadAllowlist()`, `runPivot()`, or an OOM. Measured against a served build
+pointed at a deliberately broken database:
+
+| URL | Status | `Cache-Control` |
+|---|---|---|
+| `/route/JFK-LAX` (catalog view missing) | **500** | `public, s-maxage=2592000, stale-while-revalidate=86400` |
+| `/explore?…` (same) | **500** | `public, s-maxage=2592000, stale-while-revalidate=86400` |
+| `/api/pivot?…` (same) | 500 | `no-store` — the handler owns its own header |
+| `/route/ZZZZ-LAX` (same) | 404 | `no-store` — unaffected |
+
+RFC 9111 § 3 lets a shared cache store a 500 that carries an explicit `s-maxage`, so this is
+a real exposure on the headline SEO-canonical URL, not a technicality.
+
+**This is not fixable from the proxy and is not new.** The same shape has been true of
+`/explore` since M3b, and of `/route` before and after the fix wave that made 404s
+`no-store`: the proxy cannot see the downstream status, and a Server Component cannot set a
+response header, so there is no place left that knows both "this is a 5xx" and "headers are
+still writable". `/api/pivot` escapes only because a route handler builds its own `Response`.
+
+What *would* fix it, none of them small and none of them M4b: give the pages a route-handler
+entry point that can set headers per outcome; or drop the proxy's blanket `Cache-Control` in
+favour of a per-page mechanism if Next ever grows one; or accept a short `s-maxage` for the
+HTML so an error self-corrects in minutes rather than a month. Recorded here so M4d inherits
+the honest version.
 
 ## If the Dockerfile ever adopts `output: "standalone"`
 

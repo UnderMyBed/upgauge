@@ -22,17 +22,36 @@ casting/binding to reject. Duplicating DuckDB's type system in Python would be e
 over-engineering the project's rules forbid elsewhere. The boundary: PivotError for "this
 request could never produce valid SQL," DuckDB for "this request produced valid SQL that
 doesn't match any data."
+
+One structural check that boundary DOES cover (M4b, final whole-branch review Important 4):
+a composite filter value must be two INTEGER ids joined by '-' -- every composite dimension
+today resolves through an id column (CLAUDE.md: "Key on AIRLINE_ID and AIRPORT_ID"), and the
+error message has always promised "two ids". Rejecting 'JFK-LAX' here is enforcing that
+promise as a format check, not validating whether either id actually exists (that half stays
+DuckDB's job) -- before this, 'route:JFK-LAX' passed this function's checks and only failed
+deep inside DuckDB with an unhandled "Conversion Error", which neither TypeScript call site
+was written to catch since they only guarded against `PivotError`.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 import duckdb
 
 QUERIES_DIR = Path(__file__).parents[1] / "sql" / "03_queries"
+
+# Minor, final whole-branch review: Python's `str.strip()` and JS's `String.trim()` disagree
+# on which characters count as whitespace -- `.strip()` additionally strips \x1c-\x1f (the
+# Unicode separator control codes), which JS's `trim()` does not; `trim()` additionally strips
+# U+FEFF (ZWNBSP/BOM), which `.strip()` does not. An explicit ASCII whitespace set is the only
+# strip both languages can express identically -- mirrored in app/src/lib/pivot/render.ts as
+# `ASCII_WHITESPACE_RE`/`stripAsciiWhitespace`.
+_ASCII_WHITESPACE = " \t\n\r\f\v"
+_INTEGER_RE = re.compile(r"\A[0-9]+\Z")
 MAINLINE_JOIN_PATH = QUERIES_DIR / "pivot_mainline_join.sql"
 GOLDENS_DIR = QUERIES_DIR / "goldens"
 PIVOT_GOLDENS_PATH = GOLDENS_DIR / "pivot.json"
@@ -259,17 +278,47 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     for i, (key, values) in enumerate(q.filters):
         entry = _validate_dimension(key, dims, q.grain)
         columns = _dimension_columns(entry)
-        if len(columns) != 1:
+        if len(columns) == 1:
+            placeholders = []
+            for j, value in enumerate(values):
+                pname = f"f{i}_{j}"
+                params[pname] = value
+                placeholders.append(f"${pname}")
+            filter_clauses.append(f"{columns[0]} IN ({', '.join(placeholders)})")
+            continue
+
+        # A composite dimension names more than one key column -- `route` is
+        # (route_key_low, route_key_high). One filter VALUE encodes one whole route as
+        # "<low>-<high>", so multiple values stay OR'd exactly like every other dimension's
+        # IN-list rather than inventing a positional pair convention that would make
+        # "a,b,c" meaningless.
+        #
+        # least()/greatest() rather than trusting stored column order: the filter must be
+        # correct however the fact row was written. Filtering the underlying columns
+        # separately -- what this branch used to tell callers to do -- is NOT equivalent and
+        # is silently wrong: `origin IN (a,b) AND dest IN (a,b)` also matches a->a and b->b,
+        # and 12,738 such same-airport filings exist across 530 airports. On JFK-LAX that
+        # inflates seats by 18,895 (docs/data/invariants.md).
+        if len(columns) != 2:
             raise PivotError(
-                f"dimension {key!r} spans multiple columns ({entry['column_expr']}); "
-                "filter on the underlying columns directly, not the composite dimension"
+                f"dimension {key!r} spans {len(columns)} columns; only two are supported"
             )
-        placeholders = []
+        pair_clauses = []
         for j, value in enumerate(values):
-            pname = f"f{i}_{j}"
-            params[pname] = value
-            placeholders.append(f"${pname}")
-        filter_clauses.append(f"{columns[0]} IN ({', '.join(placeholders)})")
+            parts = [p.strip(_ASCII_WHITESPACE) for p in value.split("-")]
+            if len(parts) != 2 or not all(_INTEGER_RE.match(p) for p in parts):
+                raise PivotError(
+                    f"filter value {value!r} for composite dimension {key!r} must be "
+                    "two ids joined by '-', e.g. '12478-12892'"
+                )
+            lo_name, hi_name = f"f{i}_{j}a", f"f{i}_{j}b"
+            params[lo_name] = parts[0]
+            params[hi_name] = parts[1]
+            pair_clauses.append(
+                f"(least({columns[0]}, {columns[1]}) = ${lo_name} "
+                f"AND greatest({columns[0]}, {columns[1]}) = ${hi_name})"
+            )
+        filter_clauses.append(f"({' OR '.join(pair_clauses)})")
     filters_sql = " AND ".join(filter_clauses) if filter_clauses else "TRUE"
 
     # Sortable identifiers are exactly what's in the SELECT list: single-column dimensions by
@@ -340,9 +389,12 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
 #: (name, description, query). Covers: a single-dimension segment pivot; a multi-dimension
 #: pivot; a route-grain pivot (the multi-column `route` dimension); a derived-measure pivot
 #: (also the case Step 4 of the M3a plan mutates to prove the goldens pin something); a
-#: filtered pivot; a mainline-grouped pivot; an ascending-sort pivot; and the Task 5
+#: filtered pivot; a mainline-grouped pivot; an ascending-sort pivot; the Task 5
 #: regression -- sorting by the carrier dimension under mainline grouping, which crashed
-#: until op_airline_id's ORDER BY expression was made to match its GROUP BY expression.
+#: until op_airline_id's ORDER BY expression was made to match its GROUP BY expression; and
+#: (M4b Task 3) a composite-dimension filter on `route`, single- and multi-value, pinning
+#: the least()/greatest() rendering both pipeline/pivot.py and app/src/lib/pivot/render.ts
+#: must emit identically.
 _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
     (
         "single_dimension_segment",
@@ -437,13 +489,38 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
             time_from="2015-01", time_to="2015-12", sort="op_airline_id", grouping="mainline",
         ),
     ),
+    (
+        "filter_composite_route",
+        "An undirected route filter on the composite `route` dimension, which names two key "
+        "columns. Emits least()/greatest() so the match is correct however the fact row was "
+        "written -- filtering origin and dest separately also matches a->a and b->b, which "
+        "over-counts by 18,895 seats on JFK-LAX (docs/data/invariants.md).",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
+            limit=50, grouping="operating", filters=(("route", ("12478-12892",)),),
+        ),
+    ),
+    (
+        "filter_composite_route_multiple",
+        "Two routes in one filter. Values stay OR'd, preserving the IN-list semantics every "
+        "other dimension has.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
+            limit=50, grouping="operating",
+            filters=(("route", ("12478-12892", "10140-14747")),),
+        ),
+    ),
 ]
 
 #: (name, description, query). Covers the URL codec's own required round-trips: grain='route'
 #: through its short token ('k=route'); grouping='mainline' through its short token ('g=ml');
-#: an ascending sort (no '-' prefix on 's'); ordinary multi-value filters; and a filter value
+#: an ascending sort (no '-' prefix on 's'); ordinary multi-value filters; a filter value
 #: containing every character the URL format itself uses structurally (',' '&' '%' ':' '='
-#: '+' and a space) -- the one piece of user/attacker-controlled free text in the contract.
+#: '+' and a space) -- the one piece of user/attacker-controlled free text in the contract;
+#: and (M4b Task 3) a filter on the composite `route` dimension, whose value contains '-',
+#: a character this format does not treat as a delimiter.
 _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
     (
         "baseline_round_trip",
@@ -531,6 +608,16 @@ _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
             grain="segment", dimensions=("op_airline_id",), measures=("seats",),
             time_from="2015-01", time_to="2015-12",
             filters=(("op_airline_id", ("2T (1)", "O'Hare", "a!b", "c*d")),),
+        ),
+    ),
+    (
+        "filter_composite_route",
+        "A route filter round-trips through the URL codec. The value contains a '-', which "
+        "is not a structural delimiter in this format and so needs no escaping.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
+            limit=50, grouping="operating", filters=(("route", ("12478-12892",)),),
         ),
     ),
 ]

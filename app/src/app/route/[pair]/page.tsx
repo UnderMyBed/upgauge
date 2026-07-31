@@ -1,0 +1,322 @@
+import { notFound, permanentRedirect } from "next/navigation";
+import { resolveRoutePair } from "@/lib/routePair";
+import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
+import { DataTable, type ColumnSpec } from "@/components/DataTable";
+import { LegendRail } from "@/components/LegendRail";
+import { encode } from "@/lib/pivot/urlstate";
+import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
+import type { AirportRef } from "@/lib/resolve";
+import type { Allowlist } from "@/lib/pivot/allowlist";
+import type { PivotQuery } from "@/lib/pivot/types";
+
+// A permalink page whose content depends on live warehouse state (dataAsOf(), the pivot
+// result) must not be frozen at build time -- same reasoning, same fix, as explore/page.tsx's
+// export of this constant: a statically-cached /route/JFK-LAX would keep serving a stale
+// DATA AS OF badge and stale totals to every visitor.
+export const dynamic = "force-dynamic";
+
+/** Measured: the busiest route carries 16 distinct operating carriers over a trailing 12
+ * months, 99th percentile 8. 50 leaves generous headroom so the totals below always cover
+ * every carrier. If a future refresh exceeds it the page says so rather than under-reporting
+ * -- see `truncated` below. */
+const ROUTE_CARRIER_LIMIT = 50;
+
+// data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- the widest window
+// any query against this database can have, matching explore/page.tsx's own constant of the
+// same name and value.
+const EARLIEST_MONTH = "2015-01";
+
+/** The trailing-12-month window this page always shows, computed from `asOf` the same way
+ * mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql:
+ * `end_m - INTERVAL 11 MONTH`) -- 11 months back from asOf, inclusive of asOf, is 12 months. */
+function trailing12From(asOf: string): string {
+  const [y, m] = asOf.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 - 11, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Ratios of sums, never averages of the rows above. CLAUDE.md's rule: compute derived
+ * measures from summed numerator and denominator. Averaging the per-carrier load factors in
+ * the table would be the classic T-100 error this project exists not to make. */
+function routeTotals(rows: Record<string, unknown>[]) {
+  const sum = (k: string) => rows.reduce((a, r) => a + Number(r[k] ?? 0), 0);
+  const seats = sum("seats");
+  const passengers = sum("passengers");
+  const departures = sum("departures_performed");
+  return {
+    seats,
+    passengers,
+    departures,
+    loadFactor: seats === 0 ? null : passengers / seats,
+    avgGauge: departures === 0 ? null : seats / departures,
+  };
+}
+
+// fct_segment_month exposes quarantine bookkeeping columns alongside every measure a query
+// asked for (same as explore/page.tsx's identical constant) -- the stat strip surfaces the
+// count, but they are not pivot-vocabulary columns and must never appear as a table column.
+const NON_DISPLAY_COLUMNS = new Set(["quarantined_rows", "quarantine_reasons"]);
+
+const KIND: Record<string, ColumnSpec["kind"]> = {
+  seats: "seats",
+  passengers: "seats",
+  load_factor: "loadFactor",
+  avg_gauge: "gauge",
+  departures_performed: "count",
+};
+
+/** Same fallback as explore/page.tsx's identically-named function: a measure the KIND
+ * override map does not name still needs a numeric kind, derived from the catalog's own
+ * is_additive flag rather than a second hand-copied list. */
+function defaultKind(allowlist: Allowlist, key: string): ColumnSpec["kind"] {
+  const measure = allowlist.meas.get(key);
+  if (measure === undefined) return "identifier";
+  return measure.isAdditive ? "count" : "gauge";
+}
+
+function buildColumns(allowlist: Allowlist, resultColumns: string[]): ColumnSpec[] {
+  return resultColumns
+    .filter((c) => !NON_DISPLAY_COLUMNS.has(c))
+    .map((c) => ({
+      key: c,
+      label: allowlist.meas.get(c)?.label ?? allowlist.dims.get(c)?.label ?? c,
+      kind: KIND[c] ?? defaultKind(allowlist, c),
+      derived: allowlist.meas.get(c)?.isAdditive === false,
+      dimKey: allowlist.dims.get(c)?.joinDim ? c : undefined,
+    }));
+}
+
+function Wordmark() {
+  return (
+    <span className="mark">
+      UP<span className="accent">GAUGE</span>
+    </span>
+  );
+}
+
+function TopBar({ asOf }: { asOf: string }) {
+  return (
+    <div className="top">
+      <Wordmark />
+      <span className="asof">DATA AS OF {asOf}</span>
+    </div>
+  );
+}
+
+function Stat({ label, value, derived }: { label: string; value: string; derived?: boolean }) {
+  return (
+    <div className="stat">
+      <div className="k">{derived ? <span className="deriv">{label}</span> : label}</div>
+      <div className="v">{value}</div>
+    </div>
+  );
+}
+
+/** The permalink for the identical query (same dimension, same measures, same route filter)
+ * against the Explorer, widened to `EARLIEST_MONTH` when asked -- shared by the Explorer link
+ * and the empty-state's widened-window offer, so both always agree on what "the same query"
+ * means. Mirrors explore/page.tsx's own `widerWindowHref`. */
+function exploreHref(query: PivotQuery, timeFrom?: string): string {
+  return `/explore?${encode(timeFrom === undefined ? query : { ...query, timeFrom })}`;
+}
+
+/** "No scheduled service" is data, not an error (CLAUDE.md's BNH-JFK-style gotchas) -- both
+ * airport codes resolved, the query is valid, and zero rows is the honest answer. Mirrors
+ * explore/page.tsx's EmptyState: state the finding in words, offer the widened-to-2015
+ * permalink, never render a blank panel. */
+function RouteEmptyState({
+  query,
+  low,
+  high,
+}: {
+  query: PivotQuery;
+  low: AirportRef;
+  high: AirportRef;
+}) {
+  const wider = query.timeFrom > EARLIEST_MONTH ? exploreHref(query, EARLIEST_MONTH) : null;
+  return (
+    <div className="empty-state">
+      <p>
+        No scheduled service between {low.name} ({low.code}) and {high.name} ({high.code}) over{" "}
+        {query.timeFrom} → {query.timeTo}.
+      </p>
+      {wider ? (
+        <p>
+          <a href={wider}>
+            Try the same query over {EARLIEST_MONTH} → {query.timeTo}
+          </a>
+          , the widest window this data covers.
+        </p>
+      ) : (
+        <p>This is already the widest window this data covers.</p>
+      )}
+    </div>
+  );
+}
+
+/** The "ok" branch's whole render, taking the resolved pair AND the carrier limit as explicit
+ * inputs -- same split, same reason, as explore/page.tsx's `ExploreView` (exported) vs
+ * `ExplorePage` (thin default-export wrapper): nothing here reaches Next's routing plumbing
+ * directly, so a test can drive it with a real, live-database render instead of a mocked one
+ * (this codebase has no mocks -- lib/resolve.ts's own header comment). `limit` defaulting to
+ * `ROUTE_CARRIER_LIMIT` is what makes the truncation disclosure testable at all: JFK-LAX has 5
+ * operating carriers in the real trailing-12-month window (measured), nowhere near 50, so
+ * nothing in production data reaches that branch without the ability to lower the limit for a
+ * test -- fix round 1, Finding 2. */
+export async function RouteView({
+  low,
+  high,
+  canonical,
+  filterValue,
+  limit = ROUTE_CARRIER_LIMIT,
+}: {
+  low: AirportRef;
+  high: AirportRef;
+  canonical: string;
+  filterValue: string;
+  limit?: number;
+}) {
+  const allowlist = await loadAllowlist();
+  const asOf = await dataAsOf();
+  const TRAILING_12_FROM = trailing12From(asOf);
+
+  const query: PivotQuery = {
+    grain: "segment",
+    dimensions: ["op_airline_id"],
+    measures: ["seats", "passengers", "departures_performed", "load_factor", "avg_gauge"],
+    timeFrom: TRAILING_12_FROM,
+    timeTo: asOf,
+    filters: [["route", [filterValue]]],
+    sort: "seats",
+    sortDesc: true,
+    limit,
+    grouping: "operating",
+  };
+
+  const result: PivotResult = await runPivot(query);
+  const totals = routeTotals(result.rows);
+  const truncated = result.rows.length >= limit;
+  const isEmpty = result.rows.length === 0;
+
+  const columns = buildColumns(allowlist, result.columns);
+
+  // canonical is ALPHABETICAL (routePair.ts); low/high are ordered by ID and can disagree
+  // with it (154 of 22,420 routes do -- 0.69%, excluding the 530 same-airport "routes" that
+  // are not routes). Pairing each half of `canonical` back to its airport
+  // by CODE, rather than assuming canonical.split("-") lines up with [low, high], keeps the
+  // displayed name attached to the code it is actually under even when the two orderings
+  // differ.
+  const [codeA, codeB] = canonical.split("-");
+  const airports = [low, high];
+  const a = airports.find((x) => x.code === codeA) ?? low;
+  const b = airports.find((x) => x.code === codeB) ?? high;
+
+  return (
+    <div className="wrap">
+      <TopBar asOf={asOf} />
+      <main>
+        <div className="entity">
+          <div className="code">{canonical.replace("-", "–")}</div>
+          <div className="ename">
+            {a.name} ↔ {b.name}
+          </div>
+        </div>
+        <div className="stats">
+          <Stat label="Seats" value={formatSeats(totals.seats)} />
+          <Stat label="Passengers" value={formatSeats(totals.passengers)} />
+          <Stat label="Load factor" value={formatLoadFactor(totals.loadFactor)} derived />
+          <Stat label="Avg gauge" value={formatGauge(totals.avgGauge)} derived />
+          <Stat label="Departures" value={formatCount(totals.departures)} />
+          <Stat label="Carriers" value={formatCount(result.rows.length)} />
+          <Stat label="Quarantined" value={formatCount(result.quarantinedRowsOnPage)} />
+        </div>
+        <p className="window">
+          Trailing 12 months · {query.timeFrom} → {query.timeTo}
+        </p>
+        <div className="body">
+          <div>
+            {isEmpty ? (
+              // `a`/`b` (alphabetical, same order as the header above), NOT `low`/`high`
+              // (id order) -- Minor, final whole-branch review: for the 154 routes where the
+              // two orderings disagree (BNH-JFK is one: id order is JFK,BNH but the header
+              // reads "BNH–JFK"), passing low/high here made the empty-state prose name the
+              // airports in the OPPOSITE order from the header immediately above it.
+              <RouteEmptyState query={query} low={a} high={b} />
+            ) : (
+              <DataTable columns={columns} rows={result.rows} resolved={result.resolved} />
+            )}
+            {truncated && (
+              <p className="foot">
+                Showing the top {limit} carriers by seats; the totals above cover only these
+                rows.
+              </p>
+            )}
+            <p className="foot">
+              {result.quarantinedRowsOnPage} quarantined row
+              {result.quarantinedRowsOnPage === 1 ? "" : "s"} excluded from these totals, never
+              clamped. <span className="deriv">Load factor</span> and{" "}
+              <span className="deriv">avg gauge</span> are computed at query time from summed
+              passengers, seats and performed departures -- never averaged.
+            </p>
+            <p className="foot">
+              <a href={exploreHref(query)}>Open in the Explorer</a> for the identical query --
+              every row above is one click from the raw rows that produced it.
+            </p>
+          </div>
+          <LegendRail />
+        </div>
+      </main>
+    </div>
+  );
+}
+
+/** Thin wrapper: the ONLY job here is resolving the slug and handling the three-way
+ * `RoutePairResult` (routePair.ts, Task 5) before handing the "ok" case to `RouteView`. Split
+ * out so `RouteView` above never has to know about `params`, matching explore/page.tsx's
+ * `ExplorePage`/`ExploreView` split. */
+export default async function RoutePage({
+  params,
+}: {
+  params: Promise<{ pair: string }>;
+}) {
+  const { pair: slug } = await params;
+  const resolved = await resolveRoutePair(slug);
+
+  if (resolved.kind === "redirect") {
+    // permanentRedirect -> 308: this IS the canonical URL for this route pair (routePair.ts's
+    // alphabetical-vs-id-order header comment), not a temporary relocation, so the correct
+    // signal is 308 (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/
+    // permanentRedirect.md), not redirect()'s default 307. Confirmed against the actual
+    // thrown error, not just the docs' prose: node_modules/next/dist/client/components/
+    // redirect.js's `permanentRedirect()` throws `getRedirectError(url, type,
+    // RedirectStatusCode.PermanentRedirect)`, whose `.digest` is the literal string
+    // `NEXT_REDIRECT;${type};${url};${statusCode};` -- `statusCode` is `308` here and would
+    // be `307` (RedirectStatusCode.TemporaryRedirect, redirect.js's default) if this ever
+    // regressed to plain `redirect()`. page.test.tsx pins that exact digest.
+    permanentRedirect(`/route/${resolved.canonical}`);
+  }
+  if (resolved.kind === "notFound") {
+    // notFound() throws NEXT_HTTP_ERROR_FALLBACK;404 and terminates rendering of this segment
+    // (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/not-found.md) --
+    // there is no app/not-found.tsx yet, so Next's own default 404 UI renders; that default
+    // still returns the documented 404 status, which is the contract this page owes.
+    // Confirmed against the source, not just the docs: node_modules/next/dist/client/
+    // components/not-found.js throws an Error whose `.digest` is the literal string
+    // `NEXT_HTTP_ERROR_FALLBACK;404` (http-access-fallback.js's `HTTP_ERROR_FALLBACK_ERROR_CODE`
+    // + the fixed 404 status) -- page.test.tsx pins that exact digest too.
+    notFound();
+  }
+
+  // Called directly rather than written as `<RouteView .../>`: RouteView is an async
+  // function, and this codebase's tests render the result of `await RoutePage(...)` through
+  // react-dom's ordinary client renderer (testing-library/react), which -- unlike Next's own
+  // RSC renderer -- cannot await a nested async component reached via JSX. Calling it
+  // directly returns its already-resolved element tree, exactly as if this function had
+  // inlined RouteView's body itself. Equivalent under Next's real RSC rendering either way.
+  return await RouteView({
+    low: resolved.low,
+    high: resolved.high,
+    canonical: resolved.canonical,
+    filterValue: resolved.filterValue,
+  });
+}

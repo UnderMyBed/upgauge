@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
 import { decode, encode, UrlStateError } from "@/lib/pivot/urlstate";
+import { PivotError } from "@/lib/pivot/types";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
@@ -166,16 +167,24 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
   const allowlist = await loadAllowlist();
   const asOf = await dataAsOf();
 
-  // Only decode() is guarded: it is the sole step that validates untrusted request input
-  // (the URL) against the allowlist, and UrlStateError is the one exception it documents
-  // itself with. A permalink that quietly rendered a different query than it encodes would
-  // be worse than one that errors -- the screenshot would still look authoritative -- so an
-  // invalid key here always renders a named error, never a fallback to a default view.
+  // decode() AND runPivot() are both guarded: decode() validates the URL against the
+  // allowlist and documents UrlStateError as the exception it raises, but runPivot() calls
+  // renderPivot() again internally (db.ts) to build the executable SQL, and a value that
+  // passes decode()'s structural check can still fail there -- e.g. a composite filter value
+  // shaped like an id pair but not actually numeric, `f=route:JFK-LAX`, which decode() lets
+  // through (Important 4, final whole-branch review: PivotError did not extend UrlStateError,
+  // and this try used to end right after decode(), so a PivotError thrown from inside
+  // runPivot() escaped as an unhandled 500 -- verified against a running build before this
+  // fix). A permalink that quietly rendered a different query than it encodes would be worse
+  // than one that errors -- the screenshot would still look authoritative -- so an invalid
+  // key or value here always renders a named error, never a fallback to a default view.
   let query: PivotQuery;
+  let result: PivotResult;
   try {
     query = decode(qs, allowlist);
+    result = await runPivot(query);
   } catch (e) {
-    if (e instanceof UrlStateError) {
+    if (e instanceof UrlStateError || e instanceof PivotError) {
       return (
         <div className="wrap">
           <TopBar asOf={asOf} />
@@ -198,7 +207,6 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
   }
 
   const permalink = encode(query);
-  const result: PivotResult = await runPivot(query);
   const isEmpty = result.rows.length === 0;
 
   // `route`'s catalog entry names two columns (route_key_low, route_key_high) that both

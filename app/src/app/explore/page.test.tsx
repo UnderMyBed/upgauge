@@ -1,8 +1,21 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
+
+// Partial mock: wraps the REAL runPivot so every test except the one that opts in via
+// `mockRejectedValueOnce` still exercises the real DuckDB catalog read (this codebase's
+// integration-test style -- db.test.ts has no mocks at all). Exists to simulate a PivotError
+// thrown from INSIDE runPivot() specifically (Important 4, final whole-branch review) --
+// distinct from decode()'s own guard, which now also catches this for any input decode()
+// itself can validate.
+vi.mock("@/lib/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  return { ...actual, runPivot: vi.fn(actual.runPivot) };
+});
+
 import { ExploreView } from "@/app/explore/page";
-import { loadAllowlist } from "@/lib/db";
+import { loadAllowlist, runPivot } from "@/lib/db";
+import { PivotError } from "@/lib/pivot/types";
 
 const OK = {
   v: "1",
@@ -57,6 +70,37 @@ describe("/explore", () => {
   it("names the offending key on an invalid permalink instead of falling back", async () => {
     render(await ExploreView({ rawQuery: qs({ ...OK, d: "nope" }) }));
     expect(screen.getByText(/unknown dimension/i)).toBeDefined();
+    expect(screen.queryAllByRole("row").length).toBe(0);
+  });
+
+  it("names a non-numeric composite filter value rather than an unhandled server error", async () => {
+    // End-to-end regression, Important 4 (final whole-branch review): before the render.ts
+    // fix, 'f=route:JFK-LAX' passed decode()'s structural check (two non-empty dash-separated
+    // parts) and only failed deep inside runPivot() with a PivotError this page did not catch
+    // -- an unhandled throw, not a rendered error page. Verified against a running build
+    // before this fix. Proves the OUTCOME (a named error page, not a crash); the next test
+    // proves the SPECIFIC guard this file added, independent of render.ts's own fix.
+    const raw = "v=1&k=route&d=route&m=seats&t=2025-05:2026-04&f=route:JFK-LAX&n=5&g=op";
+    render(await ExploreView({ rawQuery: raw }));
+    expect(screen.getByText(/two ids joined by/i)).toBeDefined();
+    expect(screen.queryAllByRole("row").length).toBe(0);
+  });
+
+  it("treats a PivotError thrown from inside runPivot() the same as an invalid permalink", async () => {
+    // The specific gap: PivotError does not extend UrlStateError, and until this fix
+    // decode()'s own guard was the ONLY thing standing between a PivotError and an unhandled
+    // crash -- anything that made it past decode() (a TOCTOU catalog change between decode()'s
+    // loadAllowlist() call and runPivot()'s own internal one, or any future PivotError source
+    // decode()'s validation pass doesn't also check) would render Next's raw error boundary
+    // instead of this page's own error UI. Bypasses decode() entirely by making the
+    // (separately mocked) runPivot() throw directly, so this fails if the
+    // `e instanceof PivotError` branch is ever removed, independent of what decode() itself
+    // catches.
+    vi.mocked(runPivot).mockRejectedValueOnce(
+      new PivotError("unknown dimension 'simulated-catalog-race'"),
+    );
+    render(await ExploreView({ rawQuery: qs(OK) }));
+    expect(screen.getByText(/simulated-catalog-race/)).toBeDefined();
     expect(screen.queryAllByRole("row").length).toBe(0);
   });
 

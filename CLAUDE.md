@@ -49,7 +49,7 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M3a, M3b and M4a COMPLETE.** M3a's Explorer pivot query contract — templates
+**M3a, M3b, M4a and M4b COMPLETE.** M3a's Explorer pivot query contract — templates
 (`sql/03_queries/pivot_segment.sql` / `pivot_route.sql`), the allowlist as catalog objects
 (`meta_pivot_dimensions` / `meta_pivot_measures`), the CI-only Python reference
 implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`), the mainline-grouping toggle,
@@ -58,7 +58,7 @@ the URL state codec, and the golden fixtures
 `sql/02_marts/` into `upgauge.duckdb` (6 catalog views + `fct_route_month` +
 `mart_route_health` + the 2 pivot-vocabulary catalog views); `make verify` proves both the
 Parquet layer and the database layer reproducible across two from-scratch builds —
-`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 428 Python tests
+`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 443 Python tests
 green, zero join orphans. `data/raw/` holds the full 2015–2026 window.
 
 M3b ported that contract into the Next.js app and wired it end to end: the TypeScript pivot
@@ -70,9 +70,7 @@ server-rendered page that decodes the URL, runs the pivot, and renders a real ta
 `DATA AS OF` badge, a stat/meta strip, the legend rail, and the permalink displayed. An
 invalid permalink renders a named error (e.g. `unknown dimension 'nope'`), never a silent
 fallback to a default view; a valid permalink matching zero rows states the query in words
-and offers the widened-to-2015 permalink, never a blank panel. 155 app tests green
-(`make app-check`); `make app-build` produces a working production build; `make app-smoke`
-builds, serves and curls real URLs, 17 checks in all.
+and offers the widened-to-2015 permalink, never a blank panel.
 
 **`app/src/proxy.ts` + `skipProxyUrlNormalize` are load-bearing, not an optimisation.** Next
 form-encodes the query string before any page or route handler sees it, which turns the
@@ -80,13 +78,23 @@ format's structural `:` into `%3A` and collapses `k:a%2Cb,c` into `k%3Aa%2Cb%2Cc
 comma becomes indistinguishable from a separator. Without them **every** filtered query fails
 on **both** `/explore` and `/api/pivot`, reserved characters or not. Both entry points read
 the raw string from one header and nothing else; a page can never use `searchParams` for this.
-Full detail and the measurements: `docs/architecture/hosting.md`.
+`proxy.ts` also sets a second header (the request pathname, for `not-found.js` — which accepts
+no props) and applies the project `Cache-Control`. Full detail, and the rule that a new page
+route must be added to its matcher: `docs/architecture/hosting.md` § What `proxy.ts` owns.
 
 **No unit test can catch that class.** Five bugs on this branch had the shape "green tests,
 broken production" — `__dirname` under Turbopack, `decodeURIComponent` throwing,
 `process.chdir`, the DuckDB platform-switch `require`, and the query normalization above.
 Every one was found by building and serving, never by the suite. That is what `make app-smoke`
 is for; run it before merging anything that touches routing, config, or the query layer.
+
+**`lib/db.ts` memoizes its `DuckDBInstance` on `globalThis`, not in a module-level `let`, and
+that is the same class of bug.** Turbopack emits that module into a separate server chunk per
+entry graph — proxy, page SSR, route handler — so a module-level memo is *three* memos:
+measured, one `next start` process opened `upgauge.duckdb` three times, three buffer pools,
+and three snapshots of a file the proxy and the page must agree about to keep a 404 out of the
+30-day cache. No unit test can see this (one module graph by construction); `make app-smoke`
+asserts the open-handle count is 1.
 
 **M4a resolves dimension ids to display codes.** `meta_pivot_dimensions`'s `join_dim`/
 `join_key` columns (`op_airline_id` → `dim_carrier.airline_id`, and so on) are now read by
@@ -99,12 +107,49 @@ depends on. A dimension with no code (city market) renders its name directly; an
 from the catalog renders as itself, never a dash. `make app-smoke` asserts a real code
 renders and the bare id does not, on both a segment and a route query.
 
-Not built yet: the time-series and fleet-mix charts, the arc map, entity pages (`/route`,
-`/airport`, `/carrier`, `/aircraft`), `/watch`, the seasonality heatmap, and OG cards — all
-specified in `docs/design/system.md` and left to M4b (`/route/<pair>` and the
-aircraft-type-mix chart) and M4c+ (`/airport`, `/carrier`, `/aircraft`, the maps) onward.
+**M4b ships the first entity page, `/route/<pair>`** (`app/src/app/route/[pair]/page.tsx`),
+composed on the same pivot layer M3/M4a already built — a title block, a stat strip (seats,
+passengers, load factor, avg gauge, departures, carrier count, quarantined count — load
+factor and avg gauge computed as ratios of summed rows, never averaged), the carriers table,
+an Explorer link for the identical query, and the
+legend rail. Getting there required two changes to the pivot layer itself, made in
+`app/src/lib/pivot/render.ts` and `pipeline/pivot.py` in lockstep (the 17 existing goldens
+stayed byte-identical): **composite-dimension filtering**, so `route` — whose `column_expr`
+spans two columns — can be filtered at all, using `least`/`greatest` on the airport-id pair
+rather than the naive `origin IN (...) AND dest IN (...)` form, which is silently wrong (a
+measured 18,895-seat inflation on JFK–LAX — `docs/data/invariants.md` § Route identity); and
+`app/src/lib/routePair.ts`'s reverse lookup, code → `airport_id`, which computes the URL's
+alphabetical canonical form and the query's id-ordered filter as two explicit, separately
+computed values (they disagree for 154 of 22,950 routes, 0.7%). That reverse lookup also
+surfaced a resolution gap M4a's own invariant never covered — `WHERE is_latest` is scoped per
+`airport_id`, not per code, so 36 codes had more than one `is_latest` row (`AUS` returned both
+the real Austin-Bergstrom and a defunct airport closed since 1999) — fixed by scoping the
+lookup to airports present in `fct_segment_month`, which takes colliding codes to 0
+(`docs/data/invariants.md` § Entity resolution). That lookup is now on the request hot path —
+the proxy runs it to decide cacheability — so its fact-presence filter is a hash semi-join
+rather than the correlated `EXISTS` it shipped as: 43–51 ms → 17 ms, selecting exactly the
+same airports, proven over every code rather than a sampled pair. `/route/LAX-JFK` 308-redirects to
+`/route/JFK-LAX`; `/route/ZZZZ-LAX` 404s on a branded page naming the offending **half**
+(`unknown airport code 'ZZZZ'`, and `'LHR' is a recognized airport code, but this dataset is
+domestic-only` for `/route/JFK-LHR`) — server-rendered from `resolveRoutePair`'s own reason,
+not a client-side guess at the pair, and served `no-store` rather than cached for a month; a
+real pair with no scheduled service in the window 200s with an empty-state message and the
+widened-to-2015 offer, never a blank panel. Full contract:
+`docs/architecture/pipeline.md` § M4b.
 
-Next: **M4b** — `/route/<pair>` and the aircraft-type-mix chart.
+222 app tests green (`make app-check`); `make app-build` produces a working production
+build; `make app-smoke` builds, serves and curls real URLs, 39 checks in all — including a
+curl-verified redirect, 404, `Cache-Control` and 404 *body* for `/route/<pair>`, since a
+handler returning a redirect object and a served app returning one are not the same claim,
+and a 404 whose status is right tells you nothing about what it says.
+
+Not built yet: the time-series and fleet-mix charts, the arc map, `/airport`, `/carrier`,
+`/aircraft`, `/watch`, the seasonality heatmap, and OG cards — all specified in
+`docs/design/system.md` and left to M4c (the aircraft-type-mix chart, deliberately kept out
+of M4b's first entity page since no chart library is installed yet) and M4d+ (`/airport`,
+`/carrier`, `/aircraft`, the maps) onward.
+
+Next: **M4c** — the aircraft-type-mix chart.
 
 ## Architecture
 
@@ -256,9 +301,19 @@ signature element; it does not own these.
 
 - **Invariants are written as failing tests first**, before the pipeline that satisfies them.
 - Marts must rebuild from scratch reproducibly via `make`. No manual steps.
-- Every response gets `Cache-Control: public, s-maxage=2592000,
+- Every **successful** response gets `Cache-Control: public, s-maxage=2592000,
   stale-while-revalidate=86400`. Precompute leaderboards as static JSON at build time — the
-  caching is the cost control, not the hosting tier.
+  caching is the cost control, not the hosting tier. **404s get `no-store`**: the dataset is
+  rebuilt monthly, so a 404 pinned in a shared cache outlives the condition that caused it.
+  `/api/pivot` does this in its handler; a page cannot, and a proxy cannot see the
+  downstream status — so **`proxy.ts` caches on "is this a well-formed, known entity",
+  resolved before the page runs**, which is the rule M4d's entity pages must follow too.
+  **A 5xx from a page is NOT covered and is knowingly still cached for 30 days** — measured
+  on both `/route` and `/explore`, unfixable from a proxy, uncovered since M3b, and written
+  up with the numbers in `docs/architecture/hosting.md` § The gap. Do not restate the rule
+  as "errors get `no-store`"; it is 404s only.
+  **A new page route must be added to `proxy.ts`'s matcher or it ships uncached and without
+  the raw-query and pathname headers.** Full detail: `docs/architecture/hosting.md`.
 - Build the **aircraft-type-mix chart before the load-factor chart**. Everyone does load
   factor; the gauge story is the differentiator.
 - Build the generic Top-N builder once; the `/watch` presets are saved instances of it.

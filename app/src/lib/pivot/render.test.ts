@@ -14,8 +14,8 @@ const goldens = JSON.parse(
 // goldens.cases)` emits zero tests -- and therefore passes -- if pivot.json is ever truncated
 // or reshaped. A suite that cannot fail is worse than no suite: it reports green.
 describe("golden fixture sanity", () => {
-  it("has exactly 9 cases -- a reshaped fixture must not silently emit zero tests", () => {
-    expect(goldens.cases).toHaveLength(9);
+  it("has exactly 11 cases -- a reshaped fixture must not silently emit zero tests", () => {
+    expect(goldens.cases).toHaveLength(11);
   });
 });
 
@@ -143,15 +143,6 @@ describe("renderPivot rejects malformed and malicious requests", () => {
     ).toThrow(/filter/);
   });
 
-  it("rejects the multi-column route dimension used as a filter key", () => {
-    expect(() =>
-      renderPivot(q({ filters: [["route", ["JFK-LAX"]]] }), FIXTURE),
-    ).toThrow(PivotError);
-    expect(() =>
-      renderPivot(q({ filters: [["route", ["JFK-LAX"]]] }), FIXTURE),
-    ).toThrow(/multiple columns/);
-  });
-
   it("rejects an unknown sort key", () => {
     expect(() => renderPivot(q({ sort: "not_a_column" }), FIXTURE)).toThrow(PivotError);
     expect(() => renderPivot(q({ sort: "not_a_column" }), FIXTURE)).toThrow(/sort/);
@@ -170,5 +161,76 @@ describe("renderPivot rejects malformed and malicious requests", () => {
     expect(() =>
       renderPivot(q({ grouping: "Mainline" as PivotQuery["grouping"] }), FIXTURE),
     ).toThrow(/grouping/);
+  });
+});
+
+describe("composite-dimension filters", () => {
+  const BASE = {
+    grain: "segment", dimensions: ["op_airline_id"], measures: ["seats"],
+    timeFrom: "2025-05", timeTo: "2026-04", sort: null, sortDesc: true,
+    limit: 50, grouping: "operating",
+  } as unknown as PivotQuery;
+
+  it("emits least/greatest over both key columns", () => {
+    const { sql, params } = renderPivot(
+      { ...BASE, filters: [["route", ["12478-12892"]]] }, FIXTURE);
+    expect(sql).toContain(
+      "(least(route_key_low, route_key_high) = $f0_0a " +
+        "AND greatest(route_key_low, route_key_high) = $f0_0b)",
+    );
+    expect(params.f0_0a).toBe("12478");
+    expect(params.f0_0b).toBe("12892");
+  });
+
+  it("OR-joins multiple routes, keeping IN-list semantics", () => {
+    const { sql, params } = renderPivot(
+      { ...BASE, filters: [["route", ["12478-12892", "10140-14747"]]] }, FIXTURE);
+    expect(sql).toContain(" OR ");
+    expect(sql).toContain("$f0_1a");
+    expect(sql).toContain("$f0_1b");
+    expect(params.f0_1a).toBe("10140");
+    expect(params.f0_1b).toBe("14747");
+  });
+
+  it("rejects a malformed pair with a named error", () => {
+    expect(() =>
+      renderPivot({ ...BASE, filters: [["route", ["12478"]]] }, FIXTURE),
+    ).toThrow(/two ids joined by/);
+  });
+
+  it("rejects a non-numeric pair with a named PivotError instead of reaching DuckDB", () => {
+    // Important 4, final whole-branch review: 'JFK-LAX' has two non-empty dash-separated
+    // parts, so the OLD check (length === 2, both non-empty) passed it straight through to
+    // a bound string param -- DuckDB then threw an unhandled "Conversion Error: Could not
+    // convert string 'JFK' to INT32" deep inside runPivot(), which decode()'s own PivotError
+    // guard never saw. Verified against a running build before this fix. Fails if the digit
+    // check is dropped, or narrowed to reject only non-ASCII digits.
+    expect(() =>
+      renderPivot({ ...BASE, filters: [["route", ["JFK-LAX"]]] }, FIXTURE),
+    ).toThrow(PivotError);
+    expect(() =>
+      renderPivot({ ...BASE, filters: [["route", ["JFK-LAX"]]] }, FIXTURE),
+    ).toThrow(/two ids joined by/);
+  });
+
+  it("strips ASCII whitespace around each id, matching pipeline/pivot.py's strip set", () => {
+    // Not `.trim()`/`.strip()` directly (JS and Python disagree on non-ASCII whitespace --
+    // see stripAsciiWhitespace's header comment) -- this pins the ASCII case both language's
+    // explicit sets agree on, so a regression to either language's native trim/strip would
+    // still pass this specific test (by design: the divergence is in the NON-ASCII set,
+    // which no golden exercises either -- documented as a known gap, not asserted here).
+    const { params } = renderPivot(
+      { ...BASE, filters: [["route", [" 12478 - 12892\t"]]] },
+      FIXTURE,
+    );
+    expect(params.f0_0a).toBe("12478");
+    expect(params.f0_0b).toBe("12892");
+  });
+
+  it("leaves the single-column filter path untouched", () => {
+    const { sql, params } = renderPivot(
+      { ...BASE, filters: [["origin_state", ["OR", "WA"]]] }, FIXTURE);
+    expect(sql).toContain("origin_state IN ($f0_0, $f0_1)");
+    expect(params.f0_0).toBe("OR");
   });
 });

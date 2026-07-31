@@ -106,6 +106,102 @@ function substituteIds(statement: string, file: string, placeholder: string): st
   return statement.replace("{{IDS}}", placeholder);
 }
 
+export interface AirportRef {
+  id: number;
+  code: string;
+  name: string;
+}
+
+/** Fold one lookup_airport_by_code.sql result row into the code -> airport map, throwing if
+ * the code was already present. Pulled out of lookupAirportsByCode so the fail-loud path is
+ * directly testable with synthetic rows -- the same reason collectIds is pulled out of
+ * resolveRows above: real data no longer produces a colliding pair for any code (the SQL
+ * file's fact-presence filter took collisions from 36 to 0, measured), so the only way to
+ * exercise this branch against the live database would be to wait for BTS to reuse a closed
+ * airport's code, which is not a test. */
+export function insertAirportRow(out: Map<string, AirportRef>, row: AirportRef): void {
+  const code = row.code.toUpperCase();
+  const existing = out.get(code);
+  if (existing !== undefined) {
+    throw new Error(
+      `lookupAirportsByCode: code '${code}' matched more than one airport_id ` +
+        `(${existing.id}, ${row.id}) -- lookup_airport_by_code.sql's uniqueness guarantee no ` +
+        "longer holds. Refusing to silently pick one (see this file's header comment).",
+    );
+  }
+  out.set(code, row);
+}
+
+/** Reverse of the airport resolver: code -> the airport. Keyed by UPPERCASED code, so a
+ * lowercase URL resolves while the canonical form stays uppercase.
+ *
+ * Absent key means unknown, exactly as resolveRows()'s map does -- the caller renders a 404
+ * naming the code rather than guessing.
+ *
+ * lookup_airport_by_code.sql's fact-presence filter is what makes a code unique today
+ * (measured: 36 codes collide among all is_latest airports, 0 among fact-present ones -- see
+ * that file's header). But that invariant is data-dependent, not structural -- a future BTS
+ * refresh could reintroduce a collision (a newly-closed airport whose code gets reused, for
+ * instance), and this function's own header comment already promises to fail loudly rather
+ * than let a second row for the same code silently overwrite the first via Map.set(). This
+ * is that promise enforced (in insertAirportRow, above): a repeated code throws, naming both
+ * airport_ids, instead of rendering an arbitrary one of them under a DATA AS OF badge. */
+export async function lookupAirportsByCode(codes: string[]): Promise<Map<string, AirportRef>> {
+  const out = new Map<string, AirportRef>();
+  const wanted = [...new Set(codes.map((c) => c.toUpperCase()))].filter((c) => c.length > 0);
+  if (wanted.length === 0) return out;
+
+  const names = wanted.map((_, i) => `$id${i}`);
+  const raw = readFileSync(path.join(QUERIES_DIR, "lookup_airport_by_code.sql"), "utf8");
+  const statement = substituteIds(raw, "lookup_airport_by_code", `(${names.join(", ")})`);
+
+  const params: Record<string, DuckDBValue> = {};
+  wanted.forEach((c, i) => {
+    params[`id${i}`] = c as DuckDBValue;
+  });
+
+  const con = await connect();
+  const prepared = await con.prepare(statement);
+  prepared.bind(params);
+  const result = await prepared.run();
+  for (const r of await result.getRowObjects()) {
+    insertAirportRow(out, { id: Number(r.id), code: String(r.code), name: String(r.name) });
+  }
+  return out;
+}
+
+/** Existence-only check, deliberately weaker than `lookupAirportsByCode`: a code coming back
+ * in the returned set means it appears in `dim_airport`'s current (`is_latest`) roster, and
+ * says nothing about whether it has any domestic segment data -- callers must not treat a hit
+ * here as resolved. The one caller, `routePair.ts`, uses it only to choose a 404 reason: a
+ * code that fails `lookupAirportsByCode` but appears here is a real, recognized airport this
+ * domestic-only dataset (T-100 Segment, CLAUDE.md's "Segment only" rule) simply has no rows
+ * for -- LHR, CDG, NRT are the measured examples -- which reads very differently from a typo
+ * and would otherwise render the identical "unknown airport code" 404 either way. */
+export async function airportCodesExist(codes: string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  const wanted = [...new Set(codes.map((c) => c.toUpperCase()))].filter((c) => c.length > 0);
+  if (wanted.length === 0) return out;
+
+  const names = wanted.map((_, i) => `$id${i}`);
+  const raw = readFileSync(path.join(QUERIES_DIR, "lookup_airport_code_exists.sql"), "utf8");
+  const statement = substituteIds(raw, "lookup_airport_code_exists", `(${names.join(", ")})`);
+
+  const params: Record<string, DuckDBValue> = {};
+  wanted.forEach((c, i) => {
+    params[`id${i}`] = c as DuckDBValue;
+  });
+
+  const con = await connect();
+  const prepared = await con.prepare(statement);
+  prepared.bind(params);
+  const result = await prepared.run();
+  for (const r of await result.getRowObjects()) {
+    out.add(String(r.code));
+  }
+  return out;
+}
+
 export async function resolveRows(
   rows: Record<string, unknown>[],
   allowlist: Allowlist,
