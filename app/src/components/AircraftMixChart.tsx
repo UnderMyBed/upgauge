@@ -1,12 +1,17 @@
 import * as Plot from "@observablehq/plot";
 import { renderPlotToSvg } from "@/lib/chart/svg";
 import { findCrossover } from "@/lib/chart/crossover";
-import { toBands, OTHER_TOKEN, type MixRow } from "@/lib/chart/aircraftMix";
+import {
+  toBands,
+  OTHER_TOKEN,
+  BY_AIRCRAFT_TYPE,
+  type MixDimension,
+  type MixRow,
+} from "@/lib/chart/aircraftMix";
 
 /** The project's first chart (docs/design/system.md § Charts, and CLAUDE.md's workflow rule
- * that this one is built before the load-factor chart): a stacked area of monthly seats by
- * aircraft type, shaded along the monochrome `--g*` ramp so that **an upgauge darkens the
- * stack**.
+ * that this one is built before the load-factor chart): a stacked area of monthly seats,
+ * shaded along the monochrome `--g*` ramp so that **an upgauge darkens the stack**.
  *
  * Server-rendered to markup, never a client chart. The SVG is in the served HTML and visible
  * with JS off -- the same property `/route` already had for its text, on the page whose
@@ -15,6 +20,13 @@ import { toBands, OTHER_TOKEN, type MixRow } from "@/lib/chart/aircraftMix";
  * It knows nothing about what it is describing. `title` is the subject line and `rows` are
  * already-shaped mix rows, so /route mounts it today and /airport, /carrier and /aircraft
  * mount the identical component in M4d. Nothing here may say "route".
+ *
+ * `dimension` is what M4d added and is the ONLY thing this component knows about the breakdown:
+ * the pivot key never reaches here, only the words that describe the stack (MixDimension). It
+ * defaults to the aircraft-type stack, so /route, /airport and /carrier mount it exactly as
+ * M4c did; /aircraft passes BY_CARRIER, because a page that IS one aircraft type would
+ * otherwise draw a single band whose gauge ordering encodes nothing. The file keeps its M4c
+ * name: three pages import it, and a rename buys nothing a comment cannot say.
  *
  * Synchronous on purpose: `toBands`, `findCrossover` and `renderPlotToSvg` are all pure and
  * blocking, so this can be used as ordinary JSX from an async Server Component (an async
@@ -38,10 +50,12 @@ const COVID_TO = "2021-06";
 const COVID_LABEL = "COVID — in window on purpose.";
 
 /** The z value for the Other bucket. Two leading underscores because the real z values are
- * BTS `AIRCRAFT_TYPE` codes -- zero-padded digit strings ('079'), never anything else -- so
- * this cannot collide with one. Keyed on CODE and not on the display label for the same
+ * warehouse ids -- zero-padded BTS `AIRCRAFT_TYPE` digit strings ('079') under the default
+ * stack, `AIRLINE_ID` integers under the carrier one, never anything else -- so this cannot
+ * collide with one under either. Keyed on CODE and not on the display label for the same
  * reason the pivot is (CLAUDE.md: key on ids, display codes): two types sharing a
- * `short_name` would otherwise merge into one band and silently under-count. */
+ * `short_name` -- CE-180 names two, measured -- would otherwise merge into one band and
+ * silently under-count. */
 const OTHER_KEY = "__other";
 
 /** Every month is a point at its first day, UTC. UTC and not local: a local-midnight Date
@@ -76,7 +90,15 @@ function withImgRole(svg: string): string {
   return svg.replace(/^<svg /, '<svg role="img" ');
 }
 
-export function AircraftMixChart({ rows, title }: { rows: MixRow[]; title: string }) {
+export function AircraftMixChart({
+  rows,
+  title,
+  dimension = BY_AIRCRAFT_TYPE,
+}: {
+  rows: MixRow[];
+  title: string;
+  dimension?: MixDimension;
+}) {
   const months = [...new Set(rows.map((r) => r.month))].sort();
 
   // A blank frame under a DATA AS OF badge is the failure /explore and /route already refuse
@@ -86,10 +108,10 @@ export function AircraftMixChart({ rows, title }: { rows: MixRow[]; title: strin
   // trend. Both say so instead.
   if (months.length < 2) {
     return (
-      <Frame title={title}>
+      <Frame title={title} dimension={dimension}>
         <p className="foot">
           {months.length === 0
-            ? "No aircraft-type filings in this window."
+            ? `No ${dimension.absent} filings in this window.`
             : `Only one month of filings in this window (${months[0]}) — a stacked area needs at least two.`}
         </p>
       </Frame>
@@ -115,7 +137,7 @@ export function AircraftMixChart({ rows, title }: { rows: MixRow[]; title: strin
             // 1,571 of 4,618 multi-type routes fall below 90% and the worst is 48.2%
             // (measured, spec § "The Other band is not a rounding error"). A chart where half
             // the area is in the lightest band has to admit it.
-            label: `Other · ${plural(other.typeCount, "type")} · ${pct(other.seatShare)} of seats`,
+            label: `Other · ${plural(other.typeCount, dimension.unit)} · ${pct(other.seatShare)} of seats`,
             series: other.series,
           },
         ]
@@ -193,7 +215,15 @@ export function AircraftMixChart({ rows, title }: { rows: MixRow[]; title: strin
       // literal family name: globals.css stays the single source, the same rule the `--g*`
       // ramp follows.
       style: { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" },
-      ariaLabel: describe({ title, first, last, stack, crossover, gaps: axis.gaps.length }),
+      ariaLabel: describe({
+        title,
+        dimension,
+        first,
+        last,
+        stack,
+        crossover,
+        gaps: axis.gaps.length,
+      }),
       x: { type: "utc", label: null, ticks: "1 year", tickFormat: "%Y" },
       y: { label: "Seats", grid: true, ticks: 4, tickFormat: "~s" },
       // The tokens go through as-is: Plot passes an ordinal scale's range straight to the
@@ -245,7 +275,7 @@ export function AircraftMixChart({ rows, title }: { rows: MixRow[]; title: strin
   );
 
   return (
-    <Frame title={title}>
+    <Frame title={title} dimension={dimension}>
       {/* The markup is Plot's own serialization of our warehouse data -- no user input
           reaches it, and every string that does (the title, the aircraft short_names) is
           written through the DOM by Plot and escaped by jsdom's serializer, not concatenated
@@ -261,7 +291,11 @@ export function AircraftMixChart({ rows, title }: { rows: MixRow[]; title: strin
             {s.label}
           </span>
         ))}
-        <span className="gnum">← lightest is the smallest metal, by seats per departure</span>
+        {/* What the ramp MEANS, and it is not the same claim on both stacks: across aircraft
+            types a darker band is bigger metal, across carriers of one type it is the same
+            metal fitted denser (F9 230.0 seats in the A321 to B6's 172.3, measured). The
+            sentence therefore comes from the dimension, never from here. */}
+        <span className="gnum">{dimension.rampNote}</span>
         {/* Stated on the chart, not only in the aria-label: a hole in a stacked area is easy
             to read as "flat and small" rather than "not filed", and the count is per-subject
             so the static legend rail cannot carry it. */}
@@ -273,11 +307,24 @@ export function AircraftMixChart({ rows, title }: { rows: MixRow[]; title: strin
 
 /** The chart block's chrome, shared by the drawn and the stated-in-words cases so the two
  * are visually the same object. Mirrors the mockup's `.chart` / `.chead`. */
-function Frame({ title, children }: { title: string; children: React.ReactNode }) {
+function Frame({
+  title,
+  dimension,
+  children,
+}: {
+  title: string;
+  dimension: MixDimension;
+  children: React.ReactNode;
+}) {
   return (
     <div className="chart">
       <div className="chead">
-        <div className="ctitle">Seats by aircraft type</div>
+        {/* ONE template string, not `Seats by {dimension.title}`. React's SSR emits an HTML
+            comment between adjacent text nodes so it can find the boundaries again when
+            hydrating, so the two-node form serves `Seats by <!-- -->aircraft type` -- invisible
+            to `textContent` and therefore to every unit test here, and fatal to a raw-bytes
+            grep in app/smoke.sh. The same trap as route/[pair]/page.tsx's `chartWindow`. */}
+        <div className="ctitle">{`Seats by ${dimension.title}`}</div>
         <div className="csub">{title} · monthly · shaded by seats per departure</div>
       </div>
       {children}
@@ -291,6 +338,7 @@ function Frame({ title, children }: { title: string; children: React.ReactNode }
  * string is the ONLY thing announced. */
 function describe({
   title,
+  dimension,
   first,
   last,
   stack,
@@ -298,6 +346,7 @@ function describe({
   gaps,
 }: {
   title: string;
+  dimension: MixDimension;
   first: string;
   last: string;
   stack: { key: string; label: string }[];
@@ -307,7 +356,7 @@ function describe({
   const types = stack.filter((s) => s.key !== OTHER_KEY).map((s) => s.label);
   const other = stack.find((s) => s.key === OTHER_KEY);
   return [
-    `Stacked area of monthly seats by aircraft type, ${title}, ${first} to ${last}.`,
+    `Stacked area of monthly seats by ${dimension.title}, ${title}, ${first} to ${last}.`,
     `Bands lightest to darkest by seats per departure: ${types.join(", ")}.`,
     other === undefined ? null : `${other.label}, drawn lightest of all beneath them.`,
     // A reader who cannot see the holes has to be told they are there, or the label describes

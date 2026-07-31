@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { LegendRail } from "@/components/LegendRail";
+import { BY_CARRIER } from "@/lib/chart/aircraftMix";
 
 describe("LegendRail", () => {
   it("renders the panel", () => {
@@ -77,6 +78,22 @@ describe("LegendRail", () => {
     // months, so it cannot drift from the chart's own COVID_FROM/COVID_TO without a test
     // failing here.
     render(<LegendRail fleetMix />);
+    expect(screen.getByText(/2020-03 to 2021-06/)).toBeDefined();
+  });
+
+  // M4d. The rail must describe the stack the page actually draws. `/aircraft/<slug>` stacks
+  // seats by operating carrier, so "the five types with the most seats" and "larger metal" are
+  // both false there -- every band is the SAME metal, configured differently.
+  it("describes the carrier stack when that is what the page drew", () => {
+    render(<LegendRail fleetMix stack={BY_CARRIER} />);
+    expect(screen.getByText(/five carriers with the most seats/i)).toBeDefined();
+    expect(screen.getByText(/denser cabin/)).toBeDefined();
+    // Falsifiable against a rail that merely appended the new words: the type-stack claims
+    // must be GONE, not accompanied.
+    expect(screen.queryByText(/larger metal/)).toBeNull();
+    expect(screen.queryByText(/five types with the most seats/i)).toBeNull();
+    // The parts that are true of every stack stay put.
+    expect(screen.getByText(/darkening stack is an upgauge/i)).toBeDefined();
     expect(screen.getByText(/2020-03 to 2021-06/)).toBeDefined();
   });
 });

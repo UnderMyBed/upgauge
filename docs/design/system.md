@@ -265,6 +265,43 @@ bands: **how many types Other aggregates and its share of seats are stated on th
 itself**, not in the legend rail. That number is per-subject — it differs for every route — and
 the rail is static; putting it in both places is how two copies of one measurement drift.
 
+#### The same chart, stacked by something else (M4d)
+
+**The stacking dimension is a parameter, and the words that describe the ramp travel with it.**
+`/aircraft/<slug>` is a page that *is* one aircraft type, so the type stack is degenerate there:
+one band, whose gauge ordering encodes nothing. It stacks by **operating carrier** instead, which
+answers the better question — who adopted this type, and when. `/route`, `/airport` and
+`/carrier` keep the type stack.
+
+**The ramp still encodes something, and that is measured, not assumed.** Carriers configure the
+same airframe very differently, so ordering carrier bands by seats per departure is a real
+encoding rather than a decorative reuse:
+
+| type | lightest | darkest | spread |
+|---|---|---|---|
+| A321/LR | B6 172.3 | F9 230.0 | **57.7 seats (33%)** |
+| A320-1/2 | AA 150.0 | F9 184.1 | 34.1 |
+| B737-8 | AS 159.5 | SY 186.0 | 26.5 |
+
+**But it is not the same claim, so it must not carry the same words.** Across aircraft types a
+darker band is *bigger metal*. Across carriers of one type it is the *same* metal fitted denser —
+on `/aircraft` the ramp isolates **configuration** choice from **fleet** choice, which `/route`
+cannot separate. So the chart's key reads "lightest is the least dense cabin" and the legend
+rail's swatches read "less dense cabin" / "denser cabin" and "the five **carriers** with the most
+seats get a band". A rail explaining metal size next to a chart whose bands are all one airframe
+is the stale "how to read this" the rail exists to replace, one level down.
+
+`app/src/lib/chart/aircraftMix.ts`'s `MixDimension` holds the pivot key **and** those sentences
+in one object, deliberately: splitting them is how a chart ends up stacked by carrier under a
+title and a legend that both say "aircraft type".
+
+**The two orderings do not become one just because the bands changed.** On the 737-800 they are
+exact *reverses* — Southwest flies the most of them **and** the densest cabin (593.6 M seats,
+175.0 seats/departure), Alaska the fewest and the least dense (104.2 M, 159.8) — so a single sort
+mislabels all five swatches rather than four of five. That is the fixture the implementation is
+pinned against, precisely because M4c's own version of this test had the two orders coincide and
+a single sort passed it.
+
 ### Multi-series lines
 
 **No hue at all.** Series are distinguished by weight, dash, and a direct end-label:

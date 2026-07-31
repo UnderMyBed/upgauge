@@ -3,6 +3,8 @@ import {
   fetchAircraftMix,
   aircraftMixQuery,
   toBands,
+  BY_AIRCRAFT_TYPE,
+  BY_CARRIER,
   type MixRow,
 } from "@/lib/chart/aircraftMix";
 
@@ -12,6 +14,11 @@ import {
 const JFK_LAX: [string, string[]][] = [["route", ["12478-12892"]]];
 const FULL_FROM = "2015-01";
 const FULL_TO = "2026-04";
+
+/** BTS AIRCRAFT_TYPE 614 is the B737-8 (BOEING 737-800) -- the type /aircraft/B737-8 renders,
+ * and the one the M4d spec measures its carrier-gauge spread on. Zero-padded VARCHAR discipline
+ * applies to the filter value exactly as it does to the row key. */
+const B737_8: [string, string[]][] = [["aircraft_type", ["614"]]];
 
 describe("fetchAircraftMix", () => {
   it("returns one row per month per type, with a resolved short_name", async () => {
@@ -60,6 +67,8 @@ describe("fetchAircraftMix", () => {
   });
 
   it("asks the catalog for exactly the pivot the chart needs", () => {
+    // No fourth argument: the M4d generalization must leave the three-argument call -- the one
+    // /route, /airport and /carrier make -- meaning exactly what it meant in M4c.
     const q = aircraftMixQuery(JFK_LAX, FULL_FROM, FULL_TO);
     // Falsifiable line by line: `aircraft_type` is segment-grain only in
     // meta_pivot_dimensions, so a `route` grain here throws inside renderPivot; dropping
@@ -347,5 +356,94 @@ describe("toBands against a real route that stopped filing mid-window", () => {
     expect(axis.run.get("2020-03")).toBe(1);
     expect(axis.run.get("2020-10")).toBe(2);
     expect([...axis.solo]).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// M4d: the same mix, stacked by a DIFFERENT dimension.
+//
+// `/aircraft/<slug>` is a page that IS one aircraft type, so stacking by type would draw a
+// single band whose gauge ordering encodes nothing. It stacks by OPERATING CARRIER instead --
+// who adopted this type, and when -- and the ramp still means something because carriers
+// configure the same airframe very differently (the M4d spec's measured table).
+// ---------------------------------------------------------------------------------------
+
+describe("fetchAircraftMix stacked by operating carrier", () => {
+  it("returns one row per month per carrier, with the airline id resolved to its code", async () => {
+    const rows = await fetchAircraftMix(B737_8, FULL_FROM, FULL_TO, BY_CARRIER);
+    // Measured against the built upgauge.duckdb: 7 operating carriers filed the 737-800 over
+    // the full window, in all 136 of its months. Falsifiable in both directions -- a query that
+    // lost the carrier dimension returns 1 distinct code, one that lost the month dimension
+    // returns 1 distinct month, and one still keyed on `aircraft_type` returns 1 code as well
+    // (the filter pins the type), which is the hard-coded-dimension regression.
+    expect(new Set(rows.map((r) => r.code)).size).toBe(7);
+    expect(new Set(rows.map((r) => r.month)).size).toBe(136);
+    // The row key is the AIRLINE_ID (CLAUDE.md: key on ids, display codes), and the label is
+    // the current carrier code resolved through the catalog's own join_dim/join_key. A label
+    // left unresolved reads '19393' here.
+    const wn = rows.find((r) => r.code === "19393");
+    expect(wn?.label).toBe("WN");
+  });
+
+  it("asks the catalog for the carrier pivot, not the aircraft-type one", () => {
+    const q = aircraftMixQuery(B737_8, FULL_FROM, FULL_TO, BY_CARRIER);
+    expect(q.dimensions).toEqual(["year_month", "op_airline_id"]);
+    // Still segment grain (the filter is on a segment-only dimension), still the operating
+    // carrier and never the mainline rollup: rolling Endeavor into Delta would rewrite who
+    // "adopted" a type, which is the exact question this chart answers. CLAUDE.md: operating
+    // carrier is the grain and the truth.
+    expect(q.grain).toBe("segment");
+    expect(q.grouping).toBe("operating");
+    expect(q.measures).toEqual(["seats", "departures_performed"]);
+  });
+
+  it("defaults to the aircraft-type stack, so M4c's three-argument callers are unchanged", () => {
+    // /route, /airport and /carrier all call the three-argument form. Falsifiable: making the
+    // dimension a required parameter, or defaulting it to the carrier stack, breaks this.
+    expect(aircraftMixQuery(JFK_LAX, FULL_FROM, FULL_TO)).toEqual(
+      aircraftMixQuery(JFK_LAX, FULL_FROM, FULL_TO, BY_AIRCRAFT_TYPE),
+    );
+    expect(BY_AIRCRAFT_TYPE.key).toBe("aircraft_type");
+  });
+});
+
+describe("toBands over the real B737-8 carrier mix", () => {
+  // THE fixture for this task, and it is live data rather than a hand-built one: on the 737-800
+  // the seats ordering and the gauge ordering are EXACT REVERSES of each other, so a single
+  // sort cannot pass at any position. Measured against the built upgauge.duckdb, full window:
+  //
+  //   carrier   seats          departures   gauge     seats rank   shade
+  //   WN        593,614,000     3,392,080   175.00        1        --g5
+  //   AA        549,360,536     3,302,589   166.34        2        --g4
+  //   UA        226,714,263     1,374,319   164.96        3        --g3
+  //   DL        134,870,505       843,585   159.88        4        --g2
+  //   AS        104,208,364       652,019   159.82        5        --g1
+  //   SY         35,287,023       194,974   180.98        6        Other
+  //   XP          7,381,874        39,328   187.70        7        Other
+  //
+  // Southwest flies the densest 737-800 of the five banded carriers and also flies the most of
+  // them; Alaska the least dense and the fewest. Note SY and XP are the two DENSEST cabins on
+  // the type and are still in Other: membership is a seats question, never a gauge one.
+  it("orders membership by seats and shade by gauge, which are exact reverses here", async () => {
+    const rows = await fetchAircraftMix(B737_8, FULL_FROM, FULL_TO, BY_CARRIER);
+    const { bands, other } = toBands(rows);
+
+    // Membership, order-insensitive: which five carriers get a band at all.
+    expect([...bands].map((b) => b.label).sort()).toEqual(["AA", "AS", "DL", "UA", "WN"]);
+
+    // Shade, ordered: gauge ASCENDING. A single sort by seats produces the exact reverse of
+    // this list, so every one of the five positions fails under that mutation -- unlike
+    // JFK-LAX, where the first position coincides.
+    expect(bands.map((b) => b.label)).toEqual(["AS", "DL", "UA", "AA", "WN"]);
+    expect(bands.map((b) => b.token)).toEqual(["--g1", "--g2", "--g3", "--g4", "--g5"]);
+
+    // 7 carriers, 5 banded, 2 in Other -- 42,668,897 of 1,651,436,565 seats (2.58%).
+    expect(other.typeCount).toBe(2);
+    expect(other.seatShare).toBeCloseTo(42_668_897 / 1_651_436_565, 6);
+
+    const stacked =
+      bands.reduce((a, b) => a + b.series.reduce((s, p) => s + p.seats, 0), 0) +
+      other.series.reduce((s, p) => s + p.seats, 0);
+    expect(stacked).toBe(1_651_436_565);
   });
 });

@@ -1,3 +1,5 @@
+import { BY_AIRCRAFT_TYPE, type MixDimension } from "@/lib/chart/aircraftMix";
+
 /** Signature element 3 of 3 (docs/design/system.md "The legend rail"): a sticky panel
  * present on every data view, carrying the methodology explanation -- the gauge rail's
  * fixed axis, the reason-code gutter's glyphs, and the operating-carrier grain -- so there
@@ -9,13 +11,23 @@
  * `fleetMix` is that same rule applied to M4c's stacked-area chart: the group is opt-in
  * because `/explore` draws no chart, and a rail that explained a monochrome gauge ramp on a
  * page with no ramp on it would be exactly the stale "how to read this" this element exists
- * to replace. */
-export function LegendRail({ fleetMix = false }: { fleetMix?: boolean } = {}) {
+ * to replace.
+ *
+ * `stack` is M4d's application of the SAME rule one level down: the chart is now stacked by
+ * either aircraft type or operating carrier, and the two ramps do not mean the same thing. On
+ * `/aircraft/<slug>` every band is the same airframe, so "larger metal" and "the five types
+ * with the most seats" would both be false sentences in a panel whose entire job is telling a
+ * reader how to read the thing next to it. Defaulted, so `/explore`, `/route`, `/airport` and
+ * `/carrier` are untouched. */
+export function LegendRail({
+  fleetMix = false,
+  stack = BY_AIRCRAFT_TYPE,
+}: { fleetMix?: boolean; stack?: MixDimension } = {}) {
   return (
     <aside className="legend">
       <h4>Chart legend</h4>
 
-      {fleetMix ? <FleetShading /> : null}
+      {fleetMix ? <FleetShading stack={stack} /> : null}
 
       <div className="grp">
         <div className="gt">Gauge rail</div>
@@ -88,8 +100,12 @@ export function LegendRail({ fleetMix = false }: { fleetMix?: boolean } = {}) {
  *
  * The two swatches read `var(--g1)` and `var(--g5)`, the ends of the ramp the chart itself
  * draws from, so `globals.css` stays the single source for the palette (the mockup's own
- * hex literals are not copied down here). */
-function FleetShading() {
+ * hex literals are not copied down here).
+ *
+ * Every word that depends on WHAT is stacked comes from `stack` (lib/chart/aircraftMix.ts's
+ * MixDimension), not from here: the ramp's two ends and the unit membership is counted in. The
+ * rest of the group is true of both stacks and stays literal. */
+function FleetShading({ stack }: { stack: MixDimension }) {
   return (
     <div className="grp">
       <div className="gt">Fleet shading</div>
@@ -99,7 +115,7 @@ function FleetShading() {
             <rect width="40" height="9" fill="var(--g1)" />
           </svg>
         </span>
-        <em>smaller metal</em>
+        <em>{stack.rampLight}</em>
       </div>
       <div className="lrow">
         <span className="g" aria-hidden="true">
@@ -107,14 +123,18 @@ function FleetShading() {
             <rect width="40" height="9" fill="var(--g5)" />
           </svg>
         </span>
-        <em>larger metal</em>
+        <em>{stack.rampDark}</em>
       </div>
       <div className="lrow">
+        {/* One string per sentence rather than text interleaved with `{stack.unit}`: React's
+            SSR would otherwise emit `<!-- -->` inside the phrase, which `textContent` hides
+            from every test here and a raw-bytes grep in app/smoke.sh would trip over. Same
+            trap as the chart's own title. */}
         <em>
-          One ramp, ordered by seats per departure — a darkening stack is an upgauge. Band
-          membership is a different ordering: the five types with the most seats get a band,
-          and everything else is aggregated into the lightest band, Other, whose count and
-          share of seats are stated on the chart&rsquo;s own key.
+          {`One ramp, ordered by seats per departure — a darkening stack is an upgauge. Band ` +
+            `membership is a different ordering: the five ${stack.unit}s with the most seats ` +
+            `get a band, and everything else is aggregated into the lightest band, Other, ` +
+            `whose count and share of seats are stated on the chart’s own key.`}
         </em>
       </div>
       <div className="lrow">

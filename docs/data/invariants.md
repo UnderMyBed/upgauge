@@ -605,6 +605,16 @@ injective over all 111 fact-present short names** (0 collisions, measured), so i
 slug scheme; `test_aircraft_short_names_survive_a_url_path_segment` pins that so a future
 refresh that makes it unsafe fails a test rather than a route.
 
+**M4d adopted it, and re-pins the measurement from the app side too.** `slugFor()` in
+`app/src/lib/aircraftSlug.ts` is that transform; `aircraftSlug.test.ts` enumerates every
+fact-present type through the ordinary pivot and asserts **112 codes → 111 distinct slugs, with
+`CE-180` the only repeat and that repeat being the short name colliding with itself** rather than
+two names flattened together. The distinction matters: a future BTS refresh could collide two
+*distinct* names (the transform maps two characters onto one that already occurs in `B737-8`), and
+that would be a new failure, not this one. The separator count is pinned in the same test — **max
+2 across all 111 slugs** — because resolving a slug expands it back into `3^n` candidate short
+names, which is capped at 4 separators (`docs/architecture/pipeline.md` § M4d).
+
 ---
 
 ## Where these are enforced

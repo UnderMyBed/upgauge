@@ -1324,6 +1324,55 @@ error. `/aircraft` is where that error is reachable on today's data and must be 
 tasks would have been editing at once. The four copies (route, airport, carrier, aircraft)
 should collapse into one `entitySlugFromPath(pathname, prefix)` now that they all exist.
 
+### `/aircraft/<slug>` — the slug is not a key, and the chart is not the same chart
+
+Two things are different here from the other two entity pages, and both were forced by the data
+rather than chosen.
+
+**The slug is a transform of `short_name`, not `short_name`.** 16 of the 112 fact-present short
+names carry a `/` or a space (`docs/data/invariants.md` § Entity resolution), so
+`/aircraft/A321/LR` parses as *two* path segments and can never match a single dynamic segment —
+the design spec's own worked example was unroutable. `app/src/lib/aircraftSlug.ts`'s `slugFor()`
+replaces both characters with `-` and uppercases; `/aircraft/a321-lr` 308s to `/aircraft/A321-LR`,
+never to the unroutable raw name.
+
+That transform is many-to-one, so resolving a slug means **expanding it back into every
+`short_name` it could have come from** — each `-` was a `-`, a `/`, or a space — and handing the
+whole set to Task 1's `lookup_aircraft_by_name.sql`. The alternative, rewriting that file's
+`WHERE` to compare slugs, would make its name a lie and would move the collision guard out from
+under `insertUniqueByCode`, which keys on the short name. The expansion is `3^n`, so it is
+**capped at 4 separators** (81 candidates) and refused above that: the measured maximum over all
+111 fact-present slugs is 2, and without a cap `/aircraft/-------------------` asks DuckDB to
+bind `3^19` parameters. `aircraftSlug.test.ts` pins that maximum against the live catalog, so a
+BTS refresh that ships a five-separator type fails a test rather than a request.
+
+**`/aircraft/CE-180` is a reachable URL with no answer, and it renders one anyway.** `CE-180`
+names BTS code `030` (CESSNA 180) *and* `031` (CESSNA 180A/B); both really flew and no scoping
+resolves it. It is a **404** — literally true, no entity lives at that URL, and a 404 gets
+`no-store`, which is right for an answer that changes when the dataset does. But the 404 body is
+not an apology: `not-found.tsx` re-runs the resolution, catches `AmbiguousCodeError`, resolves
+both codes to their full designations through the ordinary resolver, and renders each with a
+working Explorer permalink — the Explorer is keyed on the BTS code, so it can show what this page
+cannot. Candidates are sorted by code; the error preserves driver row order by design, which is
+right for a message and wrong for a page that would otherwise list them differently across
+restarts.
+
+**The chart stacks by carrier.** `AircraftMixChart` and `fetchAircraftMix` now take a
+`MixDimension` as a trailing, defaulted argument, so `/route`, `/airport` and `/carrier` are
+untouched. Why, what the ramp then means, and the measured configuration spreads that justify it:
+`docs/design/system.md` § Charts. `pipeline/pivot.py` and `app/src/lib/pivot/render.ts` were not
+touched and `make goldens` leaves `sql/03_queries/goldens/` byte-identical — the generalization is
+entirely in the query *composition* layer, which is what M4c's "the chart adds no SQL" property
+bought.
+
+**Two derived-measure traps this page has and `/route` does not.** An aircraft type *has* a
+nominal seat count, so averaging the carrier rows' `avg_gauge` looks like it would recover it. It
+would not: it weights Sun Country's 186-seat 737-800 equally with Southwest's 175-seat one
+regardless of how many either flew. And the filter value is the BTS `code` as a **string** — 13
+fact-present types carry a leading zero, and `Number('036')` renders an empty page for a type that
+filed in 120 months. `/aircraft/SKYHAWK` is the test that catches it; every other type this page
+is tested on (614, 655, 699) survives an int-parse unchanged.
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command
