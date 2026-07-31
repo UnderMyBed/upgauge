@@ -40,9 +40,10 @@ And the workaround that error suggests is **silently wrong**. Measured on JFK–
 | The actual undirected route | 264 | **3,455,820** |
 
 The gap is JFK→JFK (2 rows) and LAX→LAX (31 rows). Same-airport filings are not a curiosity:
-**12,738 of them exist across 530 airports.** The workaround would inflate this route by 18,895
-seats under a `DATA AS OF` badge — the silently-authoritative wrong number this project treats
-as worse than an error.
+**12,738 of them exist across 530 airports** (full window 2015-01 → 2026-04, quarantined rows
+included — see `docs/data/invariants.md` § Route identity for all four window × quarantine
+answers). The workaround would inflate this route by 18,895 seats under a `DATA AS OF` badge —
+the silently-authoritative wrong number this project treats as worse than an error.
 
 So M4b's first deliverable is the missing capability, not the page.
 
@@ -257,7 +258,8 @@ change that would make it fail, and confirm it does.
 - **`docs/product/features.md`** — `/route` exists, what it shows, and that the chart is M4c.
 - **`docs/design/system.md`** — the entity-page layout: title block, stat strip, table, Explorer
   link, legend rail.
-- **`docs/data/invariants.md`** — same-airport filings (12,738 across 530 airports) and the
+- **`docs/data/invariants.md`** — same-airport filings (12,738 across 530 airports, full
+  window, quarantined included) and the
   0.7% ID-vs-alphabetical ordering disagreement, each next to the rule it justifies.
 - **CLAUDE.md** — status, and `/route` in the command/route inventory.
 

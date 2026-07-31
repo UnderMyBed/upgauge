@@ -11,6 +11,7 @@ import { dataAsOf, loadAllowlist } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
+import { AIRCRAFT_MIX_LIMIT } from "@/lib/chart/aircraftMix";
 import { encode } from "@/lib/pivot/urlstate";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
 import type { AirportRef } from "@/lib/resolve";
@@ -154,16 +155,19 @@ function AirportEmptyState({
 }
 
 /** The whole render for a resolved airport, taking the row limit as an explicit input for the
- * same reason `RouteView` does: nothing in production data reaches the truncation branch
- * (measured worst case 959 groups against a 5,000 limit), so the disclosure would be
- * untestable without it. Split from the default export so a test can drive a real,
+ * same reason `RouteView` does: nothing in production data reaches either truncation branch
+ * (measured per-side worst case 879 carrier-endpoint groups against a 5,000 limit, and 4,094
+ * (month, type) cells against 10,000 -- both at ORD), so the disclosures would be untestable
+ * without them. Split from the default export so a test can drive a real,
  * live-database render without going near Next's routing plumbing. */
 export async function AirportView({
   airport,
   limit = AIRPORT_ENDPOINT_LIMIT,
+  mixLimit = AIRCRAFT_MIX_LIMIT,
 }: {
   airport: AirportRef;
   limit?: number;
+  mixLimit?: number;
 }) {
   const allowlist = await loadAllowlist();
   const asOf = await dataAsOf();
@@ -178,20 +182,24 @@ export async function AirportView({
   // windows genuinely differ, which is why the `.window` line below names both.
   const [traffic, mix] = await Promise.all([
     fetchAirportTraffic(airport.id, trailing12, asOf, limit),
-    fetchAirportMix(airport.id, EARLIEST_MONTH, asOf),
+    fetchAirportMix(airport.id, EARLIEST_MONTH, asOf, mixLimit),
   ]);
 
   const rows = carrierRows(traffic.rows);
   const totals = airportTotals(traffic.rows, airport.id);
   const isEmpty = rows.length === 0;
-  const hasMix = mix.length > 0;
+  const hasMix = mix.rows.length > 0;
 
   // The range the chart can DRAW, which is not the range it was fetched over -- ISN's history
   // ends in 2019-10. Naming the requested window over a chart that stops five years earlier is
   // the same fabrication as interpolating across a gap (M4c). Months are zero-padded YYYY-MM,
   // so lexical min/max IS chronological.
-  const drawnFrom = hasMix ? mix.reduce((m, r) => (r.month < m ? r.month : m), mix[0].month) : null;
-  const drawnTo = hasMix ? mix.reduce((m, r) => (r.month > m ? r.month : m), mix[0].month) : null;
+  const drawnFrom = hasMix
+    ? mix.rows.reduce((m, r) => (r.month < m ? r.month : m), mix.rows[0].month)
+    : null;
+  const drawnTo = hasMix
+    ? mix.rows.reduce((m, r) => (r.month > m ? r.month : m), mix.rows[0].month)
+    : null;
   const drawsFullWindow = drawnFrom === EARLIEST_MONTH && drawnTo === asOf;
   // ONE string, not adjacent JSX expressions: React's SSR emits `<!-- -->` between adjacent
   // text nodes, which `textContent` skips but a grep over the served bytes does not --
@@ -231,7 +239,17 @@ export async function AirportView({
         </p>
         <div className="body">
           <div>
-            {hasMix ? <AircraftMixChart rows={mix} title={airport.code} /> : null}
+            {hasMix ? <AircraftMixChart rows={mix.rows} title={airport.code} /> : null}
+            {/* The chart's own truncation, disclosed separately from the table's: the two are
+                separate unions over separate pivots with separate limits, and either can be
+                short while the other is whole. Saying "the totals above" here would be false --
+                the stat strip is fed by the table's union, not by this one. */}
+            {mix.truncated && (
+              <p className="foot">
+                The chart hit its {mixLimit}-row limit on at least one side, so some months or
+                aircraft types are missing from it; the table and the totals above are unaffected.
+              </p>
+            )}
             {isEmpty ? (
               <AirportEmptyState airport={airport} timeFrom={trailing12} timeTo={asOf} />
             ) : (

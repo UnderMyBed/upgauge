@@ -68,8 +68,16 @@ describe("/airport/<code>", () => {
     const { container } = render(await renderSEA());
     const stats = container.querySelector(".stats")?.textContent ?? "";
     expect(stats).toContain("43,896,637");
-    expect(stats).toContain("143");
     expect(stats).not.toContain("21,941,241");
+    // SCOPED to the Destinations stat's own value node. `toContain("143")` over the whole strip
+    // was a three-digit substring match: it happens to be unambiguous against today's other
+    // stats, but 143 is a substring of any figure containing it, so the assertion could pass for
+    // a reason other than the destination count being right. The whole point of this figure is
+    // that origin-only reads 140 and nothing can scale its way there.
+    const destinations = [...container.querySelectorAll(".stats .stat")].find(
+      (s) => s.querySelector(".k")?.textContent === "Destinations",
+    );
+    expect(destinations?.querySelector(".v")?.textContent).toBe("143");
   });
 
   it("computes load factor and avg gauge from summed parts, never by averaging carriers", async () => {
@@ -190,14 +198,15 @@ describe("/airport/<code> with nothing in the trailing 12 months", () => {
 
 describe("/airport/<code> truncation disclosure", () => {
   // SEA's real trailing-12 query returns 374 (carrier, destination) groups departing and 293
-  // arriving, against a 5,000 limit no airport in this database reaches (measured worst case
-  // 959), so nothing in production data exercises this branch. `AirportView` takes the limit
+  // arriving, against a 5,000 limit no airport in this database reaches (measured worst case is
+  // ORD at 879 origin / 855 dest per side; 959 is ORD's union), so nothing in production data
+  // exercises this branch. `AirportView` takes the limit
   // as an explicit parameter for exactly that reason -- same split, same justification, as
   // RouteView's.
-  async function view(limit?: number) {
+  async function view(limit?: number, mixLimit?: number) {
     const r = await resolveAirportCode("SEA");
     if (r.kind !== "ok") throw new Error("expected SEA to resolve for this fixture");
-    return await AirportView({ airport: r.airport, limit });
+    return await AirportView({ airport: r.airport, limit, mixLimit });
   }
 
   it("discloses when a side hits the row limit", async () => {
@@ -208,6 +217,22 @@ describe("/airport/<code> truncation disclosure", () => {
   it("does not disclose at the real limit", async () => {
     render(await view());
     expect(screen.queryByText(/top \d+ /i)).toBeNull();
+  });
+
+  it("discloses a truncated CHART separately, and does not 500 for being big", async () => {
+    // The chart is a SECOND union over three SEPARATE LIMIT-ed pivots, and it shipped without
+    // the `partial` guard its sibling has: a truncated side drops a cell the overlap query
+    // still returns, inclusionExclusion throws, and the page 500s -- with the proxy's
+    // `public, s-maxage=2592000` already on the response, so the CDN pins that 500 for a month.
+    // Rendering at all is half the assertion here; saying so is the other half.
+    render(await view(undefined, 5));
+    expect(screen.getByText(/chart .*hit its 5-row limit/i)).toBeDefined();
+    expect(screen.getByText(/DATA AS OF/)).toBeDefined();
+  });
+
+  it("does not disclose a truncated chart at the real limit", async () => {
+    render(await view());
+    expect(screen.queryByText(/row limit/i)).toBeNull();
   });
 });
 

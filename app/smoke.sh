@@ -412,6 +412,13 @@ check_not "airport 404: not every cause at once"        "$BODY" 'domestic-only'
 BODY=$(curl -s --max-time 15 "${BASE}/airport/LHR")
 check     "airport 404: a real airport outside the dataset says so" "$BODY" 'domestic-only'
 check_not "airport 404: LHR is not reported as unknown"             "$BODY" 'unknown airport code'
+# The SENTENCE carries the slug, not just the reason. Both checks above are satisfied by a page
+# that stopped echoing the requested code entirely, because the reason names it too -- the trap
+# Task 3 found on /carrier and left open here. Unlike /carrier there is no lower-case variant to
+# contrast with: resolveAirportCode 308s on case BEFORE it looks anything up, so the typed and
+# canonical spellings are equal by construction on this path (pinned in not-found.test.tsx).
+BODY=$(curl -s --max-time 15 "${BASE}/airport/ZZZZ")
+check_re  "airport 404: the SENTENCE carries the requested code" "$BODY" 'We can.{1,3}t show .{1,12}ZZZZ'
 
 # 11. /carrier/<code> -- the page has to say what it is counting.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL")
@@ -454,7 +461,8 @@ check     "carrier: 308 keeps the project Cache-Control" "$HDRS" "$CACHE_EXPECTE
 
 # ZZ is in dim_carrier not at all; PA (Pan American) is in it three times and has filed zero
 # T-100 Segment rows. Both 404 by the same path, which is why the reason talks about FILINGS
-# rather than recognition -- 1,543 of dim_carrier's 1,776 codes land in PA's bucket, so a
+# rather than recognition -- 1,543 of dim_carrier's 1,657 DISTINCT codes land in PA's bucket
+# (1,657 - 114 fact-present; 1,776 is the table's ROW count, one per airline_id), so a
 # "unknown carrier code 'PA'" wording would be false about the majority 404 (pipeline.md § M4d).
 for C in ZZ PA; do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/carrier/${C}")
@@ -514,6 +522,15 @@ check     "aircraft: an unknown slug is a 404"      "$CODE" '404'
 check_not "aircraft: 404 is not long-cached"        "$HDRS" "s-maxage=2592000"
 check     "aircraft: 404 is no-store"               "$HDRS" "no-store"
 check     "aircraft 404: names the offending slug"  "$BODY" "unknown aircraft type 'NOPE-1'"
+# The lower-case slug is echoed as TYPED while the reason names the upper-cased form -- the same
+# discriminator /carrier gets, on the page that has the widest divergence available and had no
+# check at all. `resolveAircraftSlug` reasons in terms of slugFor(trimmed), so '/aircraft/nope-1'
+# must show 'nope-1' in the sentence and 'NOPE-1' in the reason.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/aircraft/nope-1")
+BODY=$(curl -s --max-time 15 "${BASE}/aircraft/nope-1")
+check     "aircraft: an unknown lower-case slug is a 404 too"      "$CODE" '404'
+check_re  "aircraft 404: the SENTENCE carries the slug as typed"   "$BODY" 'We can.{1,3}t show .{1,12}nope-1'
+check     "aircraft 404: ...and the REASON names the canonical"    "$BODY" "unknown aircraft type 'NOPE-1'"
 
 # THE ONE THIS SECTION EXISTS FOR. `resolveAircraftSlug` has FOUR outcomes, not three:
 # `/aircraft/CE-180` names BTS codes 030 (CESSNA 180) and 031 (CESSNA 180A/B), both of which
@@ -540,12 +557,15 @@ check     "aircraft 404: names the second airframe" "$BODY" 'CESSNA 180A/B — B
 check_re  "aircraft 404: refuses to pick one"       "$BODY" 'We won.{1,3}t pick one for you'
 
 # Page weight for the three new pages, recorded not asserted -- same reasoning as /route above.
-# /airport/ATL is the worst case in the database: its full-window mix is 4,118 (month, type)
-# cells per side against JFK-LAX's 996, so it is the page that would find any fixed buffer.
+# /airport/ORD is the worst case in the database, and it is NOT /airport/ATL: measured (month,
+# aircraft type) group counts over 2015-01..2026-04 are ORD 4,094 origin / 4,089 dest, union
+# 4,118, against ATL's 3,561 / 3,572, union 3,592 -- so the 4,118 this loop used to attribute to
+# ATL "per side" was ORD's UNION all along. M4d's final review caught it. ATL stays in the list
+# as the second-heaviest, since weighing only the top one tells you nothing about the spread.
 # There is no fixed buffer here -- these bodies land in shell variables -- but the `grep -q`
 # hazard at the top of this file was invisible until a page crossed 64 KB, so the numbers are
 # kept where the next person will see them.
-for U in /airport/SEA /airport/ATL /carrier/DL /aircraft/B737-8; do
+for U in /airport/SEA /airport/ATL /airport/ORD /carrier/DL /aircraft/B737-8; do
   printf '  note %8s bytes of HTML for %s\n' "$(curl -s --max-time 30 "${BASE}${U}" | wc -c)" "$U"
 done
 

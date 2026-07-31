@@ -320,6 +320,16 @@ consults the dataset, so the redirect can never become the wrong answer, and the
 follows is the response that has to stay uncached. `resolveCarrier` and `resolveAircraftSlug`
 resolve first and redirect second, so they have no equivalent case.
 
+**The cost side of that same fact, which is worth knowing on a project whose cost control *is*
+the caching:** because the redirect precedes the lookup, *every* lower-case path under
+`/airport/` mints a long-cached 308 — `/airport/aaaa`, `/airport/aaab`, and so on without bound.
+A crawler walking random lower-case strings therefore creates an attacker-controllable family of
+30-day CDN entries. Nothing is *wrong*: each response is correct, and each is the cheapest
+response in the app (no DB work at all, § What the proxy's query actually costs). The other
+three resolvers consult the dataset first, so an unknown slug there gets `no-store` regardless
+of case and has no equivalent. Cloudflare's rate limiting is the mitigation and is already in
+the architecture; this is recorded so nobody discovers the shape from a cache-fill graph.
+
 At most **one** resolution runs per request: every `slugFromPath` is a prefix test and the loop
 breaks on the first match, so four entity pages cost what one did.
 

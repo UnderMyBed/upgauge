@@ -277,11 +277,28 @@ answers the better question — who adopted this type, and when. `/route`, `/air
 same airframe very differently, so ordering carrier bands by seats per departure is a real
 encoding rather than a decorative reuse:
 
+**Over the full window `2015-01 → 2026-04`, which is the window `/aircraft` actually draws:**
+
+| type | lightest | darkest | spread |
+|---|---|---|---|
+| A321/LR | B6 176.0 | F9 230.0 | **54.0 seats (31%)** |
+| A320-1/2 | MX 129.3 | G4 181.7 | 52.4 |
+| B737-8 | AS 159.8 | XP 187.7 | 27.9 |
+
+**Over the trailing 12 months `2025-05 → 2026-04`** — the window originally measured here, and
+the source of the `172.3 → 230.0` pair quoted in prose elsewhere in this repo:
+
 | type | lightest | darkest | spread |
 |---|---|---|---|
 | A321/LR | B6 172.3 | F9 230.0 | **57.7 seats (33%)** |
 | A320-1/2 | AA 150.0 | F9 184.1 | 34.1 |
 | B737-8 | AS 159.5 | SY 186.0 | 26.5 |
+
+Both are given because neither alone is the whole claim: the table justifies an encoding the
+chart draws over the **full** window, while the figure everyone quotes was measured over the
+**trailing 12**, where SY rather than XP tops the B737-8. The spread survives either way, which
+is the point — but an unlabelled row is not evidence (`docs/data/invariants.md` § Route identity
+records the same lesson about the same-airport counts).
 
 **But it is not the same claim, so it must not carry the same words.** Across aircraft types a
 darker band is *bigger metal*. Across carriers of one type it is the *same* metal fitted denser —

@@ -737,7 +737,9 @@ The pivot had no way to filter on `route` — a dimension whose `column_expr` na
 columns (`route_key_low`, `route_key_high`) rather than one. The obvious workaround —
 `origin_airport_id IN (a,b) AND dest_airport_id IN (a,b)` — is not equivalent to "the route
 between a and b": it also matches same-airport filings (`a→a`, `b→b`), which are not a
-curiosity — 12,738 of them exist across 530 airports. On JFK–LAX that workaround inflates
+curiosity — 12,738 of them exist across 530 airports (full window 2015-01 → 2026-04,
+quarantined rows included; `docs/data/invariants.md` § Route identity tabulates all four
+window × quarantine answers). On JFK–LAX that workaround inflates
 seats by 18,895 under a `DATA AS OF` badge. Full measurement:
 [`docs/data/invariants.md` § Route identity](../data/invariants.md#route-identity).
 
@@ -1237,12 +1239,24 @@ same six are 64.3 ms. Full table: [hosting.md § What the proxy's query actually
 costs](hosting.md#what-the-proxys-query-actually-costs). That is the standing price of an OR
 the pivot layer cannot express, and the strongest argument for M5 adding one.
 
-**Two limits, both measured rather than guessed.** The per-side row limit is 5,000 against a
-measured worst case of 959 (carrier, endpoint) groups for the busiest airport in the database;
-SEA produces 374 departing and 293 arriving. The chart's three sides run under
-`fetchAircraftMix`'s own 10,000-row bound against a measured worst case of 4,118 (month, type)
-groups per side. Reaching the first discloses truncation on the page; reaching the second would
-throw, which is the fail-loud answer and is recorded in `endpoints.ts`.
+**Two limits, both measured rather than guessed — and both figures were mis-attributed until
+M4d's final review.** Every count below is per side unless the row says otherwise; the union of
+the two sides is always larger, and quoting a union as a per-side bound understates the headroom.
+
+| Bound | Worst airport | origin side | dest side | union | limit |
+|---|---|---|---|---|---|
+| (carrier, other endpoint) groups, trailing 12 (2025-05 → 2026-04) | ORD (13930) | 879 | 855 | 959 | 5,000 |
+| (month, aircraft type) groups, full window (2015-01 → 2026-04) | ORD (13930) | 4,094 | 4,089 | 4,118 | 10,000 |
+
+SEA produces 374 departing and 293 arriving on the first, and 2,832 / 2,801 (union 2,886) on the
+second; ATL — which `smoke.sh` weighed as "the worst case" — is 3,561 / 3,572 on the second, well
+under ORD. **Reaching either limit now discloses truncation on the page rather than throwing.**
+The chart's union originally called `unionMix` with no options, so a truncated side that dropped
+a cell the overlap query still returned reached `inclusionExclusion`'s throw — a 500 on a
+response the proxy had already stamped `public, s-maxage=2592000`, i.e. a 500 pinned in a shared
+CDN cache for thirty days on a page that would serve fine the moment the limit was raised. Both
+unions now thread `partial`, and `endpoints.test.ts` asserts ORD comes back **untruncated**, so a
+refresh that approaches the bound fails a test rather than degrading a page.
 
 **An empty trailing-12 table is normal, and unlike `/route` the chart is never empty.** Every
 airport that resolves is fact-present by construction, so there is always history somewhere in
@@ -1297,7 +1311,8 @@ stays green while a `smoke.sh` grep stops matching. That is M4c's window-line bu
 these two sentences are the ones a served-build check most wants to grep.
 
 **The 404 says "nothing filed under this code", not "unknown code".** 1,543 of `dim_carrier`'s
-1,776 codes have no fact-present holder (measured), so "recognized by BTS, never filed" is the
+**1,657 distinct** codes have no fact-present holder (measured — 1,776 is the table's *row*
+count, one per `airline_id`; 1,657 − 114 fact-present carriers = 1,543), so "recognized by BTS, never filed" is the
 **common** carrier 404, not the exotic one — `PA` (Pan American World Airways, three
 `airline_id`s, zero T-100 Segment rows) reaches it by the same path as `ZZ`, which is in
 `dim_carrier` not at all. `routePair.ts` splits its two cases apart only because
@@ -1423,9 +1438,14 @@ Page weight on the served build, recorded rather than thresholded (M4c's `/route
 |---|---|
 | `/route/JFK-LAX` | 96,153 |
 | `/aircraft/B737-8` | 103,019 |
-| `/airport/SEA` | 119,120 |
+| `/airport/SEA` | 119,126 |
 | `/carrier/DL` | 127,688 |
-| `/airport/ATL` | **130,429** — the worst case in the database, 4,118 (month, type) cells per side |
+| `/airport/ATL` | 130,435 — 3,561 / 3,572 (month, type) cells per side, union 3,592 |
+| `/airport/ORD` | **139,520** — the true worst case, 4,094 / 4,089 per side, union 4,118 |
+
+`/airport/ATL` was recorded here and in `smoke.sh` as "the worst case in the database, 4,118
+cells per side". It is neither: 4,118 is **ORD's union**, and ORD is denser than ATL on both
+sides. `smoke.sh` now weighs both.
 
 Nothing in the harness holds a fixed response buffer — the bodies land in shell variables — but
 the `grep -q`/`SIGPIPE` hazard the file's header describes was invisible until a page crossed

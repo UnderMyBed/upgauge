@@ -67,6 +67,22 @@ describe("/aircraft/<slug> not-found", () => {
     expect(screen.queryByRole("link", { name: /^\/aircraft\/CE-180$/ })).toBeNull();
   });
 
+  it("echoes the slug exactly as requested, not the resolver's canonical form", async () => {
+    // Task 3's finding, closed on this page. Every OTHER assertion in this file reads the
+    // resolver's REASON sentence, which carries `slugFor(trimmed)` -- the UPPERCASED slug -- so
+    // a mutant that replaced the displayed slug with the canonical form, or with a hard-coded
+    // literal, survived all of them.
+    //
+    // '/aircraft/nope-1' is the input that separates the two: the page must echo 'nope-1' (what
+    // was typed) while the reason names 'NOPE-1' (what the resolver looked up). Both are asserted
+    // inside the alert's own textContent -- an unscoped query would find 'NOPE-1' in the h1 or
+    // the recovery link and pass for the wrong reason.
+    const { container } = render(await NotFoundView({ pathname: "/aircraft/nope-1" }));
+    const alert = container.querySelector("p[role='alert']")?.textContent ?? "";
+    expect(alert).toContain("nope-1");
+    expect(alert).toContain("'NOPE-1'");
+  });
+
   it("offers a way back into a working page", async () => {
     render(await NotFoundView({ pathname: "/aircraft/NOPE-1" }));
     expect(screen.getByRole("link", { name: /B737-8/ })).toBeDefined();

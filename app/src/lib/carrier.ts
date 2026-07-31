@@ -51,7 +51,9 @@ export function carrierSlugFromPath(pathname: string): string | null {
  *   notFound -- names the code.
  *
  * ONE 404 reason, worded to be true of both of the ways a code can fail. 1,543 of
- * dim_carrier's 1,776 codes have no fact-present holder (measured), so "recognized by BTS but
+ * dim_carrier's 1,657 DISTINCT codes have no fact-present holder -- measured, and 1,657 is the
+ * right denominator: 1,776 is the table's ROW count (one row per airline_id), and 1,657 - 114
+ * fact-present carriers is exactly the 1,543. So "recognized by BTS but
  * never filed a T-100 Segment row" is the COMMON case, not the exotic one: PA (Pan American
  * World Airways, three airline_ids, zero rows) reaches this branch by exactly the same path as
  * ZZ, which is in dim_carrier not at all. `routePair.ts` splits its two cases apart because it

@@ -72,8 +72,14 @@ total are what discriminate.
 
 **Same-airport rows DO exist in `fct_segment_month`** — this spec previously claimed they do
 not. That is true of *route identity* (M4b excludes same-airport pairs as non-routes), not of
-the fact table: **3,182 rows across 358 airports carrying 601,565 seats** in-window, and **18
-rows / 12,646 seats at SEA alone**. So a naive `origin = X OR dest = X` sum double-counts them,
+the fact table: **3,182 rows across 358 airports carrying 601,565 seats over the trailing 12
+months (2025-05 → 2026-04), excluding quarantined rows** — 3,187 / 359 / 601,573 with them, and
+12,696 / 530 / 1,887,193 (or 12,738 / 530 / 1,887,424 with them) over the **full 2015-01 →
+2026-04 window**. This figure was originally written here as "in-window" with no window and no
+quarantine qualifier, which is a 4x ambiguity: `docs/data/invariants.md` § Route identity owns
+the four-row table, and the rest of this repo quotes the *including-quarantined* rows, because
+quarantine changes what a row contributes and never whether a filter matches it. Also **18
+rows / 12,646 seats at SEA alone** (trailing 12). So a naive `origin = X OR dest = X` sum double-counts them,
 and the page must subtract the overlap rather than assume it is empty.
 
 **The pivot cannot express `origin OR dest`.** Its filters are AND-ed, and the one composite
@@ -141,11 +147,28 @@ seats by operating carrier answers the better question: who adopted this type, a
 same airframe very differently, so ordering carrier bands by seats per departure still means
 something and a darkening stack still reads as upgauge:
 
+**Over the full window `2015-01 → 2026-04`, which is the window `/aircraft` actually draws:**
+
+| type | lightest | darkest | spread |
+|---|---|---|---|
+| A321/LR | B6 176.0 | F9 230.0 | **54.0 seats (31%)** |
+| A320-1/2 | MX 129.3 | G4 181.7 | 52.4 |
+| B737-8 | AS 159.8 | XP 187.7 | 27.9 |
+
+**Over the trailing 12 months `2025-05 → 2026-04`** — the window originally measured here, and
+the source of the `172.3 → 230.0` pair quoted in prose elsewhere in this repo:
+
 | type | lightest | darkest | spread |
 |---|---|---|---|
 | A321/LR | B6 172.3 | F9 230.0 | **57.7 seats (33%)** |
 | A320-1/2 | AA 150.0 | F9 184.1 | 34.1 |
 | B737-8 | AS 159.5 | SY 186.0 | 26.5 |
+
+Both are given because neither alone is the whole claim: the table justifies an encoding the
+chart draws over the **full** window, while the figure everyone quotes was measured over the
+**trailing 12**, where SY rather than XP tops the B737-8. The spread survives either way, which
+is the point — but an unlabelled row is not evidence (`docs/data/invariants.md` § Route identity
+records the same lesson about the same-airport counts).
 
 On `/aircraft` the ramp isolates *configuration* choice from *fleet* choice, which `/route`
 cannot separate — the same metal, fitted a third denser by a low-cost carrier than by JetBlue.

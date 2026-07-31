@@ -13,9 +13,10 @@ import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
 //         this window. Recognized by BTS, absent from the facts.
 //   ZZ -- 0 rows in dim_carrier at all (measured).
 //
-// PA and ZZ are both 404s and that is the point: 1,543 of dim_carrier's 1,776 codes have no
-// fact-present holder (measured), so the "recognized but never filed" case is the COMMON 404
-// here, not the exotic one, and the reason sentence has to be true of it.
+// PA and ZZ are both 404s and that is the point: 1,543 of dim_carrier's 1,657 DISTINCT codes
+// have no fact-present holder (measured; 1,776 is the table's ROW count, one per airline_id),
+// so the "recognized but never filed" case is the COMMON 404 here, not the exotic one, and the
+// reason sentence has to be true of it.
 
 describe("resolveCarrier", () => {
   it("resolves a real code to its airline, keyed on the id", async () => {

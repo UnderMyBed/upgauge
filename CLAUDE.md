@@ -214,10 +214,17 @@ them real. Each one has exactly one thing it could not inherit:
   express `origin OR dest` (separate dimensions, filters AND-ed), so the page assembles
   `origin + dest − (origin ∧ dest)` over **three** pivots per grain, six per page (54.2 ms
   against `/route`'s 20.2). The third term is not a formality: `fct_segment_month` really
-  carries same-airport rows (3,187 rows, 601,573 seats over the trailing 12), and dropping it
+  carries same-airport rows (**3,187 rows / 601,573 seats over the trailing 12 months,
+  quarantined rows included** — `docs/data/invariants.md` § Route identity tabulates all four
+  window × quarantine answers, which differ by 4x, so never quote one unlabelled), and dropping it
   reads SEA at 53,386,452 seats instead of **53,373,806**. An origin-only page reads 26,710,000
   and looks perfect — carrier and type *counts* are identical either way, so only the seat,
-  passenger and destination figures can catch it.
+  passenger and destination figures can catch it. **Both unions thread `partial` through the
+  subset invariant, and the chart's did not until M4d's final review**: a truncated side drops a
+  cell the overlap query still returns, `inclusionExclusion` throws, and the 500 goes out under
+  the `s-maxage=2592000` the proxy stamped *before* the page ran — a 500 pinned in a shared CDN
+  cache for a month, which is item 4 below with a live trigger. Both limits now disclose
+  truncation instead, and a warehouse test asserts the worst case (ORD) comes back untruncated.
 - **`/carrier` has to say what it is counting**, on every carrier and whether or not it has a
   table: operated-not-marketed, and codes/names are BTS's current identity. Its table is
   aircraft types (the fleet is the subject; routes and airports want the Top-N builder, which
@@ -227,7 +234,8 @@ them real. Each one has exactly one thing it could not inherit:
   segments and can never be a page — `/` and space become `-`, and resolving inverts that by
   expanding the slug into every name it could have come from (capped at 4 separators; measured
   max is 2). The chart stacks by **operating carrier**, because a type stack on a type page is
-  one band, and the ramp then encodes configuration rather than fleet (A321/LR: 172.3 → 230.0
+  one band, and the ramp then encodes configuration rather than fleet (A321/LR, trailing 12:
+  B6 172.3 → F9 230.0; full window, which is what the chart draws: 176.0 → 230.0
   seats/departure across carriers). `/aircraft/CE-180` names two airframes that both really flew
   and is a 404 that names and links both rather than picking one.
 
@@ -242,15 +250,17 @@ throws without it, so its 404s keep the 404 status and lose their entire message
 7,740-byte error shell with no reason, no code, no `DATA AS OF`. Five served-build mutants pin
 all of it (`docs/architecture/hosting.md`).
 
-457 app tests green (`make app-check`), 447 Python (`make check`); `make goldens` leaves
+466 app tests green (`make app-check`), 447 Python (`make check`); `make goldens` leaves
 `sql/03_queries/goldens/` byte-identical — M4c and M4d touched no pivot SQL, which is what
-M4c's "the chart adds no SQL" property bought. `make app-smoke` is **134 checks** (55 at M4c), one section
+M4c's "the chart adds no SQL" property bought. `make app-smoke` is **138 checks** (55 at M4c), one section
 per entity page, each asserting the same five things in the same order: it renders, its
 `Cache-Control` is the project one, a real code renders and a bare id does not, the chart's
 `<svg>` and `<path fill="var(--gN)" d=` ramp fills are in the served bytes, and its 404 names
 the code *and* is `no-store` while its 308 keeps the long cache. Page weight: `/aircraft/B737-8`
-103,019 bytes, `/airport/SEA` 119,120, `/carrier/DL` 127,688, `/airport/ATL` **130,429** (the
-densest chart in the database, 4,118 cells per side).
+103,019 bytes, `/airport/SEA` 119,126, `/carrier/DL` 127,688, `/airport/ATL` 130,435
+(3,561 / 3,572 (month, type) cells per side). **`/airport/ORD` is the true worst case —
+139,520 bytes**, 4,094 / 4,089 per side, union 4,118; the 4,118 previously attributed to ATL
+"per side" was ORD's *union*, and `smoke.sh` now weighs both.
 
 Not built yet: the load-factor time-series chart, the arc maps, `/watch`, the seasonality
 heatmap, and OG cards — all specified in `docs/design/system.md`.
@@ -262,8 +272,9 @@ Next: **M5.** What it owes, each identified by the work above rather than guesse
    filter semantics in `render.ts` **and** `pipeline/pivot.py` in lockstep, plus a golden; that
    is a milestone-sized change, which is why M4d assembled the OR arithmetically instead.
 2. **`lookup_carrier_code_exists.sql`** (~15 lines, mirroring the airport one) so the carrier
-   404 can make the split the airport 404 already makes. **1,543 of `dim_carrier`'s 1,776 codes
-   have no fact-present holder**, so "recognized by BTS, never filed a segment row" is the
+   404 can make the split the airport 404 already makes. **1,543 of `dim_carrier`'s 1,657
+   *distinct* codes have no fact-present holder** (1,776 is the *row* count, one per
+   `airline_id`; 1,657 − 114 fact-present = 1,543), so "recognized by BTS, never filed a segment row" is the
    *majority* carrier 404, not a corner: `/carrier/PA` is Pan American, and today it reads the
    same as a typo.
 3. **Collapse the four `<entity>SlugFromPath` readers into one
@@ -274,8 +285,11 @@ Next: **M5.** What it owes, each identified by the work above rather than guesse
    long cache before the page can throw, so a 500 is publicly cacheable for a month. Not fixable
    from a proxy — see `docs/architecture/hosting.md` for the three things that would fix it.
 5. **`/airport`'s truncation arithmetic** skips the overlap term rather than correcting it, so a
-   truncated page's totals are approximate (disclosed on the page). No airport reaches the limit
-   today — 959 rows against 5,000 — so this is a latent semantic, not a live bug.
+   truncated page's totals are approximate (disclosed on the page, on the table and the chart
+   separately). No airport reaches either limit today — measured **per-side** worst cases are 879
+   (carrier, endpoint) groups against 5,000 and 4,094 (month, type) cells against 10,000, both at
+   ORD — so this is a latent semantic, not a live bug. The 959 and 4,118 this file used to quote
+   "per side" are ORD's *unions*, so the real headroom is wider than was claimed.
 
 ## Architecture
 

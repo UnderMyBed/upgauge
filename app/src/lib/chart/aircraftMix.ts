@@ -72,12 +72,16 @@ export const BY_AIRCRAFT_TYPE: MixDimension = {
 
 /** The `/aircraft` stack: seats by operating carrier.
  *
- * THE RAMP STILL ENCODES SOMETHING, MEASURED. Carriers configure the same airframe very
- * differently, so ordering carrier bands by seats per departure is not a decorative reuse of
- * the ramp -- on the A321/LR, JetBlue fits 172.3 seats per departure against Frontier's 230.0,
- * a 57.7-seat (33%) spread on identical metal; the A320-1/2 spans AA 150.0 -> F9 184.1 and the
- * B737-8 spans AS 159.5 -> SY 186.0. On this page the ramp isolates CONFIGURATION choice from
- * FLEET choice, which `/route` cannot separate.
+ * THE RAMP STILL ENCODES SOMETHING, MEASURED -- and every figure below names its WINDOW,
+ * because they differ and this page draws the full one. Over 2015-01..2026-04, which is what
+ * /aircraft fetches: the A321/LR spans B6 176.0 -> F9 230.0 (54.0 seats, 31%, on identical
+ * metal), the A320-1/2 spans MX 129.3 -> G4 181.7, and the B737-8 spans AS 159.8 -> XP 187.7.
+ * Over the trailing 12 months alone the same three read B6 172.3 -> F9 230.0 (57.7, 33%),
+ * AA 150.0 -> F9 184.1, and AS 159.5 -> SY 186.0 -- the source of the 172.3/230.0 pair quoted
+ * in prose elsewhere in this repo, and the reason this comment used to name SY as the densest
+ * B737-8 operator on a chart that draws a window in which XP is. The spread survives either
+ * window, which is the claim; the unlabelled figure was not evidence for it. On this page the
+ * ramp isolates CONFIGURATION choice from FLEET choice, which `/route` cannot separate.
  *
  * `op_airline_id` and not a mainline rollup: the query keeps `grouping: "operating"` (CLAUDE.md
  * -- the operating carrier is the grain and the truth), because rolling Endeavor into Delta
@@ -105,8 +109,13 @@ export const BY_CARRIER: MixDimension = {
  * M4d re-measured it for the CARRIER stack rather than assuming the type figure covered it,
  * since the bound is now shared: the worst-case aircraft type produces 1,915 (month, carrier)
  * groups (type 035, the CESSNA 172) and the most carriers any one type carries is 25 (type
- * 416) -- 3,400 absolute. The 737-800 this page's tests use returns 952. Same headroom. */
-const AIRCRAFT_MIX_LIMIT = 10000;
+ * 416) -- 3,400 absolute. The 737-800 this page's tests use returns 952. Same headroom.
+ *
+ * EXPORTED because /airport unions THREE of these queries and has to know whether any side came
+ * back at the bound: a truncated side can drop a cell the overlap query still returns, and the
+ * union's subset invariant then throws -- a 500 the proxy has already marked cacheable for
+ * thirty days. See endpoints.ts's fetchAirportMix. */
+export const AIRCRAFT_MIX_LIMIT = 10000;
 
 /** The pivot the chart is drawn from. No new SQL and no new catalog entries: the existing
  * segment-grain pivot answers this directly (the spec's § Data).
@@ -129,12 +138,16 @@ const AIRCRAFT_MIX_LIMIT = 10000;
  * (`SUM(seats) FILTER (WHERE NOT is_quarantined)`); this layer inherits that and must never
  * re-filter.
  *
- * `dimension` is LAST and defaulted, so every M4c call site keeps its meaning untouched. */
+ * `dimension` and `limit` are LAST and defaulted, so every M4c call site keeps its meaning
+ * untouched. `limit` is an argument for the same reason RouteView's row limit is: nothing in
+ * production data reaches 10,000, so a caller's truncation handling would otherwise be
+ * unreachable and therefore untestable. */
 export function aircraftMixQuery(
   filters: [string, string[]][],
   timeFrom: string,
   timeTo: string,
   dimension: MixDimension = BY_AIRCRAFT_TYPE,
+  limit: number = AIRCRAFT_MIX_LIMIT,
 ): PivotQuery {
   return {
     grain: "segment",
@@ -145,7 +158,7 @@ export function aircraftMixQuery(
     filters,
     sort: null,
     sortDesc: true,
-    limit: AIRCRAFT_MIX_LIMIT,
+    limit,
     grouping: "operating",
   };
 }
@@ -155,8 +168,9 @@ export async function fetchAircraftMix(
   timeFrom: string,
   timeTo: string,
   dimension: MixDimension = BY_AIRCRAFT_TYPE,
+  limit: number = AIRCRAFT_MIX_LIMIT,
 ): Promise<MixRow[]> {
-  const result = await runPivot(aircraftMixQuery(filters, timeFrom, timeTo, dimension));
+  const result = await runPivot(aircraftMixQuery(filters, timeFrom, timeTo, dimension, limit));
   return result.rows.map((r) => {
     // `dimension.key` reads BOTH the result column and the resolution key -- see MixDimension.
     // Reading a literal column name here is the hard-coded-dimension regression: the carrier

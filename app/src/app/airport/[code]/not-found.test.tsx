@@ -6,7 +6,7 @@ import { render, screen } from "@testing-library/react";
 // RAW_PATH_HEADER, lib/rawPath.ts) and re-running the REAL resolveAirportCode against the
 // REAL database -- the same shape, and the same reasoning, as route/[pair]/not-found.test.tsx.
 import { NotFoundView } from "@/app/airport/[code]/not-found";
-import { airportSlugFromPath } from "@/app/airport/[code]/resolveAirport";
+import { airportSlugFromPath, resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 
 describe("/airport/<code> not-found", () => {
   it("renders the wordmark and DATA AS OF, not Next's bare 404", async () => {
@@ -29,6 +29,41 @@ describe("/airport/<code> not-found", () => {
     expect(screen.getByText(/'LHR' is a recognized airport code/)).toBeDefined();
     expect(screen.getByText(/domestic-only/)).toBeDefined();
     expect(screen.queryByText(/unknown airport code/)).toBeNull();
+  });
+
+  it("echoes the slug as typed, alongside the reason's own copy of it", async () => {
+    // Task 3's finding, closed on this page. Every assertion above reads the resolver's REASON
+    // sentence, so a mutant that deleted the echoed slug from not-found.tsx entirely reddened
+    // nothing: the reason still names the code, and `getByText(/unknown airport code 'ZZZZ'/)`
+    // never looked at the echo.
+    //
+    // COUNTING is what makes this falsifiable rather than decorative. The code appears exactly
+    // TWICE in the alert -- once as the slug the visitor typed, once inside the reason -- so
+    // deleting either occurrence reddens this. A second, DIFFERENT code kills a hard-coded
+    // literal, which is the other half of the same trap.
+    const occurrences = async (code: string) => {
+      const { container } = render(await NotFoundView({ pathname: `/airport/${code}` }));
+      const alert = container.querySelector("p[role='alert']")?.textContent ?? "";
+      return alert.split(code).length - 1;
+    };
+    expect(await occurrences("ZZZZ")).toBe(2);
+    expect(await occurrences("QQQQ")).toBe(2);
+  });
+
+  it("cannot be handed a slug whose canonical spelling differs, which is why the echo above is counted rather than contrasted", async () => {
+    // The honest limit of the test above, pinned rather than asserted away. /carrier and
+    // /aircraft can separate the echo from the reason by asking for a lower-case slug, because
+    // both resolve FIRST and canonicalise second. resolveAirportCode is the other order: it
+    // returns `redirect` for anything whose canonical form differs from what was typed, BEFORE
+    // it consults the dataset -- so on the 404 path the two spellings are equal by construction
+    // and no input can make them diverge. If that ordering is ever changed, this reddens and the
+    // divergence test /carrier has becomes both possible and necessary here.
+    for (const slug of ["zzzz", "ZZZZ ", " ZZZZ", "Zzzz"]) {
+      const resolved = await resolveAirportCode(slug);
+      expect([slug, resolved.kind]).toEqual([slug, "redirect"]);
+    }
+    const upper = await resolveAirportCode("ZZZZ");
+    expect(upper.kind).toBe("notFound");
   });
 
   it("offers a way back into a working page", async () => {

@@ -1,5 +1,10 @@
 import { runPivot } from "@/lib/db";
-import { fetchAircraftMix, type MixRow } from "@/lib/chart/aircraftMix";
+import {
+  AIRCRAFT_MIX_LIMIT,
+  BY_AIRCRAFT_TYPE,
+  fetchAircraftMix,
+  type MixRow,
+} from "@/lib/chart/aircraftMix";
 import type { PivotQuery } from "@/lib/pivot/types";
 import type { Resolved } from "@/lib/resolve";
 
@@ -20,8 +25,13 @@ import type { Resolved } from "@/lib/resolve";
  * in docs/architecture/pipeline.md § M4d; a first-class endpoint filter is M5's call.
  *
  * The overlap term is not decoration. `origin = dest` rows exist: 3,187 of them over the
- * trailing 12 months across 359 airports (601,573 seats), 18 at SEA carrying 12,646 seats and
- * 172 departures. The M4d design spec states these "do not exist" at segment grain -- that is
+ * TRAILING 12 MONTHS (2025-05..2026-04) across 359 airports, 601,573 seats, QUARANTINED ROWS
+ * INCLUDED -- 3,182 / 358 / 601,565 without them, and 12,738 / 530 / 1,887,424 (12,696 / 530 /
+ * 1,887,193 without) over the full 2015-01..2026-04 window. The window and the quarantine
+ * qualifier are both load-bearing: the four answers differ by 4x, and this file's own window is
+ * the trailing 12 for the table and the FULL window for the chart. docs/data/invariants.md
+ * § Route identity tabulates all four. At SEA: 18 rows carrying 12,646 seats and 172
+ * departures. The M4d design spec states these "do not exist" at segment grain -- that is
  * true of route IDENTITY (docs/data/invariants.md § Route identity excludes them as non-routes)
  * and false of fct_segment_month, which is what this page queries. Without the subtraction SEA
  * reads 53,386,452 seats.
@@ -134,11 +144,24 @@ export function unionSides(
   return inclusionExclusion({ origin, dest, both }, endpointKey, ENDPOINT_MEASURES, options);
 }
 
-export function unionMix(origin: MixRow[], dest: MixRow[], both: MixRow[]): MixRow[] {
+/** `options` is not optional decoration, and leaving it off here was a real bug: the mix sides
+ * are LIMIT-ed pivots exactly as `unionSides`' are, so a truncated side can drop a cell the
+ * overlap query still returns and `inclusionExclusion` throws. That throw becomes a 500 on a
+ * response `proxy.ts` has ALREADY stamped `public, s-maxage=2592000` on, so the CDN would pin it
+ * for thirty days on a page that serves fine the moment the limit is raised -- and
+ * `stale-while-revalidate` cannot self-correct it, since it only applies once `s-maxage` has
+ * expired. Same escape hatch, same reasoning, as the endpoint union's. */
+export function unionMix(
+  origin: MixRow[],
+  dest: MixRow[],
+  both: MixRow[],
+  options: { partial?: boolean } = {},
+): MixRow[] {
   return inclusionExclusion(
     { origin, dest, both },
     (r) => `${r.month}\u0000${r.code}`,
     MIX_MEASURES,
+    options,
   );
 }
 
@@ -216,11 +239,13 @@ export function airportTotals(rows: EndpointRow[], airportId: number): AirportTo
   };
 }
 
-/** Measured ceiling, not a guess: the busiest airport in the database produces 959 distinct
- * (operating carrier, other endpoint) groups over a trailing 12 months, per side -- SEA
- * produces 374 departing and 293 arriving. 5,000 clears the measured worst case 5x. If a
- * future refresh ever reaches it the page says so (`truncated`) rather than under-reporting,
- * exactly as /route/<pair> does at its own limit. */
+/** Measured ceiling, not a guess -- and the measurement is PER SIDE, which is what this limit
+ * bounds. The busiest airport in the database (ORD, 13930) produces 879 distinct (operating
+ * carrier, other endpoint) groups on the origin side and 855 on the dest side over a trailing 12
+ * months; 959 is ORD's UNION of the two, and this comment quoted that union as a per-side figure
+ * until M4d's final review. SEA produces 374 departing and 293 arriving. 5,000 therefore clears
+ * the real per-side worst case 5.7x. If a future refresh ever reaches it the page says so
+ * (`truncated`) rather than under-reporting, exactly as /route/<pair> does at its own limit. */
 export const AIRPORT_ENDPOINT_LIMIT = 5000;
 
 const CARRIER_MEASURES = ["seats", "passengers", "departures_performed"];
@@ -320,20 +345,37 @@ export async function fetchAirportTraffic(
   };
 }
 
+export interface AirportMix {
+  rows: MixRow[];
+  /** A side came back at exactly `limit` cells, so the chart under-reports and the page must
+   * say so -- the same contract, and the same word, as AirportTraffic's. */
+  truncated: boolean;
+}
+
 /** The chart's full-window mix, same three-term union at (month, aircraft type) grain.
  *
- * Measured: the busiest airport produces 4,118 distinct (month, type) groups over the full
- * 2015-2026 window per side, comfortably inside fetchAircraftMix's own 10,000-row bound, so
- * no side is silently truncated. */
+ * Measured over 2015-01..2026-04: the worst case in the database is ORD (13930) at 4,094
+ * distinct (month, type) groups on the origin side and 4,089 on the dest side, 4,118 in the
+ * union -- comfortably inside `AIRCRAFT_MIX_LIMIT`. ATL is 3,561 / 3,572 and SEA 2,832 / 2,801.
+ * endpoints.test.ts asserts ORD comes back untruncated, so a refresh that approaches the bound
+ * fails a TEST rather than a page.
+ *
+ * IT STILL COMPUTES `truncated`, and that is the point of this function's shape. The headroom
+ * above is a fact about today's data; the union's subset invariant is a fact about SQL, and it
+ * is suspended the instant a side is cut short. Shipping the union without threading `partial`
+ * -- which is what M4d did here, while its sibling fetchAirportTraffic threaded it -- makes a
+ * crossed limit a thrown exception, i.e. a 500 the proxy has already marked publicly cacheable
+ * for thirty days. A short chart that says it is short is strictly better than that. */
 export async function fetchAirportMix(
   airportId: number,
   timeFrom: string,
   timeTo: string,
-): Promise<MixRow[]> {
+  limit: number = AIRCRAFT_MIX_LIMIT,
+): Promise<AirportMix> {
   const id = String(airportId);
   const [origin, dest, both] = await Promise.all([
-    fetchAircraftMix([["origin_airport_id", [id]]], timeFrom, timeTo),
-    fetchAircraftMix([["dest_airport_id", [id]]], timeFrom, timeTo),
+    fetchAircraftMix([["origin_airport_id", [id]]], timeFrom, timeTo, BY_AIRCRAFT_TYPE, limit),
+    fetchAircraftMix([["dest_airport_id", [id]]], timeFrom, timeTo, BY_AIRCRAFT_TYPE, limit),
     fetchAircraftMix(
       [
         ["origin_airport_id", [id]],
@@ -341,7 +383,14 @@ export async function fetchAirportMix(
       ],
       timeFrom,
       timeTo,
+      BY_AIRCRAFT_TYPE,
+      limit,
     ),
   ]);
-  return unionMix(origin, dest, both);
+  // The OVERLAP side counts too, unlike fetchAirportTraffic's: a truncated overlap cannot
+  // corrupt the arithmetic (it only under-subtracts), but it does mean the union is no longer
+  // the whole airport, which is what this flag tells the reader.
+  const truncated =
+    origin.length >= limit || dest.length >= limit || both.length >= limit;
+  return { rows: unionMix(origin, dest, both, { partial: truncated }), truncated };
 }
