@@ -106,6 +106,45 @@ function substituteIds(statement: string, file: string, placeholder: string): st
   return statement.replace("{{IDS}}", placeholder);
 }
 
+export interface AirportRef {
+  id: number;
+  code: string;
+  name: string;
+}
+
+/** Reverse of the airport resolver: code -> the airport. Keyed by UPPERCASED code, so a
+ * lowercase URL resolves while the canonical form stays uppercase.
+ *
+ * Absent key means unknown, exactly as resolveRows()'s map does -- the caller renders a 404
+ * naming the code rather than guessing. */
+export async function lookupAirportsByCode(codes: string[]): Promise<Map<string, AirportRef>> {
+  const out = new Map<string, AirportRef>();
+  const wanted = [...new Set(codes.map((c) => c.toUpperCase()))].filter((c) => c.length > 0);
+  if (wanted.length === 0) return out;
+
+  const names = wanted.map((_, i) => `$id${i}`);
+  const raw = readFileSync(path.join(QUERIES_DIR, "lookup_airport_by_code.sql"), "utf8");
+  const statement = substituteIds(raw, "lookup_airport_by_code", `(${names.join(", ")})`);
+
+  const params: Record<string, DuckDBValue> = {};
+  wanted.forEach((c, i) => {
+    params[`id${i}`] = c as DuckDBValue;
+  });
+
+  const con = await connect();
+  const prepared = await con.prepare(statement);
+  prepared.bind(params);
+  const result = await prepared.run();
+  for (const r of await result.getRowObjects()) {
+    out.set(String(r.code).toUpperCase(), {
+      id: Number(r.id),
+      code: String(r.code),
+      name: String(r.name),
+    });
+  }
+  return out;
+}
+
 export async function resolveRows(
   rows: Record<string, unknown>[],
   allowlist: Allowlist,

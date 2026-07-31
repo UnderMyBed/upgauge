@@ -1,7 +1,14 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { collectIds, resolveRows, resolutionKey, displayValue, RESOLVER_FILE } from "@/lib/resolve";
+import {
+  collectIds,
+  resolveRows,
+  resolutionKey,
+  displayValue,
+  RESOLVER_FILE,
+  lookupAirportsByCode,
+} from "@/lib/resolve";
 import { connect, loadAllowlist } from "@/lib/db";
 
 // Same anchor as db.ts's ROOT / QUERIES_DIR -- see db.ts's header comment for the full
@@ -152,5 +159,64 @@ describe("resolve_airport.sql's cardinality guard", () => {
     // resolve_airport.sql, which the Map-based tests above cannot do.
     expect(rows.length).toBe(1);
     expect(rows[0].code).toBe("SEA");
+  });
+});
+
+describe("lookupAirportsByCode", () => {
+  it("resolves a code to its airport id", async () => {
+    const m = await lookupAirportsByCode(["JFK"]);
+    expect(m.get("JFK")?.id).toBe(12478);
+    expect(m.get("JFK")?.code).toBe("JFK");
+  });
+
+  it("is case-insensitive, keyed by the uppercased code", async () => {
+    const m = await lookupAirportsByCode(["jfk"]);
+    expect(m.get("JFK")?.id).toBe(12478);
+  });
+
+  it("omits an unknown code rather than inventing one", async () => {
+    const m = await lookupAirportsByCode(["ZZZZ"]);
+    expect(m.has("ZZZZ")).toBe(false);
+  });
+
+  it("resolves several codes in one query", async () => {
+    const m = await lookupAirportsByCode(["JFK", "LAX"]);
+    expect(m.get("JFK")?.id).toBe(12478);
+    expect(m.get("LAX")?.id).toBe(12892);
+  });
+
+  it("returns exactly one airport per code despite multi-seq history", async () => {
+    // Without `WHERE is_latest` a code with several seq rows returns several -- the same
+    // fan-out resolve_airport.sql guards against.
+    const m = await lookupAirportsByCode(["JFK"]);
+    expect(m.size).toBe(1);
+  });
+});
+
+// The brief's own "multi-seq history" test above (map.size === 1) cannot actually detect a
+// missing `WHERE is_latest`: JFK's 5 seq rows (1247801-05, confirmed against dim_airport
+// directly while building this file) all carry the SAME code ('JFK') and the SAME
+// airport_id (12478), so a Map keyed by uppercased CODE collapses them to one entry via
+// plain overwrite regardless of how many rows the query returns -- exactly the same blind
+// spot resolve.test.ts's own comment calls out for resolveRows()'s id-keyed map, just one
+// level removed (there it's Map.set on a repeated id; here every one of JFK's rows would
+// produce the identical (key, value) pair, so even a "did the value change" check wouldn't
+// catch it). Row COUNT is the only thing that actually distinguishes "one row" from "five
+// identical rows", so this test runs lookup_airport_by_code.sql directly, the same way
+// "resolve_airport.sql's cardinality guard" above does for the id -> code direction.
+describe("lookup_airport_by_code.sql's cardinality guard", () => {
+  it("returns exactly one row for a code with multiple seq rows in dim_airport", async () => {
+    const raw = readFileSync(path.join(QUERIES_DIR, "lookup_airport_by_code.sql"), "utf8");
+    const statement = raw.replace("{{IDS}}", "($id0)");
+    const con = await connect();
+    const prepared = await con.prepare(statement);
+    prepared.bind({ id0: "JFK" });
+    const result = await prepared.run();
+    const rows = await result.getRowObjects();
+    // airport code 'JFK' carries 5 rows in dim_airport (seq 1247801-05); exactly one has
+    // is_latest. This assertion fails the moment `WHERE is_latest` is removed from
+    // lookup_airport_by_code.sql, which the Map-based test above cannot do.
+    expect(rows.length).toBe(1);
+    expect(rows[0].id).toBe(12478);
   });
 });
