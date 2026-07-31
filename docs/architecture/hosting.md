@@ -109,8 +109,15 @@ moment either changes.
 
 The three page types together are ~1,265 all-time URLs, three orders of magnitude below the
 20,000-file cap above and nowhere near a build-time problem. The route pages are the set that
-is not finite in the same sense — 22,950 pairs — which is why the split is entity pages static,
-routes served.
+is not finite in the same sense — **22,420** undirected pairs, excluding same-airport rows
+(`scope.md` § D2 / `sitemap_routes.sql`, quarantine-inclusive, the sitemap's own count) — which
+is why the split is entity pages static, routes served. (This section previously quoted
+**22,950**, which is a real, separately-measured count but the wrong universe for THIS
+question: it is the same-airport-INCLUSIVE figure `pipeline.md` § M4c's chart-gap statistics
+use — 22,950 − 530 same-airport pairs = 22,420, `docs/data/invariants.md` § Route identity's own
+arithmetic. A same-airport "route" has no `/route/<pair>` page at all — `routePair.ts` 404s it as
+"not a route between two airports" — so it does not belong in a count of pages this split is
+about.)
 
 **Count airports at both endpoints, or the number is wrong by a third.** Origin-only gives 741
 / 993, and that is not a rounding difference: it is the same silent halving `pipeline.md` § M4d
@@ -203,8 +210,37 @@ being invisible to whoever added a route:
 >
 > **Three lines per page, and all three are load-bearing:** a `matcher` entry, a row in
 > `ENTITY_ROUTES`, and *both* a header assertion and a `no-store` assertion in `app/smoke.sh`.
-> M4d added `/airport/:code`, `/carrier/:code` and `/aircraft/:name` on that pattern, so the
-> matcher now carries **six** entries: `/explore`, `/api/pivot`, and the four entity pages.
+> M4d added `/airport/:code`, `/carrier/:code` and `/aircraft/:name` on that pattern, taking the
+> matcher to six entries: `/explore`, `/api/pivot`, and the four entity pages. **M5 Task 8 adds
+> three more exact-path entries — `/search`, `/sitemap.xml`, `/robots.txt` — for nine.** None of
+> the three is a dynamic segment (no `ENTITY_ROUTES` row, no per-slug resolution), but the rule
+> is the same one line lower than "three lines per page": a route absent from the matcher gets
+> no `Cache-Control` from this file at all, which for `/search` happens to be harmless (Next's
+> own `no-store` for `dynamic = "force-dynamic"` covers the gap) but for `/sitemap.xml` and
+> `/robots.txt` is not — neither sets its own header the way `/api/pivot`'s route handler does,
+> so omitting either from the matcher ships it with literally no shared-cache header, forever,
+> not merely mis-cached. `/search` gets `no-store` **unconditionally** (`q` is an unbounded,
+> attacker-chosen string, and there is no proxy-side resolution that would make caching any of
+> it safe — see `proxy.ts`'s own doc comment on that branch); `/sitemap.xml` and `/robots.txt`
+> get the project's 30-day value outright, since both are built from the same catalog queries
+> regardless of who's asking and carry none of an entity page's per-request resolution risk.
+>
+> **M5 Task 8 is also where the matcher's evidence stopped being hypothetical a second time.**
+> `app/sitemap.ts` and `app/robots.ts` shipped in M5 Task 5 with no `dynamic` export, which Next
+> tried to prerender at `next build` time — and `next build` runs with `cwd` wherever the build
+> tool started it (`npm --prefix app run build`, every documented entry point's exact command,
+> changes `cwd` to `app/` before invoking the real `next build`), not the repo root `db.ts`'s
+> `UPGAUGE_ROOT` contract assumes. `make app-build` failed outright the first time anything
+> actually ran it — `IO Error: Cannot open database ".../app/upgauge.duckdb" ... database does
+> not exist` — because `make app-smoke` (the only gate that runs a real `next build`) is the one
+> M5 task this repo's own 8GB-memory working agreement reserves for a single dedicated pass, so
+> nothing had built this route since Task 5 landed. Both files now carry
+> `export const dynamic = "force-dynamic"`, the same export every other DB-touching route
+> already had. The lesson generalizes past caching: a route can be *structurally* wrong (missing
+> a required page-level export, not merely a matcher row) and stay invisible to every gate this
+> project runs except the one it reserves for a dedicated, memory-capped pass — which is the
+> whole argument for treating that pass as a first-class task deliverable rather than a
+> nice-to-have at the end.
 
 ### What omitting one actually costs — measured, not assumed
 
@@ -215,9 +251,16 @@ deliberately removed from the matcher, the truth is narrower and worth stating e
 
 | | With the matcher entry | Without it |
 |---|---|---|
-| `/airport/SEA` | 200, `public, s-maxage=2592000, …` | 200, `private, no-cache, no-store, max-age=0, must-revalidate` |
+| `/airport/SEA` | 200, `public, s-maxage=3600, …` | 200, `private, no-cache, no-store, max-age=0, must-revalidate` |
 | `/airport/sea` | 308, long-cached | 308, `private, no-cache…` |
 | `/airport/ZZZZ` | 404, `no-store`, names the code | **404**, `private, no-cache…`, **7,740-byte `<html id="__next_error__">` shell** |
+
+> This measurement predates M5 Task 7's `HTML_CACHE` split (it was taken, and originally
+> written up, against the then-single 30-day constant); the "With the matcher entry" column is
+> corrected here to `s-maxage=3600` — `/airport/SEA` is an `ENTITY_ROUTES` page, so it has
+> carried `HTML_CACHE` rather than the project's 30-day value since Task 7 landed. The **shape**
+> of the finding — present vs. absent, not the literal number — is what the table exists to
+> show, and that shape is unchanged by which constant HTML pages happen to use this week.
 
 So the status stays 404 — Next catches the throw inside the 404 render — but the page is gone:
 no reason, no code named, no `DATA AS OF`, no recovery link, and `MissingRawPathError` in the
@@ -317,11 +360,17 @@ colliding BTS codes to their full designations, and renders each with an Explore
 
 ## `Cache-Control` lives here, and it is status-blind by construction
 
-CLAUDE.md's *"every response gets `public, s-maxage=2592000, stale-while-revalidate=86400`"*
-is applied in `proxy.ts`, on the proxy's own response — not in the pages. (As of M5 Task 7,
-`proxy.ts` applies that exact value only to `/api/pivot`'s own route handler, untouched by this
-file, and to a future sitemap/robots matcher entry; every HTML page route gets the shorter
-`HTML_CACHE` — § "The gap" below has the measurement behind the split.) It has to be applied
+CLAUDE.md used to state one blanket rule, *"every response gets `public, s-maxage=2592000,
+stale-while-revalidate=86400`"* — since superseded by the split below, and CLAUDE.md itself now
+says so. That value is applied in `proxy.ts`, on the proxy's own response — not in the pages.
+As of M5 Task 7, `proxy.ts` applies that exact 30-day value only to `/api/pivot`'s own route
+handler (untouched by this file) and, as of M5 Task 8, to `/sitemap.xml` and `/robots.txt`
+(`PROJECT_CACHE` in `proxy.ts`, set on this file's own response since neither metadata-route
+export sets one itself); every HTML page route — `/explore` and the four `ENTITY_ROUTES`
+pages — gets the shorter `HTML_CACHE`, and `/search` gets `no-store` unconditionally (§ "The
+gap" below has the measurement behind the `HTML_CACHE` split; `/search`'s reasoning is its own
+branch in `proxy.ts`, not a variant of this one — an unbounded free-text `q` has no
+well-formed-vs-not distinction to cache either side of). It has to be applied
 here regardless of which value: `/explore` and `/route/<pair>` both export
 `dynamic = "force-dynamic"` (their content depends on live warehouse state), so Next emits its
 own `no-store` for the HTML, and every shared permalink — the growth mechanic — would hit
@@ -404,6 +453,11 @@ every row below, and the status on every 308 and 404.
 
 | URL | Status | `Cache-Control` | Why |
 |---|---|---|---|
+| `/explore?…` (well-formed) | 200 | `HTML_CACHE` (1hr) | `isDataLayerHealthy()` probe succeeded |
+| `/search?q=PDX` | 307 | `no-store` | a live resolution, not a fixed URL — see below |
+| `/search?q=LNY` | 200 | `no-store` | a collision, not a redirect — both candidates rendered |
+| `/search?q=nonsense` | 200 | `no-store` | `no-store` is unconditional on this route, outcome-blind |
+| `/sitemap.xml` · `/robots.txt` | 200 | `PROJECT_CACHE` (30d) | built from the same catalog queries regardless of caller |
 | `/route/JFK-LAX` | 200 | long cache | known pair |
 | `/route/LAX-JFK` | 308 | long cache | re-ordering, derived from the two codes |
 | `/route/ZZZZ-LAX` · `/route/JFK-LHR` · `/route/LAX-LAX` | 404 | `no-store` | unknown code · non-domestic · self-route |
@@ -417,6 +471,20 @@ every row below, and the status on every 308 and 404.
 | `/aircraft/a321-lr` | 308 | long cache | to the **slug**, never to the unroutable `A321/LR` |
 | `/aircraft/NOPE-1` | 404 | `no-store` | unknown type |
 | **`/aircraft/CE-180`** | **404** | **`no-store`** | **`ambiguous`, not `notFound` — the allow-list is for this row** |
+
+**`/search`'s 307 is a deliberate departure from every 308 in this table, and it is `search.ts`'s
+choice, not `proxy.ts`'s** — the redirect status is set by `redirect()` in
+`app/src/app/search/page.tsx`, unrelated to the `Cache-Control` decision above it. Every other
+redirect row here is a second spelling of one fixed URL, derived from the slug alone
+(`toUpperCase()`, an id-to-code re-sort) and therefore exactly as permanently valid as the 200 it
+targets — a browser caching that mapping forever is correct. `/search?q=PDX` redirecting to
+`/airport/PDX` is a different kind of fact: it is *this month's* answer to a live query over
+changing data, not a second spelling of a fixed thing, and a 308 is cached by the requesting
+browser itself, independently of any CDN and for as long as that browser exists. If a future
+carrier or aircraft rebuild ever made `PDX` ambiguous, every browser that had ever visited
+`/search?q=PDX` under a 308 would keep redirecting to `/airport/PDX` forever, past the point
+where that answer stopped being true — exactly the class of "a wrong permanent answer that no
+`s-maxage` bounds" this table's `no-store` rows exist to avoid one layer up.
 
 **Verified by mutation on a served build, because a `check_not` that cannot fire is worse than
 no check** (M4c's final review found exactly one of those). Five mutants, each applied to
@@ -539,7 +607,9 @@ Two consequences, one of them a live route back to the bug above:
 1. **Three snapshots.** The three instances open at three different moments and each pins
    an inode for the process's life. If the database file were replaced between the proxy's
    open and the page's, a pair present in the proxy's snapshot and absent from the page's
-   would get `s-maxage=2592000` on a 404.
+   would get a long-cached header (`HTML_CACHE` today, `s-maxage=2592000` when this was
+   written and measured, before M5 Task 7's split — the RISK described here is unchanged by
+   which constant HTML pages happen to use) on a 404.
 2. **Three buffer pools**, each defaulting to ~80% of system RAM, with no coordination
    between them, on an 8 GB box.
 
@@ -764,6 +834,48 @@ safety argument. The probe counts `head` **and** `body` children and measures
 appended SVG. The test asserts both zero nodes and zero growth across 12 renders, and the leaky
 renderer above turns it red. So a future Plot release that starts appending now fails a test
 rather than leaking memory in an always-on process.
+
+## React's `cache()` needs an active RSC dispatcher — unprovable by unit test
+
+M5 Task 2 wrapped each entity page's slug resolver in React's `cache()`
+(`resolveRoutePairForRequest` in `route/[pair]/page.tsx`, and its `/airport`, `/carrier`,
+`/aircraft` siblings) so `generateMetadata` and the default page export — two separate calls
+Next makes for the same request (`generate-metadata.md`'s own "Memoizing data requests"
+section, which shows the identical `cache(async (slug) => …)` pattern) — dedupe the DB-backed
+lookup instead of paying for it twice on every successful render.
+
+**`cache()`'s memoization is conditional on something a Vitest test cannot construct.** Its
+implementation (`app/node_modules/react/cjs/react.react-server.development.js:578`) reads the
+current React dispatcher and, if none is active, calls straight through:
+
+```js
+exports.cache = function (fn) {
+  return function () {
+    var dispatcher = ReactSharedInternals.A;
+    if (!dispatcher) return fn.apply(null, arguments);   // <- no dedup, ever
+    ...
+```
+
+That dispatcher only exists while Next's RSC renderer is actually rendering a request. This
+project's test suite calls `generateMetadata()` and each page's default export as ordinary
+function invocations (`RoutePage(...)`, not `<RoutePage />` through Next's renderer) — the same
+limitation `route/[pair]/page.tsx`'s own header comment already states for a different reason,
+since these tests render through react-dom's client renderer to sidestep a separate problem
+(awaiting a nested async Server Component reached via JSX). No dispatcher is ever active, so
+`cache()` degrades to calling straight through on every test run — a call-count assertion here
+would measure the test harness's own limitation, not whether the dedup happens in production.
+
+**This is a new member of this file's "no unit test can catch that class" list** — the same
+class `smoke.sh`'s own header enumerates (`__dirname` under Turbopack, `decodeURIComponent`
+throwing, `process.chdir`, the DuckDB platform-switch `require`, Next's query normalization):
+a real behavior difference between test and production that every unit test, by construction,
+cannot see. `make app-smoke` does not currently assert a call *count* for this either — doing
+so would need either an instrumented build or a request-level trace, neither of which this
+script has — so the dedup is disclosed as unverified-by-this-suite rather than silently assumed
+correct. What `make app-smoke` DOES prove, indirectly: every entity page renders and resolves
+correctly under a real served request, which is the scenario `cache()` is wrapped around; a
+`cache()` that threw or resolved incorrectly outside a dispatcher would surface there as a
+broken page, not as a missing dedup.
 
 ## If the Dockerfile ever adopts `output: "standalone"`
 

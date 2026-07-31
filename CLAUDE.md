@@ -49,8 +49,8 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M3 and M4 are COMPLETE — M3a, M3b, M4a, M4b, M4c, M4d.** All four entity pages ship.
-M3a's Explorer pivot query contract — templates
+**M3, M4 and M5 are COMPLETE — M3a, M3b, M4a, M4b, M4c, M4d, M5 (Tasks 1-8).** All four entity
+pages ship, cross-linked, with an omnibox and a sitemap. M3a's Explorer pivot query contract — templates
 (`sql/03_queries/pivot_segment.sql` / `pivot_route.sql`), the allowlist as catalog objects
 (`meta_pivot_dimensions` / `meta_pivot_measures`), the CI-only Python reference
 implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`), the mainline-grouping toggle,
@@ -263,41 +263,114 @@ the code *and* is `no-store` while its 308 keeps the long cache. Page weight: `/
 139,520 bytes**, 4,094 / 4,089 per side, union 4,118; the 4,118 previously attributed to ATL
 "per side" was ORD's *union*, and `smoke.sh` now weighs both.
 
-Not built yet: the load-factor time-series chart, the arc maps, `/watch`, the seasonality
-heatmap, and OG cards — all specified in `docs/design/system.md`.
+Not built yet, at M4: the load-factor time-series chart, the arc maps, `/watch`, the
+seasonality heatmap, and OG cards — all specified in `docs/design/system.md`.
 
-Next: **M5.** What it owes, each identified by the work above rather than guessed:
+**M5 is COMPLETE — connects the four islands M3/M4 built.** Explorer and entity pages could
+each only be reached by typing a URL; M5's eight tasks are the edges between them. Full
+per-task account: `docs/architecture/pipeline.md` § M5.
+
+Every resolved dimension cell in every table — `/explore` and all four entity pages, since they
+share one `DataTable` component — now **links** to the entity page it resolves to
+(`app/src/lib/entityLink.ts`'s `entityHref`, keyed on the dimension's own key, never on
+`join_dim` — `route`, `origin_airport_id` and `dest_airport_id` all carry `join_dim =
+dim_airport`, so a `join_dim`-keyed map would send route cells to `/airport/`). `route`'s own
+cell is the one exception (its `column_expr` spans two columns, so there is no single id to
+hand `entityHref`) and it is where **the milestone's sharpest trap** lives: `/explore` displays
+a route cell in airport-id order but must link to the code-alphabetical canonical `/route/`
+URL, and the two orderings disagree for 154 of 22,420 pairs — `IFP–IAH` displays in that order
+but links to `/route/IAH-IFP`, the reverse, and is the fixture both the unit tests and
+`app/smoke.sh` use, since a `JFK–LAX`-shaped fixture cannot fail this way.
+
+**`/search?q=...` is the omnibox** (`app/src/lib/search.ts`) — one field resolving a route
+pair (`PDX-AUS`), an exact code in any of three namespaces **checked concurrently and
+collected, never short-circuited** (a code can be a real match in two namespaces at once — LNY,
+NEW, WST are the three measured collisions, `LNY` the sharpest since the carrier is named after
+the airport), or a ranked name substring (`Portland` matches four airports, not three — `PWM`
+is Maine). A unique match **307-redirects, never 308**: `q=PDX` resolving uniquely is a fact
+about *this month's* dataset, and a 308 is cached by the browser itself, permanently, so a code
+that started colliding in a future rebuild would leave a wrong permanent redirect behind that no
+server-side fix could reach. `/search` is also the one route whose `Cache-Control` breaks this
+project's usual pattern: `no-store`, **unconditionally**, never the well-formed-vs-not split
+every other route gets — `q` is an unbounded, attacker-chosen string, and a per-`q` shared-cache
+entry is a cache-fill vector.
+
+**`/sitemap.xml` and `/robots.txt` open the crawl graph**: 23,689 URLs (22,420 routes + 1,045
+airports + 114 carriers + 110 aircraft), every count quarantine-inclusive, `lastmod` each
+entity's own last-filed month (never the sitemap's build date — `/carrier/VX`, dormant since
+2018-03, is the fixture that distinction needs). `robots.txt` disallows `/search` (unbounded
+query space) and `/api/` (a data endpoint), allows everything else.
+
+**The carrier 404 now makes the same split `/route/<pair>`'s always has** (Task 6):
+`sql/03_queries/lookup_carrier_code_exists.sql` mirrors the airport version, so `ZZ` 404s
+"unknown carrier code" and `PA` 404s "recognized by BTS ... none of which has filed" — naming
+*every* holder, not just the first, since `PA` alone holds three `airline_id`s (20384 and 20386
+both "Pan American World Airways", plus 20389 "Florida Coastal Airlines", an unrelated carrier
+sharing the code). `/carrier/PA` is **not** simply "Pan American" — that phrasing, upthread in
+an earlier revision of this file, was the exact silent-pick failure the split exists to refuse.
+The four `<entity>SlugFromPath` readers also collapsed into one-line wrappers around
+`app/src/lib/entitySlug.ts`'s `entitySlugFromPath(pathname, prefix)`.
+
+**The 5xx cache gap is narrowed, not closed** (Task 7). `/explore`'s proxy branch used to run no
+database query at all before committing to a cache header — the one branch with nothing to
+catch its own failure — so `isDataLayerHealthy()` gives it the same fail-safe probe every
+entity page already had. The complete fix (a route handler owning its own `Response`, the way
+`/api/pivot` already does) was spiked against `/route/<pair>` and **does not build**: Next 16
+rejects a `route.js` and a `page.js` at the same segment outright, and the only other shape
+(delete the page, hand-render from the handler) gives up layouts, `notFound()`, streaming, and
+the RSC flight payload the server-rendered chart depends on. The adopted fallback: `HTML_CACHE`
+drops from the project's `s-maxage=2592000` to `s-maxage=3600` for `/explore` and the four
+entity pages — bounding a 5xx's public-cache exposure from up to 30 days to up to 1 hour. **It
+does not close the gap** — a 500 minted at minute 0 is still cached for up to 59 more minutes.
+
+**Task 8 completed the routing tier and found two bugs that only running the heavy gates could
+find.** `proxy.ts`'s matcher grew to **nine** entries (`/search`, `/sitemap.xml`, `/robots.txt`
+joined the six from M4d). `app/sitemap.ts` and `app/robots.ts` shipped in Task 5 with no
+`dynamic` export, so `next build` tried to prerender `/sitemap.xml` — and the documented build
+command changes `cwd` to `app/` before invoking `next build`, breaking `db.ts`'s WORKDIR
+contract; `make app-build` failed outright the first time anything actually built this route,
+because `make app-smoke` (the only gate that runs a real build) is the one task this repo's
+8GB-memory working agreement reserves a dedicated pass for. Both files now carry
+`export const dynamic = "force-dynamic"`. Separately, `app/smoke.sh`'s own Cache-Control checks
+for `/explore` and all four entity pages were still asserting the pre-Task-7 30-day value —
+silently wrong (a red check for a correct header) since Task 7 landed, since that task touched
+`proxy.ts` and its own unit test but not this file. Both fixed; Task 7 Part A's fail-safe is
+now also verified end to end against a served build with a genuinely broken database copy, not
+just unit-mocked.
+
+**582 app tests green (`make app-check`), 447 Python (`make check`); `make goldens` leaves
+`sql/03_queries/goldens/` byte-identical** — M5 touched no pivot template. `make app-smoke` is
+**174 checks** (138 at M4d). Page weight: `/route/JFK-LAX` 98,096 bytes, `/search?q=Portland`
+10,206 bytes; the M4d entity-page figures are unchanged by M5.
+
+Next: **M6.** What it owes, each identified by the work above rather than guessed:
 
 1. **A first-class either-endpoint filter** in `meta_pivot_dimensions` — one pivot instead of
    three on `/airport`, and the same shape a future `/city-market` needs. It needs composite
    filter semantics in `render.ts` **and** `pipeline/pivot.py` in lockstep, plus a golden; that
    is a milestone-sized change, which is why M4d assembled the OR arithmetically instead.
-2. **The 5xx cache gap**, inherited from M3b and now spanning four pages: the proxy writes the
-   long cache before the page can throw, so a 500 is publicly cacheable for a month. Not fixable
-   from a proxy — see `docs/architecture/hosting.md` for the three things that would fix it.
-3. **`/airport`'s truncation arithmetic** skips the overlap term rather than correcting it, so a
+2. **`/airport`'s truncation arithmetic** skips the overlap term rather than correcting it, so a
    truncated page's totals are approximate (disclosed on the page, on the table and the chart
    separately). No airport reaches either limit today — measured **per-side** worst cases are 879
    (carrier, endpoint) groups against 5,000 and 4,094 (month, type) cells against 10,000, both at
    ORD — so this is a latent semantic, not a live bug. The 959 and 4,118 this file used to quote
    "per side" are ORD's *unions*, so the real headroom is wider than was claimed.
-
-**M5 Task 6 shipped both of the structural debts this list used to carry.**
-`sql/03_queries/lookup_carrier_code_exists.sql` mirrors the airport existence-only lookup (it
-also returns `id`/`name`, which the airport version does not need to), so `/carrier/<code>`'s
-404 now makes the same split `/route/<pair>` always has: `ZZ` 404s "unknown carrier code";
-`PA` 404s "recognized by BTS ... none of which has filed a T-100 Segment row" — and names
-*every* holder, not just the first, because `PA` alone holds three `airline_id`s (20384 and
-20386 both "Pan American World Airways", plus 20389 "Florida Coastal Airlines", an unrelated
-carrier), and 94 of the 1,543 never-filed codes are multi-holder the same way (worst case 3;
-`docs/data/invariants.md` § Entity resolution). `/carrier/PA` is **not** simply "Pan American" —
-that phrasing, upthread in an earlier revision of this file, was the exact silent-pick failure
-the split exists to refuse. Separately, the four `<entity>SlugFromPath` readers
-(`routeSlugFromPath`, `airportSlugFromPath`, `carrierSlugFromPath`, `aircraftSlugFromPath`) are
-now one-line wrappers around `app/src/lib/entitySlug.ts`'s `entitySlugFromPath(pathname,
-prefix)`; `AIRPORT_PREFIX` moved out of `app/airport/[code]/resolveAirport.ts` into
-`app/src/lib/airport.ts` alongside it, so `proxy.ts` and `lib/entityLink.ts` no longer import
-from a route directory.
+3. **The residual 5xx cache gap** — a page-specific throw whose proxy resolution already
+   succeeded (a catalog view the entity resolvers or `/explore`'s probe don't touch) is still
+   cached for up to an hour. `docs/architecture/hosting.md` § "The gap" has the full account of
+   why the complete fix isn't reachable on this Next version.
+4. **The maps** — airport network, carrier network, aircraft type, diff map. `docs/product/
+   features.md` § Maps. None built yet.
+5. **`/watch`** and the **generic Top-N builder** it should be built on top of, once — Gauge
+   Watch leads, per the design docs.
+6. **The interactive Explorer builder** — pick dimensions/measures/filters from a UI rather
+   than hand-editing the permalink. The permalink contract (M3a/M3b) is done; nothing renders
+   a form over it yet.
+7. **The load-factor time-series chart** and the **seasonality heatmap** — both specified,
+   neither built. Build the load-factor chart only after confirming nothing else in the M6 list
+   is a better use of the slot; M4c already made the gauge story the differentiator.
+8. **OG cards** — social-preview images per entity page, for the links `/search` and the
+   sitemap now make shareable.
 
 ## Architecture
 
@@ -465,19 +538,30 @@ signature element; it does not own these.
   things that happen to be present. Record the mutants run; "tests pass" is not the claim,
   "these mutants died" is.
 - Marts must rebuild from scratch reproducibly via `make`. No manual steps.
-- Every **successful** response gets `Cache-Control: public, s-maxage=2592000,
-  stale-while-revalidate=86400`. Precompute leaderboards as static JSON at build time — the
-  caching is the cost control, not the hosting tier. **404s get `no-store`**: the dataset is
+- **The project's `Cache-Control` is NOT one value.** `/api/pivot`'s own successful responses,
+  `/sitemap.xml`, and `/robots.txt` get the full `public, s-maxage=2592000,
+  stale-while-revalidate=86400`. `/explore` and the four entity pages get the shorter
+  `HTML_CACHE` instead, `public, s-maxage=3600, stale-while-revalidate=86400` (M5 Task 7 — see
+  below for why). `/search` gets `no-store` unconditionally, regardless of outcome (`q` is an
+  unbounded, attacker-chosen cache key). Precompute leaderboards as static JSON at build time —
+  the caching is the cost control, not the hosting tier. **404s get `no-store`**: the dataset is
   rebuilt monthly, so a 404 pinned in a shared cache outlives the condition that caused it.
   `/api/pivot` does this in its handler; a page cannot, and a proxy cannot see the
   downstream status — so **`proxy.ts` caches on "is this a well-formed, known entity",
-  resolved before the page runs**, which is the rule M4d's entity pages must follow too.
-  **A 5xx from a page is NOT covered and is knowingly still cached for 30 days** — measured
-  on both `/route` and `/explore`, unfixable from a proxy, uncovered since M3b, and written
-  up with the numbers in `docs/architecture/hosting.md` § The gap. Do not restate the rule
-  as "errors get `no-store`"; it is 404s only.
+  resolved before the page runs**, which is the rule every entity page follows.
+  **A 5xx from a page is narrowed, not closed** (M5 Task 7): the proxy resolves cacheability and
+  writes the header BEFORE the page can throw, so a 500 still goes out under whichever
+  `Cache-Control` the proxy already committed to. `HTML_CACHE`'s shorter `s-maxage` (above)
+  bounds this to at most an hour of public caching instead of 30 days — a real improvement, not
+  a fix; a 500 minted at minute 0 of its hour is still cached for up to 59 more minutes. Not
+  fixable from a proxy on this Next version — a `route.ts` sibling to a page fails `next build`
+  outright (`docs/architecture/hosting.md` § The gap has the measurement and the three things
+  that would still fix it). Do not restate any of this as "errors get `no-store`"; it is 404s
+  only, and even those are per-route (`/sitemap.xml`/`/robots.txt` 404 the same way any Next
+  route does, uncached by `proxy.ts` since they never leave the 200 path in practice).
   **A new page route must be added to `proxy.ts`'s matcher or it ships uncached and without
-  the raw-query and pathname headers.** Full detail: `docs/architecture/hosting.md`.
+  the raw-query and pathname headers** — nine entries as of M5 Task 8. Full detail:
+  `docs/architecture/hosting.md`.
 - Build the **aircraft-type-mix chart before the load-factor chart**. Everyone does load
   factor; the gauge story is the differentiator.
 - Build the generic Top-N builder once; the `/watch` presets are saved instances of it.

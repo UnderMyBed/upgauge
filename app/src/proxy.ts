@@ -103,6 +103,33 @@ export async function proxy(request: NextRequest) {
     response.headers.set("Cache-Control", (await isDataLayerHealthy()) ? HTML_CACHE : NO_STORE);
     return response;
   }
+  // M5 Task 8. `/search` runs no proxy-side resolution at all -- unlike every branch above and
+  // below, cacheability here is not a question this file answers by asking the database
+  // anything, because there is nothing to ask that would make the answer safe to cache. `q` is
+  // an unbounded, attacker-chosen string: caching a well-formed-vs-not distinction the way
+  // ENTITY_ROUTES does would still leave every distinct `q` a shared-cache entry, so a crawler
+  // (or an attacker) walking the query space mints an unbounded family of 30-day CDN entries on
+  // a box whose entire cost model is that caching bounds origin load. `no-store`, unconditionally,
+  // is the only value that closes that off. It still needs the matcher entry below -- absent
+  // one, this request gets neither the raw-query header `search.ts` doesn't need nor the
+  // pathname header its (nonexistent) not-found path would need, but MORE importantly it also
+  // gets NO Cache-Control at all, which for this route happens to be harmless (Next's own
+  // `no-store` for `dynamic = "force-dynamic"` would apply) but is the same invisible-omission
+  // shape every other row in this file warns about, so the entry is not optional on principle.
+  if (pathname === "/search") {
+    response.headers.set("Cache-Control", NO_STORE);
+    return response;
+  }
+  // The sitemap and robots.txt carry none of the entity pages' per-request resolution risk --
+  // both are built from the same catalog queries regardless of who's asking, so CLAUDE.md's
+  // project-wide 30-day value applies outright, the same as /api/pivot's own success responses.
+  // Neither app/sitemap.ts nor app/robots.ts sets its own Cache-Control (unlike /api/pivot's
+  // route.ts), so this file has to, or they'd ship with none at all -- Next does not infer a
+  // shared-cache header for a MetadataRoute export.
+  if (pathname === "/sitemap.xml" || pathname === "/robots.txt") {
+    response.headers.set("Cache-Control", PROJECT_CACHE);
+    return response;
+  }
   for (const entity of ENTITY_ROUTES) {
     const slug = entity.slugFromPath(pathname);
     if (slug === null) continue;
@@ -162,7 +189,19 @@ async function isDataLayerHealthy(): Promise<boolean> {
  * `entitySlugFromPath(pathname, prefix)`, and each module still exports its own one-line
  * wrapper under its original name, so this table -- true to what this comment predicted -- is
  * the only call site that changed (the airport import moved from the route directory to
- * `lib/airport.ts`, alongside `AIRPORT_PREFIX`; see that file and `lib/entityLink.ts`). */
+ * `lib/airport.ts`, alongside `AIRPORT_PREFIX`; see that file and `lib/entityLink.ts`).
+ *
+ * Why the four rows below still call `routeSlugFromPath`/`airportSlugFromPath`/etc. rather than
+ * `entitySlugFromPath(pathname, PREFIX)` inlined here, now that all four are one-line wrappers
+ * around the same function: `airportSlugFromPath` is NOT a bare partial application of
+ * `entitySlugFromPath` -- it additionally maps the bare-prefix empty slug to `null` rather than
+ * `""` (`lib/airport.ts`'s own header explains why: an empty code segment must opt the request
+ * out of entity resolution entirely, not send `""` into `resolveAirportCode` as a slug to
+ * reject). Inlining `entitySlugFromPath(pathname, PREFIX)` for all four here would silently
+ * drop that one line for airport alone, and the four rows would stop reading as the same shape
+ * they are meant to be. `lib/entitySlug.ts`'s own header records the other three readers'
+ * un-opinionated default; this note exists so the next person adding a row does not "simplify"
+ * this table by inlining and lose the one reader that isn't a bare wrapper. */
 const ENTITY_ROUTES: ReadonlyArray<{
   slugFromPath: (pathname: string) => string | null;
   resolve: (slug: string) => Promise<{ kind: string }>;
@@ -252,11 +291,11 @@ async function isCacheable(
 
 /** The HTML page routes' Cache-Control -- `/explore` and every `ENTITY_ROUTES` page -- and
  * ONLY those. Do not reuse this for `/api/pivot` (it already sets its own, and stays at the
- * project's full `s-maxage=2592000`, see route.ts) or for a future `/sitemap.xml`/`robots.txt`
- * matcher entry (CLAUDE.md's fallback is explicit: "leaving `/api/pivot`, the sitemap and
- * `robots.txt` at the 30-day value" -- neither reads live warehouse state per request the way
- * an entity page's pivot does, so neither carries the risk this shortened value exists to
- * bound).
+ * project's full `s-maxage=2592000`, see route.ts) or for `/sitemap.xml`/`robots.txt` (M5 Task
+ * 8, below: `PROJECT_CACHE`, not this constant -- neither reads live warehouse state per
+ * request the way an entity page's pivot does, so neither carries the risk this shortened
+ * value exists to bound) or for `/search` (Task 8: `NO_STORE`, unconditionally -- an unbounded
+ * free-text cache key is a cache-fill vector regardless of how short the window is).
  *
  * M5 Task 7, Part B. This is the fallback, not the fix Part B set out to spike: a route handler
  * that owns its own `Response` can catch a page-specific throw AFTER the proxy's resolution (or
@@ -278,8 +317,19 @@ async function isCacheable(
  * `docs/architecture/hosting.md` § "The gap". */
 const HTML_CACHE = "public, s-maxage=3600, stale-while-revalidate=86400";
 /** Matches what `/api/pivot`'s route handler already sets on its own error responses. A 404
- * here is a statement about the current dataset, and the dataset changes monthly. */
+ * here is a statement about the current dataset, and the dataset changes monthly. `/search`
+ * (M5 Task 8) also uses this, unconditionally, for a different reason -- see that branch. */
 const NO_STORE = "no-store";
+/** CLAUDE.md's project-wide value, applied here (M5 Task 8) to the two surfaces that carry
+ * none of the entity pages' per-request resolution risk: `/sitemap.xml` and `/robots.txt` are
+ * built from the same catalog queries no matter who is asking, so there is no "is this a
+ * well-formed, known entity" question to answer first the way there is for `/explore` or an
+ * `ENTITY_ROUTES` page. `/api/pivot` sets this exact string itself, in its own route handler
+ * (route.ts) -- untouched by this file, same as always -- so this is a second declaration of
+ * one literal value, not a second source of truth for it; keeping the sitemap/robots branch
+ * next to `HTML_CACHE`/`NO_STORE` rather than importing a constant from route.ts avoided a
+ * page-route module importing a route-handler module for a string. */
+const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 
 // Without a matcher, proxy runs on every request including _next/static and public assets.
 // Every entry point needs the header (or, for /api/pivot, the raw-query passthrough only
@@ -290,7 +340,13 @@ const NO_STORE = "no-store";
 // Each `/<entity>/:slug` entry covers every `/<entity>/<anything>` request with exactly ONE
 // dynamic segment, matching the segment its `app/<entity>/[x]/page.tsx` owns -- a prefix test in
 // spirit, but narrow enough that it cannot accidentally net `/api/pivot` or a future unrelated
-// top-level route.
+// top-level route. `/search`, `/sitemap.xml` and `/robots.txt` (M5 Task 8) are exact-path
+// entries for the same reason: each is one literal pathname, not a dynamic segment, and each
+// needs the header/cache branches above to run at all -- the sitemap and robots.txt would
+// otherwise ship with NO Cache-Control (Next infers none for a MetadataRoute export), and
+// `/search`, while its own `no-store` doesn't strictly depend on the pathname header the way a
+// `not-found.tsx` does, still follows the same "every route gets a row" discipline this list
+// exists to enforce rather than becoming the one silent exception.
 //
 // THIS LIST AND `ENTITY_ROUTES` MUST AGREE. A row here without a row there ships an entity page
 // that is long-cached on its 404s; a row there without a row here ships a page with no
@@ -298,6 +354,12 @@ const NO_STORE = "no-store";
 // `MissingRawPathError` when the pathname header is absent). Neither asymmetry is visible in a
 // build, a unit test, or a rendered page -- only `app/smoke.sh` sees them, which is why every
 // row here has a served-build header assertion and a served-build `no-store` assertion there.
+//
+// NINE entries as of M5 Task 8 (was six through M4d) -- `/search`, `/sitemap.xml` and
+// `/robots.txt` added here. `app/sitemap.ts` is a single default export (23,689 URLs is well
+// under the sitemap protocol's 50,000-per-file limit -- see that file's own header), not
+// `generateSitemaps()`'s multi-file convention, so there is exactly one `/sitemap.xml` route to
+// list, not a family of numbered children.
 export const config = {
   matcher: [
     "/explore",
@@ -306,5 +368,8 @@ export const config = {
     "/airport/:code",
     "/carrier/:code",
     "/aircraft/:name",
+    "/search",
+    "/sitemap.xml",
+    "/robots.txt",
   ],
 };

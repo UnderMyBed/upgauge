@@ -185,6 +185,44 @@ describe("proxy", () => {
     const res = await proxy(new NextRequest("http://localhost/api/pivot?v=1"));
     expect(res.headers.get("Cache-Control")).toBeNull();
   });
+
+  // M5 Task 8. `/search` is `no-store` UNCONDITIONALLY -- not the well-formed-vs-not split
+  // ENTITY_ROUTES gets, because `q` is an unbounded, attacker-chosen string and there is no
+  // proxy-side resolution that would make caching it safe. Two different queries prove it is
+  // unconditional rather than a coincidence of one input: a query that resolves (PDX, a real
+  // airport code) and one that cannot possibly resolve to anything real.
+  it.each([
+    ["a query that resolves to a real entity", "/search?q=PDX"],
+    ["a query that cannot resolve to anything", "/search?q=zzzzzzzzzz"],
+  ])("sets /search to no-store regardless of whether %s", async (_label, path) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // The sitemap and robots.txt carry none of the entity pages' per-request resolution risk, so
+  // they get CLAUDE.md's project-wide value outright -- neither app/sitemap.ts nor
+  // app/robots.ts sets its own Cache-Control, so absent this branch they would ship with none
+  // at all (Next infers no shared-cache header for a MetadataRoute export).
+  it.each([["/sitemap.xml"], ["/robots.txt"]])(
+    "sets the project's 30-day Cache-Control on %s",
+    async (path) => {
+      const res = await proxy(new NextRequest(`http://localhost${path}`));
+      expect(res.headers.get("Cache-Control")).toBe(
+        "public, s-maxage=2592000, stale-while-revalidate=86400",
+      );
+    },
+  );
+
+  // M5 Task 8's own version of the M4d trap above: a request under a prefix that merely LOOKS
+  // like one of the three new exact-path routes must not be netted by them. `/search` is an
+  // exact match, not a prefix, so a nested path falls through untouched.
+  it.each([["/search/nope"], ["/sitemap.xml.map"], ["/robots.txt.bak"]])(
+    "sets no Cache-Control on %s, which is not one of the three exact routes",
+    async (path) => {
+      const res = await proxy(new NextRequest(`http://localhost${path}`));
+      expect(res.headers.get("Cache-Control")).toBeNull();
+    },
+  );
 });
 
 /** NextResponse.next({request:{headers}}) encodes the upstream request headers into the

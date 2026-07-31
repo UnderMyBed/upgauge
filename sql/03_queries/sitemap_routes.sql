@@ -9,10 +9,17 @@
 -- database), silently shrinking the crawl graph below what actually exists.
 --
 -- Route identity is UNDIRECTED (docs/data/invariants.md § Route identity): a segment files
--- origin -> dest in one direction only, so the pair is grouped by LEAST/GREATEST of the two
--- airport ids, the same shape render.ts / pipeline/pivot.py use for the composite `route`
--- dimension filter. Same-airport rows (`origin_airport_id = dest_airport_id`) are excluded --
--- CLAUDE.md / routePair.ts: those are not routes.
+-- origin -> dest in one direction only, so the pair is grouped by the fact table's own
+-- `route_key_low`/`route_key_high` -- normalize_t100_segment.sql's LEAST/GREATEST of the two
+-- airport ids at staging time, the same undirected key render.ts / pipeline/pivot.py filter the
+-- composite `route` dimension on. Recomputing least/greatest(origin_airport_id,
+-- dest_airport_id) here instead (this file's form before M5 Task 8) produces an identical
+-- result -- verified over all 3.36M fct_segment_month rows -- but it is convention drift: every
+-- other route-grain query (fct_route_month, mart_route_health, the route dimension's
+-- column_expr) reads route_key_low/high directly rather than re-deriving them, and a future
+-- change to the undirected-key definition would only need to touch the one staging expression
+-- if every downstream reader already deferred to it. Same-airport rows (`route_key_low =
+-- route_key_high`) are excluded -- CLAUDE.md / routePair.ts: those are not routes.
 --
 -- `lo_code`/`hi_code` come back in AIRPORT-ID order, NOT the alphabetical order the sitemap
 -- URL needs -- they disagree for 154 of 22,420 pairs (routePair.ts's own header; HPN/BNH is
@@ -28,11 +35,11 @@
 -- given id's own seq chain (resolve_airport.sql does the same).
 WITH pairs AS (
     SELECT
-        least(origin_airport_id, dest_airport_id)    AS lo_id,
-        greatest(origin_airport_id, dest_airport_id) AS hi_id,
-        max(year_month)                              AS last_month
+        route_key_low  AS lo_id,
+        route_key_high AS hi_id,
+        max(year_month) AS last_month
     FROM fct_segment_month
-    WHERE origin_airport_id <> dest_airport_id
+    WHERE route_key_low <> route_key_high
     GROUP BY 1, 2
 )
 SELECT

@@ -135,10 +135,15 @@ canonical URL per entity, every other spelling 308s to it (`/airport/sea`, `/car
 `/aircraft/a321-lr`), and a 404 always names the offending code and says *which* of the ways it
 failed — an unknown code and a real one this domestic-only dataset carries no rows for are
 different findings, and `/route/JFK-LHR` and `/airport/LHR` both say so. **Only what resolves is
-CDN-cached**: 200s and 308s get the 30-day cache, 404s get `no-store`, because a 404 here is a
-statement about the current dataset and the dataset is rebuilt monthly
-([`../architecture/hosting.md`](../architecture/hosting.md)). The carrier 404 is the one that
-cannot yet make the distinction the others make — see the M5 note in `CLAUDE.md`.
+CDN-cached**: 200s and 308s get `HTML_CACHE` (M5 Task 7 shortened this from the project's 30-day
+value to `s-maxage=3600` for `/explore` and all four entity pages — see the citation below), 404s
+get `no-store`, because a 404 here is a statement about the current dataset and the dataset is
+rebuilt monthly ([`../architecture/hosting.md`](../architecture/hosting.md)). **The carrier 404
+makes the same split the other three do, as of M5 Task 6**: `sql/03_queries/
+lookup_carrier_code_exists.sql` mirrors the airport version, so `/carrier/ZZ` 404s "unknown
+carrier code" and `/carrier/PA` 404s "recognized by BTS ... none of which has filed", naming
+all three of `PA`'s holders (two really are Pan American, the third — Florida Coastal Airlines —
+merely shares the code) rather than picking one.
 
 **The pages cross-link (M5).** Every resolved dimension cell in every table — `/explore` and
 all four entity pages, since they share the one `DataTable` component — links to the entity
