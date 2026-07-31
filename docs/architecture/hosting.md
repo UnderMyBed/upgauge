@@ -306,6 +306,31 @@ server runs with — `db.ts` never sets `threads`) and, in brackets, capped to `
 | `lookup_airport_code_exists.sql` (404 reason only) | 1.8–2.4 ms | unchanged | genuinely dimension-only |
 | A `/route/JFK-LAX` carriers pivot | ~7–9 ms | unchanged | the query the lookup precedes |
 
+**`/route` runs TWO pivots, and the second one is the larger.** M4c mounted the aircraft-mix
+chart on this page without updating this table, which is the table that exists because M4d is
+told above to copy the pattern three more times. Measured **in-process**, through
+`runPivot`/`fetchAircraftMix` against the built database on `/route/JFK-LAX`, warm, median of
+8 runs at DuckDB's default thread count — so each figure includes that call's own
+`loadAllowlist()` (two catalog reads) and `resolveRows()`, i.e. what the page actually pays,
+not the bare SQL:
+
+| Work | Rows | Warm median |
+|---|---|---|
+| carriers pivot, trailing 12 | 5 | **10.9 ms** |
+| aircraft-mix pivot, full window | 996 | **20.0 ms** |
+| the two **serially awaited** (as M4c shipped) | | **30.1 ms** |
+| the two under `Promise.all` (now) | | **20.2 ms** |
+
+They share nothing — different windows, different dimensions, and `connect()` hands each its
+own `DuckDBConnection` off the single memoized instance — so the serial form was paying for
+both in turn for no reason. Concurrent, the pair costs what its slower half costs: **a 33%
+saving on the page's DB work, for free.** M4d will copy whatever shape is here, so the shape
+is `Promise.all`.
+
+A direct read-only measurement of the mix query alone, at `threads=2` rather than the default,
+puts it at 30–34 ms; a measurement of this query that omits its thread count and whether the
+allowlist read is inside it is not comparable to another one.
+
 The old form is **identical at 2 threads and at 12** — it does not parallelise, which is
 itself the tell that it was re-scanning rather than probing. Both figures reproduce; a
 measurement of this query that omits its thread count is not comparable to another one.
@@ -381,6 +406,84 @@ entry point that can set headers per outcome; or drop the proxy's blanket `Cache
 favour of a per-page mechanism if Next ever grows one; or accept a short `s-maxage` for the
 HTML so an error self-corrects in minutes rather than a month. Recorded here so M4d inherits
 the honest version.
+
+## Server-side Observable Plot needs no bundler configuration
+
+M4c renders charts on the server: Plot draws into a jsdom `document` and the serialized SVG
+is injected (`app/src/lib/chart/svg.ts`). The risk going in was that `jsdom` would need
+`serverExternalPackages` the way `@duckdb/node-bindings` does — jsdom has dynamic requires
+and native-ish dependencies, the same shape that broke the DuckDB build above.
+
+**It does not.** Measured against Next 16.2.12 + Turbopack: `next build` compiled the server
+bundle with jsdom and `@observablehq/plot` inlined, unchanged `next.config.ts`, and the
+served build renders the SVG per request on a `force-dynamic` page. `serverExternalPackages`
+was left at its existing two DuckDB entries. Recorded because M4d mounts the same component
+on three more pages and should not re-litigate this.
+
+The one thing that *was* required is a types-only dev dependency. jsdom 29 ships no
+declarations, and `next build` runs `tsc` after a successful compile, so the build fails
+*after* reporting `✓ Compiled successfully`:
+
+```
+./src/lib/chart/svg.ts:1:23
+Type error: Could not find a declaration file for module 'jsdom'.
+'/…/node_modules/jsdom/lib/api.js' implicitly has an 'any' type.
+```
+
+`@types/jsdom` in `devDependencies` fixes it; `jsdom` itself is a production dependency
+because it runs at request time.
+
+**The two are a major version apart — `jsdom@^29` against `@types/jsdom@^28` — and that cannot
+currently be fixed by bumping.** Checked against the registry on 2026-07-31: DefinitelyTyped's
+newest published `@types/jsdom` is **28.0.3**, which is also its `latest` tag; there is no 29.
+So the skew is recorded rather than closed. Exposure is minimal and deliberately kept that way:
+`svg.ts` uses exactly `JSDOM` and `.window.document`, and nothing else in the app imports jsdom
+at all. Bump the day 29 ships.
+
+**`var()` colour tokens survive into the served SVG**, so `globals.css` stays the single
+source for the ramp and no hex fallback is needed. Verified on a served build in *both*
+forms, which are different code paths: a constant `fill: "var(--g3)"` and — the form the
+stacked area actually uses — an ordinal colour scale whose `range` is `var()` strings.
+The served bytes carry `<path fill="var(--g1)" d="…">` and `fill="var(--g5)"` verbatim.
+
+**The SVG is emitted twice per response.** Once as markup in the HTML body and once,
+escaped, in the RSC flight payload that follows it (`self.__next_f.push`) — measured by
+counting occurrences in a served response. That is inherent to rendering into
+`dangerouslySetInnerHTML` from a Server Component, not a bug, but it doubles the byte cost
+of every chart. It is the number to watch when M4d puts this component on three more pages;
+a trivial two-mark probe page came to 18,762 bytes.
+
+Measured on the real shape — 136 months × 6 bands, which is what `/route` actually renders —
+one chart serializes to **28,609 bytes**, so it costs about **57 KB per response** once the
+flight-payload copy is counted. M4d mounting this on `/airport`, `/carrier` and `/aircraft`
+does not multiply a rounding error.
+
+**The jsdom document is created once for the module, not per call**, and the reason is worth
+recording because the first implementation assumed the opposite. Plot never appends its output
+into the document it is given: `plot.js:156` creates the root with d3's `creator("svg")` (the
+document only resolves the namespace), and `plot.js:360` returns it still detached. Measured: a
+shared document grew **0 bytes across 25 renders**. Sharing it takes a render from **8.59 ms to
+3.93 ms** — `new JSDOM()` alone is **5.21 ms**, more than the entire plot — on a `force-dynamic`
+page that pays this on every cache miss.
+
+**`svg.test.ts` pins the no-accumulation property — but only since M4c's final review, and
+this paragraph claimed it before it was true.** The original test asserted
+`mark().length === first.length`: the byte length of the **returned, detached node**, across
+repeated renders. Appending that node to the shared document does not change the node's own
+`outerHTML`, so the one regression the test named was invisible to it. Demonstrated rather than
+inferred: a deliberately leaky renderer doing `document.body.appendChild(node)` returned 1,384
+bytes on every one of 12 renders while `document.body` grew to **16,608**, and the test stayed
+green.
+
+It now observes the document, through `sharedDocumentFootprint()` — a narrow read-only probe
+exported from `svg.ts` rather than the document itself, because exporting the document would
+put a DOM type on that module's public surface (its whole point is that callers stay free of
+them) and hand every future caller a writable handle to the one object whose emptiness *is* the
+safety argument. The probe counts `head` **and** `body` children and measures
+`documentElement.outerHTML`: an injected `<style>` in `<head>` leaks exactly as much as an
+appended SVG. The test asserts both zero nodes and zero growth across 12 renders, and the leaky
+renderer above turns it red. So a future Plot release that starts appending now fails a test
+rather than leaking memory in an always-on process.
 
 ## If the Dockerfile ever adopts `output: "standalone"`
 

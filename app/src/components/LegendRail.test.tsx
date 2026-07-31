@@ -37,4 +37,46 @@ describe("LegendRail", () => {
     render(<LegendRail />);
     expect(screen.getByText(/current identity/i)).toBeDefined();
   });
+
+  // M4c. The rail is the project's standing "how to read this", so the temptation is to put
+  // every encoding in it once and be done. The rule this component already follows (its own
+  // header, on the mockup's map group) is the opposite: describe the encodings THIS view uses.
+  // /explore draws no chart.
+  it("omits the fleet-shading group unless a chart is on the page", () => {
+    render(<LegendRail />);
+    expect(screen.queryByText(/darkening stack is an upgauge/i)).toBeNull();
+    expect(screen.queryByText(/Fleet shading/i)).toBeNull();
+  });
+
+  it("explains the gauge ramp when a chart is on the page", () => {
+    render(<LegendRail fleetMix />);
+    expect(screen.getByText("Fleet shading")).toBeDefined();
+    expect(screen.getByText(/smaller metal/)).toBeDefined();
+    expect(screen.getByText(/larger metal/)).toBeDefined();
+    // The methodology, not a restatement of the chart's per-subject numbers: BOTH orderings,
+    // because "shaded by gauge" alone leaves a reader thinking the biggest band is the biggest
+    // aircraft. Fails if the group is reduced to the ramp sentence alone.
+    expect(screen.getByText(/ordered by seats per departure/i)).toBeDefined();
+    expect(screen.getByText(/darkening stack is an upgauge/i)).toBeDefined();
+    expect(screen.getByText(/five types with the most seats/i)).toBeDefined();
+  });
+
+  it("draws its swatches from the ramp tokens, not from copied hex", () => {
+    // globals.css is the single source for --g0..--g5 (system.md § Charts, and the same rule
+    // the chart component follows by passing `var(--gN)` into Plot's colour range). The
+    // mockup this group is ported from hardcodes #C8D3D1/#21514A; copying those down here
+    // would make a palette change silently disagree with the chart standing next to it.
+    const { container } = render(<LegendRail fleetMix />);
+    expect(container.querySelector('rect[fill="var(--g1)"]')).not.toBeNull();
+    expect(container.querySelector('rect[fill="var(--g5)"]')).not.toBeNull();
+  });
+
+  it("states that the shaded months are COVID, drawn on purpose", () => {
+    // The band is --panel-2 and carries a label inside the SVG, but the rail is where a
+    // reader who cannot see the chart finds out what the shading means -- and it names the
+    // months, so it cannot drift from the chart's own COVID_FROM/COVID_TO without a test
+    // failing here.
+    render(<LegendRail fleetMix />);
+    expect(screen.getByText(/2020-03 to 2021-06/)).toBeDefined();
+  });
 });

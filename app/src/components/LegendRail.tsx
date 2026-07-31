@@ -4,11 +4,18 @@
  * is no separate "how to read this" page to go stale. Content and structure mirror
  * docs/design/mockups/table.html's `<aside class="legend">`, minus its "Arc rendering
  * (maps)" group: this page has no map, and the working reference's own map-specific group
- * would describe an encoding nothing on `/explore` uses. */
-export function LegendRail() {
+ * would describe an encoding nothing on `/explore` uses.
+ *
+ * `fleetMix` is that same rule applied to M4c's stacked-area chart: the group is opt-in
+ * because `/explore` draws no chart, and a rail that explained a monochrome gauge ramp on a
+ * page with no ramp on it would be exactly the stale "how to read this" this element exists
+ * to replace. */
+export function LegendRail({ fleetMix = false }: { fleetMix?: boolean } = {}) {
   return (
     <aside className="legend">
       <h4>Chart legend</h4>
+
+      {fleetMix ? <FleetShading /> : null}
 
       <div className="grp">
         <div className="gt">Gauge rail</div>
@@ -68,5 +75,54 @@ export function LegendRail() {
         </div>
       </div>
     </aside>
+  );
+}
+
+/** The methodology behind the aircraft-mix chart's ramp, and nothing else.
+ *
+ * Deliberately carries no numbers. How many types "Other" aggregates and what share of seats
+ * it carries are per-subject facts -- they differ for every route -- and they are already
+ * stated on the chart's own colour key, attached to the swatch they describe. Restating them
+ * here would put the same measurement in two places, one of which is a static component that
+ * cannot know the subject; the rail's job is the part that is true of every chart.
+ *
+ * The two swatches read `var(--g1)` and `var(--g5)`, the ends of the ramp the chart itself
+ * draws from, so `globals.css` stays the single source for the palette (the mockup's own
+ * hex literals are not copied down here). */
+function FleetShading() {
+  return (
+    <div className="grp">
+      <div className="gt">Fleet shading</div>
+      <div className="lrow">
+        <span className="g" aria-hidden="true">
+          <svg width="40" height="9" viewBox="0 0 40 9">
+            <rect width="40" height="9" fill="var(--g1)" />
+          </svg>
+        </span>
+        <em>smaller metal</em>
+      </div>
+      <div className="lrow">
+        <span className="g" aria-hidden="true">
+          <svg width="40" height="9" viewBox="0 0 40 9">
+            <rect width="40" height="9" fill="var(--g5)" />
+          </svg>
+        </span>
+        <em>larger metal</em>
+      </div>
+      <div className="lrow">
+        <em>
+          One ramp, ordered by seats per departure — a darkening stack is an upgauge. Band
+          membership is a different ordering: the five types with the most seats get a band,
+          and everything else is aggregated into the lightest band, Other, whose count and
+          share of seats are stated on the chart&rsquo;s own key.
+        </em>
+      </div>
+      <div className="lrow">
+        <em>
+          The shaded months are 2020-03 to 2021-06. COVID is in the window on purpose and is
+          drawn, never smoothed away.
+        </em>
+      </div>
+    </div>
   );
 }

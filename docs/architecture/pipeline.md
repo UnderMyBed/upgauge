@@ -715,9 +715,10 @@ it out.
 M4a is built: 424 Python tests green (`make check`), the app suite green
 (`make app-check`), `make app-build` produces a working production build, and
 `make goldens` reproduces all 17 goldens byte-identical — proof the M3a contract never
-moved. See `CLAUDE.md`'s Status section for the current test counts and what M4c+ still owe
-(`/airport`, `/carrier`, `/aircraft`, the charts, the maps, `/watch`) — `/route` is the M4b
-section immediately below.
+moved. See `CLAUDE.md`'s Status section for the current test counts and what M4d+ still owe
+(`/airport`, `/carrier`, `/aircraft`, the remaining charts — load-factor lines and the
+seasonality heatmap — the maps, `/watch`) — `/route` is the M4b section immediately below,
+and its aircraft-type-mix chart shipped in M4c.
 
 ## M4b — the route page
 
@@ -726,7 +727,9 @@ grain, grouped by operating carrier, filtered to one undirected route) composed 
 same pivot layer M3/M4a already built, deliberately reusing `DataTable` / `LegendRail` and
 the resolution layer rather than writing bespoke SQL. That reuse is also what makes the
 Explorer link free: the page's query *is* a `PivotQuery`, so `encode()` yields the permalink
-directly. No chart (that's M4c) and no new dependency.
+directly. No chart in M4b and no new dependency — the aircraft-type-mix chart was mounted on
+this page in M4c (§ M4c, below), which is where the Plot dependency and the second, wider
+query arrived.
 
 ### Composite-dimension filtering, added in lockstep
 
@@ -825,6 +828,338 @@ lookup fixed to 0 collisions among in-window airports, `/route/<pair>` rendering
 block, stat strip, carriers table, Explorer link and legend rail, and `make app-smoke`
 curling a real served page for the redirect and 404 status codes — see `CLAUDE.md`'s Status
 section for current test counts.
+
+## M4c — the aircraft-type-mix chart
+
+Design spec: `docs/superpowers/specs/2026-07-31-m4c-aircraft-mix-chart-design.md`. Encoding
+rules: `docs/design/system.md` § Charts. This section records what the *implementation*
+needed that neither of those owns.
+
+### The chart adds no SQL and no catalog entries
+
+`app/src/lib/chart/aircraftMix.ts` composes the existing segment-grain pivot:
+`dimensions: ["year_month", "aircraft_type"]`, `measures: ["seats", "departures_performed"]`,
+`grouping: "operating"`, filtered by the composite `route` dimension M4b added. The type is
+resolved to `dim_aircraft_type.short_name` through the map `runPivot` already returns — the
+same M4a resolution path `/route`'s carriers table uses, via `displayValue()` rather than a
+second local copy of the three-way display contract.
+
+`departures_performed` is fetched even though nothing is *drawn* from it: band shade is
+ordered by gauge (Σ seats / Σ departures), which is a different ordering from band membership.
+See the next section.
+
+**The row limit (10,000) is a measured bound, not a guess.** Measured over the full
+2015-01 → 2026-04 window: the worst-case route produces **1,908 (month, type) groups**, and
+the most aircraft types any one route carries is **36** across 136 months — a 4,896-row
+structural ceiling. JFK–LAX, the flagship example, returns **996 rows / 20 types / 136
+months**. 10,000 clears the measured worst case 5× and the ceiling 2×.
+
+Truncation here would not look like a bug. A stacked area silently missing its tail months
+looks like an airline stopped flying the route, rendered under a `DATA AS OF` badge — the same
+failure shape as M4b's carrier-limit disclosure, but with no row count on screen to give it
+away. `aircraftMix.test.ts` therefore pins the returned row count *exactly* (996) and asserts
+it stays strictly below the limit, rather than trusting the arithmetic above.
+
+### Two orderings, and testing them is harder than implementing them
+
+`toBands()` sorts the same five types twice, on two different keys:
+
+| | key | direction | produces |
+|---|---|---|---|
+| **membership** | total seats | descending | which 5 types get a band; the rest → Other |
+| **shade** | gauge (Σ seats / Σ departures) | ascending | which of `--g1`…`--g5` each band gets |
+
+Measured on JFK–LAX, where they genuinely disagree — the two sorts share only their first
+element:
+
+| by seats (membership) | | by gauge (shade) | |
+|---|---|---|---|
+| 1. A321/LR | 17,485,274 | `--g1` A321/LR | 128.1 |
+| 2. B767-3/R | 7,852,109 | `--g2` A320-1/2 | 148.4 |
+| 3. B767-4 | 3,119,079 | `--g3` B757-2 | 164.2 |
+| 4. B757-2 | 2,900,388 | `--g4` B767-3/R | 216.6 |
+| 5. A320-1/2 | 2,132,256 | `--g5` B767-4 | 239.2 |
+
+Bands are returned in **shade order**, `--g1` first, so the array is directly usable as the
+stack order: light at the bottom, dark on top. That gradient is the entire reason the
+categories are ordered rather than merely distinguishable.
+
+**A two-element fixture cannot test this rule, and that is not obvious.** The task brief's own
+headline test used one — a "Small" type with the most seats and the smallest gauge, on the
+reasoning that "the largest by seats is the smallest by gauge, so the orderings are reversed."
+They are not: seats-descending and gauge-ascending both put that type first, so the two orders
+*coincide* and an implementation that sorts once and reuses the order passes. Confirmed by
+mutation, not by reading. Reversing two elements requires the type with the **most seats** to
+also have the **largest gauge**; the shipped fixture does that, and the mutation now goes red.
+
+Two derived decisions, both with their own test:
+
+- **An unknown gauge sorts last, not lightest.** A type with 0 performed departures has no
+  gauge — real, not hypothetical: type `650` (DC-9-50) appears on JFK–LAX with 0 seats and 0
+  departures, so `seats / departures` is `0/0`. `gauge()` returns `null` and nulls sort last,
+  matching DuckDB's own `NULLS LAST` default for `ORDER BY ASC`. The plausible alternative —
+  `departures === 0 ? 0 : …` — makes an aircraft that flew nothing the *lightest* band on the
+  chart, a claim about metal size drawn from no evidence.
+- **Ties break on `code`,** arbitrary but deterministic. The property that matters is that the
+  same data always produces the same chart.
+
+`OtherSummary.seatShare` is a share of the route's **total** seats, not of the remainder, and
+its series is **empty** rather than zero-filled when `typeCount === 0` — so the renderer's
+`typeCount > 0` gate never draws an invisible band.
+
+### Two absences that look alike and are not
+
+Every band carries a point for every month **the subject filed**, zero-filled where that
+particular type did not fly — a stacked area needs every series sampled at the same x or the
+bands misalign. It carries **no point at all** for a month the subject did not file. The two
+cases are one word apart in English and opposite in meaning, and M4c shipped handling only the
+first: `toBands` zero-filled across the months present *somewhere* in its input, and the
+renderer built its x domain from the same set, so a month absent from **every** type was not on
+the axis and Plot drew a straight edge across it. The encoding rule and the measured damage:
+[`../design/system.md` § Charts](../design/system.md), third standing rule.
+
+`toBands` now also returns a `MonthAxis`:
+
+| field | is |
+|---|---|
+| `span` | every month from the first filing to the last, contiguous, filed or not |
+| `gaps` | the months in `span` nobody filed |
+| `run` | month → id of the contiguous run of filed months it belongs to |
+| `solo` | the run ids covering exactly one month |
+
+The renderer keys Plot's `z` (series identity) on the **run** and `fill` on the **band**, so
+one `areaY` mark emits one path per (band, run) and a broken band keeps one shade across all
+its pieces. That forced one other change: `order` had to become the rank **function**
+(`(d) => d.rank`) rather than the array of z values it was, since z is no longer the band.
+Stack order is unchanged — rank is the band's index in shade order.
+
+Runs of exactly **one** month go into a second mark with `stroke` set. A one-month area has no
+width: d3 emits `M x,y1 L x,y2 Z`, which fills to nothing. **9,486 of 22,919 route pairs (41%)
+have at least one isolated interior month**, so dropping them would have traded the
+interpolation bug for an erasure bug on nearly half of all pages. Stroked, an isolated filing
+is a hairline column in its own shade at its own height in the stack.
+
+**Verified on the served build, not only in jsdom.** `/route/HNL-LAS`, x-axis year ticks read
+out of the chart's own axis: 2020 at x=447.83, 2021 at x=528.37, so one month is 6.71 px. The
+`--g5` band arrives as **two** paths — the first ending at x=461.0 (2020-03, +1.96 months) and
+the second beginning at x=508.1 (2020-10, +8.98) — with 47.1 px, exactly seven month-widths, of
+blank between them. `/route/JFK-LAX`, which filed in all 136 months, is **one** path spanning
+x=46.0 → 950.0. `smoke.sh` asserts that multiplicity (`count`, not `has`: the needle
+`<path fill="var(--g5)" d=` is present either way and only its count distinguishes a broken
+area from a smoothed one) as a pair across the two routes.
+
+### The derived annotation, and what counts as a leader
+
+`app/src/lib/chart/crossover.ts` implements `system.md`'s rule that annotations are derived,
+never hand-written: the annotation is the most recent year in which the #1 aircraft type by
+seats differs from the previous year's. Three rules decide what that means, none of which the
+design docs owned before M4c and each of which suppresses an annotation that would otherwise
+mislead:
+
+- **A tie has no leader.** Breaking a tie by input order, by `code`, or by `label` emits an
+  annotation whose *direction* depends on nothing the reader can see, and which flips the day
+  the row order changes. The year is simply not a candidate.
+- **A leader must have flown** (`seats > 0`). T-100 carries ordinary no-service filings with
+  `seats = 0` (`CLAUDE.md`, data gotchas — 5,713 of 2015's 5,717 zero-seat rows never flew), so
+  a year in which nothing flew has no dominant type, and "X overtakes Y" drawn from two zeroes
+  is a claim about nothing.
+- **A year with no leader is skipped, not treated as a wall.** A leading → a tied year → B
+  leading is a *genuine* crossover; it is what one looks like mid-transition, and it is reported
+  against the later year, the one B actually leads. Strict calendar adjacency would silently
+  delete real events, and would delete them most often at exactly the transition the annotation
+  exists to describe.
+
+**`null` is the common case, not an edge case:** only **12,416 of 22,919 routes (54%)** ever
+change their #1 type, and JFK–LAX is not one of them — the A321/LR leads every year 2015–2026
+even as its share falls 44.8% → 35.2%, which is a real upgauge story but not a crossover. So
+the chart renders no annotation on nearly half of routes, and must never manufacture one or
+fall back to naming the largest type: that is not an event, it would appear on every chart, and
+it would teach readers to ignore annotations. The rule is year-grain by construction — a
+monthly #1 flips on seasonality.
+
+The annotation names types by **display label**, which is current identity from
+`dim_aircraft_type`, the same caveat the legend rail already states for carrier and airport
+codes.
+
+### The component: what Plot does not give you
+
+`app/src/components/AircraftMixChart.tsx` is a synchronous Server Component taking a row set
+and a title, and nothing else — it never names what it is describing, because M4d mounts the
+identical component on `/airport`, `/carrier` and `/aircraft`. Four decisions the encoding
+docs do not own:
+
+- **`role="img"` is injected into Plot's root `<svg>`, not put on a wrapper.** Plot exposes
+  `ariaLabel` and `className` but no `role`, and the attribute has to be on the SVG itself:
+  `role="img"` is what makes the subtree presentational, so a screen reader announces the one
+  description instead of reading out the `aria-label`ed group Plot wraps every axis in. A
+  wrapping `<div role="img">` would hide those groups too but leaves the SVG unlabelled the
+  moment it is extracted, so the component does a single anchored replacement of Plot's own
+  root tag.
+- **The COVID band's edges land ON the 2020-03 and 2021-06 samples, not around them.** Every
+  month is plotted at its first day (UTC — a local-midnight `Date` moves a month's sample
+  across the year boundary west of Greenwich), so `2021-06-01` is exactly where June 2021's
+  seats are drawn. It is clamped to the window and dropped entirely when the two are disjoint;
+  an unconditional rect puts a `--panel-2` slab at a meaningless x on any chart starting after
+  2021.
+- **The crossover annotation's text anchor flips at the window's midpoint.** ~30 characters
+  against the ~10% of the frame a 2025 crossover leaves would run off the right edge.
+- **Fewer than two months is stated in words, never drawn.** A one-month stacked area has a
+  degenerate x domain and serializes to zero width — a blank panel under a `DATA AS OF` badge,
+  the failure `/explore` and `/route` already refuse. `system.md`'s own sparkline rule says the
+  same thing: one month is not a trend.
+
+The colour key (`.ckey`) carries Other's disclosure — how many types it aggregates and its
+share of seats — on the swatch itself, because that number is per-subject and the legend rail
+is static.
+
+**Measured, full shape (136 months × 6 bands): 30,372 bytes of HTML** for the whole block,
+against Task 1's 28,609 for the bare SVG. It ships twice per response (body + RSC flight
+payload, see `hosting.md`), so ~61 KB, and M4d mounts it three more times.
+
+### The mount: two windows on one page
+
+`/route/<pair>` now runs **two** pivot queries, **concurrently** — `Promise.all`, not two
+sequential `await`s. They share nothing and the mix query is the larger of the two (996 rows
+against 5), so the serial form paid for both in turn: 30.1 ms against 20.2 ms, warm, in
+process. Numbers and method: [`hosting.md` § What the proxy's query actually
+costs](hosting.md). The carriers table keeps its trailing 12 months; the chart gets the
+**full** `2015-01 → asOf`. That is not an oversight to be tidied
+into one window later — a twelve-point fleet-mix stack shows nothing, and the story the chart
+exists to tell (the A321's rise on JFK–LAX) takes eight years to read. The consequence is a
+disclosure obligation, and the `.window` line carries it: it names **both** ranges, because a
+page drawing a decade under a line reading "Trailing 12 months" is claiming a window it is not
+showing. `page.test.tsx` reads the chart's own `aria-label` for the window it actually drew,
+not the line — a chart handed the trailing 12 renders a perfectly plausible twelve-point area
+and would pass any check that only read the prose.
+
+**The chart is drawn from the wider window's rows, not from the table's.** 12,062 of the
+22,950 route pairs in this database last filed before the current trailing-12 window
+(measured), so a route whose table is empty but whose chart has ten years of history is the
+majority case, not a corner. Gating the chart on the table's `isEmpty` — the obvious way to
+write the mount — would blank the only panel on those pages with anything in it. When the full
+window is empty too (BNH–JFK: zero rows, 2015–2026) no chart is drawn at all: the empty state
+below already states that finding in words and offers the widened permalink, and a second
+panel repeating it in the chart's own voice is the card soup `CLAUDE.md`'s density rule rules
+out.
+
+**The legend rail's fleet-shading group is opt-in** (`<LegendRail fleetMix />`), for the same
+reason `LegendRail` already omits the mockup's map group: `/explore` draws no chart, and a rail
+explaining a monochrome gauge ramp on a page with no ramp on it is exactly the stale "how to
+read this" the rail exists to replace. The group carries the **methodology** — one ramp ordered
+by seats per departure, so a darkening stack is an upgauge; membership is a *different*
+ordering — and deliberately no numbers. How many types Other holds and its share of seats are
+per-subject facts, already on the chart's own `.ckey` next to the swatch they describe; a
+static rail cannot know them, and stating them twice is how two copies drift.
+
+**Page weight, measured on the served build:** `/route/JFK-LAX` is **32,087 bytes before the
+chart and 96,179 after** — **+64,092**, close to the ~61 KB the component predicted from its
+own block (30,372 × 2 for body + RSC payload) plus the legend group and the second window
+line. (It was 96,112 before the final review added `font-family: var(--font-mono)` to the
+chart's root style — 33 bytes, twice per response.) That is the input to M4d's decision, which
+mounts this component on three more pages: at
+three charts a page the arithmetic lands near 220 KB of HTML per response, which is where a
+shared `Suspense` boundary, a narrower default window, or dropping the RSC copy stops being
+premature. `app/smoke.sh` prints the current number on every run rather than asserting a
+threshold — a threshold in a shell script is a number nobody measured.
+
+### The gate that was missing
+
+Before the mount, `AircraftMixChart` had **262 green unit tests and a clean production build
+while being reachable from no route at all.** Nothing in CI executed its Plot path. A
+`serverExternalPackages` or bundler regression would have shipped with every gate green — which
+is the exact shape of the five M3b bugs `app/smoke.sh`'s own header lists, and the reason that
+file exists. Plot + jsdom + Next's server bundler is a seam no unit test crosses by
+construction.
+
+`app/smoke.sh` section 9 closes it, on a real built-and-served page: the `<svg role="img">` is
+in the HTML (not an empty client-side container), the `aria-label` describes the series,
+`fill="var(--g0)"` **and** `fill="var(--g5)"` survive Plot's ordinal scale → jsdom's serializer
+→ React's HTML escaping (so `globals.css` stays the single source and the spec's hardcoded-hex
+fallback stays unused), the COVID label is present, the rail explains the ramp, and the rest of
+the page still server-renders above it.
+
+The annotation is checked as a **falsifiable pair**, because either half alone is vacuous:
+absence on JFK–LAX (no crossover — 46% of routes) is satisfied by a component that never
+renders an annotation, and presence is satisfied by one that manufactures an annotation on every
+chart, which is the specific failure the spec forbids. So both run: `/route/JFK-LAX` must
+contain no `overtakes`, and `/route/ATL-MCO` must contain the derived
+`B757-2 overtakes A321/LR · 2018` — measured against the built warehouse, and pinned as the
+whole derived string rather than the bare word so a refresh that moves it fails loudly instead
+of passing on a coincidence.
+
+### The smoke harness was silently reporting the wrong answer
+
+Mounting the chart is what found this, and it is the more valuable half of the milestone's
+verification work. `smoke.sh` runs under `set -o pipefail` and every check was
+`printf '%s' "$body" | grep -q…`. **`grep -q` exits the instant it matches**, so on a body
+larger than the 64 KB pipe buffer the `printf` still feeding it dies of SIGPIPE and the
+*pipeline's* status is 141 — even though the needle was found.
+
+`/route/JFK-LAX` was 32,087 bytes through all of M4b, comfortably under the buffer, so this
+never fired. At 96,112 it fired immediately and *positionally*: measured on the served build,
+needles at byte offsets 1,489 (`DATA AS OF`) and 2,723 (`<svg role="img"`) returned 141 while
+identical lookups for needles at 6,773 and beyond returned 0. Five checks reported FAIL for
+strings that were plainly in the page.
+
+The false FAIL is the harmless half. **`check_not` took 141 down its else branch and printed
+`ok` for a needle that WAS present** — a gate passing for the wrong reason, in the one file
+this repo keeps specifically because the other gates can pass for the wrong reason. Every
+`check_not` in the file was one page-size increase away from going dark, including M4c's own
+"a route with no crossover emits no annotation".
+
+Fixed by dropping `-q`: without it grep reads its input to the end, `printf` always completes,
+and the status is grep's own. The helpers now route through `has`/`has_re` with the reasoning
+written above them, because the `-q` is exactly the kind of thing a later reader adds back as
+an optimisation.
+
+**Two of M4c's own smoke checks were then found weak by mutation, not by reading** — the same
+lesson `CLAUDE.md`'s workflow section now generalises. With the chart mutated out of the page,
+`fill="var(--g5)"` stayed green: the legend rail's fleet swatch is a `<rect>` drawn from the
+same token. The needle is now `<path fill="var(--g5)" d=`, which is a claim about a mark with
+geometry rather than about the rail standing next to it. Recorded mutants: mounting `false` in
+place of the chart element kills 5 chart checks; `hasMix = false` (chart, window line and
+legend group all gone) kills 8 of 10. The two survivors are survivors by design — "the rest of
+the page still server-renders" is a guard that *must* hold with the chart gone, and "no
+crossover, no annotation" is satisfied by an absent chart, which is precisely why it is paired
+with a positive on ATL–MCO that the same mutant does kill.
+
+### A needle that could never appear, and a `check_not` with nothing to lean on
+
+The `-q` fix above made every check report grep's own status. It did **not** make every check
+*meaningful*, and the final review found two that were not — neither of them a SIGPIPE problem.
+
+**A dark needle.** `check_not … 'can&rsquo;t be read'` was copied out of
+`explore/page.tsx`'s `<h1>This permalink can&rsquo;t be read</h1>`. **JSX decodes HTML entities
+in text at compile time**, and React's serializer escapes only `& < > " '` — U+2019 goes out as
+raw UTF-8. The literal string was never in the response, so the check printed `ok`
+unconditionally, *including* in the case it exists to catch: `/explore` rejecting the
+reserved-character permalink, the M3b regression that motivates `proxy.ts`. A guard that cannot
+fail is worse than no guard, because it reads as coverage. It is now a regex spanning the
+apostrophe (`permalink can.{1,6}t be read`), the same shape line 222 already used — and
+confirmed by mutation: forcing `/explore` to reject that permalink turns it red.
+
+**The whole file was swept for the class.** `grep -n '&[a-zA-Z]\+;\|&#'` over `src/` finds
+entities in five files (`page.tsx`, `not-found.tsx`, `explore/page.tsx`, `LegendRail.tsx`), and
+`can&rsquo;t be read` was the **only** smoke needle overlapping any of them. Two adjacent
+classes were checked too and are sound: `unknown airport code 'ZZZZ'` survives because that
+check reads the RSC flight payload, where the string is JSON-encoded and the apostrophes are
+intact (React escapes `'` to `&#x27;` in the HTML body — both forms are in the same response,
+and `smoke.sh` documents which one it is reading); and `data-below-floor="true"` is emitted by
+`DataTable` as that exact literal.
+
+**The last unpaired `check_not`.** `/` asserted only the *absence* of `vercel.com/new`, so an
+empty body, an error shell or a 500 satisfied it. It is now paired with two positives on the
+same body — the page's own `h1`, which nothing else in the app renders, and `DATA AS OF`, which
+is what makes `/` a data view rather than a splash.
+
+**The rule this generalises to:** a smoke needle crosses JSX, so it must be written in the
+bytes React emits, not in the bytes the source contains. Anything with an entity, an
+apostrophe, or an angle bracket in it needs a mutation run before it counts as coverage.
+
+M4c is built: **280 app tests** green (`make app-check`), **443 Python tests** green
+(`make check`), `make app-build` clean, `make app-smoke` green at **55 checks**, and
+`make goldens` byte-identical — this milestone touches no SQL, so any golden movement would
+have been a bug.
 
 ## Toolchain
 

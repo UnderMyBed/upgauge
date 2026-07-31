@@ -194,8 +194,9 @@ body { background: var(--panel); color: var(--ink); }
 }
 
 /* ---------- entity header (docs/design/mockups/entity-route.html: .entity/.code/.ename)
-   -- only the header portion. The route page (M4b) has no chart/fleet-mix content yet
-   (M4/M5); this is enough for the code + names above the carrier table. ---------- */
+   -- the code + names above the chart and the carrier table. The mockup's remaining chart
+   blocks (the multi-series load-factor lines and the seasonality heatmap) are still unbuilt;
+   the aircraft-mix chart landed in M4c and is styled by `.chart` below. ---------- */
 .entity {
   display: flex;
   align-items: baseline;
@@ -218,6 +219,66 @@ body { background: var(--panel); color: var(--ink); }
   color: var(--ink-2);
   padding: 6px 0 14px;
   margin: 0;
+}
+
+/* ---------- the chart block (docs/design/mockups/entity-route.html: .chart/.chead/.ckey)
+   -- the frame around a server-rendered Observable Plot SVG. The chart's own encoding lives
+   in the component and in globals.css's --g* ramp above; nothing here is chart-type
+   specific, so the load-factor chart and the seasonality heatmap reuse it unchanged. */
+.chart {
+  margin-bottom: 22px;
+}
+.chead {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  border-bottom: 1px solid var(--ink);
+  padding-bottom: 4px;
+  margin-bottom: 7px;
+}
+.ctitle {
+  font-size: 11px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+.csub {
+  font-size: 11px;
+  color: var(--ink-2);
+  flex: 1;
+}
+/* Plot's own :where(.plot) rule sets max-width/height:auto at zero specificity, so this wins
+   and the chart fills the content column instead of stopping at its 960px width attribute. */
+svg.plot {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+/* The colour key: which shade is which type, darkest first. The ramp is ordered, so this
+   doubles as the statement that reading it top-down is reading metal size down. */
+.ckey {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-top: 5px;
+  font-size: 10.5px;
+  color: var(--ink-2);
+}
+.ckey i {
+  display: inline-block;
+  width: 10px;
+  height: 9px;
+  margin-right: 4px;
+  vertical-align: -1px;
+  /* The ramp's lightest tokens are near-white on --panel; without this the swatch for --g0
+     reads as a gap in the key rather than as a colour. */
+  outline: 1px solid var(--rule);
+}
+.ckey .gnum {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--ink-3);
 }
 
 /* ---------- stat / meta strip (docs/design/system.md "Stat strip") ---------- */
