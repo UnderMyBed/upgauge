@@ -421,6 +421,20 @@ counting occurrences in a served response. That is inherent to rendering into
 of every chart. It is the number to watch when M4d puts this component on three more pages;
 a trivial two-mark probe page came to 18,762 bytes.
 
+Measured on the real shape — 136 months × 6 bands, which is what `/route` actually renders —
+one chart serializes to **28,609 bytes**, so it costs about **57 KB per response** once the
+flight-payload copy is counted. M4d mounting this on `/airport`, `/carrier` and `/aircraft`
+does not multiply a rounding error.
+
+**The jsdom document is created once for the module, not per call**, and the reason is worth
+recording because the first implementation assumed the opposite. Plot never appends its output
+into the document it is given: `plot.js:156` creates the root with d3's `creator("svg")` (the
+document only resolves the namespace), and `plot.js:360` returns it still detached. Measured: a
+shared document grew **0 bytes across 25 renders**. Sharing it takes a render from **8.59 ms to
+3.93 ms** — `new JSDOM()` alone is **5.21 ms**, more than the entire plot — on a `force-dynamic`
+page that pays this on every cache miss. `svg.test.ts` pins the no-accumulation property, so a
+future Plot release that starts appending fails a test rather than leaking memory in production.
+
 ## If the Dockerfile ever adopts `output: "standalone"`
 
 Next's standalone output traces the module graph and copies only what it finds. **`sql/` is
