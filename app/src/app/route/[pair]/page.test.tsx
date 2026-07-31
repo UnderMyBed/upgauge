@@ -345,9 +345,13 @@ describe("/route/<pair> aircraft-mix chart", () => {
 });
 
 describe("/route/<pair> canonical metadata (M5, Task 2)", () => {
+  // `http://localhost:3000` is `@/lib/siteUrl`'s own default with `UPGAUGE_BASE_URL` unset --
+  // NOT a hardcoded production hostname (fix round 1, Critical 1). See
+  // `src/lib/siteUrl.test.ts` for the env-var-override case; the point under test here is
+  // that the resolved PAIR is correct, not the host.
   it("declares the canonical URL for an already-canonical pair", async () => {
     const meta = await generateMetadata({ params: Promise.resolve({ pair: "JFK-LAX" }) });
-    expect(meta.alternates?.canonical).toBe("https://upgauge.shipman.dev/route/JFK-LAX");
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/route/JFK-LAX");
   });
 
   it("declares the CANONICAL (alphabetical) spelling for a reversed request, not the request", async () => {
@@ -355,7 +359,7 @@ describe("/route/<pair> canonical metadata (M5, Task 2)", () => {
     // renders this page in production (it 308s first), but the canonical tag must still name
     // the alphabetical pair, not `/route/LAX-JFK`, an already-canonical fixture cannot fail.
     const meta = await generateMetadata({ params: Promise.resolve({ pair: "LAX-JFK" }) });
-    expect(meta.alternates?.canonical).toBe("https://upgauge.shipman.dev/route/JFK-LAX");
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/route/JFK-LAX");
   });
 
   it("returns no canonical for a pair that cannot resolve at all", async () => {

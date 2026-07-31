@@ -692,17 +692,21 @@ have taken this with them.
 
 ## Environment variables
 
-The server (`app/src/lib/db.ts`) reads two, and M5's sitemap (`app/src/app/sitemap.ts`,
-`app/src/app/robots.ts`) reads a third. All three are optional — production sets none and gets
-the defaults below, which are what the Portability test and the WORKDIR contract assume.
+The server (`app/src/lib/db.ts`) reads two, and a third — read through the one shared
+`app/src/lib/siteUrl.ts` module, not re-declared per call site — backs both M5's sitemap
+(`app/src/app/sitemap.ts`, `app/src/app/robots.ts`) and the four entity pages' canonical
+`<link>` tags (`app/src/app/route/[pair]/page.tsx` and its `/airport`, `/carrier`, `/aircraft`
+siblings). All three are optional — production sets none and gets the defaults below, which
+are what the Portability test and the WORKDIR contract assume.
 
 | Var | Default | What it's for | What breaks if it's wrong |
 |---|---|---|---|
 | `UPGAUGE_ROOT` | `process.cwd()` | The directory containing `data/` and `sql/` — anchors both `upgauge.duckdb`'s default location and every `.sql` file read (`sql/03_queries/*.sql`). Also passed to DuckDB as `file_search_path`, so the catalog's relative Parquet globs (`read_parquet('data/parquet/...')`) resolve against it regardless of the process's actual OS working directory. | Set to the wrong directory: every `.sql` file read fails with ENOENT, and every query against a Parquet-backed view fails with `IO Error: No files found that match the pattern "data/parquet/..."` — the exact failure the Portability test section above describes, just triggered by a bad env var instead of a bad `WORKDIR`. |
 | `UPGAUGE_DB` | `${UPGAUGE_ROOT}/upgauge.duckdb` | Overrides the `.duckdb` file path directly, independent of `UPGAUGE_ROOT` — for a deploy that keeps the database file somewhere other than the repo-root default (e.g. a mounted volume). | Set to a path that doesn't exist or isn't a valid DuckDB file: `DuckDBInstance.create()` rejects and every route handler 500s. Note this does NOT relocate `data/parquet/` — that's still resolved via `UPGAUGE_ROOT`'s `file_search_path`, so pointing `UPGAUGE_DB` at a database file whose Parquet tree lives elsewhere still needs `UPGAUGE_ROOT` set to match. |
-| `UPGAUGE_BASE_URL` | `http://localhost:3000` | The scheme+host every `<loc>` in `/sitemap.xml` and the `Sitemap:` line in `/robots.txt` are prefixed with — the sitemap protocol requires a fully-qualified URL, and `sitemapEntries()` (`app/src/lib/sitemap.ts`) itself only ever returns a site-relative path, on purpose (CLAUDE.md's portability rule: no hardcoded hostname, Docker + env vars only). | Left at the default in a real deploy: the sitemap validates and crawls fine locally but every submitted `<loc>` points at `localhost`, so a crawler resolves none of them. |
+| `UPGAUGE_BASE_URL` | `http://localhost:3000` | The scheme+host every fully-qualified URL this app emits is prefixed with: every `<loc>` in `/sitemap.xml`, the `Sitemap:` line in `/robots.txt`, **and** (M5 Task 2) every entity page's self-referential `<link rel="canonical">`. The sitemap protocol requires a fully-qualified URL, `sitemapEntries()` (`app/src/lib/sitemap.ts`) and the entity resolvers alike only ever return a site-relative path or a bare code, on purpose (CLAUDE.md's portability rule: no hardcoded hostname, Docker + env vars only) — a hardcoded `https://upgauge.shipman.dev` was Task 2's fix-round-1 Critical finding. | Left at the default in a real deploy: the sitemap validates and crawls fine locally, and every entity page still renders, but every submitted `<loc>` and every canonical `<link>` points at `localhost`, so a crawler resolves none of them and every canonical tag is wrong for wherever this is actually served. |
 
 Neither of the first two is a substitute for the WORKDIR contract — they exist so the default
 (WORKDIR == repo root, both vars unset) needs no configuration, while still giving an operator
 an escape hatch if a deploy's directory layout genuinely can't match it. `UPGAUGE_BASE_URL` is
-unrelated to that contract; it exists only because a sitemap's `<loc>` cannot be relative.
+unrelated to that contract; it exists only because a fully-qualified URL cannot be built from a
+relative path alone.

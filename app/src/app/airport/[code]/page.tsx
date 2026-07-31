@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import { cache } from "react";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveAirportCode } from "./resolveAirport";
+import { BASE_URL } from "@/lib/siteUrl";
 import {
   AIRPORT_ENDPOINT_LIMIT,
   airportTotals,
@@ -29,9 +31,13 @@ export const dynamic = "force-dynamic";
 // any query against this database can have. Same constant, same value, as /route and /explore.
 const EARLIEST_MONTH = "2015-01";
 
-// Same reasoning, same value, as route/[pair]/page.tsx's identically-named constant --
-// docs/architecture/hosting.md's "Host at upgauge.shipman.dev".
-const SITE_URL = "https://upgauge.shipman.dev";
+// Same reasoning, same pattern, as route/[pair]/page.tsx's identically-named wrapper: dedupes
+// the slug resolution across `generateMetadata` and the default page export -- two separate
+// calls per request in this Next version -- without touching `resolveAirportCode` itself,
+// which `proxy.ts` also imports from a non-render context. Full rationale on the route page's
+// own copy of this comment; not verifiable by this project's Vitest suite (disclosed in
+// task-2-report.md).
+const resolveAirportCodeForRequest = cache((slug: string) => resolveAirportCode(slug));
 
 /** The trailing-12-month window the table always shows, computed from `asOf` exactly as
  * route/[pair]/page.tsx computes it (and as mart_route_health's own t12 window is): 11 months
@@ -279,7 +285,7 @@ export async function AirportView({
  * it verbatim -- `resolveAirportCode`'s "ok" branch has no `canonical` field of its own (an
  * airport code has one canonical FORM, unlike a route pair's two orderings -- resolveAirport.ts's
  * own header), so the canonical code is `airport.code` there and `resolved.canonical` on the
- * "redirect" branch. The bug this excludes: emitting `${SITE_URL}/airport/${slug}`, which would
+ * "redirect" branch. The bug this excludes: emitting `${BASE_URL}/airport/${slug}`, which would
  * make `/airport/sea` declare itself (lowercase) as canonical instead of `/airport/SEA`. */
 export async function generateMetadata({
   params,
@@ -287,10 +293,10 @@ export async function generateMetadata({
   params: Promise<{ code: string }>;
 }): Promise<Metadata> {
   const { code: slug } = await params;
-  const resolved = await resolveAirportCode(slug);
+  const resolved = await resolveAirportCodeForRequest(slug);
   if (resolved.kind === "notFound") return {};
   const canonical = resolved.kind === "redirect" ? resolved.canonical : resolved.airport.code;
-  return { alternates: { canonical: `${SITE_URL}/airport/${canonical}` } };
+  return { alternates: { canonical: `${BASE_URL}/airport/${canonical}` } };
 }
 
 /** Thin wrapper: resolve the slug, handle the three-way result, hand the "ok" case to
@@ -301,7 +307,7 @@ export default async function AirportPage({
   params: Promise<{ code: string }>;
 }) {
   const { code: slug } = await params;
-  const resolved = await resolveAirportCode(slug);
+  const resolved = await resolveAirportCodeForRequest(slug);
 
   if (resolved.kind === "redirect") {
     // 308, not 307: /airport/SEA IS the canonical URL for this airport, not a temporary

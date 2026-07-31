@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import { cache } from "react";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveAircraftSlug } from "@/lib/aircraftSlug";
+import { BASE_URL } from "@/lib/siteUrl";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
@@ -28,9 +30,12 @@ const AIRCRAFT_CARRIER_LIMIT = 50;
 // any query against this database can have, matching route/[pair]/page.tsx's constant.
 const EARLIEST_MONTH = "2015-01";
 
-// Same reasoning, same value, as route/[pair]/page.tsx's identically-named constant --
-// docs/architecture/hosting.md's "Host at upgauge.shipman.dev".
-const SITE_URL = "https://upgauge.shipman.dev";
+// Same reasoning, same pattern, as route/[pair]/page.tsx's identically-named wrapper: dedupes
+// the slug resolution across `generateMetadata` and the default page export without touching
+// `resolveAircraftSlug` itself, which `proxy.ts` also imports from a non-render context. Full
+// rationale on the route page's own copy of this comment; not verifiable by this project's
+// Vitest suite (disclosed in task-2-report.md).
+const resolveAircraftSlugForRequest = cache((slug: string) => resolveAircraftSlug(slug));
 
 /** The trailing-12-month window this page always shows, computed from `asOf` the same way
  * mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql:
@@ -287,9 +292,9 @@ export async function generateMetadata({
   params: Promise<{ name: string }>;
 }): Promise<Metadata> {
   const { name: slug } = await params;
-  const resolved = await resolveAircraftSlug(slug);
+  const resolved = await resolveAircraftSlugForRequest(slug);
   if (resolved.kind !== "ok" && resolved.kind !== "redirect") return {};
-  return { alternates: { canonical: `${SITE_URL}/aircraft/${resolved.canonical}` } };
+  return { alternates: { canonical: `${BASE_URL}/aircraft/${resolved.canonical}` } };
 }
 
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the four-way
@@ -304,7 +309,7 @@ export async function generateMetadata({
  * link for each, which is the honest form of "we will not pick one for you". */
 export default async function AircraftPage({ params }: { params: Promise<{ name: string }> }) {
   const { name: slug } = await params;
-  const resolved = await resolveAircraftSlug(slug);
+  const resolved = await resolveAircraftSlugForRequest(slug);
 
   if (resolved.kind === "redirect") {
     // permanentRedirect -> 308, not redirect()'s 307: the uppercased slug IS the canonical URL

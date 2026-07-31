@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import { cache } from "react";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveRoutePair } from "@/lib/routePair";
+import { BASE_URL } from "@/lib/siteUrl";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
@@ -30,11 +32,31 @@ const ROUTE_CARRIER_LIMIT = 50;
 // same name and value.
 const EARLIEST_MONTH = "2015-01";
 
-// docs/architecture/hosting.md: "Host at upgauge.shipman.dev". `alternates.canonical` needs a
-// fully-qualified URL (Next's Metadata API would otherwise fall back to a local
-// http://localhost origin -- node_modules/next/dist/lib/metadata/resolvers/resolve-url.js's
-// createLocalMetadataBase()), so this is written out rather than left as a relative path.
-const SITE_URL = "https://upgauge.shipman.dev";
+/** Memoizes the slug resolution FOR THE DURATION OF ONE REQUEST's render. Next invokes
+ * `generateMetadata` and the default page export as two separate calls for the same request
+ * (`node_modules/next/dist/docs/01-app/03-api-reference/04-functions/generate-metadata.md`'s
+ * own "Memoizing data requests" section documents exactly this shape, with the identical
+ * `cache(async (slug) => …)` pattern used both places), so without this the resolver -- a
+ * DB-backed query -- ran twice on every successful render (fix round 1, Important 2).
+ *
+ * Wrapped HERE, at the page layer, rather than inside `routePair.ts`: `proxy.ts` imports
+ * `resolveRoutePair` directly from a proxy context, which is not a React render, and React's
+ * `cache()` only memoizes inside an ACTIVE Server Components render -- it reads
+ * `ReactSharedInternals.A`, the current dispatcher (`react.react-server.development.js`);
+ * outside a render (confirmed against that source, and against a bare Node call: `cache((x) =>
+ * x)(1)` called twice runs the wrapped function twice) it degrades to calling straight
+ * through -- never throws, never dedupes. Wrapping the shared module would silently change
+ * proxy.ts's semantics for a concurrent, unrelated task's file; wrapping it here changes only
+ * this page.
+ *
+ * NOT independently verifiable by this project's Vitest suite: the tests call
+ * `generateMetadata()` and `RoutePage()` as ordinary function invocations with no shared
+ * request-scoped React dispatcher (the same limitation `RoutePage`'s own header comment
+ * already states for a different reason -- these tests render through react-dom's client
+ * renderer, not Next's RSC renderer), so a call-count assertion here would be measuring the
+ * test harness, not the dedup. Disclosed, not silently assumed, in task-2-report.md;
+ * `make app-smoke` against a served build is what would measure it. */
+const resolveRoutePairForRequest = cache((slug: string) => resolveRoutePair(slug));
 
 /** The trailing-12-month window this page always shows, computed from `asOf` the same way
  * mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql:
@@ -340,9 +362,9 @@ export async function generateMetadata({
   params: Promise<{ pair: string }>;
 }): Promise<Metadata> {
   const { pair: slug } = await params;
-  const resolved = await resolveRoutePair(slug);
+  const resolved = await resolveRoutePairForRequest(slug);
   if (resolved.kind === "notFound") return {};
-  return { alternates: { canonical: `${SITE_URL}/route/${resolved.canonical}` } };
+  return { alternates: { canonical: `${BASE_URL}/route/${resolved.canonical}` } };
 }
 
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the three-way
@@ -355,7 +377,7 @@ export default async function RoutePage({
   params: Promise<{ pair: string }>;
 }) {
   const { pair: slug } = await params;
-  const resolved = await resolveRoutePair(slug);
+  const resolved = await resolveRoutePairForRequest(slug);
 
   if (resolved.kind === "redirect") {
     // permanentRedirect -> 308: this IS the canonical URL for this route pair (routePair.ts's

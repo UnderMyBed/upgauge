@@ -179,7 +179,7 @@ describe("/aircraft/<slug> redirect and 404", () => {
 describe("/aircraft/<slug> canonical metadata (M5, Task 2)", () => {
   it("declares the canonical URL for an already-canonical slug", async () => {
     const meta = await generateMetadata({ params: Promise.resolve({ name: "B737-8" }) });
-    expect(meta.alternates?.canonical).toBe("https://upgauge.shipman.dev/aircraft/B737-8");
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/aircraft/B737-8");
   });
 
   it("declares the UPPERCASED slug for a lowercase request, not the request", async () => {
@@ -188,7 +188,7 @@ describe("/aircraft/<slug> canonical metadata (M5, Task 2)", () => {
     // canonical tag must still name the uppercased slug -- never the unroutable raw short
     // name (`A321/LR`) either.
     const meta = await generateMetadata({ params: Promise.resolve({ name: "a321-lr" }) });
-    expect(meta.alternates?.canonical).toBe("https://upgauge.shipman.dev/aircraft/A321-LR");
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/aircraft/A321-LR");
   });
 
   it("returns no canonical for a slug that cannot resolve at all", async () => {

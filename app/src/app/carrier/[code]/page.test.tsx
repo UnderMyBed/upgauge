@@ -265,7 +265,7 @@ describe("/carrier/<code> redirect and 404", () => {
 describe("/carrier/<code> canonical metadata (M5, Task 2)", () => {
   it("declares the canonical URL for an already-canonical code", async () => {
     const meta = await generateMetadata({ params: Promise.resolve({ code: "DL" }) });
-    expect(meta.alternates?.canonical).toBe("https://upgauge.shipman.dev/carrier/DL");
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/carrier/DL");
   });
 
   it("declares dim_carrier's own spelling for a lowercase request, not the request", async () => {
@@ -273,7 +273,7 @@ describe("/carrier/<code> canonical metadata (M5, Task 2)", () => {
     // /carrier/dl never renders this page in production (it 308s first), but the canonical
     // tag must still name `dim_carrier`'s own code.
     const meta = await generateMetadata({ params: Promise.resolve({ code: "dl" }) });
-    expect(meta.alternates?.canonical).toBe("https://upgauge.shipman.dev/carrier/DL");
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/carrier/DL");
   });
 
   it("returns no canonical for a code that cannot resolve at all", async () => {

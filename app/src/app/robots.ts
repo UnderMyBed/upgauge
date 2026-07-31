@@ -1,10 +1,9 @@
 import type { MetadataRoute } from "next";
+import { BASE_URL } from "@/lib/siteUrl";
 
-// Same env var, same default, as app/sitemap.ts -- kept as two separate reads rather than a
-// shared constant module because these are the only two consumers and Next resolves each
-// file convention independently at the routing layer; a shared import would not save
-// anything a comment doesn't already say.
-const BASE_URL = process.env.UPGAUGE_BASE_URL ?? "http://localhost:3000";
+// Same shared constant as app/sitemap.ts and the four entity pages' canonical <link> tags
+// (M5 Task 2 fix round 1, Critical 1) -- one definition of `UPGAUGE_BASE_URL`'s default
+// rather than each consumer re-declaring the same literal.
 
 /** `/search` is disallowed for the same reason Task 8's proxy gives it `no-store` rather than
  * the project's 30-day cache: `q` is an unbounded, attacker-chosen string, and a crawler

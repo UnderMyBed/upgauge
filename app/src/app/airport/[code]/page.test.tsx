@@ -255,7 +255,7 @@ describe("/airport/<code> redirect and 404", () => {
 describe("/airport/<code> canonical metadata (M5, Task 2)", () => {
   it("declares the canonical URL for an already-canonical code", async () => {
     const meta = await generateMetadata({ params: Promise.resolve({ code: "SEA" }) });
-    expect(meta.alternates?.canonical).toBe("https://upgauge.shipman.dev/airport/SEA");
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/airport/SEA");
   });
 
   it("declares the UPPERCASED spelling for a lowercase request, not the request", async () => {
@@ -263,7 +263,7 @@ describe("/airport/<code> canonical metadata (M5, Task 2)", () => {
     // the requested spelling. /airport/sea never renders this page in production (it 308s
     // first), but the canonical tag must still name the uppercase code.
     const meta = await generateMetadata({ params: Promise.resolve({ code: "sea" }) });
-    expect(meta.alternates?.canonical).toBe("https://upgauge.shipman.dev/airport/SEA");
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/airport/SEA");
   });
 
   it("returns no canonical for a code that cannot resolve at all", async () => {

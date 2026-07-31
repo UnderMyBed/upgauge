@@ -1,13 +1,6 @@
 import type { MetadataRoute } from "next";
 import { sitemapEntries } from "@/lib/sitemap";
-
-/** Base URL env var, matching this project's `UPGAUGE_*` naming convention (db.ts's
- * `UPGAUGE_ROOT` / `UPGAUGE_DB`). Absolute URLs are what the sitemap protocol requires
- * (`<loc>` must be fully-qualified -- sitemaps.org), so a relative path from
- * `sitemapEntries()` alone is not enough, and the production hostname cannot be hardcoded
- * here -- CLAUDE.md's portability rule is "Docker + Parquet + env vars only", so a sensible
- * local default is what this reads without one set. */
-const BASE_URL = process.env.UPGAUGE_BASE_URL ?? "http://localhost:3000";
+import { BASE_URL } from "@/lib/siteUrl";
 
 /** The full crawl graph: every entity page this dataset can serve today, each dated by its
  * OWN last-filed month rather than the build date (`@/lib/sitemap`'s header explains why that

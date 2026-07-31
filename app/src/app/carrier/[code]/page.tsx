@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import { cache } from "react";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveCarrier } from "@/lib/carrier";
+import { BASE_URL } from "@/lib/siteUrl";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
@@ -28,9 +30,12 @@ const CARRIER_TYPE_LIMIT = 100;
 // explore/page.tsx and route/[pair]/page.tsx.
 const EARLIEST_MONTH = "2015-01";
 
-// Same reasoning, same value, as route/[pair]/page.tsx's identically-named constant --
-// docs/architecture/hosting.md's "Host at upgauge.shipman.dev".
-const SITE_URL = "https://upgauge.shipman.dev";
+// Same reasoning, same pattern, as route/[pair]/page.tsx's identically-named wrapper: dedupes
+// the slug resolution across `generateMetadata` and the default page export without touching
+// `resolveCarrier` itself, which `proxy.ts` also imports from a non-render context. Full
+// rationale on the route page's own copy of this comment; not verifiable by this project's
+// Vitest suite (disclosed in task-2-report.md).
+const resolveCarrierForRequest = cache((slug: string) => resolveCarrier(slug));
 
 /** The trailing-12-month window this page always shows, computed from `asOf` the same way
  * mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql). */
@@ -312,7 +317,7 @@ export async function CarrierView({
 /** The self-referential canonical `<link>`, re-resolved from the slug rather than built from
  * it verbatim. `resolveCarrier`'s "ok" and "redirect" outcomes both carry `canonical` (lib/
  * carrier.ts: `dim_carrier`'s own spelling, never `wanted`), so `/carrier/dl` declares
- * `/carrier/DL` -- the bug this excludes is emitting `${SITE_URL}/carrier/${slug}` and having
+ * `/carrier/DL` -- the bug this excludes is emitting `${BASE_URL}/carrier/${slug}` and having
  * the lowercase request declare itself canonical. */
 export async function generateMetadata({
   params,
@@ -320,9 +325,9 @@ export async function generateMetadata({
   params: Promise<{ code: string }>;
 }): Promise<Metadata> {
   const { code: slug } = await params;
-  const resolved = await resolveCarrier(slug);
+  const resolved = await resolveCarrierForRequest(slug);
   if (resolved.kind === "notFound") return {};
-  return { alternates: { canonical: `${SITE_URL}/carrier/${resolved.canonical}` } };
+  return { alternates: { canonical: `${BASE_URL}/carrier/${resolved.canonical}` } };
 }
 
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the three-way
@@ -334,7 +339,7 @@ export default async function CarrierPage({
   params: Promise<{ code: string }>;
 }) {
   const { code: slug } = await params;
-  const resolved = await resolveCarrier(slug);
+  const resolved = await resolveCarrierForRequest(slug);
 
   if (resolved.kind === "redirect") {
     // 308, not 307: /carrier/DL IS the canonical URL for this carrier, not a temporary
