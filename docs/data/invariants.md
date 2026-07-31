@@ -506,6 +506,77 @@ destination-only airports. Two other rewrites were measured and rejected: `id IN
 id IN (dests)` is 80 ms (two mark joins, no shared scan), and `UNION ALL` in place of `UNION`
 is 21–22 ms (6.7 M probe values instead of 1,045 distinct ones).
 
+### The other two reverse lookups (M4d)
+
+`/carrier/<code>` and `/aircraft/<short_name>` need the same code → id direction, via
+`sql/03_queries/lookup_carrier_by_code.sql` and `lookup_aircraft_by_name.sql`. Both are
+modelled on the airport file and both carry its fact-presence semi-join, measured warm and
+read-only against the correlated `EXISTS` form they replace:
+
+| lookup | correlated `EXISTS` | plain `IN (SELECT col …)` | shipped (`IN (SELECT DISTINCT col …)`) |
+|---|---|---|---|
+| carrier | 15.1–15.8 ms | 4.6–5.6 ms | **3.5–4.0 ms** |
+| aircraft | 23.2–24.5 ms | 4.9–5.1 ms | **4.5–4.6 ms** |
+
+Neither needs an `is_latest` analogue, and that is measured rather than assumed: `dim_carrier`
+is one row per `airline_id` and `dim_aircraft_type` one row per `code` (0 ids with more than
+one row, either table), so there is no seq chain to collapse and nothing to fan out.
+
+**For carriers the fact-presence filter is the *whole* of what makes a code a key**, since
+there is no `is_latest` to share the load. Unscoped, **112** `carrier_code`s map to more than
+one `airline_id`; scoped to the 114 airlines that actually filed a T-100 Segment row, **0** do.
+`VX` is the `AUS` shape exactly — `airline_id` 21171 "Virgin America" (real in-window traffic)
+and 19995 "Aces Airlines" (a defunct Colombian carrier, 0 filed rows). `CP` fans out to three.
+
+**For aircraft the filter is not enough, and this is where the airport result stops
+generalising.** 12 `short_name`s map to more than one `code` across `dim_aircraft_type`;
+fact-presence takes that to **1**, not to 0:
+
+| `short_name` | code | designation | rows | seats | departures | filed |
+|---|---|---|---|---|---|---|
+| `CE-180` | `030` | CESSNA 180 | 183 | 994 | 441 | 2015-01 → 2024-07 |
+| `CE-180` | `031` | CESSNA 180A/B | 131 | 557 | 189 | 2016-05 → 2025-11 |
+
+Both really flew, so **no scoping resolves this and neither code is the right answer**.
+Restricting to the trailing 12 months makes the collision vanish *today* — only `031` filed in
+the current window, which is why the M4d brief records in-window collisions as 0 — and brings
+it back the first month both types file. That would be the worst available failure shape: a
+production error on a URL that worked last month, arriving as data rather than as a code
+change. The scope stays all-time.
+
+**So the decision is: a colliding slug fails loudly, and carries its candidates.**
+`app/src/lib/resolve.ts`'s `insertUniqueByCode` refuses to fold a repeated slug into its map
+and throws `AmbiguousCodeError`, which is a distinct class rather than a bare `Error` for one
+reason — for aircraft this is not a should-never-happen, so `/aircraft/CE-180` is a *reachable*
+URL and the page for it must name both airframes. The error therefore carries `code` and the
+full `ids` list, so a caller renders a disambiguation instead of re-parsing a message. Nothing
+is left in the map on collision: a half-populated map is how "fail loudly" decays back into
+the arbitrary first-row-wins answer the guard exists to refuse.
+
+The alarm for a *new* collision is
+`test_aircraft_reverse_lookup_collides_on_exactly_the_known_CE_180_pair`, which pins the
+colliding set **exactly** — `[("CE-180", ["030", "031"])]` — rather than asserting `<= 1` or
+excluding `CE-180`. A second ambiguous short name would pass any weaker assertion in silence
+and then surface as a 500 nobody signed off on. This is the M4a lesson applied deliberately:
+that milestone's collision test could not see the `AUS` pair because of how it was scoped.
+
+**One gap is recorded rather than closed.** The column-side `upper()` in both new lookups is
+inert against today's data — 0 lower-case `carrier_code`s, and the single lower-case
+`short_name` (`330-9neo`, code 824) has never filed a row, so the fact-presence clause removes
+the only row that would notice. Mutation-tested: removing either `upper()` kills no test. Both
+are kept, because the day BTS files an A330-900neo that fold is the only thing making
+`/aircraft/330-9NEO` resolve, and its absence would be a silent 404. Case-insensitivity that
+*is* exercised lives in `runSlugLookup`'s input fold (removing it reddens three tests).
+
+**16 fact-present `short_name`s are not URL path segments**: `A321/LR`, `A320-1/2`, `B767-2/R`,
+`B767-3/R`, `CE-206/7`, `CL-604/5`, `CRJ-2/4`, `RJ100/ER`, `SF-340/B`, `FLT/AMPH` carry a `/`,
+and `AS350 B2`, `DO-328 J`, `MAX 8`, `MAX 8-20`, `MAX 9`, `METRO 23` carry a space. Percent-
+encoding is not an option here — `app/src/proxy.ts` exists because Next re-encodes the query
+string, and `%2F` in a path is its own hazard. Replacing both characters with `-` **is
+injective over all 111 fact-present short names** (0 collisions, measured), so it is a safe
+slug scheme; `test_aircraft_short_names_survive_a_url_path_segment` pins that so a future
+refresh that makes it unsafe fails a test rather than a route.
+
 ---
 
 ## Where these are enforced

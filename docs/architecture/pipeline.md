@@ -813,6 +813,19 @@ the rejected variants and the mutation that fails it are in
 [`invariants.md` § Entity resolution](../data/invariants.md) and
 [`hosting.md` § What the proxy's query actually costs](hosting.md#what-the-proxys-query-actually-costs).
 
+**M4d added the other two reverse lookups — and the aircraft one does not land where this one
+did.** `lookup_carrier_by_code.sql` behaves identically to the airport file: the fact-presence
+clause is what makes the slug a key (112 colliding `carrier_code`s unscoped, 0 among the 114
+airlines that filed). `lookup_aircraft_by_name.sql` does not: fact-presence takes colliding
+`short_name`s from 12 to **1**, not to 0, because `CE-180` names two BTS codes that *both*
+really flew. So for aircraft the fail-loud guard is the entire defence rather than a
+belt-and-braces backstop, and a colliding slug throws `AmbiguousCodeError` carrying every
+candidate id — `/aircraft/CE-180` is a reachable URL whose page must name both airframes, not
+pick one. Why no scoping fixes it, why narrowing to the trailing 12 months would be the worst
+available "fix", the two surviving mutants recorded rather than papered over, and the 16
+short names that are not URL path segments:
+[`invariants.md` § The other two reverse lookups](../data/invariants.md#entity-resolution-m4a).
+
 ### Page composition and truncation
 
 The stat strip's `LOAD FACTOR` and `AVG GAUGE` are computed in TypeScript from the summed

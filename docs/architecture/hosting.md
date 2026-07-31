@@ -305,6 +305,14 @@ server runs with — `db.ts` never sets `threads`) and, in brackets, capped to `
 | `lookup_airport_by_code.sql` (the proxy's, and the page's) | 43–51 ms [same] | **8 ms** [17 ms] | filters `dim_airport` by presence in `fct_segment_month` — 3.36 M rows, not a dimension read |
 | `lookup_airport_code_exists.sql` (404 reason only) | 1.8–2.4 ms | unchanged | genuinely dimension-only |
 | A `/route/JFK-LAX` carriers pivot | ~7–9 ms | unchanged | the query the lookup precedes |
+| `lookup_carrier_by_code.sql` (M4d, `/carrier/*`) | — | **3.6–3.7 ms** | same method; correlated `EXISTS` was 15.1–15.8 ms |
+| `lookup_aircraft_by_name.sql` (M4d, `/aircraft/*`) | — | **4.6–4.8 ms** | same method; correlated `EXISTS` was 23.2–24.5 ms |
+
+The two M4d rows were measured in the same run as the `lookup_airport_by_code.sql` row above,
+which reproduced at 8.5–9.1 ms — so they are comparable rather than merely adjacent. Both are
+cheaper than the airport lookup because they probe a single fact column instead of a union of
+two; both use `IN (SELECT DISTINCT col …)` rather than the plain `IN (SELECT col …)` for the
+same reason `UNION` beat `UNION ALL` there — 114 and 112 distinct probe values against 3.36 M.
 
 **`/route` runs TWO pivots, and the second one is the larger.** M4c mounted the aircraft-mix
 chart on this page without updating this table, which is the table that exists because M4d is

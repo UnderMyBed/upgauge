@@ -10,6 +10,8 @@ import pytest
 
 DB = Path("upgauge.duckdb")
 LOOKUP_SQL = Path("sql/03_queries/lookup_airport_by_code.sql")
+CARRIER_LOOKUP_SQL = Path("sql/03_queries/lookup_carrier_by_code.sql")
+AIRCRAFT_LOOKUP_SQL = Path("sql/03_queries/lookup_aircraft_by_name.sql")
 pytestmark = pytest.mark.skipif(not DB.exists(), reason="no built catalog; run `make build`")
 
 # NOTE for the implementer and reviewer: this skip is legitimate (the catalog is a build
@@ -32,9 +34,15 @@ def _lookup_over_every_code() -> str:
     (app/src/lib/resolve.ts); a parenthesised sub-SELECT is equally valid there and is what
     turns a two-code lookup into an exhaustive one. Reading the real file rather than a copy
     is the point: a copy would keep passing after someone edits the file."""
-    statement = LOOKUP_SQL.read_text()
-    assert statement.count("{{IDS}}") == 1, "the substitution token moved or was duplicated"
-    return statement.replace("{{IDS}}", "(SELECT upper(code) FROM dim_airport WHERE is_latest)")
+    return _over_every(LOOKUP_SQL, "SELECT upper(code) FROM dim_airport WHERE is_latest")
+
+
+def _over_every(sql_path: Path, roster: str) -> str:
+    """The same trick, generalised for M4d's two new reverse lookups: read the SHIPPED file
+    and substitute a sub-SELECT over the whole slug roster for the bound-parameter list."""
+    statement = sql_path.read_text()
+    assert statement.count("{{IDS}}") == 1, f"{sql_path}: token moved or was duplicated"
+    return statement.replace("{{IDS}}", f"({roster})")
 
 
 def test_reverse_lookup_selects_exactly_the_fact_present_current_airports(con):
@@ -156,3 +164,137 @@ def test_no_code_collisions_among_in_window_operators(con):
         "WHERE a.is_latest GROUP BY 1 HAVING count(DISTINCT a.airport_id) > 1)"
     ).fetchone()[0]
     assert airport == 0
+
+
+# ---------------------------------------------------------------------------------------
+# M4d: the carrier and aircraft reverse lookups. Same shape as the airport ones above, and
+# for the same reason -- but the aircraft one lands on a different answer, which is the point
+# of measuring both rather than assuming the airport result generalises.
+# ---------------------------------------------------------------------------------------
+
+
+def _carrier_lookup_over_every_code() -> str:
+    return _over_every(CARRIER_LOOKUP_SQL, "SELECT upper(carrier_code) FROM dim_carrier")
+
+
+def _aircraft_lookup_over_every_name() -> str:
+    return _over_every(
+        AIRCRAFT_LOOKUP_SQL, "SELECT upper(short_name) FROM dim_aircraft_type"
+    )
+
+
+def test_carrier_reverse_lookup_returns_at_most_one_airline_per_code(con):
+    """carrier_code -> airline_id must be a function, or /carrier/VX resolves to Aces
+    Airlines -- a defunct Colombian carrier with zero filed rows -- instead of Virgin America.
+
+    dim_carrier has no `is_latest` analogue to lean on (v0 collapses Carrier Decode to one row
+    per airline_id), so the fact-presence filter is the ONLY thing making a code a key here.
+    The second half measures that rather than asserting it from memory: unscoped, 112 codes
+    map to more than one airline_id."""
+    resolved_n, colliding = con.execute(f"""
+      WITH shipped AS ({_carrier_lookup_over_every_code()})
+      SELECT (SELECT count(*) FROM shipped),
+             (SELECT count(*) FROM (
+                SELECT code FROM shipped GROUP BY 1 HAVING count(DISTINCT id) > 1))
+    """).fetchone()
+    # Guards the vacuous pass: a predicate filtering EVERYTHING out also has no collisions.
+    # 114 airlines filed a T-100 Segment row over 2015-2026.
+    assert resolved_n == 114
+    assert colliding == 0
+
+    without_the_filter = con.execute("""
+      SELECT count(*) FROM (
+        SELECT upper(carrier_code) FROM dim_carrier
+        GROUP BY 1 HAVING count(DISTINCT airline_id) > 1)
+    """).fetchone()[0]
+    assert without_the_filter > 0
+
+
+def test_aircraft_reverse_lookup_collides_on_exactly_the_known_CE_180_pair(con):
+    """The alarm for a NEW aircraft slug collision.
+
+    This is where the airport result does NOT generalise, and the whole reason the fail-loud
+    guard in app/src/lib/resolve.ts is the defence rather than the SQL filter. For airports,
+    fact-presence takes collisions 36 -> 0. For aircraft it takes 12 -> 1: `CE-180` names code
+    030 (CESSNA 180) AND code 031 (CESSNA 180A/B), both with real filed traffic, so no scoping
+    resolves it and neither answer is right.
+
+    Pinning the colliding set EXACTLY -- rather than asserting `<= 1` or excluding CE-180 --
+    is deliberate. A future BTS refresh that introduces a second ambiguous short_name would
+    pass any weaker assertion silently, and the resulting /aircraft/<slug> would 500 in
+    production with nobody having decided that was acceptable. Failing here instead is the
+    "impossible to miss" half of this milestone's collision decision."""
+    colliding = con.execute(f"""
+      WITH shipped AS ({_aircraft_lookup_over_every_name()})
+      SELECT code, list(id ORDER BY id) FROM shipped GROUP BY 1 HAVING count(DISTINCT id) > 1
+    """).fetchall()
+    assert colliding == [("CE-180", ["030", "031"])]
+
+    # Vacuity guard, and the counterpart to the carrier count above: 112 aircraft types filed
+    # a row over 2015-2026, mapping to 111 distinct short names -- the difference IS CE-180.
+    resolved_n, distinct_names = con.execute(f"""
+      WITH shipped AS ({_aircraft_lookup_over_every_name()})
+      SELECT count(*), count(DISTINCT code) FROM shipped
+    """).fetchone()
+    assert (resolved_n, distinct_names) == (112, 111)
+
+    without_the_filter = con.execute("""
+      SELECT count(*) FROM (
+        SELECT upper(short_name) FROM dim_aircraft_type
+        GROUP BY 1 HAVING count(DISTINCT code) > 1)
+    """).fetchone()[0]
+    assert without_the_filter == 12
+
+
+def test_new_reverse_lookups_select_exactly_the_fact_present_entities(con):
+    """Both new fact-presence clauses must select exactly what a correlated EXISTS selects.
+
+    Same instrument as `test_reverse_lookup_selects_exactly_the_fact_present_current_airports`
+    above, and the same risk: the clause is written as a semi-join for speed (correlated
+    EXISTS measured 15 ms carrier / 23 ms aircraft against 4 ms for the shipped form), and any
+    future rewrite of it must not change WHICH entities resolve. The reference set is written
+    in the other form on purpose -- comparing the file against a copy of its own predicate
+    would be a tautology."""
+    carrier_extra, carrier_missing = con.execute(f"""
+      WITH shipped AS ({_carrier_lookup_over_every_code()}),
+           reference AS (
+             SELECT airline_id AS id FROM dim_carrier WHERE EXISTS (
+                 SELECT 1 FROM fct_segment_month f
+                 WHERE f.op_airline_id = dim_carrier.airline_id))
+      SELECT (SELECT count(*) FROM (SELECT id FROM shipped EXCEPT SELECT id FROM reference)),
+             (SELECT count(*) FROM (SELECT id FROM reference EXCEPT SELECT id FROM shipped))
+    """).fetchone()
+    assert (carrier_extra, carrier_missing) == (0, 0)
+
+    aircraft_extra, aircraft_missing = con.execute(f"""
+      WITH shipped AS ({_aircraft_lookup_over_every_name()}),
+           reference AS (
+             SELECT code AS id FROM dim_aircraft_type WHERE EXISTS (
+                 SELECT 1 FROM fct_segment_month f
+                 WHERE f.aircraft_type = dim_aircraft_type.code))
+      SELECT (SELECT count(*) FROM (SELECT id FROM shipped EXCEPT SELECT id FROM reference)),
+             (SELECT count(*) FROM (SELECT id FROM reference EXCEPT SELECT id FROM shipped))
+    """).fetchone()
+    assert (aircraft_extra, aircraft_missing) == (0, 0)
+
+
+def test_aircraft_short_names_survive_a_url_path_segment(con):
+    """16 fact-present short names carry a `/` or a space -- `A321/LR`, `MAX 8`, `FLT/AMPH` --
+    so `/aircraft/<short_name>` is not expressible as a single path segment for them.
+
+    This is a Task 1 finding recorded where the fix has to live, not a Task 1 fix: the slug
+    scheme is the entity page's decision. What this pins is the measurement that decision
+    needs -- replacing `/` and ` ` with `-` is INJECTIVE over the 111 fact-present short names
+    (0 collisions), so it is a safe scheme, and this test fails the day a BTS refresh makes it
+    unsafe. See docs/data/invariants.md § Entity resolution."""
+    awkward, slug_collisions = con.execute("""
+      WITH present AS (
+        SELECT DISTINCT short_name FROM dim_aircraft_type
+        WHERE code IN (SELECT DISTINCT aircraft_type FROM fct_segment_month))
+      SELECT (SELECT count(*) FROM present WHERE regexp_matches(short_name, '[^A-Z0-9-]')),
+             (SELECT count(*) FROM (
+                SELECT upper(replace(replace(short_name, '/', '-'), ' ', '-')) AS slug
+                FROM present GROUP BY 1 HAVING count(*) > 1))
+    """).fetchone()
+    assert awkward == 16
+    assert slug_collisions == 0

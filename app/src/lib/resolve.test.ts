@@ -8,7 +8,11 @@ import {
   displayValue,
   RESOLVER_FILE,
   lookupAirportsByCode,
+  lookupCarriersByCode,
+  lookupAircraftByName,
   insertAirportRow,
+  insertUniqueByCode,
+  AmbiguousCodeError,
   type AirportRef,
 } from "@/lib/resolve";
 import { connect, loadAllowlist } from "@/lib/db";
@@ -297,3 +301,240 @@ describe("lookup_airport_by_code.sql's cardinality guard", () => {
     expect(rows[0].id).toBe(12478);
   });
 });
+
+// ---------------------------------------------------------------------------------------
+// M4d Task 1: the carrier and aircraft reverse lookups.
+//
+// Both are modelled on lookup_airport_by_code.sql and both carry its two defences -- the
+// fact-presence filter and the fail-loud collision guard -- for the reason the AUS incident
+// established: a slug -> id map that silently keeps the last row it saw resolves an entity
+// nobody asked for, under a DATA AS OF badge. What differs is that for aircraft the collision
+// is not hypothetical. `CE-180` really does name two fact-present BTS codes, so the guard is
+// exercised here by real data rather than by a synthetic pair.
+// ---------------------------------------------------------------------------------------
+
+describe("lookupCarriersByCode", () => {
+  it("resolves a code to its airline_id, current code and name", async () => {
+    const m = await lookupCarriersByCode(["DL"]);
+    expect(m.get("DL")).toEqual({ id: 19790, code: "DL", name: "Delta Air Lines Inc." });
+  });
+
+  it("is case-insensitive, keyed by the uppercased code", async () => {
+    // Red if runSlugLookup stops uppercasing the INPUT -- verified by mutation, not assumed.
+    // It is NOT red if the .sql predicate's column-side `upper()` is removed: dim_carrier
+    // stores 0 lower-case codes, so that fold is inert against today's data. Recorded in that
+    // file's header rather than papered over; there is no fixture that can kill it.
+    const m = await lookupCarriersByCode(["dl"]);
+    expect(m.get("DL")?.id).toBe(19790);
+  });
+
+  it("omits an unknown code rather than inventing one", async () => {
+    const m = await lookupCarriersByCode(["ZZ9"]);
+    expect(m.has("ZZ9")).toBe(false);
+  });
+
+  it("resolves several codes in one query", async () => {
+    const m = await lookupCarriersByCode(["DL", "AS"]);
+    expect(m.get("DL")?.id).toBe(19790);
+    expect(m.get("AS")?.id).toBe(19930);
+  });
+
+  it("returns an empty map for no codes rather than emitting `IN ()`", async () => {
+    // Red if runSlugLookup's early return goes: the substitution would produce `IN ()`, which
+    // is a DuckDB parse error at execution rather than an empty result. All four lookups
+    // carried their own copy of this guard before it was pulled into runSlugLookup, so it is
+    // now one branch four callers depend on -- worth one assertion.
+    expect((await lookupCarriersByCode([])).size).toBe(0);
+    expect((await lookupCarriersByCode([""])).size).toBe(0);
+  });
+
+  it("resolves VX to Virgin America, not the defunct Aces Airlines", async () => {
+    // The AUS shape, for carriers. `carrier_code` is reused -- 112 codes map to more than one
+    // airline_id across dim_carrier -- and dim_carrier has no `is_latest` analogue to lean on
+    // (it is already one row per airline_id, measured: 0 ids with >1 row), so the
+    // fact-presence filter is the ONLY thing making a code a key here. VX carries two rows:
+    // airline_id 19995 "Aces Airlines" (a defunct Colombian carrier, 0 fct_segment_month rows)
+    // and 21171 "Virgin America" (real in-window traffic; CLAUDE.md's mainline_group rule
+    // names its 2016 acquisition). Drop the filter and both rows come back, so this rejects
+    // with AmbiguousCodeError instead of resolving -- which is the loud failure by design, and
+    // is exactly how this test goes red.
+    const m = await lookupCarriersByCode(["VX"]);
+    expect(m.get("VX")?.id).toBe(21171);
+    expect(m.get("VX")?.name).not.toContain("Aces");
+  });
+});
+
+describe("lookup_carrier_by_code.sql's fact-presence filter", () => {
+  it("un-scoped CP returns 3 rows; the shipped query returns 1", async () => {
+    // The direct-SQL counterpart to the VX test above, on the code with the widest fan-out:
+    // CP names Canadian Airlines International (19523), Compass Airlines (21167) and Alis
+    // Cargo Airlines (22088), of which only Compass ever filed a T-100 Segment row. Truncating
+    // at the marker comment reproduces the pre-filter query rather than pinning its syntax --
+    // see the airport version of this test above for why a regex over the predicate's text was
+    // the wrong instrument.
+    const raw = readFileSync(path.join(QUERIES_DIR, "lookup_carrier_by_code.sql"), "utf8");
+    const con = await connect();
+
+    const shippedStatement = raw.replace("{{IDS}}", "($id0)");
+    const shipped = await con.prepare(shippedStatement);
+    shipped.bind({ id0: "CP" });
+    const shippedRows = await (await shipped.run()).getRowObjects();
+    expect(shippedRows.length).toBe(1);
+    expect(shippedRows[0].id).toBe(21167);
+
+    const marker = shippedStatement.indexOf(FACT_FILTER_MARKER);
+    expect(shippedStatement.split(FACT_FILTER_MARKER).length - 1).toBe(1);
+    expect(marker).toBeGreaterThan(shippedStatement.indexOf("WHERE"));
+    const unscoped = await con.prepare(shippedStatement.slice(0, marker).trimEnd());
+    unscoped.bind({ id0: "CP" });
+    const unscopedRows = await (await unscoped.run()).getRowObjects();
+    expect(unscopedRows.length).toBe(3);
+    expect(new Set(unscopedRows.map((r) => r.id))).toEqual(new Set([19523, 21167, 22088]));
+  });
+});
+
+describe("lookupAircraftByName", () => {
+  it("resolves a short_name to its BTS code, short name and full designation", async () => {
+    const m = await lookupAircraftByName(["B737-8"]);
+    expect(m.get("B737-8")).toEqual({ id: "614", code: "B737-8", name: "BOEING 737-800" });
+  });
+
+  it("keeps a zero-padded id a string", async () => {
+    // CLAUDE.md hard rule: AIRCRAFT_TYPE '036' becomes 36 if int-parsed and every downstream
+    // join breaks silently. Red the moment this lookup copies lookupAirportsByCode's
+    // `Number(r.id)` -- which is the natural thing to do when mirroring it, and is why this
+    // asserts the type rather than only the value ('036' == 36 would still pass a loose check,
+    // and toBe("036") alone would not say WHY it matters).
+    const m = await lookupAircraftByName(["SKYHAWK"]);
+    expect(m.get("SKYHAWK")?.id).toBe("036");
+    expect(typeof m.get("SKYHAWK")?.id).toBe("string");
+  });
+
+  it("is case-insensitive, keyed by the uppercased short_name", async () => {
+    // Same accounting as the carrier version above: this pins runSlugLookup's input fold, not
+    // the .sql's column-side `upper(short_name)`. The one lower-case short name in the
+    // dimension ('330-9neo', code 824) has never filed a row, so the fact-presence clause
+    // removes the only fixture that could tell the two apart.
+    const m = await lookupAircraftByName(["b737-8"]);
+    expect(m.get("B737-8")?.id).toBe("614");
+  });
+
+  it("omits an unknown short_name rather than inventing one", async () => {
+    const m = await lookupAircraftByName(["NOPE-1"]);
+    expect(m.has("NOPE-1")).toBe(false);
+  });
+
+  it("resolves KINGAIR to the fact-present Beech 200, not the King Air C-90", async () => {
+    // The AUS shape again, for aircraft: KINGAIR names code 406 "BEECH 200 SUPER KINGAIR"
+    // (fact-present) and code 457 "BEECH KING AIR C-90" (never filed). Drop the fact-presence
+    // filter and both come back, so this rejects instead of resolving. 12 short_names have
+    // more than one dim_aircraft_type row; the filter takes that to 1 (CE-180, below).
+    const m = await lookupAircraftByName(["KINGAIR"]);
+    expect(m.get("KINGAIR")?.id).toBe("406");
+    expect(m.get("KINGAIR")?.name).toBe("BEECH 200 SUPER KINGAIR");
+  });
+
+  it("rejects the genuinely ambiguous CE-180 rather than picking one of its two codes", async () => {
+    // THE test on this task. Unlike every other collision in this codebase, this one survives
+    // the fact-presence filter: CE-180 names code 030 "CESSNA 180" (183 rows, 994 seats,
+    // 2015-01..2024-07) AND code 031 "CESSNA 180A/B" (131 rows, 557 seats, 2016-05..2025-11),
+    // both with real filed traffic. There is no scope in which one of them is the right
+    // answer, so resolving either is a lie about which airframe the page describes. Delete the
+    // guard and this test goes green-to-red the useful way round: the lookup returns a
+    // one-entry map whose contents depend on driver row order -- the AUS bug, reproduced
+    // exactly, on data that exists TODAY rather than data BTS might ship next year.
+    //
+    // The structured `ids` are load-bearing, not decoration: an entity page catches this and
+    // renders a named disambiguation, so it needs the candidates, not a string to re-parse.
+    const err = await lookupAircraftByName(["CE-180"]).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AmbiguousCodeError);
+    const ambiguous = err as AmbiguousCodeError;
+    expect(ambiguous.code).toBe("CE-180");
+    expect(new Set(ambiguous.ids)).toEqual(new Set(["030", "031"]));
+    expect(ambiguous.message).toMatch(/CE-180.*030.*031|CE-180.*031.*030/);
+  });
+});
+
+describe("lookup_aircraft_by_name.sql's fact-presence filter", () => {
+  it("un-scoped KINGAIR returns 2 rows; the shipped query returns 1", async () => {
+    const raw = readFileSync(path.join(QUERIES_DIR, "lookup_aircraft_by_name.sql"), "utf8");
+    const con = await connect();
+
+    const shippedStatement = raw.replace("{{IDS}}", "($id0)");
+    const shipped = await con.prepare(shippedStatement);
+    shipped.bind({ id0: "KINGAIR" });
+    const shippedRows = await (await shipped.run()).getRowObjects();
+    expect(shippedRows.length).toBe(1);
+    expect(shippedRows[0].id).toBe("406");
+
+    const marker = shippedStatement.indexOf(FACT_FILTER_MARKER);
+    expect(shippedStatement.split(FACT_FILTER_MARKER).length - 1).toBe(1);
+    expect(marker).toBeGreaterThan(shippedStatement.indexOf("WHERE"));
+    const unscoped = await con.prepare(shippedStatement.slice(0, marker).trimEnd());
+    unscoped.bind({ id0: "KINGAIR" });
+    const unscopedRows = await (await unscoped.run()).getRowObjects();
+    expect(unscopedRows.length).toBe(2);
+    expect(new Set(unscopedRows.map((r) => r.id))).toEqual(new Set(["406", "457"]));
+  });
+
+  it("still returns BOTH CE-180 codes -- the filter is not what makes a slug unique", async () => {
+    // Guards against the tempting wrong fix. Someone who reads only the airport file will
+    // assume the fact-presence filter IS the uniqueness mechanism and treat the guard as
+    // belt-and-braces. It is not: for aircraft the filter changes nothing about CE-180, so the
+    // guard is the entire defence. If a future edit narrows this query (to the trailing 12
+    // months, say, where the collision happens to vanish) the collision comes back the moment
+    // BTS ships a month in which both types flew -- and this test, which pins the SQL's own
+    // scope rather than the lookup's outcome, is what refuses that narrowing.
+    const raw = readFileSync(path.join(QUERIES_DIR, "lookup_aircraft_by_name.sql"), "utf8");
+    const statement = raw.replace("{{IDS}}", "($id0)");
+    const con = await connect();
+    const prepared = await con.prepare(statement);
+    prepared.bind({ id0: "CE-180" });
+    const rows = await (await prepared.run()).getRowObjects();
+    expect(new Set(rows.map((r) => r.id))).toEqual(new Set(["030", "031"]));
+  });
+});
+
+// The generic behind insertAirportRow. Extracted so the carrier lookup's fail-loud path is
+// testable at all: real data produces 0 colliding fact-present carrier codes (measured), so
+// there is no live pair to feed lookupCarriersByCode -- the same reasoning insertAirportRow's
+// own tests document. The aircraft path needs no synthetic pair; CE-180 is real.
+describe("insertUniqueByCode", () => {
+  it("accepts the first row for a code", () => {
+    const out = new Map<string, { id: number; code: string; name: string }>();
+    insertUniqueByCode(out, { id: 21171, code: "VX", name: "Virgin America" }, CARRIER_CTX);
+    expect(out.get("VX")?.id).toBe(21171);
+  });
+
+  it("throws AmbiguousCodeError naming both ids on a second row for a seen code", () => {
+    const out = new Map<string, { id: number; code: string; name: string }>();
+    insertUniqueByCode(out, { id: 21171, code: "VX", name: "Virgin America" }, CARRIER_CTX);
+    let thrown: unknown;
+    try {
+      insertUniqueByCode(out, { id: 19995, code: "VX", name: "Aces Airlines" }, CARRIER_CTX);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(AmbiguousCodeError);
+    expect((thrown as AmbiguousCodeError).ids).toEqual([21171, 19995]);
+    expect((thrown as AmbiguousCodeError).message).toMatch(/VX.*21171.*19995/);
+    // The first row is NOT left in the map for a caller that swallows the error: a partially
+    // populated map is how "fail loudly" degrades back into "resolve arbitrarily".
+    expect(out.has("VX")).toBe(false);
+  });
+
+  it("uppercases the map key so a lowercase slug lands on the canonical entry", () => {
+    const out = new Map<string, { id: number; code: string; name: string }>();
+    insertUniqueByCode(out, { id: 19790, code: "dl", name: "Delta Air Lines Inc." }, CARRIER_CTX);
+    expect(out.get("DL")?.id).toBe(19790);
+  });
+});
+
+const CARRIER_CTX = {
+  lookup: "lookupCarriersByCode",
+  idLabel: "airline_id",
+  detail: "test fixture",
+};
