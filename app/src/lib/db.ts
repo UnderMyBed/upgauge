@@ -4,6 +4,7 @@ import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import { renderPivot } from "@/lib/pivot/render";
 import type { Allowlist } from "@/lib/pivot/allowlist";
 import type { PivotQuery } from "@/lib/pivot/types";
+import { resolveRows, type Resolved } from "@/lib/resolve";
 
 // Same anchor, same reason, as render.ts's QUERIES_DIR: process.cwd() is correct in
 // production (docs/architecture/hosting.md's WORKDIR contract), but Vitest needs the
@@ -177,6 +178,11 @@ export interface PivotResult {
    * counted, so this under-reports whenever the result is truncated. A query-scope total
    * would need its own aggregate query (no LIMIT); this layer does not run one. */
   quarantinedRowsOnPage: number;
+  /** Display values for the ids on these rows, keyed by resolutionKey(). Additive and
+   * display-only: `rows` still carry ids, and sorting, filtering and the permalink all
+   * continue to use them. An absent key means unresolved -- render the raw id, never a
+   * dash (lib/format.ts: "Null is absence, zero is a measurement"). */
+  resolved: Map<string, Resolved>;
 }
 
 export async function runPivot(q: PivotQuery): Promise<PivotResult> {
@@ -195,9 +201,11 @@ export async function runPivot(q: PivotQuery): Promise<PivotResult> {
   const result = await prepared.run();
   const rows = (await result.getRowObjects()) as Record<string, unknown>[];
   const converted = rows.map(demoteBigInts);
+  const resolved = await resolveRows(converted, allowlist);
   return {
     columns: result.columnNames(),
     rows: converted,
     quarantinedRowsOnPage: converted.reduce((a, r) => a + Number(r.quarantined_rows ?? 0), 0),
+    resolved,
   };
 }

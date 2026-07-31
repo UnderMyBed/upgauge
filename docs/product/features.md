@@ -8,6 +8,12 @@ A pivot surface: pick dimensions, measures, filters, time range → table + char
 mainline-group toggle)** · origin · dest · route · **city market** · origin/dest state ·
 aircraft type · aircraft group · distance group
 
+**Dimension columns display codes, not the catalog's ids.** A carrier column shows `DL`,
+not `19790`; an airport column shows `SEA`; `route` shows `PDX–SEA`. City market has no code
+of its own, so its name renders directly. The full cell rule — and why the code is current
+identity rather than a point-in-time filing — lives in `docs/design/system.md`'s "The data
+table" section.
+
 **Then the things that make it good:**
 
 1. **URL-encoded query state.** Every view is a permalink. The entire growth mechanic for a

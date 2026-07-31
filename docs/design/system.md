@@ -128,6 +128,20 @@ trust moment, and a direct violation of the rule `app/src/lib/format.ts` opens w
 absence, zero is a measurement. Never render one as the other."*). A row whose departure count
 was never queried makes no claim about the floor in either direction.
 
+**A dimension cell shows the code; the name is the `abbr` expansion.** The table is dense by
+rule, and a full carrier or airport name in every row would swamp a column sized for two or
+three letters, so `op_airline_id` renders `DL`, not "Delta Air Lines" — the name is reachable
+as the `abbr` element's `title`, not printed. Where a dimension has no code of its own (city
+market), the name **is** the value and renders directly, since hiding it in a title no
+keyboard user can reach would be worse than the density cost. `route` collapses its two
+airport-id columns into one `PDX–SEA` cell. An id absent from the catalog (never expected in
+production, but the contract must still degrade honestly) renders as the raw id, never a
+dash — absence of a name is not absence of data. Every carrier and airport code shown is
+**current identity, not a point-in-time filing** — `dim_carrier`/`dim_airport` hold only the
+present-day code (`docs/data/invariants.md`'s "Entity resolution" section) — so the legend
+rail states this on every view rather than letting a resolved code masquerade as a
+historical fact.
+
 ### The gauge rail — signature, 1 of 3
 
 A fixed **0–260 seats-per-departure** axis rendered in every row, with grid lines at 50s and

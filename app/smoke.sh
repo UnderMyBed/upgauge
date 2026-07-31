@@ -50,6 +50,24 @@ check_not() {
   fi
 }
 
+check_re() {   # check_re <name> <haystack> <extended-regex>
+  if printf '%s' "$2" | grep -qE -- "$3"; then
+    printf '  ok   %s\n' "$1"
+  else
+    printf '  FAIL %s\n       expected to match: %s\n       got: %.300s\n' "$1" "$3" "$2"
+    FAILED=1
+  fi
+}
+
+check_not_re() {
+  if printf '%s' "$2" | grep -qE -- "$3"; then
+    printf '  FAIL %s\n       expected NOT to match: %s\n' "$1" "$3"
+    FAILED=1
+  else
+    printf '  ok   %s\n' "$1"
+  fi
+}
+
 cleanup() { [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null; pkill -f "next start app -p ${PORT}" 2>/dev/null; }
 trap cleanup EXIT
 
@@ -101,6 +119,16 @@ check "api: does not cache an error" "$HDRS" "no-store"
 # 6. The front door is ours, not the scaffold's.
 BODY=$(curl -s --max-time 15 "${BASE}/")
 check_not "home: no create-next-app boilerplate" "$BODY" 'vercel.com/new'
+
+# 7. Resolution: the reader must see codes, never the catalog's ids.
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op")
+check     "explore: renders a carrier code"        "$BODY" '>DL<'
+check_not "explore: renders no bare airline id"    "$BODY" '>19790<'
+check     "explore: legend states current identity" "$BODY" 'current identity'
+
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=route&d=route&m=seats&t=2025-05:2026-04&s=-seats&n=10&g=op")
+check_re     "explore: route renders as two resolved codes"  "$BODY" '>[A-Z]{3}–[A-Z]{3}<'
+check_not_re "explore: route renders no raw airport ids"     "$BODY" '>[0-9]{4,5}–[0-9]{4,5}<'
 
 echo
 if [ "$FAILED" -eq 0 ]; then echo "smoke: all checks passed"; else echo "smoke: FAILURES above"; fi

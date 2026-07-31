@@ -550,16 +550,6 @@ quarantined-on-page count), the Task 9 `DataTable` (reused, not rebuilt), the le
 (added in fix round 1, below), and the permalink re-encoded and displayed underneath the
 table.
 
-**Known gap: dimension columns render raw IDs, not display codes.** The `op_airline_id`
-column shows the bare `AIRLINE_ID` (e.g. `19393`), not a carrier code — `db.ts`/`render.ts`
-never read `meta_pivot_dimensions`' `join_dim`/`join_key` columns, which exist for exactly
-this resolution. This does not satisfy `CLAUDE.md`'s "Join on IDs, display `carrier_code`"
-rule. Deliberately not fixed here: resolving every dimension's join is query-layer work
-(joining `dim_carrier`/`dim_airport` per dimension key, decided per dimension since not all
-of them join to a display-label table), genuinely M4-shaped rather than a page-template
-change, and out of this task's scope. Recorded here rather than left implicit, per the
-fix-round-1 review that caught the docs marking M3b complete without saying so.
-
 **The error path is the product feature, not a fallback.** Only `decode()` is wrapped in a
 try/catch — it is the one step that validates untrusted request input against the allowlist,
 and its documented failure mode is `UrlStateError`. An unknown key, an off-allowlist
@@ -617,8 +607,12 @@ duplication this whole milestone exists to avoid:
   operating-carrier "reading this" note — minus the mockup's "Arc rendering (maps)" group,
   since this page has no map. Placed in a new `.body` grid (`minmax(0,1fr) 214px`, 24px gap,
   sticky, collapsing below 920px per `system.md`'s layout rule) alongside the table.
-- **Dimension values render raw IDs, and the docs didn't say so** — see the "Known gap"
-  paragraph above, added in this round.
+- **Dimension values rendered raw IDs, and the docs didn't say so at first.** Fixed in this
+  round by adding an explicit gap note recording that `db.ts`/`render.ts` never read
+  `meta_pivot_dimensions`' `join_dim`/`join_key` columns. The gap itself was closed in M4a
+  (`app/src/lib/resolve.ts` resolves ids to codes for `/explore`); the note that recorded it
+  has been deleted rather than amended, per this project's rule that a closed gap gets
+  removed, not left with a caveat — see `CLAUDE.md`'s Status section for what M4a shipped.
 - **`DERIVED`, a hand-copied `Set` of measure keys mirroring `is_additive: FALSE` in
   `meta_pivot_measures`, was deleted.** `allowlist.meas.get(c)?.isAdditive` already carries
   the same fact and was already loaded on the page; a derived measure added to the catalog
@@ -632,15 +626,97 @@ query (the `op_airline_id:999999999` filter above) renders the "No rows match...
 and the widened-window link, with the stat strip, `DATA AS OF` badge and legend rail all
 still present.
 
-**M3b complete**, with the one known, documented gap above. The route handler (Task 8), the
-data table with its gauge rail and reason-code gutter (Task 9), and `/explore` itself
-including the legend rail and empty-result state (Task 10 and its fix round 1) close out the
-app side of the pivot contract M3a shipped. 109 app tests green (`make app-check`), 424
-Python tests green (`make check`), `make app-build` produces a working production build. Not
-built in M3b: display-code resolution for dimension values (see above, deferred to M4), the
-time-series and fleet-mix charts, the arc map, entity pages, `/watch`, the seasonality
-heatmap, and OG cards — all specified in [`../design/system.md`](../design/system.md) and
-left to M4/M5.
+**M3b complete.** The route handler (Task 8), the data table with its gauge rail and
+reason-code gutter (Task 9), and `/explore` itself including the legend rail and
+empty-result state (Task 10 and its fix round 1) close out the app side of the pivot
+contract M3a shipped. 109 app tests green (`make app-check`), 424 Python tests green
+(`make check`), `make app-build` produces a working production build. Not built in M3b:
+display-code resolution for dimension values (closed in M4a — see `CLAUDE.md`'s Status
+section), the time-series and fleet-mix charts, the arc map, entity pages, `/watch`, the
+seasonality heatmap, and OG cards — all specified in
+[`../design/system.md`](../design/system.md) and left to M4b/M4c+ onward.
+
+## M4a — entity resolution
+
+`/explore` rendered raw catalog ids (`19790`, `14747`, `612`) through all of M3b — a
+documented, known gap (see the M3b entry above). M4a closes it: `DL`, `SEA`, `B737-7`.
+
+### Why resolution runs after the pivot, not inside the templates
+
+`meta_pivot_dimensions`' `join_dim`/`join_key` columns existed since M3a for exactly this
+join, and joining `dim_carrier`/`dim_airport` straight into `pivot_segment.sql` /
+`pivot_route.sql` was the design that was rejected. Doing so would change what the pivot
+templates emit, which reopens the M3a contract: all 17 goldens regenerate, and
+`pipeline/pivot.py` and the TypeScript renderer have to change in lockstep or silently
+drift — two milestones were spent making that contract verifiable in two languages, and
+resolution is a display concern, not a reason to reopen it.
+
+Instead, resolution is a separate query stage that runs **after** `runPivot()` returns, keyed
+on the ids actually present in the returned page (at most `n` rows). `app/src/lib/resolve.ts`
+collects the distinct ids per resolvable column (`collectIds`), issues one bound query per
+dimension **present in the result** — not one per dimension in the catalog — and returns a
+`Map<resolutionKey, {code, name}>` that the page merges in at render time. The pivot SQL, the
+codec, and every golden are untouched; the id stays on the row for sorting, filtering and the
+permalink exactly as before. Cost: one extra small indexed lookup per dimension present,
+against an in-process DuckDB with no network hop — accepted for keeping the M3a contract
+frozen.
+
+### Four resolver files, one per dimension shape
+
+Per CLAUDE.md's "all query logic lives in `.sql`" rule, each resolver is its own file in
+`sql/03_queries/`, and the only TypeScript is the merge (collect ids, bind, attach):
+
+- `resolve_carrier.sql` — `op_airline_id` → `dim_carrier.carrier_code` + `name`. One row per
+  `airline_id` (v0 collapses Carrier Decode), so this join cannot fan out.
+- `resolve_airport.sql` — `origin_airport_id` / `dest_airport_id` / `route_key_low` /
+  `route_key_high` → `dim_airport.code` + `name`. `WHERE is_latest` is load-bearing: 5,033
+  `airport_id`s carry more than one `airport_seq_id` row, and omitting the filter fans out
+  and multiplies result rows — a wrong total under the `DATA AS OF` badge. Exactly one
+  `is_latest` row exists per `airport_id` today, so the filtered join is 1:1; a cardinality
+  test in `resolve.test.ts` pins that.
+- `resolve_city_market.sql` — `origin_city_market_id` / `dest_city_market_id` →
+  `dim_city_market.name`. `dim_city_market` has no code column at all, so `code` is a typed
+  `NULL` and the name renders directly as the cell value rather than as an `abbr` title.
+- `resolve_aircraft_type.sql` — `aircraft_type` → `dim_aircraft_type.short_name` + `name`.
+  This one inverts the usual direction: the fact table already stores the join key (a
+  zero-padded string code like `'612'`), and what's missing is a human-readable value.
+  Returning `dim_aircraft_type.code` would just re-render `'612'` — the exact thing this
+  milestone removes — so `code` in the resolver's output is actually `short_name`
+  (`B737-7`), not the BTS code, playing the role `carrier_code` plays for carriers. `id`
+  stays `VARCHAR`: CLAUDE.md's zero-padded-code rule applies to the join key here too.
+
+`resolve.ts`'s `RESOLVER_FILE` is the only place a dimension's `join_dim` maps to a file
+name, and it is keyed on the catalog's own `join_dim` string (`dim_carrier`, `dim_airport`,
+…) — never on a dimension's name (`op_airline_id` vs `origin_airport_id` vs
+`route_key_low`/`high` all resolve through the same `dim_airport` entry without a
+name-based branch anywhere in `collectIds` or `resolveRows`). `route` itself had no
+`join_dim`/`join_key` in `meta_pivot_dimensions` before M4a — its `column_expr` names two
+airport-id columns but the catalog couldn't describe how to resolve them. The fix was to
+the metadata (both keys now name `dim_airport`), not a special case in the resolver.
+`RESOLVER_FILE` is exported and `resolve.test.ts` asserts it has an entry for every distinct
+non-null `join_dim` the live catalog carries — an unmapped `join_dim` would otherwise be a
+silent-degradation path: `collectIds` just `continue`s past it and the affected dimension
+keeps rendering raw ids forever, with every other test staying green.
+
+### The `{{IDS}}` bound-parameter token
+
+Each resolver file's `WHERE ... IN {{IDS}}` clause is filled in at request time with a
+parenthesised list of **bound parameter names** (`($id0, $id1, …)`), never with values —
+the same substitute-a-name / bind-the-value split `render.ts` uses for the pivot templates.
+`resolve.ts`'s `substituteIds` counts occurrences of the `{{IDS}}` token before replacing:
+`String.prototype.replace` with a string needle only touches the first match, so if the
+token appeared a second time anywhere in the file — including inside a comment — the real
+`WHERE` clause would end up still holding the literal token, and DuckDB would reject it as a
+parse error at execution rather than failing at substitution time where the mistake is
+obvious. `substituteIds` throws loudly if the count isn't exactly 1, which is why every
+resolver file's header comment above describes the placeholder in prose instead of writing
+it out.
+
+M4a is built: 424 Python tests green (`make check`), the app suite green
+(`make app-check`), `make app-build` produces a working production build, and
+`make goldens` reproduces all 17 goldens byte-identical — proof the M3a contract never
+moved. See `CLAUDE.md`'s Status section for the current test counts and what M4b/M4c+ still
+owe (`/route`, `/airport`, `/carrier`, `/aircraft`, the charts, the maps, `/watch`).
 
 ## Toolchain
 

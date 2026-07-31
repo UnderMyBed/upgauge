@@ -1,12 +1,16 @@
 import { formatSeats, formatLoadFactor, formatGauge, formatCount } from "@/lib/format";
 import { GaugeRail } from "@/components/GaugeRail";
 import { ReasonCode, type Reason } from "@/components/ReasonCode";
+import { resolutionKey, displayValue, type Resolved } from "@/lib/resolve";
 
 export interface ColumnSpec {
   key: string;
   label: string;
   kind: "identifier" | "seats" | "loadFactor" | "gauge" | "count";
   derived?: boolean;
+  /** The catalog dimension this column displays, when it is one. Present ⇒ the cell renders
+   * a resolved code rather than the raw id. */
+  dimKey?: string;
 }
 
 const DEPARTURE_FLOOR = 30;
@@ -28,6 +32,27 @@ function format(kind: ColumnSpec["kind"], v: unknown): string {
     default:
       return v === null || v === undefined ? "—" : String(v);
   }
+}
+
+/** A dimension cell shows the CODE; the name is the abbreviation's expansion. The table is
+ * dense by rule (system.md) and a full carrier name per row would swamp a column sized for
+ * two letters. Where a dimension has no code -- city markets -- the name IS the value, so it
+ * renders directly rather than hiding in a title no keyboard user can reach. The three-way
+ * value selection itself (raw id / name / code) is `displayValue()` in lib/resolve.ts, shared
+ * with explore/page.tsx's `routeCode` -- only the `abbr` wrapping is specific to this
+ * component. */
+function DimensionCell({ spec, row, resolved }: {
+  spec: ColumnSpec;
+  row: Record<string, unknown>;
+  resolved?: Map<string, Resolved>;
+}) {
+  const raw = row[spec.key];
+  const hit = spec.dimKey ? resolved?.get(resolutionKey(spec.dimKey, raw)) : undefined;
+  const value = displayValue(hit, raw);
+  if (hit !== undefined && hit.code !== null && hit.name) {
+    return <abbr title={hit.name}>{value}</abbr>;
+  }
+  return <>{value}</>;
 }
 
 function isQuarantined(row: Record<string, unknown>): boolean {
@@ -70,9 +95,11 @@ function reasonFor(row: Record<string, unknown>): Reason {
 export function DataTable({
   columns,
   rows,
+  resolved,
 }: {
   columns: ColumnSpec[];
   rows: Record<string, unknown>[];
+  resolved?: Map<string, Resolved>;
 }) {
   return (
     <table className="data-table">
@@ -106,7 +133,11 @@ export function DataTable({
               />
               {columns.map((c) => (
                 <td key={c.key} className={c.kind === "identifier" ? "id" : "num"}>
-                  {format(c.kind, row[c.key])}
+                  {c.dimKey ? (
+                    <DimensionCell spec={c} row={row} resolved={resolved} />
+                  ) : (
+                    format(c.kind, row[c.key])
+                  )}
                 </td>
               ))}
               <td>

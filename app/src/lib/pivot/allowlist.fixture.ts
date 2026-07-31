@@ -11,7 +11,7 @@ export const FIXTURE: Allowlist = {
     ["op_airline_id", { key: "op_airline_id", label: "Carrier", columnExpr: "op_airline_id", grain: "both", joinDim: "dim_carrier", joinKey: "airline_id" }],
     ["origin_airport_id", { key: "origin_airport_id", label: "Origin", columnExpr: "origin_airport_id", grain: "both", joinDim: "dim_airport", joinKey: "airport_id" }],
     ["dest_airport_id", { key: "dest_airport_id", label: "Destination", columnExpr: "dest_airport_id", grain: "both", joinDim: "dim_airport", joinKey: "airport_id" }],
-    ["route", { key: "route", label: "Route", columnExpr: "route_key_low, route_key_high", grain: "both", joinDim: null, joinKey: null }],
+    ["route", { key: "route", label: "Route", columnExpr: "route_key_low, route_key_high", grain: "both", joinDim: "dim_airport", joinKey: "airport_id" }],
     ["origin_city_market_id", { key: "origin_city_market_id", label: "Origin market", columnExpr: "origin_city_market_id", grain: "both", joinDim: "dim_city_market", joinKey: "city_market_id" }],
     ["dest_city_market_id", { key: "dest_city_market_id", label: "Dest market", columnExpr: "dest_city_market_id", grain: "both", joinDim: "dim_city_market", joinKey: "city_market_id" }],
     ["origin_state", { key: "origin_state", label: "Origin state", columnExpr: "origin_state", grain: "segment", joinDim: null, joinKey: null }],

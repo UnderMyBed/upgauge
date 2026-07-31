@@ -59,6 +59,13 @@ export function LegendRail() {
             code, not DL. Summing carriers does not double-count.
           </em>
         </div>
+        <div className="lrow">
+          <em>
+            Codes and names are current identity, not point-in-time filings. A carrier that
+            changed code, or an airport that was renamed, shows its present-day form on
+            every row.
+          </em>
+        </div>
       </div>
     </aside>
   );

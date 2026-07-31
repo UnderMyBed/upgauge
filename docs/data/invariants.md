@@ -412,6 +412,31 @@ M1.
 
 ---
 
+## Entity resolution (M4a)
+
+Measured 2026-07-30 against the full 2015–2026 window. Tests:
+`pipeline/tests/test_resolution_invariants.py`.
+
+**`dim_airport` needs `WHERE is_latest` on every join.** It is keyed on `airport_seq_id`,
+the point-in-time key, and **5,033 `airport_id`s carry more than one `seq_id` row**. An
+unfiltered join fans out and multiplies result rows — a wrong total rendered under a
+`DATA AS OF` badge, which is worse than an error. Exactly one `is_latest` row exists per
+`airport_id`: 0 ids have none, 0 have more than one.
+
+**Zero join orphans.** 0 carriers, 0 airports, 0 aircraft types appear in the facts without
+a dimension row. An unresolvable id still degrades to the raw id rather than `—`: absence
+of a *name* is not absence of *data*.
+
+**Code collisions are an M4b concern, not M4a.** `carrier_code` is reused — **112 codes map
+to more than one `airline_id`** across `dim_carrier`, and 60 airport codes collide
+table-wide (distinct `(airport_id, code)` pairs across all of `dim_airport`'s history, not
+just the current `is_latest` row). Scoped to what actually flew in-window, **both are 0**
+(114 carriers, i.e. distinct `op_airline_id` values in `fct_segment_month`). `id → code` is
+a function, so collisions cannot affect display; they break only the *reverse* lookup that
+M4b needs for `/carrier/DL`. Asserted now so a refresh cannot break it quietly.
+
+---
+
 ## Where these are enforced
 
 `pipeline/invariants.py` holds the rules as pure functions, deliberately knowing nothing

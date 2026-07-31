@@ -34,8 +34,18 @@ export async function GET(request: Request): Promise<Response> {
     const allowlist = await loadAllowlist();
     const query = decode(qs, allowlist);
     const result = await runPivot(query);
+    // Named fields, not `...result`: `Response.json()` can't serialise a `Map`, so a bare
+    // spread would silently emit `"resolved": {}` -- data-shaped, but not data. Spelling out
+    // what's included, rather than destructuring `resolved` back out, also means a FUTURE
+    // field added to PivotResult defaults to excluded until someone deliberately adds it
+    // here -- opt-in, not opt-out-and-hope-nobody-forgets.
+    const body = {
+      columns: result.columns,
+      rows: result.rows,
+      quarantinedRowsOnPage: result.quarantinedRowsOnPage,
+    };
     return Response.json(
-      { ...result, url: encode(query) },
+      { ...body, url: encode(query) },
       { headers: { "Cache-Control": CACHE } },
     );
   } catch (e) {

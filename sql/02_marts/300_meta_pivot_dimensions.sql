@@ -13,7 +13,10 @@
 -- `grain`: 'both' | 'segment' | 'route'. aircraft_type and aircraft_group are segment-only
 -- because fct_route_month drops that grain.
 -- `join_dim` / `join_key`: the dimension table and key that resolve an id to a display name.
--- NULL where the value is already human-readable.
+-- NULL where the value is already human-readable. `route` is the one dimension whose
+-- column_expr names TWO keys -- route_key_low and route_key_high -- and both resolve through
+-- the same dim_airport.airport_id, which is why one join_dim/join_key pair still describes
+-- it. A test asserts every _id column_expr carries this metadata.
 --
 -- Consequence accepted knowingly: make verify now covers a product decision, not only data.
 -- That is the price of the vocabulary being impossible to drift.
@@ -24,7 +27,7 @@ SELECT * FROM (VALUES
     ('op_airline_id',         'Carrier',          'op_airline_id',         'both',    'dim_carrier',      'airline_id'),
     ('origin_airport_id',     'Origin',           'origin_airport_id',     'both',    'dim_airport',      'airport_id'),
     ('dest_airport_id',       'Destination',      'dest_airport_id',       'both',    'dim_airport',      'airport_id'),
-    ('route',                 'Route',            'route_key_low, route_key_high', 'both', NULL,          NULL),
+    ('route',                 'Route',            'route_key_low, route_key_high', 'both', 'dim_airport', 'airport_id'),
     ('origin_city_market_id', 'Origin market',    'origin_city_market_id', 'both',    'dim_city_market',  'city_market_id'),
     ('dest_city_market_id',   'Dest market',      'dest_city_market_id',   'both',    'dim_city_market',  'city_market_id'),
     ('origin_state',          'Origin state',     'origin_state',          'segment', NULL,               NULL),

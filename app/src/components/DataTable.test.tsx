@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
+import { resolutionKey } from "@/lib/resolve";
 
 const COLUMNS: ColumnSpec[] = [
   { key: "route", label: "Route", kind: "identifier" },
@@ -115,5 +116,45 @@ describe("DataTable", () => {
   it("shows no gutter glyph when departures_performed was not selected", () => {
     const { container } = render(<DataTable columns={NO_DEP_COLUMNS} rows={NO_DEP_ROWS} />);
     expect(container.querySelectorAll("tbody td.gut abbr").length).toBe(0);
+  });
+});
+
+describe("DataTable renders resolved display values", () => {
+  const COLS: ColumnSpec[] = [
+    { key: "op_airline_id", label: "Carrier", kind: "identifier", dimKey: "op_airline_id" },
+    { key: "seats", label: "Seats", kind: "seats" },
+  ];
+  const ROWS = [{ op_airline_id: 19790, seats: 100 }];
+  const RESOLVED = new Map([
+    [resolutionKey("op_airline_id", 19790), { code: "DL", name: "Delta Air Lines Inc." }],
+  ]);
+
+  it("shows the code, not the id", () => {
+    render(<DataTable columns={COLS} rows={ROWS} resolved={RESOLVED} />);
+    expect(screen.getByText("DL")).toBeDefined();
+    expect(screen.queryByText("19790")).toBeNull();
+  });
+
+  it("carries the name as the abbreviation's expansion", () => {
+    const { container } = render(<DataTable columns={COLS} rows={ROWS} resolved={RESOLVED} />);
+    expect(container.querySelector("abbr[title='Delta Air Lines Inc.']")).not.toBeNull();
+  });
+
+  it("falls back to the raw id when unresolved, never to a dash", () => {
+    render(<DataTable columns={COLS} rows={ROWS} resolved={new Map()} />);
+    // Absence of a NAME is not absence of DATA -- lib/format.ts's opening rule.
+    expect(screen.getByText("19790")).toBeDefined();
+    expect(screen.queryByText("—")).toBeNull();
+  });
+
+  it("renders a market name directly, since a market has no code", () => {
+    const cols: ColumnSpec[] = [
+      { key: "origin_city_market_id", label: "Origin market", kind: "identifier", dimKey: "origin_city_market_id" },
+    ];
+    const resolved = new Map([
+      [resolutionKey("origin_city_market_id", 30559), { code: null, name: "Seattle, WA" }],
+    ]);
+    render(<DataTable columns={cols} rows={[{ origin_city_market_id: 30559 }]} resolved={resolved} />);
+    expect(screen.getByText("Seattle, WA")).toBeDefined();
   });
 });

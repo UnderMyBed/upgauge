@@ -36,6 +36,13 @@ describe("GET /api/pivot", () => {
     expect(typeof body.quarantinedRowsOnPage).toBe("number");
   });
 
+  it("does not emit an empty resolved object in the JSON body", async () => {
+    const res = await GET(req(OK));
+    const body = await res.json();
+    expect(body.resolved).toBeUndefined();
+    expect(body.rows.length).toBeGreaterThan(0);
+  });
+
   it("sets the caching header on success", async () => {
     const res = await GET(req(OK));
     expect(res.headers.get("Cache-Control")).toBe(
