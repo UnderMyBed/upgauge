@@ -58,13 +58,30 @@ including `AUS` resolving to both Austin-Bergstrom and an airport closed since 1
 quarantined. Derived measures computed from summed numerator and denominator, never averaged.
 
 **An airport is both endpoints.** Every query must match `origin_airport_id = X OR
-dest_airport_id = X`, not origin alone. Measured at SEA over the trailing 12 months: 13
-carriers, 141 destinations, 25 aircraft types, 53,373,806 seats. A page counting only
-departures would silently halve the airport.
+dest_airport_id = X`, not origin alone. A page counting only departures silently halves the
+airport.
 
-**Do not double-count.** A segment with SEA at both ends does not exist (same-airport rows are
-excluded as non-routes, M4b), but a sum over `origin OR dest` counts each SEA segment once —
-verify this against a hand-checked figure rather than assuming.
+Measured at SEA over the trailing 12 months: 13 carriers, 25 aircraft types, 53,373,806 seats,
+**143 destinations** excluding SEA itself (144 including it).
+
+**This spec originally said 141 destinations, which is the origin-only number** — the exact bug
+the rule above exists to prevent, written into its own acceptance criterion. Task 2 caught it.
+Note also that **carriers (13) and aircraft types (25) are identical either way**, so a test
+suite built on those two figures passes against the bug; the destination count and the seat
+total are what discriminate.
+
+**Same-airport rows DO exist in `fct_segment_month`** — this spec previously claimed they do
+not. That is true of *route identity* (M4b excludes same-airport pairs as non-routes), not of
+the fact table: **3,182 rows across 358 airports carrying 601,565 seats** in-window, and **18
+rows / 12,646 seats at SEA alone**. So a naive `origin = X OR dest = X` sum double-counts them,
+and the page must subtract the overlap rather than assume it is empty.
+
+**The pivot cannot express `origin OR dest`.** Its filters are AND-ed, and the one composite
+dimension filters route *pairs*, not single endpoints. Task 2 assembles the figure as
+inclusion–exclusion over three pivots (origin, dest, minus the same-airport overlap). A
+first-class endpoint filter would need `render.ts` and `pipeline/pivot.py` changed in lockstep
+— deferred to M5, and the cost of not having it is real: the page does 54.2 ms of database work
+against `/route`'s 20.2 ms.
 
 ## `/carrier/<code>` — e.g. `/carrier/DL`
 
