@@ -6,7 +6,7 @@
 -- real, recognized airport this domestic-only dataset (CLAUDE.md's "Segment only" rule) has
 -- no rows for" -- LHR, CDG, NRT, MEX, YYZ and others are in dim_airport (BTS's airport
 -- reference table is global) but never appear in T-100 Segment (US domestic carriers), so
--- they resolve here and fail lookup_airport_by_code.sql's EXISTS-in-facts filter.
+-- they resolve here and fail lookup_airport_by_code.sql's fact-presence filter.
 --
 -- The placeholder in the WHERE clause below is substituted the same way
 -- lookup_airport_by_code.sql's is: a parenthesised list of bound parameter names, never

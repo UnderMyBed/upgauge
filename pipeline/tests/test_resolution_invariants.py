@@ -9,6 +9,7 @@ import duckdb
 import pytest
 
 DB = Path("upgauge.duckdb")
+LOOKUP_SQL = Path("sql/03_queries/lookup_airport_by_code.sql")
 pytestmark = pytest.mark.skipif(not DB.exists(), reason="no built catalog; run `make build`")
 
 # NOTE for the implementer and reviewer: this skip is legitimate (the catalog is a build
@@ -21,6 +22,75 @@ pytestmark = pytest.mark.skipif(not DB.exists(), reason="no built catalog; run `
 @pytest.fixture(scope="module")
 def con():
     return duckdb.connect(str(DB), read_only=True)
+
+
+def _lookup_over_every_code() -> str:
+    """The SHIPPED reverse-lookup statement, exercised over the whole `is_latest` roster
+    instead of one bound pair.
+
+    `{{IDS}}` is normally substituted with a parenthesised list of bound parameter NAMES
+    (app/src/lib/resolve.ts); a parenthesised sub-SELECT is equally valid there and is what
+    turns a two-code lookup into an exhaustive one. Reading the real file rather than a copy
+    is the point: a copy would keep passing after someone edits the file."""
+    statement = LOOKUP_SQL.read_text()
+    assert statement.count("{{IDS}}") == 1, "the substitution token moved or was duplicated"
+    return statement.replace("{{IDS}}", "(SELECT upper(code) FROM dim_airport WHERE is_latest)")
+
+
+def test_reverse_lookup_selects_exactly_the_fact_present_current_airports(con):
+    """The reverse lookup's fact-presence filter must select exactly the airports the
+    correlated-EXISTS form selects.
+
+    That form is what shipped first, and it was replaced (fix wave 3) by a hash semi-join
+    against `origin_airport_id UNION dest_airport_id` because the correlated version re-scans
+    3.36 M fact rows per candidate: 43-51 ms against 17 ms, on a query `proxy.ts` now runs on
+    every `/route/*` request. The two are equivalent by construction --
+    `EXISTS(f.origin = x OR f.dest = x)` is the definition of membership in that union, for
+    NULLs too (a NULL in an `IN` list yields NULL, which `WHERE` drops exactly as `EXISTS`'s
+    FALSE does) -- but "equivalent by construction" is an argument, and this is the
+    measurement. It fails for ANY future rewrite of that predicate that changes which
+    airports resolve, which is the whole risk of touching it.
+
+    The reference set is written in the OTHER form deliberately: comparing the file against a
+    copy of its own predicate would be a tautology."""
+    only_shipped, only_reference, reference_n = con.execute(f"""
+      WITH shipped AS ({_lookup_over_every_code()}),
+           reference AS (
+             SELECT airport_id AS id FROM dim_airport
+             WHERE is_latest AND EXISTS (
+                 SELECT 1 FROM fct_segment_month f
+                 WHERE f.origin_airport_id = dim_airport.airport_id
+                    OR f.dest_airport_id = dim_airport.airport_id))
+      SELECT (SELECT count(*) FROM (SELECT id FROM shipped EXCEPT SELECT id FROM reference)),
+             (SELECT count(*) FROM (SELECT id FROM reference EXCEPT SELECT id FROM shipped)),
+             (SELECT count(*) FROM reference)
+    """).fetchone()
+    # Guards the vacuous pass: a predicate that filters EVERYTHING out also has no collisions
+    # and no rows the reference lacks. 1,045 airports carry T-100 Segment traffic in-window.
+    assert reference_n > 1000
+    assert (only_shipped, only_reference) == (0, 0)
+
+
+def test_reverse_lookup_returns_at_most_one_airport_per_code(con):
+    """code -> airport_id must be a function, or `/route/AUS-SEA` silently resolves AUS to
+    Robert Mueller Municipal (closed 1999, zero traffic rows) under a DATA AS OF badge.
+
+    `WHERE is_latest` alone does not give this -- it is scoped per `airport_id`'s own seq
+    chain, not per code -- which the second half measures rather than asserts from memory:
+    strip the fact-presence filter and the collisions come back (36 at the time of writing).
+    docs/data/invariants.md § Entity resolution holds the full accounting."""
+    colliding = con.execute(f"""
+      SELECT count(*) FROM (
+        SELECT code FROM ({_lookup_over_every_code()}) GROUP BY 1 HAVING count(DISTINCT id) > 1)
+    """).fetchone()[0]
+    assert colliding == 0
+
+    without_the_filter = con.execute("""
+      SELECT count(*) FROM (
+        SELECT upper(code) FROM dim_airport WHERE is_latest
+        GROUP BY 1 HAVING count(DISTINCT airport_id) > 1)
+    """).fetchone()[0]
+    assert without_the_filter > 0
 
 
 def test_dim_airport_has_exactly_one_latest_row_per_airport_id(con):

@@ -145,9 +145,16 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/route/JFK-LAX")
 check     "route: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/route/LAX-JFK")
-LOC=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/route/LAX-JFK" | grep -i '^location:' | tr -d '\r')
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/route/LAX-JFK")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
 check     "route: reversed pair redirects"     "$CODE" '308'
 check     "route: redirect targets canonical"  "$LOC"  '/route/JFK-LAX'
+# Fix wave 3, item 4: the 308's Cache-Control was the ONE row of hosting.md's cache table no
+# served-build check covered, and it is the row a status-shaped rule ("cache 200s") would
+# silently drop -- the redirect target is derived from the two codes alone, so it is exactly
+# as stable as the 200 and must stay long-cached. Only proxy.test.ts pinned it, and that test
+# calls proxy() directly without crossing Next's header plumbing.
+check     "route: 308 keeps the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/route/ZZZZ-LAX")
 check     "route: unknown code is a 404"       "$CODE" '404'
@@ -181,15 +188,46 @@ done
 # the thing the fix is about: the payload is generated on the SERVER, so a hit here means the
 # server resolved this pair and shipped this specific reason. They do NOT prove the sentence
 # is visible with JavaScript off. That gap is logged, not fixed here.
+#
+# Fix wave 3, item 5: both of the first two checks here used to be weaker than the unit tests
+# they mirror. 'unknown airport code' alone asserts the CATEGORY, where the whole promise is
+# that the page names the offending CODE -- so the needle now carries ZZZZ. And asserting that
+# 'ZZZZ-LAX' appears anywhere was very nearly vacuous: the payload echoes the requested
+# pathname into the router state ("c":["","route","ZZZZ-LAX"]) whatever the page renders. The
+# needle is now the slug IMMEDIATELY AFTER the sentence the page itself composes, which only
+# the rendered <p role="alert"> produces. The regex spans the payload's own string-escaping
+# between the two (`show ‘\",\"ZZZZ-LAX`) rather than pinning that escaping exactly.
 BODY=$(curl -s --max-time 15 "${BASE}/route/ZZZZ-LAX")
-check     "route 404: names the offending code, not just the pair" "$BODY" 'unknown airport code'
-check     "route 404: still shows the requested slug"              "$BODY" 'ZZZZ-LAX'
+check     "route 404: names the offending code, not just the pair" "$BODY" "unknown airport code 'ZZZZ'"
+check_re  "route 404: the SENTENCE carries the slug, not just the router state" "$BODY" 'We can.{1,3}t show .{1,12}ZZZZ-LAX'
 check     "route 404: DATA AS OF is present"                       "$BODY" 'DATA AS OF'
 check_not "route 404: does not offer every cause at once"          "$BODY" 'domestic-only'
 
 BODY=$(curl -s --max-time 15 "${BASE}/route/JFK-LHR")
 check     "route 404: a real airport outside the dataset says so"  "$BODY" 'domestic-only'
 check_not "route 404: LHR is not reported as an unknown code"      "$BODY" 'unknown airport code'
+
+# Fix wave 3, item 2: ONE DuckDBInstance for the whole server, not one per entry point.
+# Turbopack emits lib/db.ts into three separate server chunks (proxy, page SSR, route
+# handler), so its memo was three memos and this process opened upgauge.duckdb three times --
+# three buffer pools, and three snapshots of the file taken at three different moments, which
+# is a live route back to the bug the section above fixes (a pair present in the proxy's
+# snapshot but not the page's would get s-maxage=2592000 on a 404). db.ts now memoizes on
+# globalThis. NOTHING but a served build can check this: a unit test has one module graph by
+# construction, so it cannot tell one instance from three.
+#
+# Deliberately placed after every entry point above has been hit at least once: it is the
+# FIRST call in each graph that opens the file. One fd == one instance was established by
+# measurement (the count went 1 -> 2 -> 3 across /, /route and /api/pivot before the fix, and
+# stays at 1 after it). Reads /proc, so this needs Linux -- the deploy target and CI both are;
+# it fails loudly rather than skipping if that ever stops being true, because a skipped guard
+# is a dark guard.
+descendants() { printf '%s\n' "$1"; local c; for c in $(pgrep -P "$1" 2>/dev/null); do descendants "$c"; done; }
+HANDLES=0
+for p in $(descendants "$SERVER_PID"); do
+  HANDLES=$(( HANDLES + $(ls -l "/proc/${p}/fd" 2>/dev/null | grep -c 'upgauge\.duckdb') ))
+done
+check_re "db: proxy, page and API share ONE DuckDBInstance (open handles = 1)" "$HANDLES" '^1$'
 
 echo
 if [ "$FAILED" -eq 0 ]; then echo "smoke: all checks passed"; else echo "smoke: FAILURES above"; fi

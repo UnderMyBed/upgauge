@@ -58,7 +58,7 @@ the URL state codec, and the golden fixtures
 `sql/02_marts/` into `upgauge.duckdb` (6 catalog views + `fct_route_month` +
 `mart_route_health` + the 2 pivot-vocabulary catalog views); `make verify` proves both the
 Parquet layer and the database layer reproducible across two from-scratch builds —
-`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 439 Python tests
+`parquet: 17 artifacts byte-identical`, `database: 10 objects identical`. 443 Python tests
 green, zero join orphans. `data/raw/` holds the full 2015–2026 window.
 
 M3b ported that contract into the Next.js app and wired it end to end: the TypeScript pivot
@@ -87,6 +87,14 @@ broken production" — `__dirname` under Turbopack, `decodeURIComponent` throwin
 `process.chdir`, the DuckDB platform-switch `require`, and the query normalization above.
 Every one was found by building and serving, never by the suite. That is what `make app-smoke`
 is for; run it before merging anything that touches routing, config, or the query layer.
+
+**`lib/db.ts` memoizes its `DuckDBInstance` on `globalThis`, not in a module-level `let`, and
+that is the same class of bug.** Turbopack emits that module into a separate server chunk per
+entry graph — proxy, page SSR, route handler — so a module-level memo is *three* memos:
+measured, one `next start` process opened `upgauge.duckdb` three times, three buffer pools,
+and three snapshots of a file the proxy and the page must agree about to keep a 404 out of the
+30-day cache. No unit test can see this (one module graph by construction); `make app-smoke`
+asserts the open-handle count is 1.
 
 **M4a resolves dimension ids to display codes.** `meta_pivot_dimensions`'s `join_dim`/
 `join_key` columns (`op_airline_id` → `dim_carrier.airline_id`, and so on) are now read by
@@ -117,7 +125,10 @@ surfaced a resolution gap M4a's own invariant never covered — `WHERE is_latest
 `airport_id`, not per code, so 36 codes had more than one `is_latest` row (`AUS` returned both
 the real Austin-Bergstrom and a defunct airport closed since 1999) — fixed by scoping the
 lookup to airports present in `fct_segment_month`, which takes colliding codes to 0
-(`docs/data/invariants.md` § Entity resolution). `/route/LAX-JFK` 308-redirects to
+(`docs/data/invariants.md` § Entity resolution). That lookup is now on the request hot path —
+the proxy runs it to decide cacheability — so its fact-presence filter is a hash semi-join
+rather than the correlated `EXISTS` it shipped as: 43–51 ms → 17 ms, selecting exactly the
+same airports, proven over every code rather than a sampled pair. `/route/LAX-JFK` 308-redirects to
 `/route/JFK-LAX`; `/route/ZZZZ-LAX` 404s on a branded page naming the offending **half**
 (`unknown airport code 'ZZZZ'`, and `'LHR' is a recognized airport code, but this dataset is
 domestic-only` for `/route/JFK-LHR`) — server-rendered from `resolveRoutePair`'s own reason,
@@ -127,7 +138,7 @@ widened-to-2015 offer, never a blank panel. Full contract:
 `docs/architecture/pipeline.md` § M4b.
 
 222 app tests green (`make app-check`); `make app-build` produces a working production
-build; `make app-smoke` builds, serves and curls real URLs, 37 checks in all — including a
+build; `make app-smoke` builds, serves and curls real URLs, 39 checks in all — including a
 curl-verified redirect, 404, `Cache-Control` and 404 *body* for `/route/<pair>`, since a
 handler returning a redirect object and a served app returning one are not the same claim,
 and a 404 whose status is right tells you nothing about what it says.
@@ -292,11 +303,15 @@ signature element; it does not own these.
 - Marts must rebuild from scratch reproducibly via `make`. No manual steps.
 - Every **successful** response gets `Cache-Control: public, s-maxage=2592000,
   stale-while-revalidate=86400`. Precompute leaderboards as static JSON at build time — the
-  caching is the cost control, not the hosting tier. **Errors and 404s get `no-store`**: the
-  dataset is rebuilt monthly, so a 404 pinned in a shared cache outlives the condition that
-  caused it. `/api/pivot` does this in its handler; a page cannot, and a proxy cannot see the
+  caching is the cost control, not the hosting tier. **404s get `no-store`**: the dataset is
+  rebuilt monthly, so a 404 pinned in a shared cache outlives the condition that caused it.
+  `/api/pivot` does this in its handler; a page cannot, and a proxy cannot see the
   downstream status — so **`proxy.ts` caches on "is this a well-formed, known entity",
   resolved before the page runs**, which is the rule M4d's entity pages must follow too.
+  **A 5xx from a page is NOT covered and is knowingly still cached for 30 days** — measured
+  on both `/route` and `/explore`, unfixable from a proxy, uncovered since M3b, and written
+  up with the numbers in `docs/architecture/hosting.md` § The gap. Do not restate the rule
+  as "errors get `no-store`"; it is 404s only.
   **A new page route must be added to `proxy.ts`'s matcher or it ships uncached and without
   the raw-query and pathname headers.** Full detail: `docs/architecture/hosting.md`.
 - Build the **aircraft-type-mix chart before the load-factor chart**. Everyone does load

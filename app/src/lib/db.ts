@@ -42,19 +42,56 @@ const QUERIES_DIR = path.join(ROOT, "sql", "03_queries");
 // Parquet-backed view succeeds with cwd left at app/ once file_search_path: ROOT is set.
 // Vitest gets a belt-and-braces process.chdir() of its own in vitest.config.ts's
 // setupFiles -- safe there only because Vitest 4's default pool is forks (main thread).
-let instance: Promise<DuckDBInstance> | null = null;
+
+// The memo lives on `globalThis`, NOT in a module-level `let`, and that is not a style
+// choice -- a module-level `let` here was measurably THREE memos, not one.
+//
+// Turbopack emits this module into a separate server chunk per entry graph, and each chunk
+// carries its own copy of the module's state. Measured against `next build` output at
+// 6a6b11c: `access_mode` (a string that occurs only in this function) appears in three
+// emitted chunks -- `chunks/[root-of-the-server]__*.js` (the proxy, loaded by
+// `.next/server/middleware.js`), `chunks/ssr/src_lib_*.js` (page SSR) and
+// `chunks/node_modules_next_dist_esm_build_templates_app-route_*.js` (route handlers). All
+// three run in ONE `next start` process (verified: one `next-server` pid), and open fds on
+// `upgauge.duckdb` in that pid climbed 1 -> 2 -> 3 as `/`, then `/route/JFK-LAX`, then
+// `/api/pivot` were each hit for the first time. Three DuckDBInstances, three buffer pools
+// each defaulting to ~80% of system RAM, on an 8 GB box.
+//
+// Worse than the memory: they are opened at three DIFFERENT moments, so they can hold three
+// different snapshots of the file. `proxy.ts` decides `/route/<pair>` cacheability from ITS
+// instance and the page 404s from the SSR one; if the database were replaced between those
+// two opens, a pair present in the proxy's snapshot and absent from the page's would get
+// `public, s-maxage=2592000` on a 404 -- exactly the bug fix wave 2 removed
+// (docs/architecture/hosting.md § Cache-Control lives here).
+//
+// `globalThis` is shared across the three chunks because they are plain `require`s in one
+// Node process, not vm contexts -- which is a claim, so it is measured: with this slot the
+// same fd count stays at 1 after all three entry points are hit, and `app/smoke.sh` asserts
+// that against a served build. If a future Next ever DOES isolate the proxy into its own
+// realm or process, this degrades to precisely today's behaviour (one memo per realm) rather
+// than breaking; the smoke check is what would tell us.
+interface InstanceSlot {
+  __upgaugeDuckDBInstance?: Promise<DuckDBInstance> | null;
+}
+const slot = globalThis as unknown as InstanceSlot;
+
 function getInstance(): Promise<DuckDBInstance> {
-  instance ??= DuckDBInstance.create(DB_PATH, {
+  const existing = slot.__upgaugeDuckDBInstance;
+  if (existing) return existing;
+  const created = DuckDBInstance.create(DB_PATH, {
     access_mode: "READ_ONLY",
     file_search_path: ROOT,
   }).catch((e: unknown) => {
     // Memoizing a REJECTED promise would replay a transient open failure (volume not yet
     // mounted, mid-rebuild EIO) for the rest of the process's life on an always-on box that
-    // otherwise has no restart trigger. Clear it so the next call retries from scratch.
-    instance = null;
+    // otherwise has no restart trigger. Clear it so the next call retries from scratch --
+    // but only if nothing has replaced it since, or a concurrent successful open would be
+    // discarded by a straggler rejection.
+    if (slot.__upgaugeDuckDBInstance === created) slot.__upgaugeDuckDBInstance = null;
     throw e;
   });
-  return instance;
+  slot.__upgaugeDuckDBInstance = created;
+  return created;
 }
 
 /** A fresh connection per operation, matching @duckdb/node-api's own documented lifecycle:

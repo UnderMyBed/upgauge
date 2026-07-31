@@ -71,9 +71,17 @@ describe("/route/<pair> not-found", () => {
   // The last line of defence for the case this file's previous version could not see: a
   // pathname that is not a /route/ page at all (or a proxy that starts sending something
   // else). Must degrade to a page that still renders, never throw a 500 out of a 404.
+  //
+  // Fix wave 3, item 6: the first line used to be `getByRole("alert")` alone, which the
+  // component's own unconditional `<p role="alert">` guarantees -- it could not fail, so the
+  // negative half was carrying the whole test. It now asserts the alert's exact TEXT, which
+  // is the branch's actual output. That fails if the ternary in not-found.tsx grows a
+  // fallback (rendering the raw pathname, or an empty sentence, for a non-/route path), if
+  // `reasonFor` stops returning null when `routeSlugFromPath` finds no slug, or if the
+  // generic sentence is reworded without anyone revisiting this case.
   it("falls back to a generic message when the path is not a route page", async () => {
     render(await NotFoundView({ pathname: "/somewhere/else" }));
-    expect(screen.getByRole("alert")).toBeDefined();
+    expect(screen.getByRole("alert").textContent).toBe("We don’t recognize this page.");
     expect(screen.queryByText(/unknown airport code/)).toBeNull();
   });
 });

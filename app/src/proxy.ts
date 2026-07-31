@@ -88,11 +88,30 @@ export async function proxy(request: NextRequest) {
  * production" and every one of them was found only by curling a real server.
  *
  * This is a second `resolveRoutePair` for the request -- `page.tsx` runs its own, because the
- * proxy has no channel to hand a resolved object to a Server Component. Both are indexed
- * reads of `dim_carrier`/`dim_airport`-scale tables against an already-memoized
- * `DuckDBInstance`, on a request that is about to run a far larger pivot; the alternative
+ * proxy has no channel to hand a resolved object to a Server Component. The alternative
  * (serialising the resolution into a header) would make the page's correctness depend on the
  * proxy having agreed with it, which is a worse trade than one small query.
+ *
+ * WHAT IT COSTS, measured, because the first version of this comment guessed and guessed
+ * WRONG in the expensive direction -- it called this "one extra read of dimension-sized
+ * tables ... on a request that is about to run a much larger pivot", and M4d is told to copy
+ * this pattern for /airport, /carrier and /aircraft. It is not a dimension read:
+ * `lookup_airport_by_code.sql` filters `dim_airport` by presence in `fct_segment_month`
+ * (3.36 M rows), and at 6a6b11c that filter was a correlated EXISTS with an OR across two
+ * columns -- 43-51 ms, roughly 6x the ~7 ms pivot it precedes, twice per 200 and three times
+ * per 404. Fix wave 3 rewrote it as a hash semi-join: 8 ms at the server's default thread
+ * count (17 ms capped to two threads), same rows (proven exhaustively
+ * against the real database, not sampled -- pipeline's
+ * test_reverse_lookup_selects_exactly_the_fact_present_current_airports). Still the largest
+ * single query on the route path; deliberately kept, because the cheap alternatives are all
+ * wrong (see docs/architecture/hosting.md).
+ *
+ * NOTE the memo it uses is on `globalThis`, not a module-level `let`, and this file is why:
+ * Turbopack emits `lib/db.ts` into a separate chunk per entry graph, so the proxy's copy of
+ * that module is NOT the page's copy. With a module-level memo the process held three
+ * DuckDBInstances (measured), and the proxy's could hold a different snapshot of the
+ * database file than the page's -- which is a route straight back to the bug this branch
+ * fixed, since the proxy's answer would then be about a file the page is no longer reading.
  *
  * Errors are swallowed to `false`, deliberately: a transient DuckDB failure inside a PROXY
  * would 500 a request that the page itself might well have served, and `false` is the

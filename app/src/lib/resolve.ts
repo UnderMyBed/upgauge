@@ -116,7 +116,7 @@ export interface AirportRef {
  * the code was already present. Pulled out of lookupAirportsByCode so the fail-loud path is
  * directly testable with synthetic rows -- the same reason collectIds is pulled out of
  * resolveRows above: real data no longer produces a colliding pair for any code (the SQL
- * file's EXISTS-in-facts filter took collisions from 36 to 0, measured), so the only way to
+ * file's fact-presence filter took collisions from 36 to 0, measured), so the only way to
  * exercise this branch against the live database would be to wait for BTS to reuse a closed
  * airport's code, which is not a test. */
 export function insertAirportRow(out: Map<string, AirportRef>, row: AirportRef): void {
@@ -138,7 +138,7 @@ export function insertAirportRow(out: Map<string, AirportRef>, row: AirportRef):
  * Absent key means unknown, exactly as resolveRows()'s map does -- the caller renders a 404
  * naming the code rather than guessing.
  *
- * lookup_airport_by_code.sql's EXISTS-in-facts filter is what makes a code unique today
+ * lookup_airport_by_code.sql's fact-presence filter is what makes a code unique today
  * (measured: 36 codes collide among all is_latest airports, 0 among fact-present ones -- see
  * that file's header). But that invariant is data-dependent, not structural -- a future BTS
  * refresh could reintroduce a collision (a newly-closed airport whose code gets reused, for

@@ -203,10 +203,21 @@ describe("lookupAirportsByCode", () => {
 });
 
 // Fix round 1: shows the un-scoped (is_latest only) query really does return 2 rows for AUS
-// while the shipped query (with the EXISTS-in-facts filter) returns 1 -- the direct-SQL
+// while the shipped query (with the fact-presence filter) returns 1 -- the direct-SQL
 // counterpart to the "resolves AUS" Map-based test above, mirroring how "lookup_airport_by_
 // code.sql's cardinality guard" (below) backs up the JFK multi-seq test.
-describe("lookup_airport_by_code.sql's EXISTS-in-facts filter", () => {
+//
+// Fix wave 3: this test used to strip the filter with a regex naming the clause's SYNTAX
+// (`AND EXISTS ( SELECT 1 FROM fct_segment_month f ...`), which pinned the query TEXT rather
+// than its behaviour -- rewriting that correlated EXISTS as the hash semi-join it is today
+// (43-51 ms -> 17 ms; see the .sql file) left the regex matching nothing, so `unscoped`
+// silently became a second copy of `shipped` and the test failed for a reason that had
+// nothing to do with the guarantee. It now truncates at a marker comment the .sql file
+// declares for this purpose, and asserts that marker exists, so any future rewrite of the
+// predicate keeps working while its DISAPPEARANCE still fails loudly.
+const FACT_FILTER_MARKER = "-- FACT-PRESENCE FILTER";
+
+describe("lookup_airport_by_code.sql's fact-presence filter", () => {
   it("un-scoped (is_latest only) AUS returns 2 rows; the shipped query returns 1", async () => {
     const raw = readFileSync(path.join(QUERIES_DIR, "lookup_airport_by_code.sql"), "utf8");
     const con = await connect();
@@ -219,14 +230,12 @@ describe("lookup_airport_by_code.sql's EXISTS-in-facts filter", () => {
     expect(shippedRows.length).toBe(1);
     expect(shippedRows[0].id).toBe(10423);
 
-    // The same statement with the EXISTS-in-facts clause stripped back out -- reproduces
-    // the pre-fix query to prove the collision this filter closes is real, not assumed.
-    const unscopedStatement = shippedStatement
-      .replace(
-        /\s+AND EXISTS \(\s*SELECT 1 FROM fct_segment_month f[\s\S]*?\)\s*$/,
-        "",
-      )
-      .trimEnd();
+    // The same statement with the fact-presence clause stripped back out -- reproduces the
+    // pre-fix query to prove the collision this filter closes is real, not assumed.
+    const marker = shippedStatement.indexOf(FACT_FILTER_MARKER);
+    expect(shippedStatement.split(FACT_FILTER_MARKER).length - 1).toBe(1);
+    expect(marker).toBeGreaterThan(shippedStatement.indexOf("WHERE is_latest"));
+    const unscopedStatement = shippedStatement.slice(0, marker).trimEnd();
     const unscopedPrepared = await con.prepare(unscopedStatement);
     unscopedPrepared.bind({ id0: "AUS" });
     const unscopedRows = await (await unscopedPrepared.run()).getRowObjects();
@@ -236,7 +245,7 @@ describe("lookup_airport_by_code.sql's EXISTS-in-facts filter", () => {
 });
 
 // Fix round 1: proves the fail-loud path actually fires. Real data no longer produces a
-// colliding pair for ANY code (lookup_airport_by_code.sql's EXISTS filter took 36 collisions
+// colliding pair for ANY code (lookup_airport_by_code.sql's fact-presence filter took 36 collisions
 // to 0, measured), so there is no way to trigger this branch through lookupAirportsByCode()
 // itself without waiting for BTS to reuse a closed airport's code -- not a test. This
 // exercises insertAirportRow directly with synthetic rows instead, the same reasoning

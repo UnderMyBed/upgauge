@@ -480,10 +480,31 @@ back `is_latest = TRUE`. Fix round 1 on M4b Task 4 caught this after ship: witho
 fact-presence filter, whichever row the driver returns last wins the reverse-lookup map in
 `app/src/lib/resolve.ts` silently — Robert Mueller today, for a page that says `DATA AS OF`
 this month. Restricting to `airport_id`s that actually appear in `fct_segment_month`
-(`lookup_airport_by_code.sql`'s `EXISTS` clause) is what takes colliding codes from 36 to 0,
-which is why the reverse lookup needs that clause and `is_latest` is not sufficient alone —
-`pipeline.tests.test_resolution_invariants`'s in-window scoping already matched this, which
-is why it never caught the gap here.
+(`lookup_airport_by_code.sql`'s fact-presence clause) is what takes colliding codes from 36
+to 0, which is why the reverse lookup needs that clause and `is_latest` is not sufficient
+alone — `pipeline.tests.test_resolution_invariants`'s in-window scoping already matched this,
+which is why it never caught the gap here.
+
+**How that clause is written is a performance decision, and it is now on a hot path.** It
+shipped as a correlated `EXISTS (… WHERE f.origin_airport_id = id OR f.dest_airport_id =
+id)`; the `OR` across two columns defeats a hash semi-join, so DuckDB re-scanned all 3.36 M
+fact rows per candidate. Measured warm, read-only: **43–51 ms**, against 1.8–2.4 ms for the
+dimension-only `lookup_airport_code_exists.sql` and ~7–9 ms for the route pivot it precedes.
+Since `app/src/proxy.ts` now runs it on every `/route/*` request to decide cacheability, it
+was rewritten as a semi-join against `origin_airport_id UNION dest_airport_id`: **8 ms** at
+the default thread count, 17 ms capped to `threads=2`, selecting exactly the same airports.
+The old form measures the same at 2 threads as at 12 — it does not parallelise at all, which
+is the tell that it was re-scanning the fact table rather than probing a hash table.
+
+*Exactly* the same is the load-bearing half, and it is measured rather than argued:
+`test_reverse_lookup_selects_exactly_the_fact_present_current_airports` runs the shipped
+`.sql` file over **every** `is_latest` code and diffs its result set against the `EXISTS`
+form's in both directions (1,045 airports, 0 either way). Both forms are equivalent by
+construction — membership in `origin ∪ dest` *is* what that `EXISTS` tests, NULLs included —
+but the same test rejects a plausible near-miss: an `origin`-only predicate loses 50
+destination-only airports. Two other rewrites were measured and rejected: `id IN (origins) OR
+id IN (dests)` is 80 ms (two mark joins, no shared scan), and `UNION ALL` in place of `UNION`
+is 21–22 ms (6.7 M probe values instead of 1,045 distinct ones).
 
 ---
 

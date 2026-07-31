@@ -798,9 +798,17 @@ alone is **not** sufficient to make a code unique: it is scoped per `airport_id`
 chain, not per code, so two different `airport_id`s sharing a code can each carry their own
 `is_latest = TRUE` row. Measured: 36 codes do (`AUS` returns both the real
 Austin-Bergstrom and Robert Mueller Municipal, closed since 1999). Task 4's fix round 1
-added an `EXISTS`-in-`fct_segment_month` clause, which takes colliding codes from 36 to 0 —
-full accounting, including why M4a's own in-window invariant test didn't already catch
-this: [`docs/data/invariants.md` § Code collisions](../data/invariants.md#entity-resolution-m4a).
+added a fact-presence clause, which takes colliding codes from 36 to 0 — full accounting,
+including why M4a's own in-window invariant test didn't already catch this:
+[`docs/data/invariants.md` § Code collisions](../data/invariants.md#entity-resolution-m4a).
+
+That clause was a correlated `EXISTS` and is now a hash semi-join (43–51 ms → 8 ms), because
+`proxy.ts` runs it on every `/route/*` request to decide cacheability. The equivalence is
+pinned by `test_reverse_lookup_selects_exactly_the_fact_present_current_airports`, which
+diffs the shipped file against the `EXISTS` form over every `is_latest` code — the timings,
+the rejected variants and the mutation that fails it are in
+[`invariants.md` § Entity resolution](../data/invariants.md) and
+[`hosting.md` § What the proxy's query actually costs](hosting.md#what-the-proxys-query-actually-costs).
 
 ### Page composition and truncation
 

@@ -41,7 +41,7 @@ export async function resolveRoutePair(slug: string): Promise<RoutePairResult> {
     // apart: a code T-100 Segment (domestic only -- CLAUDE.md's "Segment only" rule) never
     // carries a fact row for (LHR, CDG, NRT, MEX, YYZ, ...) still resolves in dim_airport's
     // own reference table (BTS's master list is global), so lookupAirportsByCode's
-    // EXISTS-in-facts filter rejects it for the same reason a genuine typo does -- reading
+    // fact-presence filter rejects it for the same reason a genuine typo does -- reading
     // as identical 404s. airportCodesExist re-checks the missing codes WITHOUT that filter
     // to tell the two apart. Neither branch changes the response kind (both stay a named
     // 404, never a silent resolve to an airport with zero possible query results).

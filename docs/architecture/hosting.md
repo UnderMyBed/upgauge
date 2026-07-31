@@ -278,10 +278,10 @@ Two things this depends on, both established by building and serving rather than
   returning `false`: a transient DuckDB failure inside a proxy would 500 a request the page
   might well have served, and declining to cache is the conservative outcome. The page runs
   its own resolution unguarded a moment later, so a real database failure still surfaces
-  loudly. The cost is one extra read of dimension-sized tables against an already-memoized
-  `DuckDBInstance`, on a request that is about to run a much larger pivot.
+  loudly.
 
-Measured against a served production build (`make app-smoke` asserts all four):
+Measured against a served production build. `make app-smoke` curls the `Cache-Control` on
+every row below; the status on the 308 and on `/route/ZZZZ-LAX`.
 
 | URL | Status | `Cache-Control` |
 |---|---|---|
@@ -289,6 +289,98 @@ Measured against a served production build (`make app-smoke` asserts all four):
 | `/route/LAX-JFK` | 308 | `public, s-maxage=2592000, stale-while-revalidate=86400` |
 | `/route/ZZZZ-LAX` | 404 | `no-store` |
 | `/route/JFK-LHR` | 404 | `no-store` |
+| `/route/LAX-LAX` | 404 | `no-store` |
+
+### What the proxy's query actually costs
+
+The first version of this section called it *"one extra read of dimension-sized tables …
+on a request that is about to run a much larger pivot"*. **That was wrong by roughly an
+order of magnitude, and in the direction that matters** — M4d is told above to copy this
+pattern three more times. The corrected numbers, read-only against the built database,
+`memory_limit=1GB`, five warm runs, at DuckDB's default thread count (which is what the
+server runs with — `db.ts` never sets `threads`) and, in brackets, capped to `threads=2`:
+
+| Query | At `6a6b11c` | Now | Note |
+|---|---|---|---|
+| `lookup_airport_by_code.sql` (the proxy's, and the page's) | 43–51 ms [same] | **8 ms** [17 ms] | filters `dim_airport` by presence in `fct_segment_month` — 3.36 M rows, not a dimension read |
+| `lookup_airport_code_exists.sql` (404 reason only) | 1.8–2.4 ms | unchanged | genuinely dimension-only |
+| A `/route/JFK-LAX` carriers pivot | ~7–9 ms | unchanged | the query the lookup precedes |
+
+The old form is **identical at 2 threads and at 12** — it does not parallelise, which is
+itself the tell that it was re-scanning rather than probing. Both figures reproduce; a
+measurement of this query that omits its thread count is not comparable to another one.
+
+The lookup ran a correlated `EXISTS (… WHERE f.origin_airport_id = id OR f.dest_airport_id
+= id)`. The `OR` across two columns defeats a hash semi-join, so DuckDB re-scanned the fact
+table per candidate row. Rewriting it as a semi-join against `origin ∪ dest` is 5.5× faster
+(2.7× at two threads) and selects exactly the same airports — proven exhaustively over every `is_latest` code
+against the real database, not sampled: `pipeline/tests/test_resolution_invariants.py`'s
+`test_reverse_lookup_selects_exactly_the_fact_present_current_airports` diffs the shipped
+file's result set against the `EXISTS` form's, both directions, and a mutation that drops
+only destination-only airports fails it by 50 rows.
+
+**It is still the largest single query on the route path**, and a 404 runs it twice (proxy,
+then `not-found.tsx`'s reason) with no CDN absorption, over an unbounded URL space.
+Cloudflare rate limiting is the front door for that (CLAUDE.md § Architecture). Do not
+"optimise" it by dropping the fact-presence filter: that filter is what takes colliding
+airport codes from 36 to 0, and `AUS` resolves to an airport closed since 1999 without it
+([invariants.md § Entity resolution](../data/invariants.md)).
+
+### One `DuckDBInstance` per process — and it takes `globalThis` to get there
+
+This section used to say the proxy's query runs "against an already-memoized
+`DuckDBInstance`". **It did not.** Turbopack emits `lib/db.ts` into a separate server chunk
+per entry graph, and each chunk carries its own copy of the module's state, so a
+module-level `let instance` was **three** memos. Measured against `next build` output:
+`access_mode` — a string that occurs only in `getInstance()` — appears in three emitted
+chunks (proxy, page SSR, route handler), and open fds on `upgauge.duckdb` in the single
+`next-server` process climbed **1 → 2 → 3** as `/`, `/route/JFK-LAX` and `/api/pivot` were
+each hit for the first time.
+
+Two consequences, one of them a live route back to the bug above:
+
+1. **Three snapshots.** The three instances open at three different moments and each pins
+   an inode for the process's life. If the database file were replaced between the proxy's
+   open and the page's, a pair present in the proxy's snapshot and absent from the page's
+   would get `s-maxage=2592000` on a 404.
+2. **Three buffer pools**, each defaulting to ~80% of system RAM, with no coordination
+   between them, on an 8 GB box.
+
+`db.ts` now memoizes on `globalThis` instead. The three chunks are plain `require`s in one
+Node process, not vm contexts, so they share it: the same fd count stays at **1** after all
+three entry points are hit. `app/smoke.sh` asserts that against a served build — no unit
+test can, because a test has one module graph by construction. If a future Next isolates the
+proxy into its own realm, this degrades to exactly the old behaviour (one memo per realm)
+rather than breaking, and that smoke check is what would say so.
+
+### The gap: a **5xx** still gets the 30-day header
+
+CLAUDE.md's rule is *"404s get `no-store`"* and that is deliberately narrow. **A 500 does
+not.** The proxy resolves the pair, writes the long cache, and only then does the page throw
+— `dataAsOf()`, `loadAllowlist()`, `runPivot()`, or an OOM. Measured against a served build
+pointed at a deliberately broken database:
+
+| URL | Status | `Cache-Control` |
+|---|---|---|
+| `/route/JFK-LAX` (catalog view missing) | **500** | `public, s-maxage=2592000, stale-while-revalidate=86400` |
+| `/explore?…` (same) | **500** | `public, s-maxage=2592000, stale-while-revalidate=86400` |
+| `/api/pivot?…` (same) | 500 | `no-store` — the handler owns its own header |
+| `/route/ZZZZ-LAX` (same) | 404 | `no-store` — unaffected |
+
+RFC 9111 § 3 lets a shared cache store a 500 that carries an explicit `s-maxage`, so this is
+a real exposure on the headline SEO-canonical URL, not a technicality.
+
+**This is not fixable from the proxy and is not new.** The same shape has been true of
+`/explore` since M3b, and of `/route` before and after the fix wave that made 404s
+`no-store`: the proxy cannot see the downstream status, and a Server Component cannot set a
+response header, so there is no place left that knows both "this is a 5xx" and "headers are
+still writable". `/api/pivot` escapes only because a route handler builds its own `Response`.
+
+What *would* fix it, none of them small and none of them M4b: give the pages a route-handler
+entry point that can set headers per outcome; or drop the proxy's blanket `Cache-Control` in
+favour of a per-page mechanism if Next ever grows one; or accept a short `s-maxage` for the
+HTML so an error self-corrects in minutes rather than a month. Recorded here so M4d inherits
+the honest version.
 
 ## If the Dockerfile ever adopts `output: "standalone"`
 
