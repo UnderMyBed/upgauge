@@ -906,6 +906,41 @@ its series is **empty** rather than zero-filled when `typeCount === 0` — so th
 month in the window (136 on JFK–LAX), zero-filled where a type did not fly: a stacked area
 with gaps misaligns rather than showing a hole.
 
+### The component: what Plot does not give you
+
+`app/src/components/AircraftMixChart.tsx` is a synchronous Server Component taking a row set
+and a title, and nothing else — it never names what it is describing, because M4d mounts the
+identical component on `/airport`, `/carrier` and `/aircraft`. Four decisions the encoding
+docs do not own:
+
+- **`role="img"` is injected into Plot's root `<svg>`, not put on a wrapper.** Plot exposes
+  `ariaLabel` and `className` but no `role`, and the attribute has to be on the SVG itself:
+  `role="img"` is what makes the subtree presentational, so a screen reader announces the one
+  description instead of reading out the `aria-label`ed group Plot wraps every axis in. A
+  wrapping `<div role="img">` would hide those groups too but leaves the SVG unlabelled the
+  moment it is extracted, so the component does a single anchored replacement of Plot's own
+  root tag.
+- **The COVID band's edges land ON the 2020-03 and 2021-06 samples, not around them.** Every
+  month is plotted at its first day (UTC — a local-midnight `Date` moves a month's sample
+  across the year boundary west of Greenwich), so `2021-06-01` is exactly where June 2021's
+  seats are drawn. It is clamped to the window and dropped entirely when the two are disjoint;
+  an unconditional rect puts a `--panel-2` slab at a meaningless x on any chart starting after
+  2021.
+- **The crossover annotation's text anchor flips at the window's midpoint.** ~30 characters
+  against the ~10% of the frame a 2025 crossover leaves would run off the right edge.
+- **Fewer than two months is stated in words, never drawn.** A one-month stacked area has a
+  degenerate x domain and serializes to zero width — a blank panel under a `DATA AS OF` badge,
+  the failure `/explore` and `/route` already refuse. `system.md`'s own sparkline rule says the
+  same thing: one month is not a trend.
+
+The colour key (`.ckey`) carries Other's disclosure — how many types it aggregates and its
+share of seats — on the swatch itself, because that number is per-subject and the legend rail
+is static.
+
+**Measured, full shape (136 months × 6 bands): 30,372 bytes of HTML** for the whole block,
+against Task 1's 28,609 for the bare SVG. It ships twice per response (body + RSC flight
+payload, see `hosting.md`), so ~61 KB, and M4d mounts it three more times.
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command
