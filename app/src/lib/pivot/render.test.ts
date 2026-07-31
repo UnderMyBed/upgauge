@@ -183,11 +183,13 @@ describe("composite-dimension filters", () => {
   });
 
   it("OR-joins multiple routes, keeping IN-list semantics", () => {
-    const { sql } = renderPivot(
+    const { sql, params } = renderPivot(
       { ...BASE, filters: [["route", ["12478-12892", "10140-14747"]]] }, FIXTURE);
     expect(sql).toContain(" OR ");
     expect(sql).toContain("$f0_1a");
     expect(sql).toContain("$f0_1b");
+    expect(params.f0_1a).toBe("10140");
+    expect(params.f0_1b).toBe("14747");
   });
 
   it("rejects a malformed pair with a named error", () => {

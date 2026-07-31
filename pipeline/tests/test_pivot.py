@@ -223,11 +223,13 @@ def test_composite_dimension_filter_emits_least_greatest(con):
 
 def test_composite_filter_values_are_or_joined(con):
     """Multiple values keep the IN-list semantics every other dimension has: either route."""
-    sql, _ = render_pivot(
+    sql, params = render_pivot(
         q(filters=(("route", ("12478-12892", "10140-14747")),)), con
     )
     assert " OR " in sql
     assert "$f0_1a" in sql and "$f0_1b" in sql
+    assert params["f0_1a"] == "10140"
+    assert params["f0_1b"] == "14747"
 
 
 def test_composite_filter_rejects_a_malformed_pair(con):
