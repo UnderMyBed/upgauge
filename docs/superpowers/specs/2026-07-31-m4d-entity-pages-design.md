@@ -88,9 +88,23 @@ marketing-carrier field; do not infer one.
 
 ## `/aircraft/<short_name>` — e.g. `/aircraft/B737-8`
 
-**Slug:** `dim_aircraft_type.short_name`, scoped to fact-present types, with a **fail-loud
-collision guard**. Never the raw `code`: `612` is the 737-700, not the A321, and nobody pastes
-`/aircraft/614`.
+**Slug:** `dim_aircraft_type.short_name`, **path-safe-encoded**, scoped to fact-present types,
+with a **fail-loud collision guard**. Never the raw `code`: `612` is the 737-700, not the A321,
+and nobody pastes `/aircraft/614`.
+
+**`short_name` is not directly usable as a path segment — this spec's own worked example proves
+it.** 16 of the 111 fact-present `short_name`s contain `/` or a space, and they include
+`A321/LR` — the type this spec uses to demonstrate the gauge ramp — and `B767-3/R`, which is a
+band on the JFK–LAX chart. `/aircraft/A321/LR` parses as *two* path segments and can never match
+a single dynamic segment, so matching `upper(short_name)` exactly 404s all 16. Found by Task 1
+while building the lookup; the spec was wrong.
+
+The slug transform is `/` → `-`, space → `-`, uppercased — measured **injective over all 111
+fact-present types, 0 collisions** (`A321/LR` → `A321-LR`, `A320-1/2` → `A320-1-2`, `CRJ-2/4`
+→ `CRJ-2-4`). Because the transform maps two characters onto one that already occurs in names
+like `B737-8`, that zero is a property of today's data, not of the scheme: guard it exactly as
+the `CE-180` collision is guarded, and let a future clash fail loudly rather than resolve
+arbitrarily.
 
 **The one collision, measured.** `CE-180` maps to **two** fact-present codes — `030` (CESSNA
 180, 994 seats, 441 departures, 183 rows) and `031` (CESSNA 180A/B, 557 seats, 189 departures,
