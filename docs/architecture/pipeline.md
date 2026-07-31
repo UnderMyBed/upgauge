@@ -826,6 +826,37 @@ block, stat strip, carriers table, Explorer link and legend rail, and `make app-
 curling a real served page for the redirect and 404 status codes — see `CLAUDE.md`'s Status
 section for current test counts.
 
+## M4c — the aircraft-type-mix chart
+
+Design spec: `docs/superpowers/specs/2026-07-31-m4c-aircraft-mix-chart-design.md`. Encoding
+rules: `docs/design/system.md` § Charts. This section records what the *implementation*
+needed that neither of those owns.
+
+### The chart adds no SQL and no catalog entries
+
+`app/src/lib/chart/aircraftMix.ts` composes the existing segment-grain pivot:
+`dimensions: ["year_month", "aircraft_type"]`, `measures: ["seats", "departures_performed"]`,
+`grouping: "operating"`, filtered by the composite `route` dimension M4b added. The type is
+resolved to `dim_aircraft_type.short_name` through the map `runPivot` already returns — the
+same M4a resolution path `/route`'s carriers table uses, via `displayValue()` rather than a
+second local copy of the three-way display contract.
+
+`departures_performed` is fetched even though nothing is *drawn* from it: band shade is
+ordered by gauge (Σ seats / Σ departures), which is a different ordering from band membership.
+See the next section.
+
+**The row limit (10,000) is a measured bound, not a guess.** Measured over the full
+2015-01 → 2026-04 window: the worst-case route produces **1,908 (month, type) groups**, and
+the most aircraft types any one route carries is **36** across 136 months — a 4,896-row
+structural ceiling. JFK–LAX, the flagship example, returns **996 rows / 20 types / 136
+months**. 10,000 clears the measured worst case 5× and the ceiling 2×.
+
+Truncation here would not look like a bug. A stacked area silently missing its tail months
+looks like an airline stopped flying the route, rendered under a `DATA AS OF` badge — the same
+failure shape as M4b's carrier-limit disclosure, but with no row count on screen to give it
+away. `aircraftMix.test.ts` therefore pins the returned row count *exactly* (996) and asserts
+it stays strictly below the limit, rather than trusting the arithmetic above.
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command
