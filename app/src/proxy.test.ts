@@ -16,7 +16,11 @@ import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { RAW_PATH_HEADER } from "@/lib/rawPath";
 import { loadAllowlist } from "@/lib/db";
 
-const CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
+// M5 Task 7, Part B fallback: /explore and every entity page get the shorter HTML_CACHE value
+// (proxy.ts's own constant, renamed and re-documented there), not CLAUDE.md's project-wide
+// 30-day value -- see proxy.ts's HTML_CACHE doc comment and docs/architecture/hosting.md §
+// "The gap" for the measured reason a route-handler fix was not reachable.
+const CACHE = "public, s-maxage=3600, stale-while-revalidate=86400";
 
 // These tests pin what proxy.ts controls: the headers it sets and the values it copies. They
 // CANNOT pin the thing that broke twice in production -- whether Next hands this function a

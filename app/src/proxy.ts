@@ -43,15 +43,24 @@ export async function proxy(request: NextRequest) {
   headers.set(RAW_PATH_HEADER, pathname);
   const response = NextResponse.next({ request: { headers } });
 
-  // CLAUDE.md: "Every response gets Cache-Control: public, s-maxage=2592000,
-  // stale-while-revalidate=86400" -- the caching IS the cost control, not the hosting tier
-  // (docs/architecture/hosting.md). /api/pivot sets its own on the JSON response, including
-  // `no-store` on errors, so it must not be overridden here. /explore and /route/<pair> both
-  // export `dynamic = "force-dynamic"` (each page's own header comment explains why: their
-  // content depends on live warehouse state), so Next emits its own no-store for the HTML and
-  // every shared permalink -- the growth mechanic, and the cold-start path the always-on box
-  // is sized around -- hit DuckDB with the CDN doing nothing. Setting it on the proxy response
-  // is what makes it stick regardless of the route segment config.
+  // CLAUDE.md's caching IS the cost control, not the hosting tier (docs/architecture/
+  // hosting.md). /api/pivot sets its own on the JSON response, including `no-store` on
+  // errors, so it must not be overridden here -- and it stays at the project's full
+  // `s-maxage=2592000` (see route.ts), untouched by the fallback below. /explore and
+  // /route/<pair> both export `dynamic = "force-dynamic"` (each page's own header comment
+  // explains why: their content depends on live warehouse state), so Next emits its own
+  // no-store for the HTML and every shared permalink -- the growth mechanic, and the
+  // cold-start path the always-on box is sized around -- hit DuckDB with the CDN doing
+  // nothing. Setting it on the proxy response is what makes it stick regardless of the route
+  // segment config.
+  //
+  // M5 Task 7, Part B: this HTML branch's header is `HTML_CACHE` (defined below), NOT
+  // CLAUDE.md's `s-maxage=2592000` -- see that constant's own doc comment and
+  // docs/architecture/hosting.md § "The gap" for the measured reason (a 500 from a page, which
+  // a proxy-side probe can never fully rule out, was publicly cacheable for a month; a route
+  // handler that could catch its own page's throw and own its own Response turned out to
+  // require giving up Next's page-rendering pipeline entirely -- not this file's decision to
+  // make alone, so the accepted fallback is a shorter `s-maxage` on HTML instead).
   //
   // CRITICAL fix (final whole-branch review): the matcher below used to list only "/explore"
   // and "/api/pivot", so `/route/<pair>` -- M4b's headline SEO-canonical permalink page --
@@ -60,13 +69,16 @@ export async function proxy(request: NextRequest) {
   // matcher below only forwards the literal `/route/:pair` shape (one dynamic segment), so
   // this can't accidentally net `/api/pivot` or some future unrelated top-level route.
   //
-  // Fix wave 2, NEW-1: the CRITICAL fix above set CACHE on EVERY `/route/` response, with no
-  // status discrimination, so a 404 was pinned in a shared CDN cache for 30 days. That
-  // outlives the condition that caused it: the dataset refreshes monthly, so `/route/XYZ-JFK`
-  // 404ing today because XYZ has no `fct_segment_month` rows yet keeps 404ing for up to
-  // another 30 days after the ingest that makes it real -- `stale-while-revalidate` only
-  // applies AFTER `s-maxage` expires, so the page cannot self-correct. The project already
-  // holds this principle: /api/pivot sets `no-store` on its own error responses.
+  // Fix wave 2, NEW-1: the CRITICAL fix above set the long cache on EVERY `/route/` response,
+  // with no status discrimination, so a 404 was pinned in a shared CDN cache for what was then
+  // 30 days (M5 Task 7, Part B shortened HTML_CACHE's own `s-maxage` to one hour -- see that
+  // constant's doc comment -- but the argument here is about MAGNITUDE, not existence: any
+  // fixed `s-maxage` on a 404 outlives the condition that caused it, only by a smaller margin
+  // now). The dataset refreshes monthly, so `/route/XYZ-JFK` 404ing today because XYZ has no
+  // `fct_segment_month` rows yet would keep 404ing for up to another cache period after the
+  // ingest that makes it real -- `stale-while-revalidate` only applies AFTER `s-maxage`
+  // expires, so the page cannot self-correct inside that window. The project already holds
+  // this principle: /api/pivot sets `no-store` on its own error responses.
   //
   // A Next proxy CANNOT read the downstream response status -- `NextResponse.next()` is a
   // passthrough sentinel created before the page runs -- so "exempt 404s" has no direct
@@ -80,21 +92,21 @@ export async function proxy(request: NextRequest) {
   // M4d generalized that from one route to four: see ENTITY_ROUTES below.
   //
   // M5 Task 7, Part A: `/explore` has no slug to resolve, so unlike every ENTITY_ROUTES row it
-  // ran NO database query at all -- this branch used to set CACHE unconditionally. That is the
-  // exact gap docs/architecture/hosting.md § "The gap" measured: a served build pointed at a
-  // database missing a catalog view 500s on /explore, and the response still carried
-  // `public, s-maxage=2592000, stale-while-revalidate=86400` because nothing on this path had
-  // asked the database anything before committing to that header. isDataLayerHealthy() is
-  // /explore's equivalent of an entity row's resolve() -- the proxy's own probe, run and
-  // caught BEFORE the header is chosen, never after.
+  // ran NO database query at all -- this branch used to set the long cache unconditionally.
+  // That is the exact gap docs/architecture/hosting.md § "The gap" measured: a served build
+  // pointed at a database missing a catalog view 500s on /explore, and the response still
+  // carried the project's then-30-day header because nothing on this path had asked the
+  // database anything before committing to it. isDataLayerHealthy() is /explore's equivalent
+  // of an entity row's resolve() -- the proxy's own probe, run and caught BEFORE the header is
+  // chosen, never after.
   if (pathname === "/explore") {
-    response.headers.set("Cache-Control", (await isDataLayerHealthy()) ? CACHE : NO_STORE);
+    response.headers.set("Cache-Control", (await isDataLayerHealthy()) ? HTML_CACHE : NO_STORE);
     return response;
   }
   for (const entity of ENTITY_ROUTES) {
     const slug = entity.slugFromPath(pathname);
     if (slug === null) continue;
-    response.headers.set("Cache-Control", (await isCacheable(entity, slug)) ? CACHE : NO_STORE);
+    response.headers.set("Cache-Control", (await isCacheable(entity, slug)) ? HTML_CACHE : NO_STORE);
     break;
   }
   return response;
@@ -167,9 +179,10 @@ const ENTITY_ROUTES: ReadonlyArray<{
  * `/aircraft/CE-180` resolves to `ambiguous` (BTS codes 030 CESSNA 180 and 031 CESSNA 180A/B
  * share one short name), which the page renders as a 404. A `!== "notFound"` test -- the shape
  * `/route` used, and the obvious thing to copy -- would have pinned that 404 in a shared CDN
- * cache for 30 days. An allow-list gets a new outcome wrong in the safe direction: an
- * unrecognized kind declines the cache, which costs a cache miss instead of a month of a wrong
- * answer.
+ * cache for as long as `HTML_CACHE`'s `s-maxage` runs (30 days when this comment was written;
+ * M5 Task 7 Part B shortened it to one hour, see that constant). An allow-list gets a new
+ * outcome wrong in the safe direction regardless of the exact number: an unrecognized kind
+ * declines the cache, which costs a cache miss instead of a period of a wrong answer.
  *
  * `redirect` IS cacheable, for all four. A 308 target is derived from the slug alone -- an
  * uppercasing, a re-ordering of two airport codes, `dim_carrier`'s own spelling of the code --
@@ -237,7 +250,33 @@ async function isCacheable(
   }
 }
 
-const CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
+/** The HTML page routes' Cache-Control -- `/explore` and every `ENTITY_ROUTES` page -- and
+ * ONLY those. Do not reuse this for `/api/pivot` (it already sets its own, and stays at the
+ * project's full `s-maxage=2592000`, see route.ts) or for a future `/sitemap.xml`/`robots.txt`
+ * matcher entry (CLAUDE.md's fallback is explicit: "leaving `/api/pivot`, the sitemap and
+ * `robots.txt` at the 30-day value" -- neither reads live warehouse state per request the way
+ * an entity page's pivot does, so neither carries the risk this shortened value exists to
+ * bound).
+ *
+ * M5 Task 7, Part B. This is the fallback, not the fix Part B set out to spike: a route handler
+ * that owns its own `Response` can catch a page-specific throw AFTER the proxy's resolution (or
+ * probe) already succeeded and set its own `Cache-Control` per outcome, closing the gap
+ * completely. That is unreachable here for a structural reason, not a difficulty one --
+ * measured directly rather than assumed: `next build` on this exact page (a temporary
+ * `route.ts` added alongside the untouched `page.tsx`, then reverted) fails outright --
+ * `Conflicting route and page at /route/[pair]: route at /route/[pair]/route and page at
+ * /route/[pair]/page` -- because Next 16 does not allow a `route.js` and a `page.js` at the
+ * same segment (node_modules/next/dist/docs/.../15-route-handlers.md: "there **cannot** be a
+ * `route.js` file at the same route segment level as `page.js`"). The only alternative --
+ * delete `page.tsx` and hand-render its tree from `route.ts` -- gives up exactly what the task
+ * brief ruled out up front: Route Handlers sit entirely outside Next's page-rendering
+ * pipeline, so they have no access to layouts, `next/navigation`'s `notFound()`/
+ * `permanentRedirect()`, streaming, or the RSC flight payload M4c's chart depends on
+ * (`docs/architecture/hosting.md` § "The SVG is emitted twice per response"). Full account,
+ * including why the fallback's shorter `s-maxage` still closes most of the exposure (a bad
+ * response self-corrects in an hour instead of a month) without pretending the gap is gone:
+ * `docs/architecture/hosting.md` § "The gap". */
+const HTML_CACHE = "public, s-maxage=3600, stale-while-revalidate=86400";
 /** Matches what `/api/pivot`'s route handler already sets on its own error responses. A 404
  * here is a statement about the current dataset, and the dataset changes monthly. */
 const NO_STORE = "no-store";

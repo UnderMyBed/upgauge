@@ -133,13 +133,28 @@ appear as destinations.
 
 ## The actual cost control is caching, not the tier
 
-Data changes monthly. Every response gets:
+Data changes monthly. Every successful JSON response (`/api/pivot`) and, once M5 Task 8 wires
+them into `proxy.ts`'s matcher, the sitemap and `robots.txt`, get:
 
 ```
 Cache-Control: public, s-maxage=2592000, stale-while-revalidate=86400
 ```
 
-With Cloudflare's free tier in front, near-zero repeat traffic touches the box.
+**HTML page routes — `/explore` and the four entity pages — get a shorter one instead, as of
+M5 Task 7:**
+
+```
+Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400
+```
+
+Not a stylistic choice: § "The gap" below measures why — a 5xx from a page carries whichever
+`Cache-Control` the proxy already committed to before the page ran, and a route-handler entry
+point that could catch that and set its own header per outcome turned out to be unreachable for
+this Next version without discarding the page. The shorter value is `proxy.ts`'s `HTML_CACHE`
+constant, bounding that exposure to an hour instead of a month rather than closing it outright.
+
+With Cloudflare's free tier in front, near-zero repeat traffic touches the box regardless —
+`stale-while-revalidate` keeps serving from the edge while either value revalidates.
 **Precompute all leaderboards as static JSON at build time.**
 
 ## Avoid
@@ -303,11 +318,15 @@ colliding BTS codes to their full designations, and renders each with an Explore
 ## `Cache-Control` lives here, and it is status-blind by construction
 
 CLAUDE.md's *"every response gets `public, s-maxage=2592000, stale-while-revalidate=86400`"*
-is applied in `proxy.ts`, on the proxy's own response — not in the pages. It has to be:
-`/explore` and `/route/<pair>` both export `dynamic = "force-dynamic"` (their content depends
-on live warehouse state), so Next emits its own `no-store` for the HTML, and every shared
-permalink — the growth mechanic — would hit DuckDB with the CDN doing nothing. Setting it on
-the proxy response is what makes it stick regardless of route segment config.
+is applied in `proxy.ts`, on the proxy's own response — not in the pages. (As of M5 Task 7,
+`proxy.ts` applies that exact value only to `/api/pivot`'s own route handler, untouched by this
+file, and to a future sitemap/robots matcher entry; every HTML page route gets the shorter
+`HTML_CACHE` — § "The gap" below has the measurement behind the split.) It has to be applied
+here regardless of which value: `/explore` and `/route/<pair>` both export
+`dynamic = "force-dynamic"` (their content depends on live warehouse state), so Next emits its
+own `no-store` for the HTML, and every shared permalink — the growth mechanic — would hit
+DuckDB with the CDN doing nothing. Setting it on the proxy response is what makes it stick
+regardless of route segment config.
 
 `/api/pivot` is deliberately excluded: its route handler sets its own header, `no-store` on
 errors and the long cache on success, and overriding here would make every 400 publicly
@@ -531,12 +550,12 @@ test can, because a test has one module graph by construction. If a future Next 
 proxy into its own realm, this degrades to exactly the old behaviour (one memo per realm)
 rather than breaking, and that smoke check is what would say so.
 
-### The gap: a **5xx** still gets the 30-day header
+### The gap: a **5xx** still gets a long-cached header — M5 Task 7 narrowed it, didn't close it
 
 CLAUDE.md's rule is *"404s get `no-store`"* and that is deliberately narrow. **A 500 does
 not.** The proxy resolves the pair, writes the long cache, and only then does the page throw
 — `dataAsOf()`, `loadAllowlist()`, `runPivot()`, or an OOM. Measured against a served build
-pointed at a deliberately broken database:
+pointed at a deliberately broken database, **before** M5 Task 7:
 
 | URL | Status | `Cache-Control` |
 |---|---|---|
@@ -545,33 +564,31 @@ pointed at a deliberately broken database:
 | `/api/pivot?…` (same) | 500 | `no-store` — the handler owns its own header |
 | `/route/ZZZZ-LAX` (same) | 404 | `no-store` — unaffected |
 
-RFC 9111 § 3 lets a shared cache store a 500 that carries an explicit `s-maxage`, so this is
+RFC 9111 § 3 lets a shared cache store a 500 that carries an explicit `s-maxage`, so this was
 a real exposure on the headline SEO-canonical URL, not a technicality.
 
-**This is not fixable from the proxy and is not new.** The same shape has been true of
-`/explore` since M3b, and of `/route` before and after the fix wave that made 404s
-`no-store`: the proxy cannot see the downstream status, and a Server Component cannot set a
-response header, so there is no place left that knows both "this is a 5xx" and "headers are
-still writable". `/api/pivot` escapes only because a route handler builds its own `Response`.
-
-What *would* fix it, none of them small and none of them M4b: give the pages a route-handler
-entry point that can set headers per outcome; or drop the proxy's blanket `Cache-Control` in
-favour of a per-page mechanism if Next ever grows one; or accept a short `s-maxage` for the
-HTML so an error self-corrects in minutes rather than a month.
+**This is not fixable from the proxy alone.** The same shape has been true of `/explore` since
+M3b, and of `/route` before and after the fix wave that made 404s `no-store`: the proxy cannot
+see the downstream status, and (see below) a Server Component genuinely cannot set a response
+header — there is no place left that knows both "this is a 5xx" and "headers are still
+writable" the way `/api/pivot`'s route handler does, unless a page ALSO becomes a route
+handler, which Task 7 Part B tried and could not do without discarding the page.
 
 **M4d inherited it unchanged and widened its blast radius from one page to four.** `/airport`
 is the worst of them: it runs six pivots (below), so it has the most ways to throw, and its
-proxy resolution succeeds first. Still not fixable from the proxy — it is on CLAUDE.md's M5
-list, and M5 Task 7 is what closes as much of it as is honestly closeable.
+proxy resolution succeeds first. M5 Task 7 is what closes as much of this as is honestly
+closeable — Part A below, plus a fallback that narrows every page's exposure window from a
+month to an hour, since the full fix (Part B) turned out not to be reachable at all.
 
 **M5 Task 7, Part A: `/explore`'s missing probe, closed.** Every `ENTITY_ROUTES` row already
 runs a real query (`resolve()`) before choosing a header, and already caught its own exception
 — `isCacheable`'s `catch { return false; }` predates this task (M4b fix wave 3) and was already
 correct: `/route`, `/airport`, `/carrier` and `/aircraft` already decline the cache when their
 own proxy-side lookup throws. **`/explore` was the one branch that ran no query at all** — it
-set `CACHE` unconditionally, with nothing to catch because nothing was attempted. That is
-precisely why the table above shows `/explore?…` 500ing with the 30-day header: the DB was
-broken (a missing catalog view), but the proxy's `/explore` branch never asked it anything.
+set the long cache unconditionally, with nothing to catch because nothing was attempted. That
+is precisely why the table above shows `/explore?…` 500ing with the (then) 30-day header: the
+DB was broken (a missing catalog view), but the proxy's `/explore` branch never asked it
+anything.
 
 The fix (`app/src/proxy.ts`'s `isDataLayerHealthy()`) gives `/explore` the same shape as an
 entity row: call `loadAllowlist()` — exactly what `ExploreView` calls first, before its own
@@ -589,14 +606,86 @@ resolution already succeeded.** `resolveRoutePair`/`resolveAirportCode`/`resolve
 `resolveAircraftSlug` each check dimension-table presence (`dim_airport`, `dim_carrier`,
 `fct_segment_month`), not the pivot catalog — so a database broken by removing, say,
 `mart_route_health` rather than `meta_pivot_dimensions` leaves every entity row's `resolve()`
-succeeding while the page's own pivot still throws downstream, still under `CACHE`. `/explore`'s
-own probe has the identical shape of blind spot one level up: `loadAllowlist()` succeeding says
-nothing about `dataAsOf()` or `runPivot()`, which the page calls afterward. Part A is a
-fail-safe on the query the proxy *already runs* (plus the one new query `/explore` needed to
-have *a* query at all) — it was never going to be able to predict every way a page can fail
-after its own resolution succeeds. That is what Part B evaluates: whether a route-handler entry
-point, which owns its own `Response` and can catch what the page itself throws, is small enough
-to ship for at least one page.
+succeeding while the page's own pivot still throws downstream, still under the long cache.
+`/explore`'s own probe has the identical shape of blind spot one level up: `loadAllowlist()`
+succeeding says nothing about `dataAsOf()` or `runPivot()`, which the page calls afterward.
+Part A is a fail-safe on the query the proxy *already runs* (plus the one new query `/explore`
+needed to have *a* query at all) — it was never going to be able to predict every way a page
+can fail after its own resolution succeeds. That is what Part B evaluated: whether a
+route-handler entry point, which owns its own `Response` and can catch what the page itself
+throws, is small enough to ship for at least one page.
+
+**M5 Task 7, Part B: the route-handler entry point, spiked and rejected — for a structural
+reason, not a hard-to-reach one.** The plan was `/route/<pair>`, the simplest of the four entity
+pages: give it a `route.ts` that runs the same resolution and rendering `page.tsx` does, catches
+whatever throws, and returns a `Response` with its own per-outcome `Cache-Control` — closing the
+gap completely for at least one page, the way `/api/pivot` already does for JSON.
+
+**Measured, not reasoned about: it cannot be done for this page, full stop, and the reason is
+Next 16 itself.** The obvious first shape — add `app/src/app/route/[pair]/route.ts` alongside
+the existing `page.tsx`, so the page tree keeps rendering exactly as it does today and the
+handler only wraps it — does not build:
+
+```
+$ next build   # app/src/app/route/[pair]/route.ts added, page.tsx untouched
+Build error occurred
+Error: Turbopack build failed with 1 errors:
+./src/app
+An issue occurred while preparing your Next.js app
+Conflicting route and page at /route/[pair]: route at /route/[pair]/route and page at /route/[pair]/page
+```
+
+Next's own docs say the same thing in prose (`node_modules/next/dist/docs/01-app/01-getting-started/15-route-handlers.md`):
+*"Route Handlers can be nested anywhere inside the `app` directory... But there **cannot** be a
+`route.js` file at the same route segment level as `page.js`."* This is not a build
+misconfiguration to work around — it is Next's routing table rejecting an ambiguous request
+target, the same category of hard rule as "no two `page.js` at one segment."
+
+**The only other shape — delete `page.tsx` and hand-render its tree from `route.ts`** — was ruled
+out by the task's own exit condition before it was ever coded: a Route Handler is not part of
+Next's page-rendering pipeline at all. Route Handlers are, in Next's own words, *"the equivalent
+of API Routes"* (same doc) — they return a bare `Response`, with no access to a `layout.js`
+ancestor, to `next/navigation`'s `notFound()`/`permanentRedirect()` (both throw a
+digest-encoded error that only the page-rendering pipeline's error boundary interprets; a route
+handler has no such boundary), to React Server Component streaming, or to the RSC flight payload
+`AircraftMixChart` and every other Server Component on this page depend on being part of
+(`docs/architecture/hosting.md` § "The SVG is emitted twice per response" — that duplication IS
+the flight payload, and a route handler emits neither copy). Reimplementing all of that inside a
+`route.ts` is not "the route-handler entry point catches a page-specific throw" — it is a second
+rendering pipeline, parallel to Next's own, and the task brief's own exit condition rules that
+out directly: *"If it cannot render the existing page tree without giving up layouts, streaming,
+or the RSC payload... stop and take the fallback."* Both are given up by construction, not by a
+weak implementation — so the second shape was never attempted, and per the brief's own scope
+rule ("the spike may touch that one page and no other"), reaching for `layout.tsx` or a
+hand-rolled document shell to claw either property back would itself have been the disqualifying
+"outgrows that one page."
+
+**Exit taken: the fallback.** `app/src/proxy.ts`'s `HTML_CACHE` constant is now
+`public, s-maxage=3600, stale-while-revalidate=86400` (was `s-maxage=2592000`) — applied only to
+the branches this file controls, `/explore` and the four `ENTITY_ROUTES` pages. `/api/pivot`
+sets its own header in its own route handler and is untouched, still `s-maxage=2592000`; the
+sitemap and `robots.txt` are not yet in `proxy.ts`'s matcher (M5 Task 8's job) and so are also
+untouched. Mutation-verified in `app/src/proxy.test.ts`: reverting `HTML_CACHE` to the old
+30-day value turns 10 of the file's 33 tests red (every test asserting the exact `Cache-Control`
+string on a 200 or a 308) with the rest — the `no-store` assertions and the pathname/raw-query
+tests — staying green, which is the same "not vacuous" property Part A's mutant demonstrated: the
+tests that should be insensitive to the header's *value* stay insensitive, and the ones that
+should be sensitive to it are.
+
+**What the fallback actually buys, honestly stated:** the exposure window for a 5xx shrinks from
+up to 30 days to up to 1 hour — origin load stays near zero because `stale-while-revalidate`
+still serves from the edge while it revalidates, and a broken deploy now self-corrects within an
+hour of being fixed rather than within a month. **It does not close the gap.** A 500 minted at
+minute 0 of its hour is still a cached 500 for up to 59 more minutes, on the headline
+SEO-canonical URL, same as before — this is a smaller number, not a different shape of bug.
+CLAUDE.md's M5 punch-list item 4 ("The 5xx cache gap") should be read against this section, not
+as still-open in its original form: Part A closed one concrete scenario outright (a broken data
+layer that /explore's own probe would catch), and Part B's fallback bounds the rest to an hour
+instead of a month — the residual page-specific-throw case above is what remains, and the three
+things named in the pre-Task-7 version of this section (a route-handler entry point; a per-page
+Cache-Control mechanism, if Next ever grows one; a short `s-maxage`) are now one adopted (the
+short `s-maxage`) and one measured-closed (the route-handler entry point, for this Next version,
+for a page with a server-rendered chart) rather than three open options.
 
 ## Server-side Observable Plot needs no bundler configuration
 
