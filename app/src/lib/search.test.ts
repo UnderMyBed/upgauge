@@ -131,6 +131,41 @@ describe("search -- name substring returns every match, across states (step 1c)"
   });
 });
 
+describe("search -- aircraft substring hits are slugified (fix round 1, Critical 1)", () => {
+  it("'A321' matches two types via search_by_name.sql and links to the SLUG, not the raw short_name", async () => {
+    // Measured against the built database: search_by_name.sql's aircraft arm returns
+    // dim_aircraft_type.short_name RAW -- 'A321/LR' (AIRBUS INDUSTRIE A321/LR) and 'A321NEO'
+    // (AIRBUS INDUSTRIE A321-200N). '/' is a real path separator, so a hit built straight from
+    // the raw short_name produces /aircraft/A321%2FLR (percent-encoded, and NOT what
+    // /aircraft/[name]/page.tsx's own canonical URL is -- that's /aircraft/A321-LR). This is
+    // the exact defect fix round 1 found: no test in the original diff reached an aircraft hit
+    // through the SUBSTRING path (only the exact-match path, via 'B737-8', which already
+    // slugified correctly) -- reached via a query as ordinary as the feature's own 'A220'
+    // headline example.
+    const r = await search("A321");
+    expect(r.kind).toBe("results");
+    if (r.kind !== "results") return;
+    const hits = flatten(r.groups).filter((h) => h.kind === "aircraft");
+    expect(hits).toContainEqual({
+      kind: "aircraft",
+      code: "A321-LR",
+      name: "AIRBUS INDUSTRIE A321/LR",
+      href: "/aircraft/A321-LR",
+    });
+    expect(hits).toContainEqual({
+      kind: "aircraft",
+      code: "A321NEO",
+      name: "AIRBUS INDUSTRIE A321-200N",
+      href: "/aircraft/A321NEO",
+    });
+    // Neither hit's href ever carries a raw '/' or a percent-encoded one.
+    for (const h of hits) {
+      expect(h.href).not.toContain("%2F");
+      expect(h.href.slice("/aircraft/".length)).not.toContain("/");
+    }
+  });
+});
+
 describe("search -- substring hits rank prefix matches first (step 1d)", () => {
   it("puts AS (Alaska Airlines) at index 0, ahead of the substring false positive DUT", async () => {
     // Measured: 'alaska' returns 8 rows -- DUT (Unalaska Airport) plus 7 carriers. Under the
@@ -209,17 +244,26 @@ describe("search -- fact-presence (mutation fixture)", () => {
 });
 
 describe("search -- escaping (ambiguity note)", () => {
-  it("a literal '%' in the query does not turn into a wildcard", async () => {
-    // No fact-present name contains '%', so this must find nothing rather than matching
-    // everything the way an un-escaped '%' would.
-    const r = await search("50%off");
-    expect(r.kind).toBe("none");
+  // Fix round 1, Important 2: the original fixtures here ('50%off', 'p_x') returned 0 rows
+  // under EVERY combination of JS-side/SQL-side escaping present or absent -- including the
+  // buggy one where `likePattern()` stops escaping entirely -- because no fact-present name
+  // happens to contain a literal backslash, which is what a dropped JS-side escape leaves
+  // behind instead of a wildcard. That made both tests pass whether or not the escaping they
+  // claimed to cover actually ran: the exact "asserting an outcome the buggy implementation
+  // also produces" anti-pattern CLAUDE.md's Workflow section names.
+  //
+  // 'd_t' and 'a%o' are a genuinely discriminating pair, measured directly against the built
+  // database before writing these: correctly escaped, both return 0 rows; with
+  // `likePattern()`'s escaping removed (so '_'/'%' reach the database as literal SQL
+  // wildcards), 'd_t' returns 7 rows and 'a%o' returns 794 -- proven below by mutating
+  // `likePattern` and re-running this exact block.
+  it("a literal '_' in the query is not treated as a single-character wildcard", async () => {
+    const r = await search("d_t");
+    expect(r).toEqual({ kind: "none", query: "d_t" });
   });
 
-  it("a literal '_' in the query is not treated as a single-character wildcard", async () => {
-    // Without escaping, 'p_x' would match 'pdx' (and anything else of that shape) via '_'
-    // matching any one character; no fact-present name literally contains 'p_x'.
-    const r = await search("p_x");
-    expect(r.kind).toBe("none");
+  it("a literal '%' in the query does not turn into a wildcard", async () => {
+    const r = await search("a%o");
+    expect(r).toEqual({ kind: "none", query: "a%o" });
   });
 });

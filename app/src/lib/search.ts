@@ -208,9 +208,16 @@ export function rankByStartsWith(rows: NameMatchRow[], q: string): NameMatchRow[
 
 const KIND_OF: Record<string, SearchHit["kind"]> = { airport: "airport", carrier: "carrier", aircraft: "aircraft" };
 
+/** `search_by_name.sql`'s aircraft arm returns `dim_aircraft_type.short_name` RAW -- 16 of
+ * 112 fact-present short names carry a `/` or a space ('A321/LR', 'MAX 8'), so the code and
+ * href built from a substring hit must go through the same `slugFor()` transform
+ * `aircraftExactHits` (above) and `entityLink.ts`'s `entityHref` already apply, or the link is
+ * a non-canonical, likely-broken URL (`/aircraft/A321%2FLR` instead of `/aircraft/A321-LR`) --
+ * fix round 1, Critical 1. `name` is left untouched: it's prose, not a path segment. */
 function hitFromRow(r: NameMatchRow): SearchHit {
   const kind = KIND_OF[r.kind];
-  return { kind, code: r.code, name: r.name, href: hrefFor(kind, r.code) };
+  const code = kind === "aircraft" ? slugFor(r.code) : r.code;
+  return { kind, code, name: r.name, href: hrefFor(kind, code) };
 }
 
 /** Groups a ranked (or otherwise ordered) hit list by `kind`, in FIRST-SEEN order -- not a
