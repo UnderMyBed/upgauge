@@ -1,9 +1,26 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import RoutePage from "@/app/route/[pair]/page";
+import RoutePage, { RouteView } from "@/app/route/[pair]/page";
 import { decode } from "@/lib/pivot/urlstate";
 import { loadAllowlist } from "@/lib/db";
+import { resolveRoutePair } from "@/lib/routePair";
+
+/** `permanentRedirect`/`notFound` throw rather than return -- calling `RoutePage` on a slug
+ * that hits either branch rejects the returned promise with that thrown Error. Narrows the
+ * `unknown` catch value down to the one property both throw shapes carry, without assuming
+ * anything else about it (Next does not export a typed shape for either). */
+async function catchDigest(pair: string): Promise<string> {
+  try {
+    await RoutePage({ params: Promise.resolve({ pair }) });
+  } catch (e: unknown) {
+    if (e !== null && typeof e === "object" && "digest" in e && typeof e.digest === "string") {
+      return e.digest;
+    }
+    throw e;
+  }
+  throw new Error(`RoutePage(${JSON.stringify(pair)}) did not throw`);
+}
 
 describe("/route/<pair>", () => {
   it("renders the route title and both airport names", async () => {
@@ -71,5 +88,91 @@ describe("/route/<pair>", () => {
     render(await RoutePage({ params: Promise.resolve({ pair: "BNH-JFK" }) }));
     expect(screen.getByText(/no scheduled service/i)).toBeDefined();
     expect(screen.getByRole("link", { name: /2015-01/ })).toBeDefined();
+  });
+});
+
+// Fix round 1, Finding 1: the redirect and notFound branches had zero committed coverage --
+// verified working during initial development (permanentRedirect/notFound digest inspected
+// by hand) and then deleted rather than kept, which meant nothing failing if
+// `permanentRedirect` regressed to a temporary `redirect()` (307) or `notFound()` were
+// dropped entirely. Both thrown shapes are read from the actual Next 16 source, not assumed
+// (app/AGENTS.md's warning): node_modules/next/dist/client/components/redirect.js's
+// `permanentRedirect()` throws `getRedirectError(url, type, RedirectStatusCode.
+// PermanentRedirect)`, whose `.digest` is the literal string
+// `NEXT_REDIRECT;${type};${url};${statusCode};` -- fully distinguishable from `redirect()`'s
+// 307 (`RedirectStatusCode.TemporaryRedirect`) at the digest level, so this pins the exact
+// string rather than hedging. node_modules/next/dist/client/components/not-found.js's
+// `notFound()` throws an Error whose `.digest` is the literal `NEXT_HTTP_ERROR_FALLBACK;404`
+// (http-access-fallback.js's `HTTP_ERROR_FALLBACK_ERROR_CODE` + the fixed 404 status).
+describe("/route/<pair> redirect and 404", () => {
+  it("redirects a reversed pair permanently (308) to the canonical URL", async () => {
+    // Fails if the redirect branch is dropped (would throw "did not throw" instead), if
+    // `permanentRedirect` regresses to plain `redirect()` (digest would end ';307;' instead
+    // of ';308;'), or if the target path is wrong (wrong canonical, missing '/route/' prefix).
+    const digest = await catchDigest("LAX-JFK");
+    expect(digest).toBe("NEXT_REDIRECT;replace;/route/JFK-LAX;308;");
+  });
+
+  it("404s an unknown airport code", async () => {
+    // Fails if notFound() is removed or replaced with a silent fallback, or if
+    // resolveRoutePair's "unknown code" reason stops reaching this page's notFound() branch.
+    const digest = await catchDigest("ZZZZ-LAX");
+    expect(digest).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
+  });
+
+  it("404s a slug that is not two codes", async () => {
+    // A DIFFERENT resolveRoutePair reason (routePair.ts: "expected two airport codes joined
+    // by '-'") than the unknown-code case above -- exercises a distinct code path through the
+    // same notFound() call, so a future regression that special-cased only one reason would
+    // still be caught here even if the "unknown code" test above kept passing.
+    const digest = await catchDigest("JFK");
+    expect(digest).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
+  });
+});
+
+// Fix round 1, Finding 2: `truncated` and its disclosure footer were real code reachable only
+// when a route's row count hits ROUTE_CARRIER_LIMIT (50) -- JFK-LAX has 5 operating carriers
+// in the real trailing-12-month window (measured against upgauge.duckdb), so nothing in
+// production data exercised either branch. `RouteView` (exported from page.tsx, split out of
+// the default-exported `RoutePage` the same way explore/page.tsx splits `ExploreView` from
+// `ExplorePage`) takes `limit` as an explicit, defaultable parameter, so these tests drive a
+// real, live-database render -- genuine SQL LIMIT against genuine JFK-LAX rows, not a mock or
+// a synthetic row array (this codebase has no mocks, lib/resolve.ts's header comment) -- with
+// a limit small enough for the real 5-carrier result to actually reach it.
+describe("/route/<pair> truncation disclosure", () => {
+  it("discloses when the carrier limit is reached", async () => {
+    // 5 real candidates, limit 3 -> SQL LIMIT returns exactly 3 rows, 3 >= 3. Fails if
+    // `truncated`'s `rows.length >= limit` regressed to `>` (3 rows would then read as NOT
+    // truncated, since 3 > 3 is false), or if the disclosure paragraph were removed.
+    const pair = await resolveRoutePair("JFK-LAX");
+    if (pair.kind !== "ok") throw new Error("expected JFK-LAX to resolve for this fixture");
+    render(
+      await RouteView({
+        low: pair.low,
+        high: pair.high,
+        canonical: pair.canonical,
+        filterValue: pair.filterValue,
+        limit: 3,
+      }),
+    );
+    expect(screen.getByText(/top 3 carriers/i)).toBeDefined();
+  });
+
+  it("does not disclose below the carrier limit", async () => {
+    // Same query, a limit (50, the real ROUTE_CARRIER_LIMIT) the real 5-row result does not
+    // reach. Fails if the disclosure paragraph rendered unconditionally (e.g. a `truncated`
+    // that got hardcoded to `true`) -- the previous test alone could not catch that, since
+    // both would then show the notice.
+    const pair = await resolveRoutePair("JFK-LAX");
+    if (pair.kind !== "ok") throw new Error("expected JFK-LAX to resolve for this fixture");
+    render(
+      await RouteView({
+        low: pair.low,
+        high: pair.high,
+        canonical: pair.canonical,
+        filterValue: pair.filterValue,
+      }),
+    );
+    expect(screen.queryByText(/top \d+ carriers/i)).toBeNull();
   });
 });

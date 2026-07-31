@@ -154,31 +154,28 @@ function RouteEmptyState({
   );
 }
 
-export default async function RoutePage({
-  params,
+/** The "ok" branch's whole render, taking the resolved pair AND the carrier limit as explicit
+ * inputs -- same split, same reason, as explore/page.tsx's `ExploreView` (exported) vs
+ * `ExplorePage` (thin default-export wrapper): nothing here reaches Next's routing plumbing
+ * directly, so a test can drive it with a real, live-database render instead of a mocked one
+ * (this codebase has no mocks -- lib/resolve.ts's own header comment). `limit` defaulting to
+ * `ROUTE_CARRIER_LIMIT` is what makes the truncation disclosure testable at all: JFK-LAX has 5
+ * operating carriers in the real trailing-12-month window (measured), nowhere near 50, so
+ * nothing in production data reaches that branch without the ability to lower the limit for a
+ * test -- fix round 1, Finding 2. */
+export async function RouteView({
+  low,
+  high,
+  canonical,
+  filterValue,
+  limit = ROUTE_CARRIER_LIMIT,
 }: {
-  params: Promise<{ pair: string }>;
+  low: AirportRef;
+  high: AirportRef;
+  canonical: string;
+  filterValue: string;
+  limit?: number;
 }) {
-  const { pair: slug } = await params;
-  const resolved = await resolveRoutePair(slug);
-
-  if (resolved.kind === "redirect") {
-    // permanentRedirect -> 308: this IS the canonical URL for this route pair (routePair.ts's
-    // alphabetical-vs-id-order header comment), not a temporary relocation, so the correct
-    // signal is 308 (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/
-    // permanentRedirect.md), not redirect()'s default 307.
-    permanentRedirect(`/route/${resolved.canonical}`);
-  }
-  if (resolved.kind === "notFound") {
-    // notFound() throws NEXT_HTTP_ERROR_FALLBACK;404 and terminates rendering of this segment
-    // (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/not-found.md) --
-    // there is no app/not-found.tsx yet, so Next's own default 404 UI renders; that default
-    // still returns the documented 404 status, which is the contract this page owes.
-    notFound();
-  }
-
-  const { low, high, canonical, filterValue } = resolved;
-
   const allowlist = await loadAllowlist();
   const asOf = await dataAsOf();
   const TRAILING_12_FROM = trailing12From(asOf);
@@ -192,13 +189,13 @@ export default async function RoutePage({
     filters: [["route", [filterValue]]],
     sort: "seats",
     sortDesc: true,
-    limit: ROUTE_CARRIER_LIMIT,
+    limit,
     grouping: "operating",
   };
 
   const result: PivotResult = await runPivot(query);
   const totals = routeTotals(result.rows);
-  const truncated = result.rows.length >= ROUTE_CARRIER_LIMIT;
+  const truncated = result.rows.length >= limit;
   const isEmpty = result.rows.length === 0;
 
   const columns = buildColumns(allowlist, result.columns);
@@ -243,8 +240,8 @@ export default async function RoutePage({
             )}
             {truncated && (
               <p className="foot">
-                Showing the top {ROUTE_CARRIER_LIMIT} carriers by seats; the totals above cover
-                only these rows.
+                Showing the top {limit} carriers by seats; the totals above cover only these
+                rows.
               </p>
             )}
             <p className="foot">
@@ -264,4 +261,55 @@ export default async function RoutePage({
       </main>
     </div>
   );
+}
+
+/** Thin wrapper: the ONLY job here is resolving the slug and handling the three-way
+ * `RoutePairResult` (routePair.ts, Task 5) before handing the "ok" case to `RouteView`. Split
+ * out so `RouteView` above never has to know about `params`, matching explore/page.tsx's
+ * `ExplorePage`/`ExploreView` split. */
+export default async function RoutePage({
+  params,
+}: {
+  params: Promise<{ pair: string }>;
+}) {
+  const { pair: slug } = await params;
+  const resolved = await resolveRoutePair(slug);
+
+  if (resolved.kind === "redirect") {
+    // permanentRedirect -> 308: this IS the canonical URL for this route pair (routePair.ts's
+    // alphabetical-vs-id-order header comment), not a temporary relocation, so the correct
+    // signal is 308 (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/
+    // permanentRedirect.md), not redirect()'s default 307. Confirmed against the actual
+    // thrown error, not just the docs' prose: node_modules/next/dist/client/components/
+    // redirect.js's `permanentRedirect()` throws `getRedirectError(url, type,
+    // RedirectStatusCode.PermanentRedirect)`, whose `.digest` is the literal string
+    // `NEXT_REDIRECT;${type};${url};${statusCode};` -- `statusCode` is `308` here and would
+    // be `307` (RedirectStatusCode.TemporaryRedirect, redirect.js's default) if this ever
+    // regressed to plain `redirect()`. page.test.tsx pins that exact digest.
+    permanentRedirect(`/route/${resolved.canonical}`);
+  }
+  if (resolved.kind === "notFound") {
+    // notFound() throws NEXT_HTTP_ERROR_FALLBACK;404 and terminates rendering of this segment
+    // (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/not-found.md) --
+    // there is no app/not-found.tsx yet, so Next's own default 404 UI renders; that default
+    // still returns the documented 404 status, which is the contract this page owes.
+    // Confirmed against the source, not just the docs: node_modules/next/dist/client/
+    // components/not-found.js throws an Error whose `.digest` is the literal string
+    // `NEXT_HTTP_ERROR_FALLBACK;404` (http-access-fallback.js's `HTTP_ERROR_FALLBACK_ERROR_CODE`
+    // + the fixed 404 status) -- page.test.tsx pins that exact digest too.
+    notFound();
+  }
+
+  // Called directly rather than written as `<RouteView .../>`: RouteView is an async
+  // function, and this codebase's tests render the result of `await RoutePage(...)` through
+  // react-dom's ordinary client renderer (testing-library/react), which -- unlike Next's own
+  // RSC renderer -- cannot await a nested async component reached via JSX. Calling it
+  // directly returns its already-resolved element tree, exactly as if this function had
+  // inlined RouteView's body itself. Equivalent under Next's real RSC rendering either way.
+  return await RouteView({
+    low: resolved.low,
+    high: resolved.high,
+    canonical: resolved.canonical,
+    filterValue: resolved.filterValue,
+  });
 }
