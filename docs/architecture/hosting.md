@@ -79,9 +79,27 @@ Surveyed 2026-07:
 self-host + Tunnel. Both are legitimately free at this traffic and neither compromises
 portability. Measure Cloud Run's cold start with the real image before committing.
 
-**A hybrid stays available:** prerender the finite entity sets (airports ~1k, carriers ~100,
-aircraft types ~200) as static, keep the server for route pages and the Explorer. An
-optimization, not a v0 requirement.
+**A hybrid stays available:** prerender the finite entity sets as static, keep the server for
+route pages and the Explorer. An optimization, not a v0 requirement — but the sets are small
+enough that it stays on the table. Measured against `fct_segment_month`, quarantined rows
+excluded, trailing 12 (2025-05 → 2026-04) and all-time (2015-01 → 2026-04):
+
+| Entity | trailing 12 | all-time |
+|---|---|---|
+| airports (`origin` **or** `dest`) | 749 | 1,041 |
+| carriers | 70 | 114 |
+| aircraft types | 74 | 110 |
+
+The three page types together are ~1,265 all-time URLs, three orders of magnitude below the
+20,000-file cap above and nowhere near a build-time problem. The route pages are the set that
+is not finite in the same sense — 22,950 pairs — which is why the split is entity pages static,
+routes served.
+
+**Count airports at both endpoints, or the number is wrong by a third.** Origin-only gives 741
+/ 993, and that is not a rounding difference: it is the same silent halving `pipeline.md` § M4d
+measures on `/airport/SEA` (26,710,000 seats against 53,373,806). A prerender list built from
+`origin_airport_id` alone would simply never emit pages for the 48 airports that only ever
+appear as destinations.
 
 ---
 

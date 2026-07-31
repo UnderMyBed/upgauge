@@ -121,7 +121,8 @@ rather than the naive `origin IN (...) AND dest IN (...)` form, which is silentl
 measured 18,895-seat inflation on JFK–LAX — `docs/data/invariants.md` § Route identity); and
 `app/src/lib/routePair.ts`'s reverse lookup, code → `airport_id`, which computes the URL's
 alphabetical canonical form and the query's id-ordered filter as two explicit, separately
-computed values (they disagree for 154 of 22,950 routes, 0.7%). That reverse lookup also
+computed values (they disagree for 154 of 22,420 routes, 0.69% — the denominator excludes the
+530 same-airport pairs, whose `low == high` makes disagreement impossible). That reverse lookup also
 surfaced a resolution gap M4a's own invariant never covered — `WHERE is_latest` is scoped per
 `airport_id`, not per code, so 36 codes had more than one `is_latest` row (`AUS` returned both
 the real Austin-Bergstrom and a defunct airport closed since 1999) — fixed by scoping the
