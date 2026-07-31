@@ -195,14 +195,27 @@ export async function RouteView({
     grouping: "operating",
   };
 
-  const result: PivotResult = await runPivot(query);
-
-  // The FULL window, not `query`'s trailing 12. A trend is the whole point of the chart, and a
-  // twelve-point stacked area of a route's fleet mix says almost nothing -- the A321's rise on
-  // JFK-LAX takes eight years to read. The two windows are therefore genuinely different, which
-  // is why the `.window` line below has to name both: a page that showed 2015-2026 under a line
-  // reading "trailing 12 months" would be claiming a window it is not drawing.
-  const mix = await fetchAircraftMix([["route", [filterValue]]], EARLIEST_MONTH, asOf);
+  // CONCURRENT, not two sequential awaits. These two pivots share nothing -- different
+  // windows, different dimensions, and `connect()` hands each one its own DuckDBConnection
+  // off the single memoized instance -- so the serial form was paying for both in turn for no
+  // reason. The mix pivot is the dominant query on this page (996 rows for JFK-LAX against
+  // the carriers pivot's 5), which is exactly the case where the ordering shows: measured
+  // in-process against the built database, JFK-LAX, warm, median of 8 -- carriers 10.9 ms,
+  // mix 20.0 ms, the two SERIAL 30.1 ms, the two CONCURRENT 20.2 ms. The pair now costs what
+  // its slower half costs. Full method and the rest of the table:
+  // docs/architecture/hosting.md § What the proxy's query actually costs.
+  //
+  // The mix takes the FULL window, not `query`'s trailing 12. A trend is the whole point of
+  // the chart, and a twelve-point stacked area of a route's fleet mix says almost nothing --
+  // the A321's rise on JFK-LAX takes eight years to read. The two windows are therefore
+  // genuinely different, which is why the `.window` line below has to name both: a page that
+  // showed 2015-2026 under a line reading "trailing 12 months" would be claiming a window it
+  // is not drawing.
+  const [result, mix]: [PivotResult, Awaited<ReturnType<typeof fetchAircraftMix>>] =
+    await Promise.all([
+      runPivot(query),
+      fetchAircraftMix([["route", [filterValue]]], EARLIEST_MONTH, asOf),
+    ]);
 
   const totals = routeTotals(result.rows);
   const truncated = result.rows.length >= limit;

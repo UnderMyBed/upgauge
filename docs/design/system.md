@@ -216,6 +216,14 @@ trend.
 
 Observable Plot under the hood. These are encoding rules, not library configuration.
 
+**Axis numerics obey the same rule as every other numeric here: monospaced and
+tabular-figure.** Plot's root style hardcodes `font-family: system-ui, sans-serif`, and
+`font-variant-numeric` alone does not override it — M4c shipped with the y ticks ("1.2M"), the
+year ticks and the annotation's year in the sans face while every other numeric on the page was
+Plex Mono. Every chart passes `style: { fontFamily: "var(--font-mono)", fontVariantNumeric:
+"tabular-nums" }`; the token, not a literal family, so `globals.css` stays the single source
+the way it already is for the `--g*` ramp. The mockups do this with a dedicated `.axl` class.
+
 ### Aircraft-type mix — build this before the load-factor chart
 
 **Shipped M4c** on `/route/<pair>`; `/airport`, `/carrier` and `/aircraft` reuse the same
@@ -263,10 +271,11 @@ the rail is static; putting it in both places is how two copies of one measureme
 2.2px solid → 1.1px solid → 1.1px dashed `4 3` → 1px dotted `1 3`. Same discipline as the
 map arcs. Legend rail carries the key.
 
-Rolling-12 is the default view; Month is the toggle. Gaps are gaps — a carrier that stops
-filing breaks the line rather than interpolating across the absence.
+Rolling-12 is the default view; Month is the toggle. Gaps are gaps — see the standing rule
+below, which M4c promoted out of this section because it turned out to bind every time-series
+mark, not only lines.
 
-### Two standing rules
+### Three standing rules
 
 - **COVID is drawn, not hidden.** A `--panel-2` band across 2020-03 → 2021-06, labelled
   *"COVID — in window on purpose."* The window includes it deliberately; the chart should
@@ -290,6 +299,40 @@ filing breaks the line rather than interpolating across the absence.
   not treated as a wall** — A, then a tied year, then B is a genuine crossover, it is what one
   looks like mid-transition, and it is reported against the later year. Full derivation:
   [`../architecture/pipeline.md` § M4c](../architecture/pipeline.md).
+- **Gaps are gaps.** A subject that stops filing **breaks** the mark rather than interpolating
+  across the absence — and **zero-filling is not the alternative**: a month with no filing is
+  *unknown*, not zero. T-100 is a filing, so "no row" means "nobody filed", which is neither
+  "nobody flew" nor "0 seats flew". Drawing either invents data, and the two inventions are
+  equally confident-looking under a `DATA AS OF` badge.
+
+  This was written for multi-series lines and M4c shipped violating it on a stacked area,
+  which is why it is now stated here. The shipped chart built its x domain from the months
+  **present in the query result**, so a month the subject never filed was not on the axis at
+  all and Plot joined the two surrounding samples with a straight edge. `HNL–LAS` (7.07 M
+  seats) filed nothing for **2020-04 … 2020-09** and the chart drew one edge from 37,441 seats
+  down to 6,804 across all six — inside the `--panel-2` band the same chart labels *"COVID —
+  in window on purpose."* The one feature whose stated purpose is refusing to smooth COVID
+  away was smoothing away the actual COVID shutdown. **14,198 of 22,950 route pairs (62%) have
+  at least one interior gap**; `LGB–SJC` has a 21-month one.
+
+  Three consequences for any chart built here:
+
+  - **The absent month gets no sample.** The filed months are split into contiguous runs and
+    each run is drawn as its own mark, so the hole is a hole.
+  - **An isolated filed month is still drawn.** A one-month run has no width and serializes to
+    an invisible degenerate path, and **9,486 of 22,919 pairs (41%)** have at least one such
+    month between two gaps. Erasing a filing is the same class of dishonesty as inventing one,
+    so those runs are drawn **stroked** — a hairline column in the band's own shade, at its own
+    height in the stack.
+  - **The count is stated, not merely drawn.** A hole in a stacked area reads as "flat and
+    small" as easily as "not filed", and a screen reader sees no hole at all. The chart's own
+    key and its `aria-label` both carry *"N months with no filings, drawn as gaps rather than
+    interpolated."* One sentence, written once — the number is per-subject, so the static
+    legend rail cannot hold it, and two copies of one measurement drift.
+
+  The x domain still runs first-filing → last-filing, not the requested window: a subject that
+  stopped filing in 2019 draws nothing to the right of 2019 rather than a flat zero line to
+  2026. The page's own window line and the `aria-label` name the range actually drawn.
 
 ---
 

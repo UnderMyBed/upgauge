@@ -156,6 +156,18 @@ share are stated on its own swatch (measured: top-5 + Other is a median 94.7% of
 drawn, and the crossover annotation is **derived or absent**, never manufactured: 46% of routes
 never change their #1 type and JFK–LAX is one of them.
 
+**Gaps are gaps, and zero is not the alternative.** A month the subject filed nothing in is
+*unknown*, not zero seats — T-100 is a filing, so "no row" is neither "nobody flew" nor "0
+seats flew", and drawing it either way invents data. The area therefore **breaks**: filed
+months are split into contiguous runs, each run is its own `z` series, and the count is stated
+on the chart's key and in its `aria-label`. This shipped wrong in M4c's first cut and the final
+review caught it — `HNL–LAS` filed nothing for 2020-04…2020-09 and the chart drew one straight
+edge across all six, *inside* the band it labels "COVID — in window on purpose". 62% of route
+pairs have such a gap; 41% have an isolated single month, which is drawn **stroked** because a
+one-month area has no width and erasing a filing is the same dishonesty as inventing one.
+`docs/design/system.md` § Charts owns the rule, now stated as standing rather than
+line-specific.
+
 The chart takes the **full** 2015-01 → `asOf` window while the carriers table keeps its
 trailing 12, and the page states both — a decade drawn under a line reading "Trailing 12
 months" would claim a window it is not showing. It is drawn from the wider window's rows, so a
@@ -174,17 +186,25 @@ keeps `globals.css` the single source for the ramp), for the COVID label, and fo
 annotation as a **falsifiable pair**: absent on JFK–LAX, present and exact on ATL–MCO. Either
 half alone is vacuous.
 
-273 app tests green (`make app-check`); `make app-build` produces a working production
-build; `make app-smoke` builds, serves and curls real URLs, 49 checks in all — including a
+280 app tests green (`make app-check`); `make app-build` produces a working production
+build; `make app-smoke` builds, serves and curls real URLs, 55 checks in all — including a
 curl-verified redirect, 404, `Cache-Control` and 404 *body* for `/route/<pair>`, since a
 handler returning a redirect object and a served app returning one are not the same claim,
 and a 404 whose status is right tells you nothing about what it says. `/route/JFK-LAX` grew
-from **32,087 to 96,112 bytes** of HTML with the chart on it, +64,025 (it ships twice per
+from **32,087 to 96,179 bytes** of HTML with the chart on it, +64,092 (it ships twice per
 response, body + RSC payload) — the input to M4d's decision, since M4d mounts this component
 three more times. **That size crossing 64 KB also exposed a latent `smoke.sh` bug**:
 `set -o pipefail` plus `grep -q` made every check's result depend on where in the page the
 needle sat, and made `check_not` report a silent **ok** for a string that was present. Fixed;
 see `docs/architecture/pipeline.md` § M4c.
+
+**A smoke needle is written in the bytes React EMITS, not the bytes the source contains.**
+`check_not … 'can&rsquo;t be read'`, copied verbatim from a JSX `<h1>`, could never fire: JSX
+decodes entities at compile time and React emits raw U+2019, so the check printed `ok`
+unconditionally — a dark guard in the one file this repo keeps because the other gates can pass
+for the wrong reason. Anything with an entity, an apostrophe or an angle bracket in it needs a
+mutation run before it counts as coverage. `/route` also runs its two pivots under
+`Promise.all` now (30.1 ms → 20.2 ms warm); M4d copies whatever shape is there.
 
 Not built yet: the load-factor time-series chart, the arc map, `/airport`, `/carrier`,
 `/aircraft`, `/watch`, the seasonality heatmap, and OG cards — all specified in

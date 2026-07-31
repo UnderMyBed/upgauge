@@ -51,6 +51,10 @@ cap() { # run under a memory cap when systemd-run is available, plainly otherwis
 # enormous line.
 has()     { printf '%s' "$1" | grep -F  -- "$2" >/dev/null; }
 has_re()  { printf '%s' "$1" | grep -E  -- "$2" >/dev/null; }
+# How many times a fixed string occurs in a body. Same no-`-q` discipline: `grep -o` reads to
+# EOF and `wc` drains it, so printf always completes. Used where PRESENCE is not the claim --
+# a band drawn in two pieces and a band drawn in one both contain the needle.
+count()   { printf '%s' "$1" | grep -oF -- "$2" | wc -l | tr -d ' '; }
 
 check() { # check <name> <haystack> <needle>
   if has "$2" "$3"; then
@@ -117,7 +121,19 @@ check "api: reserved-character filter round-trips exactly" "$BODY" 'origin_state
 
 BODY=$(curl -s --max-time 15 "${BASE}/explore?${RESERVED}")
 check "explore: reserved-character permalink renders" "$BODY" '14,771'
-check_not "explore: reserved-character permalink is not rejected" "$BODY" 'can&rsquo;t be read'
+# NEEDLES CROSS JSX, SO THEY MUST BE WRITTEN IN THE BYTES REACT ACTUALLY EMITS, NOT IN THE
+# SOURCE. This check used to read 'can&rsquo;t be read', copied from explore/page.tsx's
+# `<h1>This permalink can&rsquo;t be read</h1>`. JSX decodes HTML entities in text at COMPILE
+# time and React's serializer escapes only & < > " ' -- U+2019 goes out as raw UTF-8, so the
+# literal string `can&rsquo;t` was never in the response and this printed `ok` unconditionally,
+# including in the case it exists to catch (M4c final review, F3). A dark guard in the one file
+# this repo keeps because the other gates can pass for the wrong reason.
+#
+# The regex spans the apostrophe rather than pinning it, the same way line 222 already does --
+# the character differs between the HTML body (React escapes ' to &#x27;) and the RSC flight
+# payload (JSON-encoded, apostrophes intact), and this check reads a body containing both.
+# Verified by mutation: forcing /explore to reject this permalink turns it red.
+check_not_re "explore: reserved-character permalink is not rejected" "$BODY" 'permalink can.{1,6}t be read'
 
 # 3. An invalid permalink still names the offending key rather than falling back to a default.
 BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=nope&m=seats&t=2025-05:2026-04&n=5&g=op")
@@ -137,8 +153,16 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/api/pivot?v=1&bogus=1")
 check "api: does not cache an error" "$HDRS" "no-store"
 
 # 6. The front door is ours, not the scaffold's.
+#
+# M4c final review, F6: the absence check below was the only unpaired check_not left in the
+# file, so an empty body, an error shell or a 500 page satisfied it just as well as the real
+# front door did. It is now paired with two positives on the same body -- the page's own h1,
+# which nothing else in this app renders, and the DATA AS OF badge, which is what makes / a
+# data view rather than a static splash.
 BODY=$(curl -s --max-time 15 "${BASE}/")
-check_not "home: no create-next-app boilerplate" "$BODY" 'vercel.com/new'
+check     "home: renders our own front door"        "$BODY" 'Is this route healthy'
+check     "home: DATA AS OF is present"             "$BODY" 'DATA AS OF'
+check_not "home: no create-next-app boilerplate"    "$BODY" 'vercel.com/new'
 
 # 7. Resolution: the reader must see codes, never the catalog's ids.
 BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op")
@@ -265,8 +289,30 @@ check "chart: the rest of the page still server-renders"      "$BODY" '>DL<'
 # crossover this check fails loudly and is re-measured; that is the point of pinning the
 # derived string rather than the word.
 check_not "chart: a route with no crossover gets NO annotation (JFK-LAX)" "$BODY" 'overtakes'
+# The negative half of the gap pair below. JFK-LAX filed in all 136 months of the window
+# (measured), so it must claim no gaps AND draw each band in exactly one piece.
+check_not "chart: a route with no gaps claims none (JFK-LAX)" "$BODY" 'no filings'
+check_re  "chart: an ungapped band is ONE path (JFK-LAX)" "$(count "$BODY" '<path fill="var(--g5)" d=')" '^1$'
 BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-MCO")
 check "chart: a route with one gets the derived annotation (ATL-MCO)" "$BODY" 'B757-2 overtakes A321/LR · 2018'
+
+# M4c final review, F1, IN THE SERVED BYTES. HNL-LAS (7.07 M seats over the window) filed
+# nothing at all for 2020-04..2020-09 -- six months INSIDE the --panel-2 band this chart
+# labels "COVID -- in window on purpose." The shipped M4c built its x domain from the months
+# PRESENT in the pivot result, so those six were not on the axis and Plot drew one straight
+# edge from 37,441 seats down to 6,804 across them; a reader read roughly 30k, 22k, 15k seats
+# for months that filed nothing. 14,198 of 22,950 route pairs (62%) have such a gap.
+#
+# Two claims, because the sentence alone would be satisfied by a chart that says "6 months"
+# and still draws across them: the page STATES the absence, and the darkest band arrives as
+# TWO paths -- one either side of the hole. `count`, not `has`: `<path fill="var(--g5)" d=`
+# is present either way, and only its multiplicity distinguishes a broken area from a
+# smoothed one. Exactly 2 and not "at least 2" -- one gap means two pieces, and a third would
+# mean the area is being shattered somewhere it should not be. The literal (unescaped) form
+# occurs only in the HTML body; the RSC flight payload's copy is backslash-escaped.
+BODY=$(curl -s --max-time 30 "${BASE}/route/HNL-LAS")
+check    "chart: the unfiled months are stated (HNL-LAS)" "$BODY" '6 months with no filings, drawn as gaps rather than interpolated.'
+check_re "chart: the band BREAKS at them, drawn as two paths (HNL-LAS)" "$(count "$BODY" '<path fill="var(--g5)" d=')" '^2$'
 
 # Page weight, recorded rather than asserted: the chart is ~136 months x 6 bands of path data
 # on a force-dynamic page, and M4d mounts this same component on three more pages. A threshold

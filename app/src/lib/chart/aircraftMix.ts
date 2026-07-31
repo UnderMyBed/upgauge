@@ -104,6 +104,83 @@ export interface SeriesPoint {
   seats: number;
 }
 
+/** The month axis a chart of these rows is drawn on, and where it must BREAK.
+ *
+ * A month in which the subject filed nothing is not zero seats -- it is unknown. T-100 is a
+ * filing, so "no row" means "nobody filed", which is not the same claim as "nobody flew" and
+ * is certainly not "0 seats flew". Drawing it either way invents data:
+ *
+ *   - joining the two surrounding samples (what shipped in M4c) draws a straight edge across
+ *     the absence, so a reader reads seats for months that filed nothing;
+ *   - zero-filling it draws the stack collapsing to the floor and back, which asserts a
+ *     shutdown the data does not record.
+ *
+ * So the area BREAKS. `series` therefore carries a point only for months that filed, and this
+ * axis says which contiguous stretch each of those months belongs to; the renderer draws one
+ * area per stretch, so an absent month leaves a hole rather than an edge.
+ *
+ * Measured over the built warehouse: 14,198 of 22,950 route pairs (62%) have at least one
+ * interior gap, and HNL-LAS -- 7.07 M seats -- has six consecutive absent months
+ * (2020-04..2020-09) INSIDE the COVID band the chart labels "in window on purpose".
+ *
+ * `solo` exists because a run of one month has no width: it serializes to a degenerate,
+ * invisible path, and 9,486 of 22,919 route pairs (41%) have at least one such isolated
+ * month. Erasing a filing is the same class of dishonesty as inventing one, so the renderer
+ * draws those runs stroked instead of filled. */
+export interface MonthAxis {
+  /** Every month from the first filing to the last, contiguous, filed or not. */
+  span: string[];
+  /** Months in `span` with no filing at all, in order. */
+  gaps: string[];
+  /** month -> id of the contiguous run of filed months it belongs to. Gap months are absent. */
+  run: Map<string, number>;
+  /** Run ids covering exactly one month. */
+  solo: Set<number>;
+}
+
+/** Every month from `from` to `to` inclusive. Arithmetic on the year/month integers rather
+ * than on Date: a Date-based walk is one timezone bug away from skipping or repeating a month
+ * (the same reason monthStart() in AircraftMixChart is pinned to UTC). */
+function monthSpan(from: string, to: string): string[] {
+  const [fy, fm] = from.split("-").map(Number);
+  const [ty, tm] = to.split("-").map(Number);
+  const out: string[] = [];
+  for (let i = fy * 12 + (fm - 1); i <= ty * 12 + (tm - 1); i++) {
+    out.push(`${Math.floor(i / 12)}-${String((i % 12) + 1).padStart(2, "0")}`);
+  }
+  return out;
+}
+
+/** Split the filed months into contiguous runs, and name the months between them. */
+function monthAxis(filed: string[]): MonthAxis {
+  // No filings at all: an empty axis rather than a crash on filed[0]. The renderer never gets
+  // here (it states the absence in words below two months), but toBands is exported and a
+  // caller that hands it nothing deserves an answer, not a TypeError.
+  if (filed.length === 0) return { span: [], gaps: [], run: new Map(), solo: new Set() };
+  const span = monthSpan(filed[0], filed[filed.length - 1]);
+  const filedSet = new Set(filed);
+  const run = new Map<string, number>();
+  const size = new Map<number, number>();
+  let current = 0;
+  let previousFiled = false;
+  for (const month of span) {
+    if (!filedSet.has(month)) {
+      previousFiled = false;
+      continue;
+    }
+    if (!previousFiled) current += 1;
+    run.set(month, current);
+    size.set(current, (size.get(current) ?? 0) + 1);
+    previousFiled = true;
+  }
+  return {
+    span,
+    gaps: span.filter((m) => !filedSet.has(m)),
+    run,
+    solo: new Set([...size].filter(([, n]) => n === 1).map(([id]) => id)),
+  };
+}
+
 export interface Band {
   code: string;
   label: string;
@@ -182,10 +259,18 @@ function bySeatsDesc(a: TypeTotal, b: TypeTotal): number {
  * order: light at the bottom, dark on top, so the ramp reads as a gradient rather than as
  * six unrelated greys, which is the whole reason the categories are ordered at all.
  *
- * Every band carries a point for EVERY month in the input, zero-filled where a type did not
- * fly. A stacked area with gaps misaligns rather than showing a hole. */
-export function toBands(rows: MixRow[]): { bands: Band[]; other: OtherSummary } {
+ * Every band carries a point for every month THE SUBJECT FILED, zero-filled where that
+ * particular type did not fly -- a stacked area needs every series sampled at the same x or
+ * the bands misalign. It carries NO point for a month the subject did not file at all: that
+ * month is unknown, not zero, and the returned `axis` is what tells the renderer to break the
+ * area there instead of drawing across it. See MonthAxis. */
+export function toBands(rows: MixRow[]): {
+  bands: Band[];
+  other: OtherSummary;
+  axis: MonthAxis;
+} {
   const months = [...new Set(rows.map((r) => r.month))].sort();
+  const axis = monthAxis(months);
 
   const totals = new Map<string, TypeTotal>();
   for (const r of rows) {
@@ -241,5 +326,5 @@ export function toBands(rows: MixRow[]): { bands: Band[]; other: OtherSummary } 
           }),
   };
 
-  return { bands, other };
+  return { bands, other, axis };
 }

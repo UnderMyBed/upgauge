@@ -59,6 +59,14 @@ function plural(n: number, one: string): string {
   return `${n} ${one}${n === 1 ? "" : "s"}`;
 }
 
+/** One sentence, written once, used on the key AND in the aria-label -- the number is
+ * per-subject and two copies of one measurement drift (the same reasoning as Other's share).
+ * "no filings", not "no seats": T-100 is a filing, and nobody filing is not the same claim as
+ * nobody flying. */
+function gapNote(gaps: number): string {
+  return `${plural(gaps, "month")} with no filings, drawn as gaps rather than interpolated.`;
+}
+
 /** Neither Plot nor jsdom offers a `role` option, and the attribute belongs on the SVG
  * element itself, not on a wrapper: `role="img"` is what makes the subtree presentational, so
  * a screen reader announces the one description below instead of reading out every axis tick
@@ -88,7 +96,7 @@ export function AircraftMixChart({ rows, title }: { rows: MixRow[]; title: strin
     );
   }
 
-  const { bands, other } = toBands(rows);
+  const { bands, other, axis } = toBands(rows);
   const crossover = findCrossover(rows);
 
   // BOTTOM FIRST. `bands` already arrives in shade order (`--g1` first), which is stack order
@@ -115,9 +123,40 @@ export function AircraftMixChart({ rows, title }: { rows: MixRow[]; title: strin
     ...bands.map((b) => ({ key: b.code, token: b.token, label: b.label, series: b.series })),
   ];
 
-  const points = stack.flatMap((s) =>
-    s.series.map((p) => ({ t: monthStart(p.month), seats: p.seats, k: s.key })),
+  // GAPS ARE GAPS (docs/design/system.md § Charts). A month the subject did not file has no
+  // point here at all, and each contiguous run of filed months gets its own `z` value, so
+  // Plot emits one path per (band, run) and an absent month leaves a HOLE. `fill` stays keyed
+  // on the band, not on `z`, so a broken band keeps one shade across all its pieces.
+  //
+  // `order` has to be the rank FUNCTION rather than the array of keys it was: the array form
+  // orders the stack by z values, and z is now per-run. Rank is the band's index in `stack`,
+  // which is shade order, so the stack order is unchanged -- lightest at the bottom.
+  const points = stack.flatMap((s, rank) =>
+    s.series.map((p) => ({
+      t: monthStart(p.month),
+      seats: p.seats,
+      k: s.key,
+      z: `${s.key}@${axis.run.get(p.month)}`,
+      rank,
+      solo: axis.solo.has(axis.run.get(p.month)!),
+    })),
   );
+  const runPoints = points.filter((p) => !p.solo);
+  // A one-month run has no width: filled, it serializes to a degenerate path and disappears.
+  // 41% of route pairs have at least one isolated month (aircraftMix.ts § MonthAxis), and
+  // erasing a filing is the same dishonesty as inventing one, so these are STROKED -- a
+  // hairline column in the band's own shade, at the band's own height in the stack.
+  const soloPoints = points.filter((p) => p.solo);
+
+  const area = (data: typeof points, extra: Record<string, unknown>) =>
+    Plot.areaY(data, {
+      x: "t",
+      y: "seats",
+      z: "z",
+      fill: "k",
+      order: (d: { rank: number }) => d.rank,
+      ...extra,
+    });
 
   const first = months[0];
   const last = months[months.length - 1];
@@ -145,11 +184,16 @@ export function AircraftMixChart({ rows, title }: { rows: MixRow[]; title: strin
       marginRight: MARGIN.right,
       marginTop: MARGIN.top,
       marginBottom: MARGIN.bottom,
-      // CLAUDE.md's non-negotiable: all numerics tabular. Plot sets font-variant on its two
-      // axis-tick-label groups already; this covers the annotation's year and anything else
-      // added to the frame later.
-      style: { fontVariantNumeric: "tabular-nums" },
-      ariaLabel: describe({ title, first, last, stack, crossover }),
+      // CLAUDE.md's non-negotiable: all numerics MONOSPACED and tabular. Plot sets
+      // font-variant on its two axis-tick-label groups already, but its root style hardcodes
+      // `font-family: system-ui, sans-serif`, so without the family here the y ticks ("1.2M"),
+      // the year ticks and the annotation's year rendered in the sans face while every other
+      // numeric on the page was Plex Mono -- the mockup has a dedicated `.axl` class doing
+      // exactly this (docs/design/mockups/entity-route.html). `var(--font-mono)` and not a
+      // literal family name: globals.css stays the single source, the same rule the `--g*`
+      // ramp follows.
+      style: { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" },
+      ariaLabel: describe({ title, first, last, stack, crossover, gaps: axis.gaps.length }),
       x: { type: "utc", label: null, ticks: "1 year", tickFormat: "%Y" },
       y: { label: "Seats", grid: true, ticks: 4, tickFormat: "~s" },
       // The tokens go through as-is: Plot passes an ordinal scale's range straight to the
@@ -175,13 +219,10 @@ export function AircraftMixChart({ rows, title }: { rows: MixRow[]; title: strin
                 fill: "var(--ink-2)",
               }),
             ]),
-        Plot.areaY(points, {
-          x: "t",
-          y: "seats",
-          z: "k",
-          fill: "k",
-          order: stack.map((s) => s.key),
-        }),
+        area(runPoints, {}),
+        ...(soloPoints.length === 0
+          ? []
+          : [area(soloPoints, { stroke: "k", strokeWidth: 1.5 })]),
         ...(crossover === null || crossoverAt === null
           ? []
           : [
@@ -221,6 +262,10 @@ export function AircraftMixChart({ rows, title }: { rows: MixRow[]; title: strin
           </span>
         ))}
         <span className="gnum">← lightest is the smallest metal, by seats per departure</span>
+        {/* Stated on the chart, not only in the aria-label: a hole in a stacked area is easy
+            to read as "flat and small" rather than "not filed", and the count is per-subject
+            so the static legend rail cannot carry it. */}
+        {axis.gaps.length > 0 ? <span className="gnum">{gapNote(axis.gaps.length)}</span> : null}
       </div>
     </Frame>
   );
@@ -250,12 +295,14 @@ function describe({
   last,
   stack,
   crossover,
+  gaps,
 }: {
   title: string;
   first: string;
   last: string;
   stack: { key: string; label: string }[];
   crossover: { year: string; from: string; to: string } | null;
+  gaps: number;
 }): string {
   const types = stack.filter((s) => s.key !== OTHER_KEY).map((s) => s.label);
   const other = stack.find((s) => s.key === OTHER_KEY);
@@ -263,6 +310,9 @@ function describe({
     `Stacked area of monthly seats by aircraft type, ${title}, ${first} to ${last}.`,
     `Bands lightest to darkest by seats per departure: ${types.join(", ")}.`,
     other === undefined ? null : `${other.label}, drawn lightest of all beneath them.`,
+    // A reader who cannot see the holes has to be told they are there, or the label describes
+    // a continuous series the chart deliberately does not draw.
+    gaps === 0 ? null : `${gapNote(gaps)}`,
     crossover === null
       ? null
       : `${crossover.to} overtakes ${crossover.from} in ${crossover.year}.`,

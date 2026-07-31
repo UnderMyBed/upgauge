@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderPlotToSvg } from "@/lib/chart/svg";
+import { renderPlotToSvg, sharedDocumentFootprint } from "@/lib/chart/svg";
 import * as Plot from "@observablehq/plot";
 
 describe("renderPlotToSvg", () => {
@@ -53,13 +53,30 @@ describe("renderPlotToSvg", () => {
 
   it("keeps the shared document from accumulating, which is what makes it safe to share", () => {
     // This is the assumption svg.ts's module-level document RESTS on, so it is pinned here
-    // rather than asserted in a comment. Falsifiable against the thing that would actually
-    // break it: a future Plot release that appends its output into the document instead of
-    // returning a detached node. Then render N+1 grows relative to render N and this fails,
-    // telling us to go back to a per-call document.
+    // rather than asserted in a comment.
+    //
+    // The first version of this test could not fail for the reason it named, and svg.ts and
+    // hosting.md both claimed it could (M4c final review, F2). It asserted
+    // `mark().length === first.length` -- the byte length of the RETURNED, DETACHED node.
+    // Appending that node to the shared document does not change the node's own outerHTML, so
+    // the regression was invisible to it: a deliberately leaky renderer returned 1,384 bytes
+    // on every one of 12 renders while document.body grew to 16,608, and the test was green.
+    //
+    // It now observes THE DOCUMENT, which is the only place the regression is visible.
+    // Falsifiable, and confirmed by mutation: adding `document.body.appendChild(node)` to
+    // renderPlotToSvg turns this red on both assertions.
+    const before = sharedDocumentFootprint();
     const mark = () => renderPlotToSvg({ marks: [Plot.dot([{ x: 1, y: 1 }], { x: "x", y: "y" })] });
-    const first = mark();
-    for (let i = 0; i < 10; i++) mark();
-    expect(mark().length).toBe(first.length);
+    for (let i = 0; i < 12; i++) mark();
+    const after = sharedDocumentFootprint();
+
+    // Nothing was ever attached -- the absolute claim, which also catches a leak from any
+    // earlier test in this file, since the document is shared across all of them.
+    expect(after.nodes).toBe(0);
+    // ...and nothing grew, which is the claim that survives if an empty <head>/<body> ever
+    // stops being the baseline (a JSDOM upgrade, say). Both, because either alone is weaker:
+    // a renderer that replaced the body's contents each time holds `nodes` at 1 and `bytes`
+    // steady, and this pair rejects it on the first assertion.
+    expect(after.bytes).toBe(before.bytes);
   });
 });

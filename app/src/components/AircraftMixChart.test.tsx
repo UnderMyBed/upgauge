@@ -66,16 +66,27 @@ function monthRange(from: string, to: string): string[] {
   return out;
 }
 
-function rows(types: TypeSpec[], from = WINDOW_FROM, to = WINDOW_TO): MixRow[] {
-  return monthRange(from, to).flatMap((month) =>
-    types.map((t) => ({
-      month,
-      code: t.code,
-      label: t.label,
-      seats: t.seats(month),
-      departures: t.departures(month),
-    })),
-  );
+/** `skip` is the months the SUBJECT filed nothing in -- no row for any type, which is what a
+ * real absence looks like in a pivot result (14,198 of 22,950 route pairs have at least one).
+ * Not the same thing as a type with zero seats in a month it did fly. */
+function rows(
+  types: TypeSpec[],
+  from = WINDOW_FROM,
+  to = WINDOW_TO,
+  skip: string[] = [],
+): MixRow[] {
+  const absent = new Set(skip);
+  return monthRange(from, to)
+    .filter((month) => !absent.has(month))
+    .flatMap((month) =>
+      types.map((t) => ({
+        month,
+        code: t.code,
+        label: t.label,
+        seats: t.seats(month),
+        departures: t.departures(month),
+      })),
+    );
 }
 
 /** Seven types: five bands plus a two-type Other. */
@@ -120,6 +131,20 @@ function bandPaths(container: HTMLElement): Element[] {
 
 function fillsOf(container: HTMLElement): string[] {
   return bandPaths(container).map((p) => p.getAttribute("fill")!);
+}
+
+/** Every path drawn in one ramp token, in document order. More than one means the band is
+ * broken into pieces, which is what a month with no filings must produce. */
+function pathsFor(container: HTMLElement, token: string): Element[] {
+  return [...container.querySelectorAll(`path[fill="var(${token})"]`)];
+}
+
+/** The x coordinates in a path's outline -- its horizontal extent, which is what says whether
+ * the band was drawn ACROSS a month or stopped at it. */
+function xsOf(path: Element): number[] {
+  return [...path.getAttribute("d")!.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)].map((m) =>
+    Number(m[1]),
+  );
 }
 
 /** The highest point of a band's outline: the top edge of the stack up to and including it.
@@ -307,13 +332,83 @@ describe("AircraftMixChart", () => {
     expect(five.querySelector('.ckey [data-token="--g0"]')).toBeNull();
   });
 
-  it("renders axis numerics with tabular figures", () => {
-    // CLAUDE.md's UI constraint. Breaks if the root style is dropped: Plot sets
-    // font-variant on its two axis groups but nothing else, so the annotation's year and the
-    // COVID label would fall back to proportional figures.
-    expect(svgOf(chart(FLEET)).getAttribute("style")).toContain(
-      "font-variant-numeric: tabular-nums",
+  it("renders axis numerics monospaced AND tabular", () => {
+    // CLAUDE.md's UI constraint is both words: "All numerics monospaced, tabular-figure".
+    // The first version of this test asserted only font-variant, and the chart shipped with
+    // Plot's own `font-family: system-ui, sans-serif` on the root -- so the y ticks ("1.2M"),
+    // the year ticks and the annotation's year rendered in the sans face while every other
+    // numeric on the page was Plex Mono. Breaks if either declaration is dropped.
+    const style = svgOf(chart(FLEET)).getAttribute("style");
+    expect(style).toContain("font-variant-numeric: tabular-nums");
+    expect(style).toContain("font-family: var(--font-mono)");
+  });
+
+  // ------------------------------------------------------------------------------------
+  // Gaps are gaps (docs/design/system.md § Charts)
+  // ------------------------------------------------------------------------------------
+
+  /** The HNL-LAS hole, to the month: the pair filed nothing 2020-04..2020-09. */
+  const HNL_LAS_GAP = ["04", "05", "06", "07", "08", "09"].map((m) => `2020-${m}`);
+
+  it("breaks the area at months the subject filed nothing in, rather than drawing across", () => {
+    // The M4c defect, in the shape it actually shipped: the x domain came from the months
+    // PRESENT in the pivot result, so an absent month was not on the axis at all and Plot
+    // joined the two surrounding samples with a straight edge -- roughly 30k, 22k, 15k seats
+    // read off a chart for months that filed nothing, inside the COVID band the chart labels
+    // "in window on purpose".
+    //
+    // Falsifiable against both wrong renderings, and confirmed by mutation:
+    //   - one areaY over all points (the shipped code) draws ONE path per band spanning the
+    //     whole width, so the count assertion fails AND the extent assertion fails;
+    //   - zero-filling the hole also draws one path per band, and its outline crosses the gap.
+    const container = chart(rows(MEMBERS, WINDOW_FROM, WINDOW_TO, HNL_LAS_GAP));
+    const x = xScale(svgOf(container));
+    const lastFiled = x("2020-03-01T00:00:00Z");
+    const nextFiled = x("2020-10-01T00:00:00Z");
+
+    for (const token of RAMP) {
+      const paths = pathsFor(container, token);
+      expect(paths.length).toBe(2);
+      // No ink between the two: the left piece ends on 2020-03 and the right begins on
+      // 2020-10. `toBeLessThanOrEqual` with a 1px slack for the rounding Plot does when it
+      // serializes coordinates.
+      expect(Math.max(...xsOf(paths[0]))).toBeLessThanOrEqual(lastFiled + 1);
+      expect(Math.min(...xsOf(paths[1]))).toBeGreaterThanOrEqual(nextFiled - 1);
+    }
+  });
+
+  it("draws a single filed month between two gaps instead of erasing it", () => {
+    // An area needs two points, so a one-month run serializes to a degenerate, invisible path
+    // -- and 9,486 of 22,919 route pairs (41%) have at least one isolated interior month.
+    // Dropping the filing would be the same class of dishonesty as inventing one, so those
+    // runs are stroked. Breaks if the solo mark is removed: the month vanishes silently, which
+    // is exactly the failure that would not be noticed.
+    const isolate = monthRange("2020-01", "2020-12").filter((m) => m !== "2020-06");
+    const container = chart(rows(MEMBERS, WINDOW_FROM, WINDOW_TO, isolate));
+    const x = xScale(svgOf(container));
+    const stroked = [...container.querySelectorAll('path[stroke^="var(--g"]')];
+    // One hairline column per band, all of them at 2020-06 and nowhere else.
+    expect(stroked.length).toBe(RAMP.length);
+    expect(new Set(stroked.map((p) => p.getAttribute("stroke")))).toEqual(
+      new Set(RAMP.map((t) => `var(${t})`)),
     );
+    for (const p of stroked) {
+      for (const px of xsOf(p)) expect(px).toBeCloseTo(x("2020-06-01T00:00:00Z"), 0);
+    }
+  });
+
+  it("says how many months filed nothing, on the key and to a screen reader", () => {
+    // A hole in a stacked area reads as "flat and small" as easily as "not filed", and a
+    // screen reader sees no hole at all. Paired with the no-gap case below, because a
+    // component that printed the sentence unconditionally would satisfy either half alone.
+    const container = chart(rows(MEMBERS, WINDOW_FROM, WINDOW_TO, HNL_LAS_GAP));
+    expect(container.textContent).toContain("6 months with no filings");
+    expect(container.textContent).toContain("drawn as gaps rather than interpolated");
+    expect(svgOf(container).getAttribute("aria-label")).toContain("6 months with no filings");
+
+    const whole = chart(FLEET);
+    expect(whole.textContent).not.toContain("no filings");
+    expect(svgOf(whole).getAttribute("aria-label")).not.toContain("no filings");
   });
 
   it("states the absence in words rather than drawing an empty frame", () => {

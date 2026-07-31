@@ -154,6 +154,64 @@ describe("toBands", () => {
     ]);
   });
 
+  it("leaves a month the SUBJECT never filed out of every series, and names it a gap", () => {
+    // The distinction the shipped M4c missed. The test above ("emits zero, not a gap") covers
+    // a month present for SOME type -- which the code always handled -- so a month absent from
+    // EVERY type slipped through, and the renderer joined the two surrounding samples with a
+    // straight edge across it. 2020-02 and 2020-03 below are filed by nobody.
+    //
+    // Falsifiable against both wrong answers, which is why the fixture has a two-month hole
+    // rather than a one-month one:
+    //   - the shipped behaviour (drop absent months from the axis entirely) leaves `span` at
+    //     the two filed months and `gaps` empty, and gives both months the same run id;
+    //   - zero-filling the window puts 2020-02/2020-03 into every series with seats 0, which
+    //     the per-series month assertions below reject.
+    const rows: MixRow[] = [
+      { month: "2020-01", code: "A", label: "A", seats: 100, departures: 1 },
+      { month: "2020-04", code: "A", label: "A", seats: 200, departures: 2 },
+      { month: "2020-05", code: "A", label: "A", seats: 300, departures: 3 },
+    ];
+    const { bands, axis } = toBands(rows);
+    expect(axis.span).toEqual(["2020-01", "2020-02", "2020-03", "2020-04", "2020-05"]);
+    expect(axis.gaps).toEqual(["2020-02", "2020-03"]);
+    expect(bands[0].series.map((p) => p.month)).toEqual(["2020-01", "2020-04", "2020-05"]);
+    // Two contiguous runs, and 2020-01 is alone in its own -- an area needs two points, so
+    // the renderer has to know to draw that one differently rather than emit nothing.
+    expect(axis.run.get("2020-01")).toBe(1);
+    expect(axis.run.get("2020-04")).toBe(2);
+    expect(axis.run.get("2020-05")).toBe(2);
+    expect(axis.run.has("2020-02")).toBe(false);
+    expect([...axis.solo]).toEqual([1]);
+  });
+
+  it("reports no gaps and one run when every month in the span filed", () => {
+    // Paired with the test above on purpose: alone, that one passes for an implementation that
+    // reports EVERY month as a gap, or that starts a new run at every month (which would
+    // shatter the area into 136 invisible one-month pieces).
+    const rows: MixRow[] = ["2020-01", "2020-02", "2020-03"].map((month) => ({
+      month,
+      code: "A",
+      label: "A",
+      seats: 100,
+      departures: 1,
+    }));
+    const { axis } = toBands(rows);
+    expect(axis.gaps).toEqual([]);
+    expect(new Set(axis.run.values())).toEqual(new Set([1]));
+    expect([...axis.solo]).toEqual([]);
+  });
+
+  it("spans a year boundary without skipping or repeating a month", () => {
+    // The span is walked on month integers, not Dates. Falsifiable: a `new Date(y, m+1)` walk
+    // that forgets to normalize gives "2020-13", and one that resets the month without carrying
+    // the year loops. Neither produces this list.
+    const rows: MixRow[] = [
+      { month: "2019-11", code: "A", label: "A", seats: 1, departures: 1 },
+      { month: "2020-02", code: "A", label: "A", seats: 1, departures: 1 },
+    ];
+    expect(toBands(rows).axis.span).toEqual(["2019-11", "2019-12", "2020-01", "2020-02"]);
+  });
+
   it("does not create an Other band when there are 5 or fewer types", () => {
     const rows: MixRow[] = Array.from({ length: 4 }, (_, i) => ({
       month: "2020-01",
@@ -203,7 +261,7 @@ describe("toBands against the real JFK-LAX mix", () => {
   // disagree. Measured against the built upgauge.duckdb over the full window.
   it("orders membership by seats and shade by gauge, which disagree on this route", async () => {
     const rows = await fetchAircraftMix(JFK_LAX, FULL_FROM, FULL_TO);
-    const { bands, other } = toBands(rows);
+    const { bands, other, axis } = toBands(rows);
 
     // Membership -- top 5 by TOTAL seats: A321/LR 17,485,274 · B767-3/R 7,852,109 ·
     // B767-4 3,119,079 · B757-2 2,900,388 · A320-1/2 2,132,256. The 6th, A321NEO at
@@ -249,5 +307,45 @@ describe("toBands against the real JFK-LAX mix", () => {
       bands.reduce((a, b) => a + b.series.reduce((s, p) => s + p.seats, 0), 0) +
       other.series.reduce((s, p) => s + p.seats, 0);
     expect(stacked).toBe(37_546_781);
+
+    // No gaps on THIS route, which is what makes the HNL-LAS test below a pair rather than a
+    // lone positive: an implementation that reported every month as a gap would satisfy that
+    // one and fail this.
+    expect(axis.gaps).toEqual([]);
+  });
+});
+
+describe("toBands against a real route that stopped filing mid-window", () => {
+  // HNL is AIRPORT_ID 12173, LAS is 12889. Measured against the built upgauge.duckdb: the pair
+  // filed in 130 of the window's 136 months and nothing at all for 2020-04..2020-09 -- six
+  // months inside the --panel-2 band the chart itself labels "COVID -- in window on purpose."
+  // 7.07 M seats over the window, so this is a page someone loads, not a corner case; 14,198 of
+  // 22,950 route pairs (62%) have at least one interior gap.
+  const HNL_LAS: [string, string[]][] = [["route", ["12173-12889"]]];
+
+  it("names the six months HNL-LAS filed nothing in, and puts them in no series", async () => {
+    const rows = await fetchAircraftMix(HNL_LAS, FULL_FROM, FULL_TO);
+    const { bands, axis } = toBands(rows);
+    expect(axis.span.length).toBe(136);
+    expect(axis.gaps).toEqual([
+      "2020-04",
+      "2020-05",
+      "2020-06",
+      "2020-07",
+      "2020-08",
+      "2020-09",
+    ]);
+    // The claim that matters: no band carries a point for those months, so nothing downstream
+    // can draw them. Falsifiable against the shipped behaviour (130 points and no `axis` at
+    // all) and against zero-filling (136 points, six of them 0).
+    for (const b of bands) {
+      expect(b.series.length).toBe(130);
+      expect(b.series.some((p) => axis.gaps.includes(p.month))).toBe(false);
+    }
+    // Two runs, either side of the hole -- 2015-01..2020-03 and 2020-10..2026-04.
+    expect(new Set(axis.run.values())).toEqual(new Set([1, 2]));
+    expect(axis.run.get("2020-03")).toBe(1);
+    expect(axis.run.get("2020-10")).toBe(2);
+    expect([...axis.solo]).toEqual([]);
   });
 });

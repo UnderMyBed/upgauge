@@ -905,9 +905,48 @@ Two derived decisions, both with their own test:
 
 `OtherSummary.seatShare` is a share of the route's **total** seats, not of the remainder, and
 its series is **empty** rather than zero-filled when `typeCount === 0` — so the renderer's
-`typeCount > 0` gate never draws an invisible band. Every real band carries a point for every
-month in the window (136 on JFK–LAX), zero-filled where a type did not fly: a stacked area
-with gaps misaligns rather than showing a hole.
+`typeCount > 0` gate never draws an invisible band.
+
+### Two absences that look alike and are not
+
+Every band carries a point for every month **the subject filed**, zero-filled where that
+particular type did not fly — a stacked area needs every series sampled at the same x or the
+bands misalign. It carries **no point at all** for a month the subject did not file. The two
+cases are one word apart in English and opposite in meaning, and M4c shipped handling only the
+first: `toBands` zero-filled across the months present *somewhere* in its input, and the
+renderer built its x domain from the same set, so a month absent from **every** type was not on
+the axis and Plot drew a straight edge across it. The encoding rule and the measured damage:
+[`../design/system.md` § Charts](../design/system.md), third standing rule.
+
+`toBands` now also returns a `MonthAxis`:
+
+| field | is |
+|---|---|
+| `span` | every month from the first filing to the last, contiguous, filed or not |
+| `gaps` | the months in `span` nobody filed |
+| `run` | month → id of the contiguous run of filed months it belongs to |
+| `solo` | the run ids covering exactly one month |
+
+The renderer keys Plot's `z` (series identity) on the **run** and `fill` on the **band**, so
+one `areaY` mark emits one path per (band, run) and a broken band keeps one shade across all
+its pieces. That forced one other change: `order` had to become the rank **function**
+(`(d) => d.rank`) rather than the array of z values it was, since z is no longer the band.
+Stack order is unchanged — rank is the band's index in shade order.
+
+Runs of exactly **one** month go into a second mark with `stroke` set. A one-month area has no
+width: d3 emits `M x,y1 L x,y2 Z`, which fills to nothing. **9,486 of 22,919 route pairs (41%)
+have at least one isolated interior month**, so dropping them would have traded the
+interpolation bug for an erasure bug on nearly half of all pages. Stroked, an isolated filing
+is a hairline column in its own shade at its own height in the stack.
+
+**Verified on the served build, not only in jsdom.** `/route/HNL-LAS`, x-axis year ticks read
+out of the chart's own axis: 2020 at x=447.83, 2021 at x=528.37, so one month is 6.71 px. The
+`--g5` band arrives as **two** paths — the first ending at x=461.0 (2020-03, +1.96 months) and
+the second beginning at x=508.1 (2020-10, +8.98) — with 47.1 px, exactly seven month-widths, of
+blank between them. `/route/JFK-LAX`, which filed in all 136 months, is **one** path spanning
+x=46.0 → 950.0. `smoke.sh` asserts that multiplicity (`count`, not `has`: the needle
+`<path fill="var(--g5)" d=` is present either way and only its count distinguishes a broken
+area from a smoothed one) as a pair across the two routes.
 
 ### The derived annotation, and what counts as a leader
 
@@ -979,8 +1018,12 @@ payload, see `hosting.md`), so ~61 KB, and M4d mounts it three more times.
 
 ### The mount: two windows on one page
 
-`/route/<pair>` now runs **two** pivot queries. The carriers table keeps its trailing 12
-months; the chart gets the **full** `2015-01 → asOf`. That is not an oversight to be tidied
+`/route/<pair>` now runs **two** pivot queries, **concurrently** — `Promise.all`, not two
+sequential `await`s. They share nothing and the mix query is the larger of the two (996 rows
+against 5), so the serial form paid for both in turn: 30.1 ms against 20.2 ms, warm, in
+process. Numbers and method: [`hosting.md` § What the proxy's query actually
+costs](hosting.md). The carriers table keeps its trailing 12 months; the chart gets the
+**full** `2015-01 → asOf`. That is not an oversight to be tidied
 into one window later — a twelve-point fleet-mix stack shows nothing, and the story the chart
 exists to tell (the A321's rise on JFK–LAX) takes eight years to read. The consequence is a
 disclosure obligation, and the `.window` line carries it: it names **both** ranges, because a
@@ -1009,9 +1052,11 @@ per-subject facts, already on the chart's own `.ckey` next to the swatch they de
 static rail cannot know them, and stating them twice is how two copies drift.
 
 **Page weight, measured on the served build:** `/route/JFK-LAX` is **32,087 bytes before the
-chart and 96,112 after** — **+64,025**, close to the ~61 KB the component predicted from its
+chart and 96,179 after** — **+64,092**, close to the ~61 KB the component predicted from its
 own block (30,372 × 2 for body + RSC payload) plus the legend group and the second window
-line. That is the input to M4d's decision, which mounts this component on three more pages: at
+line. (It was 96,112 before the final review added `font-family: var(--font-mono)` to the
+chart's root style — 33 bytes, twice per response.) That is the input to M4d's decision, which
+mounts this component on three more pages: at
 three charts a page the arithmetic lands near 220 KB of HTML per response, which is where a
 shared `Suspense` boundary, a narrower default window, or dropping the RSC copy stops being
 premature. `app/smoke.sh` prints the current number on every run rather than asserting a
@@ -1078,9 +1123,43 @@ the page still server-renders" is a guard that *must* hold with the chart gone, 
 crossover, no annotation" is satisfied by an absent chart, which is precisely why it is paired
 with a positive on ATL–MCO that the same mutant does kill.
 
-M4c is built: 273 app tests green (`make app-check`), 443 Python tests green (`make check`),
-`make app-build` clean, `make app-smoke` green at 49 checks, and `make goldens` byte-identical
-— this milestone touches no SQL, so any golden movement would have been a bug.
+### A needle that could never appear, and a `check_not` with nothing to lean on
+
+The `-q` fix above made every check report grep's own status. It did **not** make every check
+*meaningful*, and the final review found two that were not — neither of them a SIGPIPE problem.
+
+**A dark needle.** `check_not … 'can&rsquo;t be read'` was copied out of
+`explore/page.tsx`'s `<h1>This permalink can&rsquo;t be read</h1>`. **JSX decodes HTML entities
+in text at compile time**, and React's serializer escapes only `& < > " '` — U+2019 goes out as
+raw UTF-8. The literal string was never in the response, so the check printed `ok`
+unconditionally, *including* in the case it exists to catch: `/explore` rejecting the
+reserved-character permalink, the M3b regression that motivates `proxy.ts`. A guard that cannot
+fail is worse than no guard, because it reads as coverage. It is now a regex spanning the
+apostrophe (`permalink can.{1,6}t be read`), the same shape line 222 already used — and
+confirmed by mutation: forcing `/explore` to reject that permalink turns it red.
+
+**The whole file was swept for the class.** `grep -n '&[a-zA-Z]\+;\|&#'` over `src/` finds
+entities in five files (`page.tsx`, `not-found.tsx`, `explore/page.tsx`, `LegendRail.tsx`), and
+`can&rsquo;t be read` was the **only** smoke needle overlapping any of them. Two adjacent
+classes were checked too and are sound: `unknown airport code 'ZZZZ'` survives because that
+check reads the RSC flight payload, where the string is JSON-encoded and the apostrophes are
+intact (React escapes `'` to `&#x27;` in the HTML body — both forms are in the same response,
+and `smoke.sh` documents which one it is reading); and `data-below-floor="true"` is emitted by
+`DataTable` as that exact literal.
+
+**The last unpaired `check_not`.** `/` asserted only the *absence* of `vercel.com/new`, so an
+empty body, an error shell or a 500 satisfied it. It is now paired with two positives on the
+same body — the page's own `h1`, which nothing else in the app renders, and `DATA AS OF`, which
+is what makes `/` a data view rather than a splash.
+
+**The rule this generalises to:** a smoke needle crosses JSX, so it must be written in the
+bytes React emits, not in the bytes the source contains. Anything with an entity, an
+apostrophe, or an angle bracket in it needs a mutation run before it counts as coverage.
+
+M4c is built: **280 app tests** green (`make app-check`), **443 Python tests** green
+(`make check`), `make app-build` clean, `make app-smoke` green at **55 checks**, and
+`make goldens` byte-identical — this milestone touches no SQL, so any golden movement would
+have been a bug.
 
 ## Toolchain
 
