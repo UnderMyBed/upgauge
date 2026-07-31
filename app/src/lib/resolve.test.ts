@@ -8,6 +8,8 @@ import {
   displayValue,
   RESOLVER_FILE,
   lookupAirportsByCode,
+  insertAirportRow,
+  type AirportRef,
 } from "@/lib/resolve";
 import { connect, loadAllowlist } from "@/lib/db";
 
@@ -186,10 +188,83 @@ describe("lookupAirportsByCode", () => {
   });
 
   it("returns exactly one airport per code despite multi-seq history", async () => {
-    // Without `WHERE is_latest` a code with several seq rows returns several -- the same
-    // fan-out resolve_airport.sql guards against.
+    // NOTE: this assertion does NOT actually detect a missing `WHERE is_latest`. JFK's 5
+    // seq rows all carry the identical code and airport_id, so a Map keyed by code
+    // overwrites with an identical value regardless of how many rows the query returns --
+    // map.size stays 1 either way. The real guard against that regression is the direct-SQL
+    // row-count test in "lookup_airport_by_code.sql's cardinality guard" below; this test is
+    // kept only because the brief specifies it, not because it is load-bearing.
     const m = await lookupAirportsByCode(["JFK"]);
     expect(m.size).toBe(1);
+  });
+
+  it("resolves AUS to Austin-Bergstrom, not the closed Robert Mueller Municipal", async () => {
+    // Fix round 1, Critical: `is_latest` is scoped per airport_id's OWN seq chain, not per
+    // code, so two DIFFERENT airport_ids sharing a code can each be is_latest = TRUE at once.
+    // Measured: 36 codes collide this way. AUS is one -- airport_id 10423 "Austin -
+    // Bergstrom International" (69,132 traffic rows) and airport_id 16440 "Robert Mueller
+    // Municipal" (closed since 1999, zero traffic rows) both come back is_latest = TRUE.
+    // Without the EXISTS-in-facts filter, whichever row the driver returns last wins the Map
+    // silently -- Robert Mueller today. This test fails without that filter, which is the
+    // point.
+    const m = await lookupAirportsByCode(["AUS"]);
+    expect(m.get("AUS")?.id).toBe(10423);
+    expect(m.get("AUS")?.name).not.toContain("Mueller");
+  });
+});
+
+// Fix round 1: shows the un-scoped (is_latest only) query really does return 2 rows for AUS
+// while the shipped query (with the EXISTS-in-facts filter) returns 1 -- the direct-SQL
+// counterpart to the "resolves AUS" Map-based test above, mirroring how "lookup_airport_by_
+// code.sql's cardinality guard" (below) backs up the JFK multi-seq test.
+describe("lookup_airport_by_code.sql's EXISTS-in-facts filter", () => {
+  it("un-scoped (is_latest only) AUS returns 2 rows; the shipped query returns 1", async () => {
+    const raw = readFileSync(path.join(QUERIES_DIR, "lookup_airport_by_code.sql"), "utf8");
+    const con = await connect();
+
+    // The shipped statement, as-is.
+    const shippedStatement = raw.replace("{{IDS}}", "($id0)");
+    const shippedPrepared = await con.prepare(shippedStatement);
+    shippedPrepared.bind({ id0: "AUS" });
+    const shippedRows = await (await shippedPrepared.run()).getRowObjects();
+    expect(shippedRows.length).toBe(1);
+    expect(shippedRows[0].id).toBe(10423);
+
+    // The same statement with the EXISTS-in-facts clause stripped back out -- reproduces
+    // the pre-fix query to prove the collision this filter closes is real, not assumed.
+    const unscopedStatement = shippedStatement
+      .replace(
+        /\s+AND EXISTS \(\s*SELECT 1 FROM fct_segment_month f[\s\S]*?\)\s*$/,
+        "",
+      )
+      .trimEnd();
+    const unscopedPrepared = await con.prepare(unscopedStatement);
+    unscopedPrepared.bind({ id0: "AUS" });
+    const unscopedRows = await (await unscopedPrepared.run()).getRowObjects();
+    expect(unscopedRows.length).toBe(2);
+    expect(new Set(unscopedRows.map((r) => r.id))).toEqual(new Set([10423, 16440]));
+  });
+});
+
+// Fix round 1: proves the fail-loud path actually fires. Real data no longer produces a
+// colliding pair for ANY code (lookup_airport_by_code.sql's EXISTS filter took 36 collisions
+// to 0, measured), so there is no way to trigger this branch through lookupAirportsByCode()
+// itself without waiting for BTS to reuse a closed airport's code -- not a test. This
+// exercises insertAirportRow directly with synthetic rows instead, the same reasoning
+// collectIds's extraction above documents for testing without connect().
+describe("insertAirportRow", () => {
+  it("accepts the first row for a code", () => {
+    const out = new Map<string, AirportRef>();
+    insertAirportRow(out, { id: 10423, code: "AUS", name: "Austin - Bergstrom International" });
+    expect(out.get("AUS")?.id).toBe(10423);
+  });
+
+  it("throws, naming both airport_ids, on a second row for an already-seen code", () => {
+    const out = new Map<string, AirportRef>();
+    insertAirportRow(out, { id: 10423, code: "AUS", name: "Austin - Bergstrom International" });
+    expect(() =>
+      insertAirportRow(out, { id: 16440, code: "AUS", name: "Robert Mueller Municipal" }),
+    ).toThrow(/AUS.*10423.*16440/);
   });
 });
 

@@ -112,11 +112,40 @@ export interface AirportRef {
   name: string;
 }
 
+/** Fold one lookup_airport_by_code.sql result row into the code -> airport map, throwing if
+ * the code was already present. Pulled out of lookupAirportsByCode so the fail-loud path is
+ * directly testable with synthetic rows -- the same reason collectIds is pulled out of
+ * resolveRows above: real data no longer produces a colliding pair for any code (the SQL
+ * file's EXISTS-in-facts filter took collisions from 36 to 0, measured), so the only way to
+ * exercise this branch against the live database would be to wait for BTS to reuse a closed
+ * airport's code, which is not a test. */
+export function insertAirportRow(out: Map<string, AirportRef>, row: AirportRef): void {
+  const code = row.code.toUpperCase();
+  const existing = out.get(code);
+  if (existing !== undefined) {
+    throw new Error(
+      `lookupAirportsByCode: code '${code}' matched more than one airport_id ` +
+        `(${existing.id}, ${row.id}) -- lookup_airport_by_code.sql's uniqueness guarantee no ` +
+        "longer holds. Refusing to silently pick one (see this file's header comment).",
+    );
+  }
+  out.set(code, row);
+}
+
 /** Reverse of the airport resolver: code -> the airport. Keyed by UPPERCASED code, so a
  * lowercase URL resolves while the canonical form stays uppercase.
  *
  * Absent key means unknown, exactly as resolveRows()'s map does -- the caller renders a 404
- * naming the code rather than guessing. */
+ * naming the code rather than guessing.
+ *
+ * lookup_airport_by_code.sql's EXISTS-in-facts filter is what makes a code unique today
+ * (measured: 36 codes collide among all is_latest airports, 0 among fact-present ones -- see
+ * that file's header). But that invariant is data-dependent, not structural -- a future BTS
+ * refresh could reintroduce a collision (a newly-closed airport whose code gets reused, for
+ * instance), and this function's own header comment already promises to fail loudly rather
+ * than let a second row for the same code silently overwrite the first via Map.set(). This
+ * is that promise enforced (in insertAirportRow, above): a repeated code throws, naming both
+ * airport_ids, instead of rendering an arbitrary one of them under a DATA AS OF badge. */
 export async function lookupAirportsByCode(codes: string[]): Promise<Map<string, AirportRef>> {
   const out = new Map<string, AirportRef>();
   const wanted = [...new Set(codes.map((c) => c.toUpperCase()))].filter((c) => c.length > 0);
@@ -136,11 +165,7 @@ export async function lookupAirportsByCode(codes: string[]): Promise<Map<string,
   prepared.bind(params);
   const result = await prepared.run();
   for (const r of await result.getRowObjects()) {
-    out.set(String(r.code).toUpperCase(), {
-      id: Number(r.id),
-      code: String(r.code),
-      name: String(r.name),
-    });
+    insertAirportRow(out, { id: Number(r.id), code: String(r.code), name: String(r.name) });
   }
   return out;
 }
