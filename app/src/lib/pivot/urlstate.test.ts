@@ -27,8 +27,8 @@ function expectUrlStateError(fn: () => unknown, msgPattern: RegExp): void {
 }
 
 describe("golden fixture sanity", () => {
-  it("has exactly 8 cases -- a reshaped fixture must not silently emit zero tests", () => {
-    expect(goldens.cases).toHaveLength(8);
+  it("has exactly 9 cases -- a reshaped fixture must not silently emit zero tests", () => {
+    expect(goldens.cases).toHaveLength(9);
   });
 });
 

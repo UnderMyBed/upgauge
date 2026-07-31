@@ -370,9 +370,12 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
 #: (name, description, query). Covers: a single-dimension segment pivot; a multi-dimension
 #: pivot; a route-grain pivot (the multi-column `route` dimension); a derived-measure pivot
 #: (also the case Step 4 of the M3a plan mutates to prove the goldens pin something); a
-#: filtered pivot; a mainline-grouped pivot; an ascending-sort pivot; and the Task 5
+#: filtered pivot; a mainline-grouped pivot; an ascending-sort pivot; the Task 5
 #: regression -- sorting by the carrier dimension under mainline grouping, which crashed
-#: until op_airline_id's ORDER BY expression was made to match its GROUP BY expression.
+#: until op_airline_id's ORDER BY expression was made to match its GROUP BY expression; and
+#: (M4b Task 3) a composite-dimension filter on `route`, single- and multi-value, pinning
+#: the least()/greatest() rendering both pipeline/pivot.py and app/src/lib/pivot/render.ts
+#: must emit identically.
 _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
     (
         "single_dimension_segment",
@@ -467,13 +470,38 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
             time_from="2015-01", time_to="2015-12", sort="op_airline_id", grouping="mainline",
         ),
     ),
+    (
+        "filter_composite_route",
+        "An undirected route filter on the composite `route` dimension, which names two key "
+        "columns. Emits least()/greatest() so the match is correct however the fact row was "
+        "written -- filtering origin and dest separately also matches a->a and b->b, which "
+        "over-counts by 18,895 seats on JFK-LAX (docs/data/invariants.md).",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
+            limit=50, grouping="operating", filters=(("route", ("12478-12892",)),),
+        ),
+    ),
+    (
+        "filter_composite_route_multiple",
+        "Two routes in one filter. Values stay OR'd, preserving the IN-list semantics every "
+        "other dimension has.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
+            limit=50, grouping="operating",
+            filters=(("route", ("12478-12892", "10140-14747")),),
+        ),
+    ),
 ]
 
 #: (name, description, query). Covers the URL codec's own required round-trips: grain='route'
 #: through its short token ('k=route'); grouping='mainline' through its short token ('g=ml');
-#: an ascending sort (no '-' prefix on 's'); ordinary multi-value filters; and a filter value
+#: an ascending sort (no '-' prefix on 's'); ordinary multi-value filters; a filter value
 #: containing every character the URL format itself uses structurally (',' '&' '%' ':' '='
-#: '+' and a space) -- the one piece of user/attacker-controlled free text in the contract.
+#: '+' and a space) -- the one piece of user/attacker-controlled free text in the contract;
+#: and (M4b Task 3) a filter on the composite `route` dimension, whose value contains '-',
+#: a character this format does not treat as a delimiter.
 _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
     (
         "baseline_round_trip",
@@ -561,6 +589,16 @@ _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
             grain="segment", dimensions=("op_airline_id",), measures=("seats",),
             time_from="2015-01", time_to="2015-12",
             filters=(("op_airline_id", ("2T (1)", "O'Hare", "a!b", "c*d")),),
+        ),
+    ),
+    (
+        "filter_composite_route",
+        "A route filter round-trips through the URL codec. The value contains a '-', which "
+        "is not a structural delimiter in this format and so needs no escaping.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
+            limit=50, grouping="operating", filters=(("route", ("12478-12892",)),),
         ),
     ),
 ]

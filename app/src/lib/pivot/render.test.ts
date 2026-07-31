@@ -14,8 +14,8 @@ const goldens = JSON.parse(
 // goldens.cases)` emits zero tests -- and therefore passes -- if pivot.json is ever truncated
 // or reshaped. A suite that cannot fail is worse than no suite: it reports green.
 describe("golden fixture sanity", () => {
-  it("has exactly 9 cases -- a reshaped fixture must not silently emit zero tests", () => {
-    expect(goldens.cases).toHaveLength(9);
+  it("has exactly 11 cases -- a reshaped fixture must not silently emit zero tests", () => {
+    expect(goldens.cases).toHaveLength(11);
   });
 });
 

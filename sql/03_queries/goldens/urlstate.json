@@ -202,6 +202,34 @@
         "grouping": "operating"
       },
       "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=op_airline_id:2T%20%281%29,O%27Hare,a%21b,c%2Ad&n=100&g=op"
+    },
+    {
+      "name": "filter_composite_route",
+      "description": "A route filter round-trips through the URL codec. The value contains a '-', which is not a structural delimiter in this format and so needs no escaping.",
+      "query": {
+        "grain": "segment",
+        "dimensions": [
+          "op_airline_id"
+        ],
+        "measures": [
+          "seats"
+        ],
+        "time_from": "2025-05",
+        "time_to": "2026-04",
+        "filters": [
+          [
+            "route",
+            [
+              "12478-12892"
+            ]
+          ]
+        ],
+        "sort": null,
+        "sort_desc": true,
+        "limit": 50,
+        "grouping": "operating"
+      },
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&f=route:12478-12892&n=50&g=op"
     }
   ]
 }
