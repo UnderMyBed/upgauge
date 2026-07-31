@@ -1,8 +1,10 @@
+import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveCarrier } from "@/lib/carrier";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
+import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { encode } from "@/lib/pivot/urlstate";
@@ -25,6 +27,10 @@ const CARRIER_TYPE_LIMIT = 100;
 // any query against this database can have, matching the identically-named constants in
 // explore/page.tsx and route/[pair]/page.tsx.
 const EARLIEST_MONTH = "2015-01";
+
+// Same reasoning, same value, as route/[pair]/page.tsx's identically-named constant --
+// docs/architecture/hosting.md's "Host at upgauge.shipman.dev".
+const SITE_URL = "https://upgauge.shipman.dev";
 
 /** The trailing-12-month window this page always shows, computed from `asOf` the same way
  * mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql). */
@@ -82,23 +88,6 @@ function buildColumns(allowlist: Allowlist, resultColumns: string[]): ColumnSpec
       derived: allowlist.meas.get(c)?.isAdditive === false,
       dimKey: allowlist.dims.get(c)?.joinDim ? c : undefined,
     }));
-}
-
-function Wordmark() {
-  return (
-    <span className="mark">
-      UP<span className="accent">GAUGE</span>
-    </span>
-  );
-}
-
-function TopBar({ asOf }: { asOf: string }) {
-  return (
-    <div className="top">
-      <Wordmark />
-      <span className="asof">DATA AS OF {asOf}</span>
-    </div>
-  );
 }
 
 function Stat({ label, value, derived }: { label: string; value: string; derived?: boolean }) {
@@ -318,6 +307,22 @@ export async function CarrierView({
       </main>
     </div>
   );
+}
+
+/** The self-referential canonical `<link>`, re-resolved from the slug rather than built from
+ * it verbatim. `resolveCarrier`'s "ok" and "redirect" outcomes both carry `canonical` (lib/
+ * carrier.ts: `dim_carrier`'s own spelling, never `wanted`), so `/carrier/dl` declares
+ * `/carrier/DL` -- the bug this excludes is emitting `${SITE_URL}/carrier/${slug}` and having
+ * the lowercase request declare itself canonical. */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ code: string }>;
+}): Promise<Metadata> {
+  const { code: slug } = await params;
+  const resolved = await resolveCarrier(slug);
+  if (resolved.kind === "notFound") return {};
+  return { alternates: { canonical: `${SITE_URL}/carrier/${resolved.canonical}` } };
 }
 
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the three-way

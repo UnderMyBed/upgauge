@@ -5,6 +5,7 @@ import { rawPathFromHeaders } from "@/lib/rawPath";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
 import { encode } from "@/lib/pivot/urlstate";
 import { displayValue, resolutionKey } from "@/lib/resolve";
+import { TopBar } from "@/components/TopBar";
 
 // Same reasoning as the page's own export of this constant: DATA AS OF must never be frozen at
 // build time, even on the 404 path. proxy.ts sets `no-store` on this response for the same
@@ -12,23 +13,6 @@ import { displayValue, resolutionKey } from "@/lib/resolve";
 export const dynamic = "force-dynamic";
 
 const EARLIEST_MONTH = "2015-01";
-
-function Wordmark() {
-  return (
-    <span className="mark">
-      UP<span className="accent">GAUGE</span>
-    </span>
-  );
-}
-
-function TopBar({ asOf }: { asOf: string }) {
-  return (
-    <div className="top">
-      <Wordmark />
-      <span className="asof">DATA AS OF {asOf}</span>
-    </div>
-  );
-}
 
 /** One of the airframes a colliding slug names, with the permalink that CAN show it. */
 interface Candidate {

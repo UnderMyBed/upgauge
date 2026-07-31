@@ -1,8 +1,10 @@
+import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveRoutePair } from "@/lib/routePair";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
+import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { encode } from "@/lib/pivot/urlstate";
@@ -27,6 +29,12 @@ const ROUTE_CARRIER_LIMIT = 50;
 // any query against this database can have, matching explore/page.tsx's own constant of the
 // same name and value.
 const EARLIEST_MONTH = "2015-01";
+
+// docs/architecture/hosting.md: "Host at upgauge.shipman.dev". `alternates.canonical` needs a
+// fully-qualified URL (Next's Metadata API would otherwise fall back to a local
+// http://localhost origin -- node_modules/next/dist/lib/metadata/resolvers/resolve-url.js's
+// createLocalMetadataBase()), so this is written out rather than left as a relative path.
+const SITE_URL = "https://upgauge.shipman.dev";
 
 /** The trailing-12-month window this page always shows, computed from `asOf` the same way
  * mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql:
@@ -86,23 +94,6 @@ function buildColumns(allowlist: Allowlist, resultColumns: string[]): ColumnSpec
       derived: allowlist.meas.get(c)?.isAdditive === false,
       dimKey: allowlist.dims.get(c)?.joinDim ? c : undefined,
     }));
-}
-
-function Wordmark() {
-  return (
-    <span className="mark">
-      UP<span className="accent">GAUGE</span>
-    </span>
-  );
-}
-
-function TopBar({ asOf }: { asOf: string }) {
-  return (
-    <div className="top">
-      <Wordmark />
-      <span className="asof">DATA AS OF {asOf}</span>
-    </div>
-  );
 }
 
 function Stat({ label, value, derived }: { label: string; value: string; derived?: boolean }) {
@@ -333,6 +324,25 @@ export async function RouteView({
       </main>
     </div>
   );
+}
+
+/** The self-referential canonical `<link>`, resolved the SAME way the page itself resolves the
+ * slug -- never the requested spelling. `resolveRoutePair` already computes the
+ * code-alphabetical canonical for both its "ok" and "redirect" outcomes (routePair.ts's own
+ * `canonical` field), so `/route/lax-jfk` declares `/route/JFK-LAX` as canonical even though
+ * this exact render never ships for that URL -- it 308s first, and a crawler that indexed the
+ * redirect's target sees the same tag confirming it. The bug this exists to exclude: building
+ * the tag from `slug` (the REQUESTED spelling) instead of re-resolving it, which would have
+ * `/route/lax-jfk` declare itself as its own canonical. */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ pair: string }>;
+}): Promise<Metadata> {
+  const { pair: slug } = await params;
+  const resolved = await resolveRoutePair(slug);
+  if (resolved.kind === "notFound") return {};
+  return { alternates: { canonical: `${SITE_URL}/route/${resolved.canonical}` } };
 }
 
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the three-way

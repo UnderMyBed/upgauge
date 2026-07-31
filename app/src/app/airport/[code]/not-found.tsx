@@ -3,27 +3,11 @@ import { headers } from "next/headers";
 import { dataAsOf } from "@/lib/db";
 import { rawPathFromHeaders } from "@/lib/rawPath";
 import { airportSlugFromPath, resolveAirportCode } from "./resolveAirport";
+import { TopBar } from "@/components/TopBar";
 
 // Same reasoning as page.tsx's own export: DATA AS OF must never be frozen at build time,
 // even on the 404 path. proxy.ts sets `no-store` on this response one level out, at the CDN.
 export const dynamic = "force-dynamic";
-
-function Wordmark() {
-  return (
-    <span className="mark">
-      UP<span className="accent">GAUGE</span>
-    </span>
-  );
-}
-
-function TopBar({ asOf }: { asOf: string }) {
-  return (
-    <div className="top">
-      <Wordmark />
-      <span className="asof">DATA AS OF {asOf}</span>
-    </div>
-  );
-}
 
 /** The specific reason this slug is not an airport, in `resolveAirport.ts`'s own words -- which
  * name the offending CODE, and distinguish a typo from a real airport this domestic-only

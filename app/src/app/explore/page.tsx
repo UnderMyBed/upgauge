@@ -7,6 +7,7 @@ import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { formatCount } from "@/lib/format";
 import { resolutionKey, displayValue, type Resolved } from "@/lib/resolve";
 import { LegendRail } from "@/components/LegendRail";
+import { TopBar } from "@/components/TopBar";
 import type { PivotQuery } from "@/lib/pivot/types";
 import type { Allowlist } from "@/lib/pivot/allowlist";
 
@@ -106,24 +107,6 @@ function describeQuery(query: PivotQuery, allowlist: Allowlist): string {
 function widerWindowHref(query: PivotQuery): string | null {
   if (query.timeFrom <= EARLIEST_MONTH) return null;
   return `/explore?${encode({ ...query, timeFrom: EARLIEST_MONTH })}`;
-}
-
-function Wordmark() {
-  // docs/design/mockups/table.html's .mark: "UP" in --ink, "GAUGE" in --signal.
-  return (
-    <span className="mark">
-      UP<span className="accent">GAUGE</span>
-    </span>
-  );
-}
-
-function TopBar({ asOf }: { asOf: string }) {
-  return (
-    <div className="top">
-      <Wordmark />
-      <span className="asof">DATA AS OF {asOf}</span>
-    </div>
-  );
 }
 
 function Stat({ label, value, derived }: { label: string; value: string; derived?: boolean }) {

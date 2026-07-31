@@ -85,6 +85,15 @@ export function LegendRail({
             every row.
           </em>
         </div>
+        {/* Unconditional, unlike the fleetMix group above -- every view the rail appears on
+            is built from this same source, whether or not that view happens to draw a chart,
+            so the attribution belongs to the rail itself rather than to the opt-in group. */}
+        <div className="lrow">
+          <em>
+            Source: US DOT / Bureau of Transportation Statistics, T-100 Segment (All Carriers)
+            -- public-domain US Government data.
+          </em>
+        </div>
       </div>
     </aside>
   );

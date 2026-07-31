@@ -108,6 +108,19 @@ Counts are integers with thousands separators.
 
 ## Components
 
+### The top bar
+
+The wordmark, the `DATA AS OF` badge, and — as of M5 — a site-wide search field, extracted
+into one shared component (`app/src/components/TopBar.tsx`) so the search box has exactly one
+home instead of drifting across every page that renders it. `UPGAUGE` in `.mark`, `UP` in
+`--ink` and `GAUGE` in `--signal`; the badge in `--signal` (first-class per `DATA AS OF`'s own
+token entry, above); the search field a plain `method="GET"` form posting `q` to `/search` —
+**no client JS, no `onChange`, no state.** Every view in this product renders and works with
+JavaScript off, and the search box is not an exception. Present on every page, including the
+four entity pages' `not-found` states and the front door — a 404 still asserts something about
+the data (that a query against it would answer nothing), so it keeps the full top bar rather
+than treating a 404 as chrome-free.
+
 ### The data table
 
 Column order is fixed: **gutter · identifiers · additive measures · derived measures ·
@@ -518,7 +531,10 @@ JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
 
 Canonical-URL handling (redirect, 404, en-dash rendering) is a routing concern, not a design
 one — full contract in
-[`../architecture/pipeline.md` § M4b](../architecture/pipeline.md#m4b--the-route-page).
+[`../architecture/pipeline.md` § M4b](../architecture/pipeline.md#m4b--the-route-page). As of
+M5, all four entity pages export a `<link rel="canonical">` at that same resolved value — never
+the requested spelling, so `/airport/sea` declares `/airport/SEA` rather than itself, exactly
+the same resolver call the redirect above already makes.
 
 ### The other three, shipped M4d — what each one changes and what it must not
 

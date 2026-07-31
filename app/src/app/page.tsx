@@ -1,4 +1,5 @@
 import { dataAsOf } from "@/lib/db";
+import { TopBar } from "@/components/TopBar";
 
 // The front door reads its freshness from the data like every other view -- CLAUDE.md makes
 // `DATA AS OF` a first-class element on every data view, and the lag is the credibility.
@@ -18,12 +19,7 @@ export default async function Home() {
   const asOf = await dataAsOf();
   return (
     <div className="wrap">
-      <div className="top">
-        <span className="mark">
-          UP<span className="accent">GAUGE</span>
-        </span>
-        <span className="asof">DATA AS OF {asOf}</span>
-      </div>
+      <TopBar asOf={asOf} />
       <main className="error-page">
         <h1>Is this route healthy, and what is the airline about to do to it?</h1>
         <p>

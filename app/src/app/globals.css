@@ -181,6 +181,45 @@ body { background: var(--panel); color: var(--ink); }
 .mark .accent {
   color: var(--signal);
 }
+/* Site-wide search (M5, Task 2): a plain GET form between the wordmark and the DATA AS OF
+   badge, `flex: 1` so it fills the space the badge's own margin-left:auto used to claim on
+   its own. No card, no rounded corners -- same restraint as the rest of page chrome. */
+.top .search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.top .search input[type="search"] {
+  flex: 1;
+  min-width: 0;
+  max-width: 360px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--field);
+  border: 1px solid var(--rule-2);
+  padding: 5px 8px;
+}
+.top .search input[type="search"]::placeholder {
+  color: var(--ink-3);
+}
+.top .search button {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: var(--field);
+  border: 1px solid var(--rule-2);
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.top .search button:hover {
+  color: var(--ink);
+  border-color: var(--ink);
+}
 .asof {
   font-family: var(--font-mono);
   font-size: 11px;

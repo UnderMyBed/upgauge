@@ -1,8 +1,10 @@
+import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveAircraftSlug } from "@/lib/aircraftSlug";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
+import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { BY_CARRIER, fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { encode } from "@/lib/pivot/urlstate";
@@ -25,6 +27,10 @@ const AIRCRAFT_CARRIER_LIMIT = 50;
 // data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- the widest window
 // any query against this database can have, matching route/[pair]/page.tsx's constant.
 const EARLIEST_MONTH = "2015-01";
+
+// Same reasoning, same value, as route/[pair]/page.tsx's identically-named constant --
+// docs/architecture/hosting.md's "Host at upgauge.shipman.dev".
+const SITE_URL = "https://upgauge.shipman.dev";
 
 /** The trailing-12-month window this page always shows, computed from `asOf` the same way
  * mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql:
@@ -85,23 +91,6 @@ function buildColumns(allowlist: Allowlist, resultColumns: string[]): ColumnSpec
       derived: allowlist.meas.get(c)?.isAdditive === false,
       dimKey: allowlist.dims.get(c)?.joinDim ? c : undefined,
     }));
-}
-
-function Wordmark() {
-  return (
-    <span className="mark">
-      UP<span className="accent">GAUGE</span>
-    </span>
-  );
-}
-
-function TopBar({ asOf }: { asOf: string }) {
-  return (
-    <div className="top">
-      <Wordmark />
-      <span className="asof">DATA AS OF {asOf}</span>
-    </div>
-  );
 }
 
 function Stat({ label, value, derived }: { label: string; value: string; derived?: boolean }) {
@@ -284,6 +273,23 @@ export async function AircraftView({
       </main>
     </div>
   );
+}
+
+/** The self-referential canonical `<link>`, re-resolved from the slug rather than built from it
+ * verbatim. Both the "ok" and "redirect" branches of `AircraftSlugResult` carry `canonical`
+ * (aircraftSlug.ts: the uppercased slug), so `/aircraft/a321-lr` declares `/aircraft/A321-LR`
+ * as canonical -- the bug this excludes is building the tag from `slug` directly. `ambiguous`
+ * has no single canonical form to declare (that is the entire content of its 404, see
+ * `AircraftPage` below), so it falls through to the same empty return as `notFound`. */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ name: string }>;
+}): Promise<Metadata> {
+  const { name: slug } = await params;
+  const resolved = await resolveAircraftSlug(slug);
+  if (resolved.kind !== "ok" && resolved.kind !== "redirect") return {};
+  return { alternates: { canonical: `${SITE_URL}/aircraft/${resolved.canonical}` } };
 }
 
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the four-way

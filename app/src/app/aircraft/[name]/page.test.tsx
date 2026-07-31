@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import AircraftPage from "@/app/aircraft/[name]/page";
+import AircraftPage, { generateMetadata } from "@/app/aircraft/[name]/page";
 import { decode } from "@/lib/pivot/urlstate";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
 
@@ -173,6 +173,32 @@ describe("/aircraft/<slug> redirect and 404", () => {
     // A distinct code path from the unknown-slug case above (AmbiguousCodeError, caught), so a
     // regression that special-cased only one would still be caught here.
     expect(await catchDigest("CE-180")).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
+  });
+});
+
+describe("/aircraft/<slug> canonical metadata (M5, Task 2)", () => {
+  it("declares the canonical URL for an already-canonical slug", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ name: "B737-8" }) });
+    expect(meta.alternates?.canonical).toBe("https://upgauge.shipman.dev/aircraft/B737-8");
+  });
+
+  it("declares the UPPERCASED slug for a lowercase request, not the request", async () => {
+    // The bug to exclude, same shape as /airport/sea: emitting the requested spelling.
+    // /aircraft/a321-lr never renders this page in production (it 308s first), but the
+    // canonical tag must still name the uppercased slug -- never the unroutable raw short
+    // name (`A321/LR`) either.
+    const meta = await generateMetadata({ params: Promise.resolve({ name: "a321-lr" }) });
+    expect(meta.alternates?.canonical).toBe("https://upgauge.shipman.dev/aircraft/A321-LR");
+  });
+
+  it("returns no canonical for a slug that cannot resolve at all", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ name: "NOPE-1" }) });
+    expect(meta.alternates?.canonical).toBeUndefined();
+  });
+
+  it("returns no canonical for an ambiguous slug -- there is no one URL to declare", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ name: "CE-180" }) });
+    expect(meta.alternates?.canonical).toBeUndefined();
   });
 });
 

@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveAirportCode } from "./resolveAirport";
 import {
@@ -10,6 +11,7 @@ import {
 import { dataAsOf, loadAllowlist } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
+import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { AIRCRAFT_MIX_LIMIT } from "@/lib/chart/aircraftMix";
 import { encode } from "@/lib/pivot/urlstate";
@@ -26,6 +28,10 @@ export const dynamic = "force-dynamic";
 // data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- the widest window
 // any query against this database can have. Same constant, same value, as /route and /explore.
 const EARLIEST_MONTH = "2015-01";
+
+// Same reasoning, same value, as route/[pair]/page.tsx's identically-named constant --
+// docs/architecture/hosting.md's "Host at upgauge.shipman.dev".
+const SITE_URL = "https://upgauge.shipman.dev";
 
 /** The trailing-12-month window the table always shows, computed from `asOf` exactly as
  * route/[pair]/page.tsx computes it (and as mart_route_health's own t12 window is): 11 months
@@ -58,23 +64,6 @@ function buildColumns(allowlist: Allowlist): ColumnSpec[] {
     derived,
     dimKey: allowlist.dims.get(key)?.joinDim ? key : undefined,
   }));
-}
-
-function Wordmark() {
-  return (
-    <span className="mark">
-      UP<span className="accent">GAUGE</span>
-    </span>
-  );
-}
-
-function TopBar({ asOf }: { asOf: string }) {
-  return (
-    <div className="top">
-      <Wordmark />
-      <span className="asof">DATA AS OF {asOf}</span>
-    </div>
-  );
 }
 
 function Stat({ label, value, derived }: { label: string; value: string; derived?: boolean }) {
@@ -284,6 +273,24 @@ export async function AirportView({
       </main>
     </div>
   );
+}
+
+/** The self-referential canonical `<link>`, re-resolved from the slug rather than built from
+ * it verbatim -- `resolveAirportCode`'s "ok" branch has no `canonical` field of its own (an
+ * airport code has one canonical FORM, unlike a route pair's two orderings -- resolveAirport.ts's
+ * own header), so the canonical code is `airport.code` there and `resolved.canonical` on the
+ * "redirect" branch. The bug this excludes: emitting `${SITE_URL}/airport/${slug}`, which would
+ * make `/airport/sea` declare itself (lowercase) as canonical instead of `/airport/SEA`. */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ code: string }>;
+}): Promise<Metadata> {
+  const { code: slug } = await params;
+  const resolved = await resolveAirportCode(slug);
+  if (resolved.kind === "notFound") return {};
+  const canonical = resolved.kind === "redirect" ? resolved.canonical : resolved.airport.code;
+  return { alternates: { canonical: `${SITE_URL}/airport/${canonical}` } };
 }
 
 /** Thin wrapper: resolve the slug, handle the three-way result, hand the "ok" case to
