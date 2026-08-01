@@ -182,3 +182,41 @@ def test_death_watch_leads_with_routes_that_are_actually_dying(con):
     capacity_delta, lf_delta = worst
     assert capacity_delta < 0, capacity_delta
     assert lf_delta < 0, lf_delta
+
+
+def test_the_gauge_floor_excludes_the_bush_and_sightseeing_operators(con):
+    """THE reason Empty Planes needs a floor. Without gauge_t12 >= 50 the leaderboard is
+    Alaska bush freight and a Grand Canyon sightseeing operator flying 4-to-6-seat aircraft --
+    GCH 1G4-BLD leads at LF 0.0000 on gauge 6.0. The preset is billed as the hook; it implies
+    a mainline wasting capacity and delivers cargo runs.
+
+    Asserting 'the top row has a low load factor' passes on the BROKEN version too. Asserting
+    the top row is real airliner metal is what distinguishes them."""
+    gauge, dep = con.execute("""
+        SELECT gauge_t12, t12_departures_performed FROM mart_route_health
+        WHERE route_key_low <> route_key_high
+          AND lf_t12 IS NOT NULL
+          AND gauge_t12 >= 50
+          AND t12_departures_performed >= 360
+        ORDER BY lf_t12 ASC LIMIT 1
+    """).fetchone()
+    assert gauge >= 50, gauge
+    assert dep >= 360, dep
+
+    unfloored = con.execute("""
+        SELECT gauge_t12 FROM mart_route_health
+        WHERE route_key_low <> route_key_high
+          AND lf_t12 IS NOT NULL
+          AND t12_departures_performed >= 360
+        ORDER BY lf_t12 ASC LIMIT 1
+    """).fetchone()[0]
+    assert unfloored < 50, "the floor is a no-op on this warehouse -- the test proves nothing"
+
+
+def test_same_airport_rows_are_excluded_from_the_presets(con):
+    """71 of 8,080 mart rows are same-airport, and 60 of the 76 rows at lf_t12 = 0 are among
+    them. The filings are real, but a ROUTE leaderboard listing ATW-ATW reads as a bug."""
+    same = con.execute(
+        "SELECT count(*) FROM mart_route_health WHERE route_key_low = route_key_high"
+    ).fetchone()[0]
+    assert same == 71, "the exclusion in every watch_*.sql is what this count justifies"
