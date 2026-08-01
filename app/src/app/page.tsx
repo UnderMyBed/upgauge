@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { dataAsOf } from "@/lib/db";
 import { TopBar } from "@/components/TopBar";
 
@@ -31,6 +32,23 @@ export default async function Home() {
         <p>
           <a href={SAMPLE}>Open the Explorer</a> &mdash; the top 25 carriers by seats over the
           trailing 12 months, with the gauge rail and the reason-code gutter.
+        </p>
+        {/* Final whole-branch review (M6), Important #2: the front door linked only /explore,
+            so /watch -- four leaderboards, the product's editorial surface -- was reachable
+            only by typing its URL. TopBar carries the standing link on every page; this is the
+            front door naming it in prose, where a first-time visitor is actually reading. */}
+        {/* `Link`, not `<a>`, for the identical reason TopBar's wordmark is one:
+            `@next/next/no-html-link-for-pages` fires on a statically-resolvable internal href
+            (verified -- this shipped as an `<a>` and `make app-check` rejected it). The
+            `SAMPLE` link above is a plain `<a>` only because its href is a computed constant
+            the rule cannot statically resolve. `prefetch={false}` for the same cost reason:
+            `/watch` is `force-dynamic` and queries `dataAsOf()` on every request. */}
+        <p>
+          <Link href="/watch" prefetch={false}>
+            Gauge Watch
+          </Link>{" "}
+          &mdash; four leaderboards: which routes got a bigger plane this year, which are flying
+          empty, which just came back, and which are in trouble on every axis at once.
         </p>
       </main>
     </div>

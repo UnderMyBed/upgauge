@@ -94,8 +94,10 @@ excluded, trailing 12 (2025-05 → 2026-04) and all-time (2015-01 → 2026-04):
 the sitemap** — do not quote them as "how many entity pages exist." A quarantined row
 (`load_factor > 1.0`, CLAUDE.md) is still a real filing and its page still 200s, so excluding
 it silently undercounts. `docs/product/scope.md` § D2 has the number that actually answers
-"how many entity pages get indexed" — M5's `/sitemap.xml`, **quarantine-INCLUDED**: 1,045
-airports, 114 carriers, 110 aircraft, 22,420 routes (23,689 total). Airports and carriers here
+"how many entity pages get indexed" — `/sitemap.xml`, **quarantine-INCLUDED**: 1,045
+airports, 114 carriers, 110 aircraft, 22,420 routes (23,689 total at M5; **23,694** as of M6
+Task 7, +5 for `/watch` and its four presets, which are not entity pages and are not part of
+this table's own breakdown). Airports and carriers here
 happen to be close to those figures (1,041 vs. 1,045; 114 both ways — no fact-present carrier's
 entire row history is quarantined), but **aircraft types' `110` here is a different count
 entirely and its match to the sitemap's `110` is coincidence, not agreement**: this row counts
@@ -147,8 +149,8 @@ them into `proxy.ts`'s matcher, the sitemap and `robots.txt`, get:
 Cache-Control: public, s-maxage=2592000, stale-while-revalidate=86400
 ```
 
-**HTML page routes — `/explore` and the four entity pages — get a shorter one instead, as of
-M5 Task 7:**
+**HTML page routes — `/explore`, the four entity pages, and (M6 Task 7) `/watch` plus its four
+`/watch/:preset` pages — get a shorter one instead, as of M5 Task 7:**
 
 ```
 Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400
@@ -211,8 +213,8 @@ being invisible to whoever added a route:
 > **Three lines per page, and all three are load-bearing:** a `matcher` entry, a row in
 > `ENTITY_ROUTES`, and *both* a header assertion and a `no-store` assertion in `app/smoke.sh`.
 > M4d added `/airport/:code`, `/carrier/:code` and `/aircraft/:name` on that pattern, taking the
-> matcher to six entries: `/explore`, `/api/pivot`, and the four entity pages. **M5 Task 8 adds
-> three more exact-path entries — `/search`, `/sitemap.xml`, `/robots.txt` — for nine.** None of
+> matcher to six entries: `/explore`, `/api/pivot`, and the four entity pages. M5 Task 8 added
+> three more exact-path entries — `/search`, `/sitemap.xml`, `/robots.txt` — for nine. None of
 > the three is a dynamic segment (no `ENTITY_ROUTES` row, no per-slug resolution), but the rule
 > is the same one line lower than "three lines per page": a route absent from the matcher gets
 > no `Cache-Control` from this file at all, which for `/search` happens to be harmless (Next's
@@ -224,6 +226,25 @@ being invisible to whoever added a route:
 > it safe — see `proxy.ts`'s own doc comment on that branch); `/sitemap.xml` and `/robots.txt`
 > get the project's 30-day value outright, since both are built from the same catalog queries
 > regardless of who's asking and carry none of an entity page's per-request resolution risk.
+>
+> **M6 Task 7 adds two more — `/watch` and `/watch/:preset` — for ELEVEN.** `/watch/:preset` is
+> a dynamic segment, the same shape as the four `ENTITY_ROUTES` entries, but it deliberately has
+> no `ENTITY_ROUTES` row: `resolveRoutePair`/`resolveAirportCode`/`resolveCarrier`/
+> `resolveAircraftSlug` each resolve an id against the warehouse, where a preset slug resolves
+> against `presetBySlug()`, a lookup into the fixed, four-entry `PRESETS` registry
+> (`lib/watch.ts`) — no query at all. That is why `/watch`'s cacheability rule in `proxy.ts` is
+> written as its own `if` branch rather than a fifth `ENTITY_ROUTES` row: **the allow-list
+> (`presetBySlug(slug) !== null`, or the bare `/watch` path which has no slug to fail) answers
+> "is this a well-formed, known page" for free, but does NOT answer "is it safe to cache" —
+> every preset page still runs a live `mart_route_health` query, so the branch also gates on
+> `isDataLayerHealthy()`, the same probe `/explore` and `/sitemap.xml`/`/robots.txt` use.**
+> Skipping that probe because the slug set is static is exactly the mistake `/sitemap.xml` made
+> once already (§ "The gap" below, fix wave F4) — "it takes no user input" was true there too,
+> and it still 500ed under a 30-day public cache. Declining the cache when the probe fails costs
+> a cache miss; skipping the probe costs a 500 pinned in a shared cache for up to an hour
+> (`HTML_CACHE`'s window, since `/watch` reads live warehouse state the way `/explore` does, not
+> a fixed catalog query the way `/sitemap.xml`/`/robots.txt` do). An unknown preset — `known`
+> false — is `no-store` regardless of the probe, same as every other 404 in this file.
 >
 > **M5 Task 8 is also where the matcher's evidence stopped being hypothetical a second time.**
 > `app/sitemap.ts` and `app/robots.ts` shipped in M5 Task 5 with no `dynamic` export, which Next
@@ -471,6 +492,17 @@ every row below, and the status on every 308 and 404.
 | `/aircraft/a321-lr` | 308 | long cache | to the **slug**, never to the unroutable `A321/LR` |
 | `/aircraft/NOPE-1` | 404 | `no-store` | unknown type |
 | **`/aircraft/CE-180`** | **404** | **`no-store`** | **`ambiguous`, not `notFound` — the allow-list is for this row** |
+| `/watch` | 200 | `HTML_CACHE` (1hr) | allow-list is unconditional (no slug to fail) — gate is the probe alone |
+| `/watch/gauge` | 200 | `HTML_CACHE` (1hr) | known preset, `isDataLayerHealthy()` probe succeeded |
+| `/watch/nope` | 404 | `no-store` | not one of the four `PRESETS` |
+
+> The three `/watch` rows above are new in M6 Task 7 and, unlike every row above them, are
+> pinned only by `proxy.test.ts` calling `proxy()` directly — they have **not yet** been
+> curled against a served build. That distinction matters here specifically: `proxy.test.ts`
+> cannot observe `config.matcher` at all (it never goes through Next's routing layer), so it
+> cannot tell a present `/watch/:preset` matcher entry from a missing one — the exact gap
+> `app/smoke.sh` exists to close, and M6 Task 8's job, not this one's. Until that gate runs
+> against a real build these three rows are unit-verified, not measured.
 
 **`/search`'s 307 is a deliberate departure from every 308 in this table, and it is `search.ts`'s
 choice, not `proxy.ts`'s** — the redirect status is set by `redirect()` in
@@ -758,6 +790,25 @@ pinned by `app/src/proxy.test.ts`'s `it.each(["/sitemap.xml", "/robots.txt"])("d
 long-cache %s when the proxy's own data-layer probe throws", …)`, same partial-mock shape as
 Part A's own test.
 
+**M6 Task 7 wrote `/watch`'s branch with the probe from the start, because F4 above is exactly
+the mistake a static, closed preset set invites a second time.** `/watch/:preset` has no
+`ENTITY_ROUTES` row and no per-request database resolution to fail — `presetBySlug()` is a
+lookup into a fixed four-entry map, not a query — which is precisely the "it takes no user
+input" shape that let F4 ship unconditional. The branch (`proxy.ts`) still gates on
+`isDataLayerHealthy()` regardless, because the allow-list only answers "is this URL
+well-formed", never "is the page about to succeed" — `WatchPresetView` runs a real
+`mart_route_health` query per request, same as `ExploreView`'s pivot. Pinned by
+`app/src/proxy.test.ts`'s `"declines to cache /watch when the data layer is broken"` and its
+`/watch`-index sibling, same partial-mock shape as Part A and F4's own tests. Mutation-verified,
+two mutants against `proxy.ts` alone, `npm test -- proxy` run, then reverted: dropping
+`&& (await isDataLayerHealthy())` turns exactly those two tests red; replacing the whole
+ternary with the unconditional `HTML_CACHE` additionally turns `"gives an unknown preset
+no-store"` red (three total), everything else green. A third mutant — removing
+`/watch/:preset` from `config.matcher` — left all 50 `proxy.test.ts` tests green: the suite
+calls `proxy()` directly and never crosses Next's routing layer, so it cannot see the matcher
+at all, the identical blind spot § "What omitting one actually costs" measures for the
+`ENTITY_ROUTES` pages. That mutant is only reachable from a served build — M6 Task 8's job.
+
 **Also recorded here, not previously written down anywhere:** `/sitemap.xml` is
 `export const dynamic = "force-dynamic"` (`app/src/app/sitemap.ts`), serves roughly 2.4 MB, and
 costs ~45 ms of DuckDB per request under `Promise.all` — measured per query: routes 35.5 ms,
@@ -782,6 +833,23 @@ things named in the pre-Task-7 version of this section (a route-handler entry po
 Cache-Control mechanism, if Next ever grows one; a short `s-maxage`) are now one adopted (the
 short `s-maxage`) and one measured-closed (the route-handler entry point, for this Next version,
 for a page with a server-rendered chart) rather than three open options.
+
+**M6 Task 8 turned the "say, `mart_route_health`" example two paragraphs above (§ "What Part A
+does not... cover") from a hypothetical into a measurement, against `/watch/gauge`.** A database
+copy with `mart_route_health` dropped — and `meta_pivot_dimensions`/`meta_pivot_measures`
+untouched — leaves `isDataLayerHealthy()` (which only calls `loadAllowlist()`) reporting
+healthy, so `proxy.ts` commits to `HTML_CACHE` before `WatchPresetView`'s `runPreset()` ever
+touches the missing table. Measured on a served build: **`/watch/gauge` returns `500` with
+`Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400`** — a cacheable 5xx, not a
+declined one. The counterpart mutant (drop `meta_pivot_dimensions` instead, leave
+`mart_route_health` intact) correctly 500s under `no-store`, confirming the gap is specific to
+what `isDataLayerHealthy()` does and does not probe, not a general failure of the branch. Closing
+this fully would mean giving that probe a `mart_route_health`-specific query of its own — the
+identical extra-round-trip-per-request tradeoff already declined for `/route` and the other three
+`ENTITY_ROUTES` pages, not a new decision this milestone makes differently. `app/smoke.sh`
+asserts the measured behaviour as a known-open gap (§ "gap check: /watch/gauge against a database
+missing mart_route_health", M6 Task 8), the same way it already did for `/explore` at M5 — except
+that one is a gap CLOSED, and this one documents a gap still open.
 
 ## Server-side Observable Plot needs no bundler configuration
 

@@ -375,7 +375,16 @@ which 24 months happen to be the trailing window right now, not a structural gua
 768-vs-767 accounting shape from M2 does not carry forward unchanged; see the corrected
 three-reason breakdown below.
 
-`health_score` is an **equal-0.20-weighted** z-score composite of `lf_delta`, `gauge_delta`,
+> **Superseded by M6 Task 1 — kept for the history, not the current formula.** The three
+> paragraphs immediately below (equal-0.20-weighted five-component composite, the M2 and M3a
+> `health_score` ranges) describe the v0 scoring shape that shipped through M5. **M6 replaced
+> it with the four-axis, `±3`-clamped composite documented in the subsection right after this
+> block** (`### The four-axis composite (M6 Task 1)`), which is what `sql/02_marts/200_mart_route_health.sql`
+> actually computes today. The old text is left in place because the *reasoning* that got
+> abandoned (raw, unbounded ratios; five components; no clamp) is exactly what a future editor
+> needs to see rejected, not just told about.
+
+`health_score` was an **equal-0.20-weighted** z-score composite of `lf_delta`, `gauge_delta`,
 `capacity_delta`, `frequency_delta`, and `completion_factor`, all oriented so **higher is
 healthier** — including `gauge_delta`, computed as `gauge_t12 - gauge_p12` (the same as-is
 shape as `lf_delta`, **no negation**): a positive `gauge_delta` already means the mean
@@ -407,6 +416,112 @@ over a nine-year-wider window, so a different one wins) with `p12_departures_per
 1.0` and `t12_departures_performed = 2387.0` — the identical dormant-to-active pattern,
 confirming this is a recurring, structural consequence of the scoring shape rather than a
 one-off artifact of the 2015–2017 subset.
+
+### The four-axis composite (M6 Task 1)
+
+**The five-component composite above was never actually five equal 0.20 weights.** Measured
+mean `|z|` contribution per component, on the real 2015–2026 warehouse: `lf_delta` 0.575,
+`capacity_delta` 0.517, `gauge_delta` 0.178, `frequency_delta` 0.179, `completion_factor`
+0.023 — a **25.0×** spread on nominally equal weights, because three of the five were raw,
+unbounded ratios whose own outliers inflated their own denominators (`capacity_delta` reached
++2348.658 on this warehouse), while `completion_factor` — already bounded near 1.0 by
+definition — was left contributing 1.6% of a nominal 20% share.
+
+**The identity that licenses dropping `capacity_delta` from the score, not just shrinking its
+weight:**
+
+```
+ln(seats_t12 / seats_p12) ≡ ln(dep_t12 / dep_p12) + ln(gauge_t12 / gauge_p12)
+```
+
+i.e. in log space, capacity change is *exactly* frequency change plus gauge change — not
+approximately correlated, identically decomposed, because `seats = departures × gauge` by
+construction. Measured: max `|residual|` **9.37e-16** over all **7,392** finite rows (the
+`p12_months_present >= 1` population — see above), which is floating-point noise, not a
+near-identity. In raw (unlogged) form the same relationship shows up as `corr(capacity_delta,
+frequency_delta) = 0.9885`; in logs it is **1.00**. Scoring `capacity_delta` alongside
+`gauge_delta` and `frequency_delta` would therefore score the same underlying movement twice —
+this is the whole justification for excluding it from the composite, not a stylistic choice, and
+without this paragraph a future editor re-adding it "to use all five components" would silently
+reintroduce the double-count. `capacity_delta` keeps its column and is still displayed; it has
+no place in the sum.
+
+**The fix: four independent axes, equal weight 0.25 each — `lf_delta`, `ln(gauge_t12 /
+gauge_p12)`, `ln(t12_departures_performed / p12_departures_performed)`, and
+`completion_factor` capped at 1.5** (not `capacity_delta`, not `frequency_delta`/`gauge_delta`
+in raw form). The two ratio axes are logged, not raw, because raw ratios are unbounded and
+asymmetric — a halving is -0.5, a doubling is +1.0 — while in log space a halving and a
+doubling get equal magnitude, which is what keeps one axis's own outliers from inflating only
+its own `stddev_samp` and starving its own contribution the way `completion_factor` was
+starved above.
+
+**`ln()` of a zero denominator does not degrade gracefully — it raises.** An earlier design
+note for this task assumed an unguarded `ln()` of a zero gauge would yield `-inf`, the way
+IEEE-754 float division does, and sort to the top or bottom of Death Watch as a visibly wrong
+but non-fatal value. **That is false for DuckDB**: `ln(0)` raises `Out of Range Error: cannot
+take logarithm of zero` — a hard runtime error that would abort the entire `make build`, not
+merely mis-sort one row. `gauge_log` and `freq_log` therefore wrap both operands in `nullif(x,
+0)`: `ln()` never sees a literal zero, only `NULL` (`ln(NULL)` is `NULL`, not an error), so a
+zero-gauge or zero-frequency row silently becomes a `NULL` axis (and therefore a `NULL`
+`health_score`, per the three-reason contract below) instead of crashing the build.
+
+That guard is also **provably unreachable today, not merely absent from the current
+warehouse** — proved, not just tested, because there is no fixture or adversarial input that
+can exercise "reached `ln()` with a literal zero" without also tripping an earlier filter. The
+upstream `zero_seats` quarantine (`sql/01_staging/normalize_t100_segment.sql`) unconditionally
+excludes any row with `seats = 0 AND departures_performed > 0` from every sum in
+`fct_route_month`, for **both** measures on that row. So any `fct_route_month` row — and
+transitively any `t12`/`p12` window sum in `mart_route_health` — with
+`departures_performed > 0` is built entirely from segment rows that each individually had
+`seats > 0`; there is no code path from raw CSV through `fct_route_month` to
+`mart_route_health` that can produce `departures_performed > 0` with `seats = 0` in either
+window. Confirmed two ways: **by construction** — a 12-month, all-quarantined adversarial
+route fed through the real `fct_route_month.sql` and `200_mart_route_health.sql` comes back
+with `departures_performed` and `seats` both `NULL`, excluded entirely by the
+`t12_departures_performed >= 30` floor before `gauge_t12` is ever computed — and
+**empirically** — measured `min(gauge_t12) = 0.958` on the real 2026-04 warehouse. The guard
+is kept anyway, the same way the `p12_months_present = 0` `CASE` earlier in this file is kept:
+correct defence against a future change to the quarantine rule, which *would* change this.
+
+**Measured contribution table, before → after** (mean `|z|`, clamped to `±3`):
+
+| Component | Before (five axes) | After (four axes) |
+|---|---|---|
+| `lf_delta` | 0.575 | 0.538 |
+| gauge (`gauge_delta` → `ln(gauge_t12/gauge_p12)`) | 0.178 | 0.454 |
+| frequency (`frequency_delta` → `ln(dep_t12/dep_p12)`) | 0.179 | 0.506 |
+| `completion_factor` (capped at 1.5) | 0.023 | 0.348 |
+| `capacity_delta` | 0.517 | *(displayed only, not scored)* |
+
+Spread (max/min of the scored components): **25.0× → 1.5×**.
+
+**The `least`/`greatest` NULL trap.** DuckDB's `least()` and `greatest()` **ignore `NULL`
+rather than propagating it** — `least(NULL, 3)` returns `3`, not `NULL`, and chaining that into
+`greatest(least(NULL, 3), -3)` returns `greatest(3, -3)`, i.e. **`3`**, not `NULL` (verified in
+DuckDB directly; an earlier draft of this paragraph claimed `-3`, transposing which bound wins
+— the conclusion is unaffected either way: a value is fabricated instead of `NULL`
+propagating). A bare `least(completion_factor,
+1.5)` therefore **fabricates a near-perfect completion rate of `1.5`** for every route with no
+filed schedule at all (`t12_departures_scheduled = 0`, so `completion_factor` is itself
+`NULL`) — **180 invented completion rates**. Left unguarded through to the clamp, the same
+behaviour on `greatest(least(z_completion, 3), -3)` would score **every** row with an
+unknown axis, destroying the three-reason NULL contract below: **8,080 rows scored instead of
+the correct 7,267**. Both are `CASE WHEN … IS NULL THEN NULL ELSE least/greatest(...) END` in
+`sql/02_marts/200_mart_route_health.sql` — a `CASE`, not a bare call, for exactly this reason.
+This is not a hypothetical: `pipeline/tests/test_route_health_real_data.py`'s own reference SQL
+(written to independently re-derive the axes from raw columns and check the mart's arithmetic)
+originally used a bare `least(completion_factor, 1.5)` and reproduced this exact fabrication —
+its measured completion contribution came out 0.195, not 0.348, until the guard was added to
+the test's own SQL to match the mart's.
+
+**The clamp.** Each of the four z-scores is clamped to `±3` before the weighted sum, so no
+single axis can move `health_score` by more than `0.75` and `|health_score| ≤ 3.0` **by
+construction** (four axes × 0.25 weight × a 3.0 clamp bound). Measured on the real
+2015–2026 warehouse: the clamp binds (at least one axis `|z| > 3`) on **470 of the 7,267**
+scored rows — a real minority, not decoration and not a rank transform wearing a z-score's
+name. Observed maximum `|health_score|`: **2.31246**, comfortably inside the 3.0 construction
+bound. Unclamped, the worst single axis (`VD` `CPX–VQS`) reaches `z_gauge = -17.28` on this
+warehouse — the reason a per-axis clamp exists at all, not just an overall cap on the sum.
 
 > ⚠️ **`health_score` is `NULL` for three distinct reasons, not one — 1,348 of 7,336 routes
 > total, measured on the 2015–2017 warehouse (M2).** The product-facing writeup (what the UI

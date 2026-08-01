@@ -40,6 +40,12 @@ agg AS (
         sum(r.passengers)           FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_passengers,
         sum(r.departures_performed) FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_departures_performed,
         sum(r.departures_scheduled) FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_departures_scheduled,
+        -- ::BIGINT after the FILTER (a cast between sum() and FILTER is a parser error):
+        -- DuckDB promotes sum() over a BIGINT column to HUGEINT. Left unguarded the column
+        -- ships as HUGEINT, not the BIGINT the brief specifies -- silent here, but Task 6
+        -- reads this through @duckdb/node-api into TypeScript, and this repo has a
+        -- documented history of DuckDB runtime types surfacing differently than expected.
+        sum(r.quarantined_rows) FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month)::BIGINT AS t12_quarantined_rows,
 
         count(DISTINCT r.year_month) FILTER (
             WHERE r.year_month BETWEEN w.p12_start_month AND w.p12_end_month) AS p12_months_present,
@@ -86,19 +92,75 @@ deltas AS (
                   / nullif(p12_departures_performed, 0) - 1 END AS frequency_delta
     FROM derived
 ),
--- Equal weights (0.20). features.md says deliberately dumb, do not over-engineer -- any other
--- weighting would be a number invented here. All five are oriented so HIGHER IS HEALTHIER,
--- including gauge_delta: a downgauge is the warning sign.
-scored AS (
+-- Four INDEPENDENT axes, equal 0.25. capacity_delta is deliberately NOT among them: in log
+-- space it is exactly frequency + gauge (verified to 9.37e-16 over all 7,392 finite rows --
+-- docs/data/model.md), so scoring it scores those two a second time. It keeps its column and
+-- stays on the page; it is the COMPOSITE it has no place in.
+--
+-- The ratios are logged because the raw form is unbounded and asymmetric: capacity_delta
+-- reached +2348.658 on the real warehouse, its own outliers inflated its own stddev, and
+-- completion_factor was left contributing 1.6% of a nominally 20% share. In logs a halving and
+-- a doubling get equal magnitude; in raw ratios they are -0.5 and +1.0.
+axes AS (
     SELECT
         *,
-        0.20 * (lf_delta         - avg(lf_delta)         OVER ()) / nullif(stddev_samp(lf_delta)         OVER (), 0)
-      + 0.20 * (gauge_delta      - avg(gauge_delta)      OVER ()) / nullif(stddev_samp(gauge_delta)      OVER (), 0)
-      + 0.20 * (capacity_delta   - avg(capacity_delta)   OVER ()) / nullif(stddev_samp(capacity_delta)   OVER (), 0)
-      + 0.20 * (frequency_delta  - avg(frequency_delta)  OVER ()) / nullif(stddev_samp(frequency_delta)  OVER (), 0)
-      + 0.20 * (completion_factor - avg(completion_factor) OVER ()) / nullif(stddev_samp(completion_factor) OVER (), 0)
-        AS health_score
+        -- nullif() on BOTH sides, not defensive decoration: DuckDB's ln(0) does not return
+        -- -inf the way IEEE-754 float division would -- it raises "Out of Range Error:
+        -- cannot take logarithm of zero", which would abort the ENTIRE `make build`, not
+        -- merely mis-sort one row. Without the guard, ln() would see that literal zero;
+        -- with it, ln() only ever sees NULL (ln(NULL) is NULL, not an error).
+        --
+        -- Provably UNREACHABLE today, not merely absent from the current warehouse: the
+        -- upstream `zero_seats` quarantine (normalize_t100_segment.sql) unconditionally
+        -- excludes any row with `seats = 0 AND departures_performed > 0` from every sum in
+        -- fct_route_month, for BOTH measures on that row. So any fct_route_month row (and
+        -- transitively any t12/p12 window sum here) with departures_performed > 0 is built
+        -- entirely from segment rows that each individually had seats > 0 -- there is no
+        -- code path that can produce departures_performed > 0 with seats = 0 in either
+        -- window. Confirmed by construction (a 12-month all-quarantined adversarial route
+        -- fed through the real fct_route_month.sql + this file: departures_performed and
+        -- seats both come back NULL, and the row never reaches mart_route_health at all,
+        -- excluded by the `t12_departures_performed >= 30` floor below) and empirically
+        -- (measured min(gauge_t12) = 0.958 on the real 2026-04 warehouse). Keep the guard
+        -- anyway, the same way the `p12_months_present = 0` CASE above is kept: correct
+        -- defence against a future change to the quarantine rule, which WOULD change this.
+        ln(nullif(gauge_t12, 0) / nullif(gauge_p12, 0))                    AS gauge_log,
+        ln(nullif(t12_departures_performed, 0)
+           / nullif(p12_departures_performed, 0))                          AS freq_log,
+        -- CASE, not a bare least(): DuckDB's least() IGNORES NULLs, so least(NULL, 1.5)
+        -- returns 1.5 and fabricates a near-perfect completion rate for the 180 routes that
+        -- filed no schedule at all. See docs/data/model.md.
+        CASE WHEN completion_factor IS NULL THEN NULL
+             ELSE least(completion_factor, 1.5) END                        AS completion_capped
     FROM deltas
+),
+z AS (
+    SELECT
+        *,
+        (lf_delta          - avg(lf_delta)          OVER ()) / nullif(stddev_samp(lf_delta)          OVER (), 0) AS z_lf,
+        (gauge_log         - avg(gauge_log)         OVER ()) / nullif(stddev_samp(gauge_log)         OVER (), 0) AS z_gauge,
+        (freq_log          - avg(freq_log)          OVER ()) / nullif(stddev_samp(freq_log)         OVER (), 0) AS z_freq,
+        (completion_capped - avg(completion_capped) OVER ()) / nullif(stddev_samp(completion_capped) OVER (), 0) AS z_completion
+    FROM axes
+),
+-- Clamped at +/-3 so no single axis can move the composite by more than 0.75. Uniform, with no
+-- per-component threshold to invent. Logging alone fixes capacity and frequency but BREAKS
+-- gauge: a three-seat change on a nine-seat aircraft is a huge log ratio, and VD CPX-VQS
+-- reaches z_gauge = -17.28 unclamped. Touches 470 of the 7,267 scored rows.
+--
+-- Every clamp is a CASE for the same reason the cap above is: greatest(least(NULL,3),-3)
+-- returns 3 (least(NULL,3) is 3, then greatest(3,-3) is 3), not NULL, which would score all
+-- 8,080 rows and destroy the three-reason NULL contract (docs/product/features.md).
+scored AS (
+    SELECT
+        * EXCLUDE (gauge_log, freq_log, completion_capped, z_lf, z_gauge, z_freq, z_completion),
+        0.25 * (
+            CASE WHEN z_lf         IS NULL THEN NULL ELSE greatest(least(z_lf,         3), -3) END
+          + CASE WHEN z_gauge      IS NULL THEN NULL ELSE greatest(least(z_gauge,      3), -3) END
+          + CASE WHEN z_freq       IS NULL THEN NULL ELSE greatest(least(z_freq,       3), -3) END
+          + CASE WHEN z_completion IS NULL THEN NULL ELSE greatest(least(z_completion, 3), -3) END
+        ) AS health_score
+    FROM z
 )
 SELECT * FROM scored
 ORDER BY op_airline_id, route_key_low, route_key_high

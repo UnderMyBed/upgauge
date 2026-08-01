@@ -162,11 +162,21 @@ def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
     against real performed ones (on-demand/charter carriers). `lf_delta`-only parity holds
     on the small fixture purely because its single surviving row happens to have every
     component NULL at once -- it can't produce a route with a populated prior window AND
-    completion_factor NULL. Checking parity against ALL FIVE components is the invariant
-    that is actually true everywhere: health_score is NULL exactly when any one of them is
-    unknown, per features.md's "components are the insight, score is only a sort key" --
-    synthesising a partial score from four of five would be exactly the over-engineering
-    that forbids."""
+    completion_factor NULL.
+
+    The composite is FOUR axes, not five: M6 removed capacity_delta from the score, because
+    in log space it is exactly frequency + gauge (verified to 9.37e-16 over all 7,392 finite
+    rows -- docs/data/model.md), so scoring it scored those two a second time. It keeps its
+    column and stays on the page; it is the composite it has no place in.
+
+    The predicate below still names all FIVE displayed components, and that is deliberate,
+    not a leftover: capacity_delta is not scored, but it is NULL under the same
+    data-availability conditions as the axes that are (p12_months_present = 0, or a zero p12
+    denominator), so including it is redundant-but-true on the real warehouse and states the
+    invariant the page actually depends on -- a row missing ANY displayed component is
+    unscored, never partially scored. Synthesising a score from a subset of what it shows
+    would be exactly the over-engineering features.md's "components are the insight, score is
+    only a sort key" forbids."""
     bad = con.execute("""
         SELECT count(*) FROM mart_route_health
         WHERE (health_score IS NULL) <> (
@@ -175,3 +185,81 @@ def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
         )
     """).fetchone()[0]
     assert bad == 0
+
+
+def test_health_score_is_bounded_by_the_clamp(con):
+    """Each axis is clamped to +/-3 and weighted 0.25, so |health_score| <= 3.0 by
+    construction. Without the clamp a nine-seat aircraft's log gauge ratio reaches z = -17.28
+    on the real warehouse (VD CPX-VQS) and Death Watch fills with bush operators."""
+    worst = con.execute(
+        "SELECT max(abs(health_score)) FROM mart_route_health WHERE health_score IS NOT NULL"
+    ).fetchone()[0]
+    assert worst is None or worst <= 3.0
+
+
+def test_the_completion_cap_is_null_safe(con):
+    """DuckDB's least() IGNORES NULLs: least(NULL, 1.5) returns 1.5, not NULL. Written as a
+    bare least(), the cap fabricates a 1.5 completion rate for every route that filed no
+    schedule at all -- 180 of them on the real warehouse -- and each then gets a health_score
+    it has no basis for."""
+    leaked = con.execute("""
+        SELECT count(*) FROM mart_route_health
+        WHERE completion_factor IS NULL AND health_score IS NOT NULL
+    """).fetchone()[0]
+    assert leaked == 0
+
+
+def test_the_z_clamp_is_null_safe(con):
+    """Same trap on the other guard. least(NULL,3) returns 3 (DuckDB's least/greatest treat
+    NULL as absent, not as the smallest/largest value), so greatest(least(NULL,3),-3) returns
+    3, not -3 -- a bare clamp scores EVERY row, including the new routes whose whole point is
+    a NULL score. Same wrong evidence this docstring itself carried until now was already
+    corrected in docs/data/model.md and in 200_mart_route_health.sql's own comment (M6 Task 2
+    review round 1); this copy was missed."""
+    leaked = con.execute("""
+        SELECT count(*) FROM mart_route_health
+        WHERE p12_months_present = 0 AND health_score IS NOT NULL
+    """).fetchone()[0]
+    assert leaked == 0
+
+
+def test_capacity_is_carried_but_not_scored(con):
+    """capacity_delta stays a DISPLAYED component -- 'capacity down 81%' is the most legible
+    cell on a Death Watch row -- but in log space it is EXACTLY frequency + gauge, so scoring
+    it scores those twice. The identity below is what licenses the exclusion."""
+    cols = [r[0] for r in con.execute("DESCRIBE mart_route_health").fetchall()]
+    assert "capacity_delta" in cols
+    residual = con.execute("""
+        SELECT max(abs( ln(t12_seats / p12_seats)
+                      - ln(t12_departures_performed / p12_departures_performed)
+                      - ln(gauge_t12 / gauge_p12) ))
+        FROM mart_route_health
+        WHERE p12_seats > 0 AND t12_seats > 0
+          AND p12_departures_performed > 0 AND t12_departures_performed > 0
+    """).fetchone()[0]
+    assert residual is None or residual < 1e-12
+
+
+def test_quarantined_rows_are_carried_for_the_trailing_window(con):
+    """CLAUDE.md makes surfacing the quarantine count a hard rule on every data view. The mart
+    did not carry it forward, so /watch could not honour that without this column."""
+    cols = [r[0] for r in con.execute("DESCRIBE mart_route_health").fetchall()]
+    assert "t12_quarantined_rows" in cols
+    negative = con.execute(
+        "SELECT count(*) FROM mart_route_health WHERE t12_quarantined_rows < 0"
+    ).fetchone()[0]
+    assert negative == 0
+
+
+def test_quarantined_rows_is_bigint_not_hugeint(con):
+    """DuckDB promotes sum() over a BIGINT column to HUGEINT unless explicitly cast back down.
+    The brief's interface spec is `t12_quarantined_rows BIGINT`; Task 6 reads this column
+    through @duckdb/node-api into TypeScript, and this repo has a documented history of DuckDB
+    runtime types surfacing differently than expected -- so the type itself is the invariant,
+    not just the column's presence and sign (which the previous test already covers and which
+    passes under either type)."""
+    dtype = con.execute("""
+        SELECT data_type FROM information_schema.columns
+        WHERE table_name = 'mart_route_health' AND column_name = 't12_quarantined_rows'
+    """).fetchone()[0]
+    assert dtype == "BIGINT"

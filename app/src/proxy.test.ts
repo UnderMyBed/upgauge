@@ -241,6 +241,71 @@ describe("proxy", () => {
       expect(res.headers.get("Cache-Control")).toBeNull();
     },
   );
+
+  // M6 Task 7. `/watch` and every `/watch/:preset` get the same shorter HTML_CACHE as /explore
+  // and the four ENTITY_ROUTES pages, not PROJECT_CACHE -- each preset page reads live
+  // mart_route_health state per request, the same per-request-resolution risk /explore carries
+  // and /sitemap.xml/robots.txt do not.
+  it("gives the /watch index HTML_CACHE", async () => {
+    const res = await proxy(new NextRequest("http://localhost/watch"));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it("gives a known preset HTML_CACHE", async () => {
+    const res = await proxy(new NextRequest("http://localhost/watch/gauge"));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it("gives an unknown preset no-store", async () => {
+    // 404s are never cached: the dataset is rebuilt monthly and a 404 pinned in a shared cache
+    // outlives the condition that caused it.
+    const res = await proxy(new NextRequest("http://localhost/watch/nope"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // THE bug this catches, and it has already shipped once on this project: M5's final review
+  // found /sitemap.xml setting PROJECT_CACHE unconditionally with no health probe. A static
+  // slug allow-list cannot see a broken database, and the proxy commits to a header BEFORE the
+  // page runs -- so a 500 would go out under a one-hour public cache. `/watch/gauge` is a KNOWN
+  // preset (the allow-list says yes), so the only thing standing between it and HTML_CACHE here
+  // is the probe -- this is the test that isolates that.
+  it("declines to cache /watch when the data layer is broken", async () => {
+    vi.mocked(loadAllowlist).mockRejectedValueOnce(
+      new Error("duckdb: Catalog Error: Table with name mart_route_health does not exist"),
+    );
+    const res = await proxy(new NextRequest("http://localhost/watch/gauge"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // Same probe, same reasoning, on the bare index: unlike a preset slug, `/watch` has no id to
+  // fail to resolve at all, so if this branch's "known" check were the only gate, `/watch`
+  // would ALWAYS read as known and this test would be the only thing catching a dropped probe
+  // on that specific path.
+  it("declines to cache the /watch index when the data layer is broken", async () => {
+    vi.mocked(loadAllowlist).mockRejectedValueOnce(
+      new Error("duckdb: Catalog Error: Table with name mart_route_health does not exist"),
+    );
+    const res = await proxy(new NextRequest("http://localhost/watch"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // The header /watch/[preset]/not-found.tsx reads. Without a matcher entry it is absent and
+  // that not-found.tsx throws MissingRawPathError -- a 500 where a 404 was the answer, same
+  // shape as the ENTITY_ROUTES pages' equivalent test above.
+  it("copies the pathname for /watch/nope, without which its not-found.tsx throws", async () => {
+    const res = await proxy(new NextRequest("http://localhost/watch/nope"));
+    expect(getReqHeader(res, RAW_PATH_HEADER)).toBe("/watch/nope");
+  });
+
+  // Prefix guard, same shape as the M4d/M5 traps above: a path that merely LOOKS like /watch
+  // must not be netted by the exact-match branch or by presetSlugFromPath's prefix test.
+  it.each([["/watches"], ["/watch-list"]])(
+    "sets no Cache-Control on %s, which is not /watch",
+    async (path) => {
+      const res = await proxy(new NextRequest(`http://localhost${path}`));
+      expect(res.headers.get("Cache-Control")).toBeNull();
+    },
+  );
 });
 
 /** NextResponse.next({request:{headers}}) encodes the upstream request headers into the

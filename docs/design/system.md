@@ -658,11 +658,53 @@ frame per preset — the only place on the site with a voice. Each row carries t
 values, not just the composite score**: the components are the insight, the score is a sort
 key. Label the score plainly as a heuristic.
 
-Every row links into the Explorer with its filters pre-applied — the `/watch` presets are
-saved instances of the Top-N builder, so their links are ordinary permalinks.
+**Not saved instances of the generic Top-N builder** (`app/src/lib/topn.ts`), and **not saved
+Explorer queries** — despite reusing the rank column: every `meta_pivot_measures` row is a
+single-window aggregate and no pivot measure expresses a delta, while these presets rank on one
+(Δ load factor, log Δ gauge) against prior-12, which only `mart_route_health` computes. The two
+share `DataTable`'s rank column and nothing else. **The user-facing copy has to say this too**,
+not just the docs: `/watch`'s own index read "Four saved Explorer queries, editorially framed"
+through M6, one milestone after the correction landed in six other places.
 
-Route Birth Tracker rows must read **"first appearance since 2015"**, never "first ever". The
-window starts in 2015.
+Route Birth Tracker rows must read **"re-entry, not first appearance"** and must **name the
+carrier** — never "first ever", never "first appearance since 2015", and never "nobody flew it
+last year". All three shipped; the first two were mandated by this very line through M6.
+`p12_months_present = 0` means *this carrier filed nothing on this route in the prior 12
+months*, full stop. Two things it does **not** mean, each measured:
+
+- **Not a first appearance.** The mart has no lookback past that window. 334 of 688 qualifying
+  rows (48.5%), and 17 of the 25 rendered, had already filed earlier — `MQ AZO–ORD` in 93
+  distinct months back to 2015-01.
+- **Not an unserved route.** `mart_route_health`'s grain is **(op_airline_id, route)**, so the
+  filter is silent about every other carrier on the same airport pair. **521 of 688 (75.7%), and
+  25 of the 25 rendered**, had a different carrier flying that pair inside the prior window —
+  `AS HNL–ITO` leads the page while HA, UA and WN filed **1,787,347 seats** on it in that
+  window, 4.9× the subject's own trailing 12.
+
+**Grain is a copy problem, not just a data problem.** The second bullet was introduced by the
+fix wave that closed the first: "nobody flew last year" read as the accurate half of the old
+sentence and was carried over unexamined, so a wave correcting one false claim shipped another
+of the same class. Any sentence about a `mart_route_health` row names the carrier or it is a
+claim about a route the query never made. `docs/product/features.md` § Insight presets owns the
+rule and the rest of the evidence.
+
+**Every filter a preset applies is stated on the preset's own page**, in a `.foot` note, or the
+page cannot be reproduced from what it says. Empty Planes has two (`gauge_t12 >= 50` and
+`t12_departures_performed >= 360`, the latter the more restrictive) and disclosed only the
+first through M6.
+
+**`health_score` renders in a left-aligned `td.id`, not a `.num` cell** — a deliberate,
+declared exception to "all numerics right-aligned, tabular-figure". The cell's value is
+`formatHealthScore`'s output, either two decimals or the literal string "insufficient data",
+and on Route Birth Tracker it is that string on 100% of rows. `DataTable`'s `kind` is per
+column, not per cell. It keeps its monospace; it gives up the right edge. See the comment on
+`buildColumns` in `app/src/app/watch/[preset]/page.tsx`.
+
+The editorial frame is `.frame`: a left hairline in `--signal`, `--ink` text at 14px, no box.
+The preset index is `.watch-list`: hairline-separated rows, no bullets, the linked title
+carrying the weight and its frame muted to `--ink-2`. Both shipped in M6 with **no CSS rule at
+all**, which left the one voiced line on the site rendering as plain body text beneath its own
+disclosures.
 
 ### OG / social card
 

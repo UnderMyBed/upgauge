@@ -224,6 +224,29 @@ describe("DataTable: non-dimension identifier cells (e.g. explore's synthetic __
   });
 });
 
+describe("DataTable: rank column", () => {
+  it("renders a leading rank column, sequential from 1, when rank is set", () => {
+    // The bug this catches: rendering the row INDEX (0-based), or re-deriving rank from a
+    // sort the component does not own. Asserting 'a rank column exists' would pass on both.
+    // Asserting the SEQUENCE is what distinguishes them.
+    const rows = [{ k: "a", seats: 3 }, { k: "b", seats: 2 }, { k: "c", seats: 1 }];
+    const columns: ColumnSpec[] = [
+      { key: "k", label: "K", kind: "identifier" },
+      { key: "seats", label: "Seats", kind: "seats" },
+    ];
+    render(<DataTable columns={columns} rows={rows} resolved={new Map()} rank />);
+    const cells = screen.getAllByTestId("rank-cell").map((n) => n.textContent);
+    expect(cells).toEqual(["1", "2", "3"]);
+  });
+
+  it("renders no rank column by default", () => {
+    const rows = [{ k: "a", seats: 3 }];
+    const columns: ColumnSpec[] = [{ key: "k", label: "K", kind: "identifier" }];
+    render(<DataTable columns={columns} rows={rows} resolved={new Map()} />);
+    expect(screen.queryAllByTestId("rank-cell")).toHaveLength(0);
+  });
+});
+
 // Fix round 1, Important 1: Tailwind's preflight resets `a { color: inherit; text-decoration:
 // inherit }`, so a new <a> in a data-table cell is pixel-identical to plain text without an
 // explicit rule -- jsdom computes no styles (no layout engine), so nothing above this line can

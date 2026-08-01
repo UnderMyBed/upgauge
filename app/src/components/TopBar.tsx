@@ -54,6 +54,29 @@ export function TopBar({ asOf }: { asOf: string }) {
   return (
     <div className="top">
       <Wordmark />
+      {/* Final whole-branch review (M6), Important #2: `/watch` shipped with ZERO inbound
+          internal links -- reachable only by typing the URL or through /sitemap.xml, which is
+          exactly the "crawlable but not browsable" island M5's own final review named
+          (docs/product/features.md § the two links outside the tables) and M6 re-created one
+          milestone later. The top bar is the strongest available fix because it is the one
+          surface every page in the product renders; a home-page link alone would leave every
+          entity page still dead-ended.
+
+          `Link` with `prefetch={false}`, for exactly the two reasons the wordmark above states:
+          `@next/next/no-html-link-for-pages` fires on a statically-resolvable internal `<a>`,
+          and `Link`'s default viewport prefetch would add an origin request per page view for
+          a link that is above the fold on all eleven pages. `/watch` is `force-dynamic` and
+          runs a `dataAsOf()` query on every request.
+
+          The label is "Watch", not "Gauge Watch": the latter is BOTH the /watch index's own
+          <h1> AND the title of the `gauge` preset, so a nav item carrying it made
+          `screen.getByText("Gauge Watch")` ambiguous in two existing tests -- a real signal
+          that the label was ambiguous for a reader too, not just for a query. */}
+      <nav className="nav">
+        <Link href="/watch" prefetch={false}>
+          Watch
+        </Link>
+      </nav>
       <form className="search" method="GET" action="/search" role="search">
         <input
           type="search"

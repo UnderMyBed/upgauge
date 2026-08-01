@@ -1,12 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { dedupeAircraftBySlug, parseLastmod, sitemapEntries } from "@/lib/sitemap";
+import { dataAsOf } from "@/lib/db";
+import robots from "@/app/robots";
 
 // No mocks: every case below runs the real sitemap_*.sql files against the real
 // upgauge.duckdb, exactly as routePair.test.ts / carrier.test.ts do.
 
 describe("sitemapEntries", () => {
   it("emits exactly the measured URL count per kind, quarantine included", async () => {
-    // docs/product/scope.md § D2's 23,689 breakdown. Each of the four counts is measured
+    // docs/product/scope.md § D2's 23,694 breakdown (23,689 through M5; M6 Task 7 added
+    // `/watch` plus its four presets, +5, which this file's four ENTITY counts do not carry --
+    // they are appended by app/sitemap.ts). Each of the four counts is measured
     // against the built database; a regression here is a real count drift, not a guess.
     const [routes, airports, carriers, aircraft] = await Promise.all([
       sitemapEntries("routes"),
@@ -97,6 +101,53 @@ describe("sitemapEntries", () => {
   it("excludes the ambiguous aircraft short name CE-180", async () => {
     const aircraft = await sitemapEntries("aircraft");
     expect(aircraft.some((e) => e.url === "/aircraft/CE-180")).toBe(false);
+  });
+
+  // M6 Task 7: five URLs, one index plus one per preset, all under /watch/.
+  it("emits /watch plus its four presets, five URLs total", async () => {
+    const watch = await sitemapEntries("watch");
+    const urls = watch.map((e) => e.url).sort();
+    expect(urls).toEqual(
+      ["/watch", "/watch/death-watch", "/watch/empty-planes", "/watch/gauge", "/watch/new-routes"].sort(),
+    );
+  });
+
+  // THE property this kind exists to hold, and the one place it disagrees with every OTHER
+  // kind in this file: lastModified is the dataset's asOf month, not a per-entity last-filed
+  // month -- there is no per-entity date to read, since /watch and its presets are
+  // dataset-WIDE views over mart_route_health, not one entity's own filing history. A test
+  // that only checked "lastModified is defined" would also pass a build-date bug; anchoring on
+  // the REAL asOf value (read independently via dataAsOf(), not re-derived from the sitemap
+  // code under test) is what a build-date substitution would actually fail.
+  it("dates every /watch URL by the dataset's asOf month, all five identically", async () => {
+    const asOf = await dataAsOf();
+    const expected = new Date(`${asOf}-01T00:00:00Z`).toISOString();
+    const watch = await sitemapEntries("watch");
+    expect(watch).toHaveLength(5);
+    for (const entry of watch) {
+      expect(entry.lastModified.toISOString()).toBe(expected);
+    }
+  });
+});
+
+describe("robots", () => {
+  // /watch is a closed, shareable set of four presets -- the whole point of Gauge Watch
+  // leading, per docs/product/features.md -- and must stay crawlable, unlike /search's
+  // unbounded query space (disallowed for exactly that reason, robots.ts's own header). No
+  // change to robots.ts is expected from M6 Task 7; this test PINS that absence of a change
+  // rather than assuming it silently holds.
+  it("does not disallow /watch", () => {
+    const { rules } = robots();
+    const ruleList = Array.isArray(rules) ? rules : [rules];
+    for (const rule of ruleList) {
+      const disallow = Array.isArray(rule.disallow)
+        ? rule.disallow
+        : rule.disallow
+          ? [rule.disallow]
+          : [];
+      expect(disallow).not.toContain("/watch");
+      expect(disallow).not.toContain("/watch/");
+    }
   });
 });
 

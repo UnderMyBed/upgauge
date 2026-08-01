@@ -78,7 +78,12 @@ describe("/carrier/<code>", () => {
     // Asserting BOTH directions -- a real short name is present AND no cell is a bare code --
     // is what distinguishes "resolved" from "happened to render something".
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
-    const codes = [...container.querySelectorAll("tbody td.id")].map((c) => c.textContent ?? "");
+    // Scoped to the FIRST table: M6 Task 4 added a "Top routes" and a "Top origin airports"
+    // table below this one, each with their own `td.id` cells, so an unscoped query would
+    // count all three tables' identifier cells together.
+    const codes = [...container.querySelectorAll("table")[0].querySelectorAll("tbody td.id")].map(
+      (c) => c.textContent ?? "",
+    );
     expect(codes.length).toBe(DL.types);
     expect(codes).toContain("B737-9ER");
     expect(codes.some((c) => /^\d{3}$/.test(c))).toBe(false);
@@ -109,7 +114,10 @@ describe("/carrier/<code>", () => {
     // or extra filter, the wrong dimension, or -- the case this page can get wrong while still
     // rendering -- a filter carrying the letter code instead of the airline id.
     render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
-    const href = screen.getByRole("link", { name: /Explorer/i }).getAttribute("href") ?? "";
+    // Exact name, not /Explorer/i -- M6 Task 4 added two more Explorer links (Top routes,
+    // Top origin airports), each with its own distinguishing text.
+    const href =
+      screen.getByRole("link", { name: "Open in the Explorer" }).getAttribute("href") ?? "";
     expect(href.startsWith("/explore?")).toBe(true);
     const query = decode(href.slice("/explore?".length), await loadAllowlist());
     expect(query.dimensions).toEqual(["aircraft_type"]);
@@ -287,6 +295,66 @@ describe("/carrier/<code> canonical metadata (M5, Task 2)", () => {
 // (measured), nowhere near CARRIER_TYPE_LIMIT, so -- exactly as on /route -- the branch is
 // driven through the exported `CarrierView` with a smaller limit against real rows, never a
 // mock.
+// M6 Task 4: the Top-N builder's first two callers. "Top origin airports", not "airports
+// served" -- the pivot filters origin_airport_id only, and a carrier's airports are an
+// origin-OR-dest question that needs the first-class either-endpoint filter, which is M6
+// backlog item 1 and NOT built. An "airports served" heading over an origin-only query is a
+// quiet false claim, the same shape as /airport reading 26,710,000 seats instead of
+// 53,373,806 when it dropped a union term.
+describe("/carrier/<code> Top-N tables", () => {
+  it("labels the airports table 'origin', because either-endpoint is not what it queries", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    const html = container.innerHTML;
+    expect(html).toContain("Top origin airports");
+    expect(html).not.toContain("Airports served");
+  });
+
+  it("heads the routes table 'Top routes' and ranks it", async () => {
+    const { container } = render(
+      await CarrierPage({ params: Promise.resolve({ code: "DL" }) }),
+    );
+    expect(screen.getByText("Top routes")).toBeDefined();
+    // Two Top-N tables, each with a rank column, alongside the existing unranked
+    // aircraft-type table -- DataTable never re-sorts, so rank 1 has to be the row the pivot
+    // itself sorted first (measures[0] descending).
+    const rankCells = container.querySelectorAll('[data-testid="rank-cell"]');
+    expect(rankCells.length).toBeGreaterThan(0);
+    expect(rankCells[0]?.textContent).toBe("1");
+  });
+
+  it("links the routes table to the identical Explorer query -- route dimension, this carrier, 25-row limit", async () => {
+    render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    const href = screen
+      .getByRole("link", { name: "Open the routes query in the Explorer" })
+      .getAttribute("href");
+    expect(href?.startsWith("/explore?")).toBe(true);
+    const query = decode(href!.slice("/explore?".length), await loadAllowlist());
+    expect(query.grain).toBe("route");
+    expect(query.dimensions).toEqual(["route"]);
+    expect(query.filters).toEqual([["op_airline_id", [String(DL.id)]]]);
+    expect(query.limit).toBe(25);
+  });
+
+  it("links the origins table to the identical Explorer query -- origin_airport_id, this carrier", async () => {
+    render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    const href = screen
+      .getByRole("link", { name: "Open the origin airports query in the Explorer" })
+      .getAttribute("href");
+    expect(href?.startsWith("/explore?")).toBe(true);
+    const query = decode(href!.slice("/explore?".length), await loadAllowlist());
+    expect(query.grain).toBe("segment");
+    expect(query.dimensions).toEqual(["origin_airport_id"]);
+    expect(query.filters).toEqual([["op_airline_id", [String(DL.id)]]]);
+  });
+
+  it("states what the origin table counts: departures from each airport, not either-endpoint activity", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    const text = container.textContent ?? "";
+    expect(text).toMatch(/departures from each airport/i);
+    expect(text).toMatch(/origin and destination separately/i);
+  });
+});
+
 describe("/carrier/<code> truncation disclosure", () => {
   it("discloses when the type limit is reached", async () => {
     const r = await resolveCarrier("DL");
