@@ -2003,7 +2003,36 @@ real warehouse or the fixture allowlist, never merely re-read:
 | 1 | Delete the `either` branch from `render.ts` only | `npm test -- render` | The 2 golden-comparison tests (`filter_either_endpoint_airport[_multiple]`) plus the 2 hand-written either-filter tests — the golden fixture itself is what catches the one-sided TS/Python drift, since `pipeline/pivot.py` still emits the OR and the committed golden still pins it |
 | 2 | Emit `AND` instead of `OR` across the two columns | `npm test -- render` | The same 4 tests — the OR-specific substring assertion in each |
 | 3 | Remove the `forGrouping`/`filter_only` check | `npm test -- render` | `rejects a filter-only dimension used as a grouping dimension` (exactly one) |
-| 4 | Set `route`'s `filter_mode` to `'either'` in `300_meta_pivot_dimensions.sql`, `make build` | `pytest pipeline/tests/test_pivot.py -k route` | `test_route_still_compiles_as_a_least_greatest_pair_not_an_or` — the fixture-backed TS test is blind to this one (its allowlist is a hardcoded fixture, not the live catalog), so only the Python test, which builds a real warehouse from the SQL catalog file, can catch a catalog-level regression here |
+| 4 | Set `route`'s `filter_mode` to `'either'` in `300_meta_pivot_dimensions.sql`, `make build` | `pytest pipeline/tests/test_pivot.py -k route`, then (corrected re-run) full `make check` and `make app-check` | See correction below — the original claim here ("only the Python test... TS is blind to this one") was FALSE and has been retracted |
+
+**Correction, first review round: the mutant-4 claim above was wrong, and wrong in a way this
+project's culture treats as its own defect class — an unverified assertion about test
+coverage, written into permanent documentation.** The original report ran only `pytest
+pipeline/tests/test_pivot.py -k route` (Python, scoped) and `npm test -- render` (TypeScript,
+scoped to one file), and concluded from that narrow slice that "the TS suite is blind to this
+mutant" because `render.test.ts`'s allowlist is a hardcoded fixture. That conclusion did not
+follow from the evidence gathered — a scoped run cannot support a claim about the whole
+suite's coverage. Re-run properly (full `make check`, full `make app-check`, mutation
+verified present in both the SQL file and the rebuilt `upgauge.duckdb` immediately before each
+run): **`app/src/lib/db.test.ts` reddens on two tests** — `reads filterOnly and filterMode from
+the catalog by name, not a default` (asserts `route`'s `filterMode` is `'pair'` directly) and
+`allowlist.fixture.ts stays in sync with the real catalog > matches meta_pivot_dimensions and
+meta_pivot_measures exactly` (the live-vs-fixture equality Important 2 of the whole-branch
+review added) — because `db.ts`'s `loadAllowlist()` reads the real catalog, unlike
+`render.test.ts`'s hardcoded `FIXTURE`. **The corrected statement:** `render.test.ts`'s own
+unit tests are fixture-based and do not couple to the catalog, but `db.test.ts`'s fixture-sync
+test does, so the catalog change IS covered on the TypeScript side — just not by the file the
+original report happened to run. The blast radius under this mutation is far larger than
+either test file alone: every page and route handler that filters on `route` in practice now
+routes through the `either`/OR branch instead of `pair`'s `least()`/`greatest()`, and 30 more
+tests redden across `src/app/explore/page.test.tsx` (4), `src/app/route/[pair]/page.test.tsx`
+(20), `src/lib/chart/aircraftMix.test.ts` (5), and `src/app/api/pivot/route.test.ts` (1) — 32
+TypeScript tests total, not zero. (A further 12 failures appeared in
+`src/app/airport/[code]/endpoints.test.ts` in the same run, from a concurrent, unrelated
+in-progress refactor of `endpoints.ts` missing `unionSides`/`unionMix` exports — confirmed
+unrelated by their `TypeError: ... is not a function` shape, nothing to do with `route`'s
+`filter_mode`, and excluded from this count.) Mutation reverted and rebuild re-verified clean
+before this correction was written.
 
 `make check` **472** (464 measured immediately after Task 1, before this task's own tests existed
 + 4 hand-written `test_pivot.py` tests + 4 from the 2 new golden cases, each of which adds 2
