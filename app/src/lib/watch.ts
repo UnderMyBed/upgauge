@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { connect, demoteBigInts } from "@/lib/db";
+import { entitySlugFromPath } from "@/lib/entitySlug";
 import { routeHrefFromCodes } from "@/lib/entityLink";
 import { normalizeQuery } from "@/lib/pivot/types";
 import { encode } from "@/lib/pivot/urlstate";
@@ -17,6 +18,18 @@ function sql(name: string): string {
 export type PresetSlug = "gauge" | "empty-planes" | "new-routes" | "death-watch";
 
 export const PRESETS: readonly PresetSlug[] = ["gauge", "empty-planes", "new-routes", "death-watch"];
+
+/** The `/watch/<preset>` slug's prefix, and the reader for it -- Task 6's own instance of the
+ * same sibling pattern as `rawPath.ts`'s `ROUTE_PREFIX`/`routeSlugFromPath`, `carrier.ts`'s
+ * `CARRIER_PREFIX`/`carrierSlugFromPath`, and `airport.ts`/`aircraftSlug.ts`'s equivalents:
+ * `proxy.ts` needs it to decide cacheability before the page runs, and `not-found.tsx` needs it
+ * because Next's `not-found.js` convention takes no props and no route params, so the request
+ * header is the only channel that carries the requested slug to that render. */
+export const WATCH_PREFIX = "/watch/";
+
+export function presetSlugFromPath(pathname: string): string | null {
+  return entitySlugFromPath(pathname, WATCH_PREFIX);
+}
 
 export interface Preset {
   slug: PresetSlug;
@@ -100,20 +113,59 @@ const DIRECTION_SQL: Readonly<Record<"asc" | "desc", "ASC" | "DESC">> = {
   desc: "DESC",
 };
 
+const DIRECTION_TOKEN = "{{DIRECTION}}";
+
+/** Blank out `-- ...` line comments with spaces (never remove them -- that would shift every
+ * index after a comment and misalign the masked text against the original), so the token
+ * count and the substitution site below only ever see real predicate text.
+ *
+ * Found necessary by Task 6, against real data, not asserted from reading: watch_gauge.sql's
+ * own header comment explains the token BY NAME ("`{{DIRECTION}}` is a token, substituted
+ * in..."), which is itself a second textual occurrence of the literal string `{{DIRECTION}}` --
+ * before this fix, EVERY call to runPreset() for the "gauge" preset (either direction) threw
+ * "expected at most one {{DIRECTION}} token, found 2" unconditionally, because the naive count
+ * below counted the comment's mention as a candidate site. Task 5's watch.test.ts never caught
+ * it: it only runs Empty Planes' and Death Watch's runPreset() path, and neither of those two
+ * SQL files carries the token at all (each hardcodes its own fixed ORDER BY) -- so Gauge Watch,
+ * "the differentiator" per docs/product/features.md and the only preset with two directions,
+ * was never actually executed by any test before Task 6's page rendered it. The guard itself
+ * was right to refuse rather than silently pick a occurrence; the bug was letting comment text
+ * count as one. */
+function maskLineComments(sql: string): string {
+  return sql
+    .split("\n")
+    .map((line) => {
+      const i = line.indexOf("--");
+      return i === -1 ? line : line.slice(0, i) + " ".repeat(line.length - i);
+    })
+    .join("\n");
+}
+
 /** Substitute the closed-set direction keyword for the `{{DIRECTION}}` token, the same
  * exactly-once discipline resolve.ts's substituteIds uses for `{{IDS}}`. Only watch_gauge.sql
  * carries the token -- the other three presets each render one table and hardcode their own
- * ORDER BY -- so an absent token is not an error, just a fixed-direction preset. */
+ * ORDER BY -- so an absent token is not an error, just a fixed-direction preset.
+ *
+ * The substitution site is located in the MASKED text, not the raw one: watch_gauge.sql's
+ * comment mentions the token before the real `ORDER BY` clause does, so a plain
+ * `statement.replace(DIRECTION_TOKEN, ...)` against the raw text -- which only ever rewrites
+ * the FIRST match -- would silently rewrite the comment instead, leaving the real clause
+ * holding an unsubstituted token (a DuckDB syntax error at query time, not merely a
+ * misordered result). Masking is length-preserving, so the located index is valid against
+ * `statement` too. */
 function substituteDirection(statement: string, file: string, direction: "asc" | "desc"): string {
-  const occurrences = statement.split("{{DIRECTION}}").length - 1;
+  const masked = maskLineComments(statement);
+  const occurrences = masked.split(DIRECTION_TOKEN).length - 1;
   if (occurrences === 0) return statement;
   if (occurrences !== 1) {
     throw new Error(
-      `${file}.sql: expected at most one {{DIRECTION}} token, found ${occurrences} -- ` +
-        "substitution would silently misfire (replace() only touches the first match)",
+      `${file}.sql: expected at most one {{DIRECTION}} token outside comments, found ` +
+        `${occurrences} -- substitution would silently misfire (replace() only touches the ` +
+        "first match).",
     );
   }
-  return statement.replace("{{DIRECTION}}", DIRECTION_SQL[direction]);
+  const idx = masked.indexOf(DIRECTION_TOKEN);
+  return statement.slice(0, idx) + DIRECTION_SQL[direction] + statement.slice(idx + DIRECTION_TOKEN.length);
 }
 
 export async function runPreset(

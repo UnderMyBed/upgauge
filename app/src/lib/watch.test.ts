@@ -71,6 +71,31 @@ describe("runPreset (real database)", () => {
     expect(rows[0].gauge_t12 as number).toBeGreaterThanOrEqual(50);
   });
 
+  // Task 6 finding: watch_gauge.sql's own header comment mentions the `{{DIRECTION}}` token
+  // by name to explain it, which is a second textual occurrence of that literal string --
+  // substituteDirection()'s naive occurrence count previously treated it as a candidate
+  // substitution site and threw "expected at most one {{DIRECTION}} token, found 2" on EVERY
+  // call for this preset, in either direction. Gauge Watch is the only preset with two
+  // directions and the only one whose SQL carries the token at all, so no other test in this
+  // file exercises this path -- these two are what would have caught the bug before it shipped.
+  it("Gauge Watch's runPreset() succeeds in both directions, not just when SQL has no token", async () => {
+    const p = presetBySlug("gauge")!;
+    const desc = await runPreset(p, "desc", 5);
+    const asc = await runPreset(p, "asc", 5);
+    expect(desc.length).toBeGreaterThan(0);
+    expect(asc.length).toBeGreaterThan(0);
+  });
+
+  it("Gauge Watch's two directions actually sort oppositely, not the same way twice", async () => {
+    // Passing the test above with a DIRECTION_SQL bug that maps both "asc" and "desc" to the
+    // same keyword would still return non-empty rows -- this is the test that catches THAT
+    // failure mode specifically, by comparing the two result sets' leading gauge_delta.
+    const p = presetBySlug("gauge")!;
+    const desc = await runPreset(p, "desc", 1);
+    const asc = await runPreset(p, "asc", 1);
+    expect(desc[0].gauge_delta as number).toBeGreaterThan(asc[0].gauge_delta as number);
+  });
+
   it("Death Watch's gauge floor excludes sub-CRJ-200 aircraft", async () => {
     // Same clause (`gauge_t12 >= 50`), same reason, in watch_death_watch.sql -- equally cheap
     // to cover through the same mechanism, so it gets the same test rather than resting on
