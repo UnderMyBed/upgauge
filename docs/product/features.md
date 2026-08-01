@@ -155,8 +155,17 @@ not a single id (its `column_expr` spans two airport columns), so its link is bu
 separately, and it is the one place the milestone's sharpest trap lives: the cell displays the
 two codes in **airport-id** order but the canonical `/route/` URL is alphabetical by **code**,
 and those two orderings disagree for 154 of 22,420 pairs (`CLAUDE.md`, M4b) — reusing the
-displayed order as the link would be silently wrong for every one of the 154. Full mechanics:
-`docs/design/system.md` § The data table.
+displayed order as the link would be silently wrong for every one of the 154. That same cell is
+also the one that must *refuse* to link: 530 same-airport pairs carry real traffic but
+`/route/ORD-ORD` is a 404 by design, so a route cell whose halves match renders as text. Full
+mechanics: `docs/design/system.md` § The data table.
+
+**Two links live outside the tables**, because the tables alone left the graph half-connected —
+`/airport/` and `/route/` were 23,465 of the sitemap's 23,689 URLs with no inbound internal link
+at all, crawlable but not browsable. So `/route/<pair>`'s title block links both airport names to
+`/airport/<code>`, and the top bar's wordmark links home from every page. Both were in M5's spec
+and both were dropped when it became a plan; the whole-branch review caught them by walking the
+graph from the front door, which no per-task review could have done.
 
 > **Build the aircraft-type-mix chart before the load-factor chart.** Everyone does load
 > factor. The gauge story is what makes this yours.

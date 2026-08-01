@@ -121,6 +121,14 @@ four entity pages' `not-found` states and the front door — a 404 still asserts
 the data (that a query against it would answer nothing), so it keeps the full top bar rather
 than treating a 404 as chrome-free.
 
+**The wordmark is a link home**, and it carries `prefetch={false}` — which is load-bearing, not
+tidiness. It is the product's only `next/link` (every other internal link is a plain `<a>`; this
+one is a `Link` only because `@next/next/no-html-link-for-pages` fires on a statically-resolvable
+`href="/"`), it sits above the fold on all ten pages, and `Link`'s default prefetches on
+viewport entry. `/` is `force-dynamic` and absent from `proxy.ts`'s matcher, so it carries
+`no-store` and the CDN cannot absorb that prefetch — the default would buy one uncached origin
+request per page view on a box whose whole cost control is the caching.
+
 ### The data table
 
 Column order is fixed: **gutter · identifiers · additive measures · derived measures ·
@@ -166,6 +174,15 @@ links: `null` for a dimension with no entity page (both city markets, `year_mont
 resolved, and for a resolution with no code — the same three cases that already render bare.
 The `<abbr>` carrying the name nests **inside** the `<a>` rather than being replaced by it —
 it is the only place a keyboard user reaches the expansion, linked cell or not.
+
+**A fourth case, and it is not a dimension property: a `route` cell whose two halves are the
+same airport does not link.** `fct_segment_month` carries 530 such pairs with real traffic
+(ORD alone is 73,082 seats over the trailing 12), but `/route/ORD-ORD` is a 404 by design —
+`resolveRoutePair` answers *"'ORD' to itself is not a route between two airports"*, and
+`sitemap_routes.sql` excludes them for the same reason. The link path was the last place that
+did not know, and shipped a link to a guaranteed 404 until M5's final review. The guard lives
+in `/explore`'s `routeHref`, beside the alphabetical-by-code sort, because the composite route
+cell is the one cell `entityHref` does not own.
 
 **The link is styled with two channels, not one.** Tailwind's preflight resets `a { color:
 inherit; text-decoration: inherit }`, so an unstyled `<a>` in a data-table cell renders

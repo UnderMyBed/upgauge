@@ -13,10 +13,20 @@ import Link from "next/link";
  * HTML and works with JS off (app/AGENTS.md), the same as everywhere else in this product;
  * only client-side transitions are extra, not required. `.mark` keeps its own CSS class
  * regardless of tag, so `globals.css` needs no change; only its selector in the existing test
- * moved from `span.mark` to `a.mark` (`Link` renders an `<a>` under the hood). */
+ * moved from `span.mark` to `a.mark` (`Link` renders an `<a>` under the hood).
+ *
+ * `prefetch={false}` is LOAD-BEARING, not a micro-optimisation. `Link`'s default (`auto`)
+ * prefetches when the link enters the viewport, in production. This wordmark is above the fold
+ * on all ten pages, and `/` is `force-dynamic` AND absent from `proxy.ts`'s matcher, so it
+ * carries Next's own `no-store` and the CDN cannot absorb the prefetch: the default would add
+ * one uncached origin request per page view, on a single always-on box whose entire cost
+ * control is the caching (CLAUDE.md, "the caching is the cost control, not the hosting tier").
+ * Every other internal link in this product is a plain `<a>`; this one is a `Link` only because
+ * `@next/next/no-html-link-for-pages` fires on a statically-resolvable `href="/"` and not on the
+ * dynamic hrefs elsewhere. Found by M5's final re-review. */
 export function Wordmark() {
   return (
-    <Link className="mark" href="/">
+    <Link className="mark" href="/" prefetch={false}>
       UP<span className="accent">GAUGE</span>
     </Link>
   );

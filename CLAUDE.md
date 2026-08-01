@@ -345,10 +345,14 @@ the same file — even though `app/sitemap.ts` runs four DuckDB queries and two 
 throw by design on malformed input. Gated on the same probe `/explore` uses;
 `docs/architecture/hosting.md` § "The gap" has the fix and the mutant that verifies it.
 
-**582 app tests green (`make app-check`), 447 Python (`make check`); `make goldens` leaves
+**594 app tests green (`make app-check`), 447 Python (`make check`); `make goldens` leaves
 `sql/03_queries/goldens/` byte-identical** — M5 touched no pivot template. `make app-smoke` is
-**174 checks** (138 at M4d). Page weight: `/route/JFK-LAX` 98,096 bytes, `/search?q=Portland`
-10,206 bytes; the M4d entity-page figures are unchanged by M5.
+**183 checks** (138 at M4d). Page weight: `/route/JFK-LAX` 98,459 bytes, `/search?q=Portland`
+10,715 bytes. **The M4d entity pages all grew**, by the links and the shared top bar rather than
+by anything structural — SEA 119,126 → 122,152, ATL 130,435 → 133,959, ORD 139,520 → 143,427,
+DL 127,688 → 131,316, B737-8 103,019 → 105,358. Roughly +2.3 to +3.9 KB each, ~2.5%: a linked
+cell costs an `href` per row, and every page gained the search form. Measured, not estimated;
+an earlier draft of this paragraph claimed these figures were unchanged by M5, which was wrong.
 
 Next: **M6.** What it owes, each identified by the work above rather than guessed:
 
