@@ -832,6 +832,23 @@ Cache-Control mechanism, if Next ever grows one; a short `s-maxage`) are now one
 short `s-maxage`) and one measured-closed (the route-handler entry point, for this Next version,
 for a page with a server-rendered chart) rather than three open options.
 
+**M6 Task 8 turned the "say, `mart_route_health`" example two paragraphs above (§ "What Part A
+does not... cover") from a hypothetical into a measurement, against `/watch/gauge`.** A database
+copy with `mart_route_health` dropped — and `meta_pivot_dimensions`/`meta_pivot_measures`
+untouched — leaves `isDataLayerHealthy()` (which only calls `loadAllowlist()`) reporting
+healthy, so `proxy.ts` commits to `HTML_CACHE` before `WatchPresetView`'s `runPreset()` ever
+touches the missing table. Measured on a served build: **`/watch/gauge` returns `500` with
+`Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400`** — a cacheable 5xx, not a
+declined one. The counterpart mutant (drop `meta_pivot_dimensions` instead, leave
+`mart_route_health` intact) correctly 500s under `no-store`, confirming the gap is specific to
+what `isDataLayerHealthy()` does and does not probe, not a general failure of the branch. Closing
+this fully would mean giving that probe a `mart_route_health`-specific query of its own — the
+identical extra-round-trip-per-request tradeoff already declined for `/route` and the other three
+`ENTITY_ROUTES` pages, not a new decision this milestone makes differently. `app/smoke.sh`
+asserts the measured behaviour as a known-open gap (§ "gap check: /watch/gauge against a database
+missing mart_route_health", M6 Task 8), the same way it already did for `/explore` at M5 — except
+that one is a gap CLOSED, and this one documents a gap still open.
+
 ## Server-side Observable Plot needs no bundler configuration
 
 M4c renders charts on the server: Plot draws into a jsdom `document` and the serialized SVG

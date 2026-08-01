@@ -71,6 +71,22 @@ has_re()  { printf '%s' "$1" | grep -E  -- "$2" >/dev/null; }
 # a band drawn in two pieces and a band drawn in one both contain the needle.
 count()   { printf '%s' "$1" | grep -oF -- "$2" | wc -l | tr -d ' '; }
 
+# Isolates one region of a single-line body -- every curl body in this file is one line, so
+# this is bash's own shortest-match parameter expansion, not sed or awk. `#*"$2"` strips the
+# SHORTEST prefix ending in the FIRST occurrence of the start marker; `%%"$3"*` then strips the
+# LONGEST suffix starting from the FIRST occurrence of the end marker that follows it (longest
+# removal finds the leftmost match, which is the nearest end marker, not the last one). Needed
+# for M6's Gauge Watch section: its two tables (Upgauging / Downgauging) sort oppositely and
+# share a row shape, so a needle asserted against the WHOLE body proves nothing about which
+# table it is actually in -- the exact "either half alone is vacuous" trap this file's Gauge
+# Watch checks below exist to avoid. Every marker used with this is the served HTML's FIRST
+# occurrence of that string; the RSC flight payload repeats it further down the same body, but
+# `#*"$2"` and `%%"$3"*` both resolve to the nearest, not the last, occurrence.
+between() { # between <haystack> <start-marker> <end-marker>
+  local rest="${1#*"$2"}"
+  printf '%s' "${rest%%"$3"*}"
+}
+
 check() { # check <name> <haystack> <needle>
   if has "$2" "$3"; then
     printf '  ok   %s\n' "$1"
@@ -112,12 +128,22 @@ check_not_re() {
 # database -- declared here, not there, so cleanup() can always find them regardless of where
 # the script stops (a `check` failure never exits early -- FAILED is a flag, not a trap -- but
 # a hard error before that section runs must still not leak the temp file or process).
+# GAP_PORT2/GAP_PID2/BROKEN_DB2 are M6 Task 8's own instance of the identical pattern, a THIRD
+# short-lived server run strictly after the second one has been killed (never concurrently --
+# same 8 GB reasoning), against a copy broken a different way (mart_route_health dropped, not
+# meta_pivot_dimensions).
 cleanup() {
   [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null
   pkill -f "next start app -p ${PORT}" 2>/dev/null
   [ -n "${GAP_PID:-}" ] && kill "$GAP_PID" 2>/dev/null
   [ -n "${GAP_PORT:-}" ] && pkill -f "next start app -p ${GAP_PORT}" 2>/dev/null
   [ -n "${BROKEN_DB:-}" ] && rm -f "$BROKEN_DB"
+  # M6 Task 8's own gap check, appended after the M5 Task 7 Part A one below: a SECOND broken
+  # copy and a SECOND short-lived server, same reason the first pair exists (an 8 GB box with
+  # zram-only swap does not run two `next start` processes at once).
+  [ -n "${GAP_PID2:-}" ] && kill "$GAP_PID2" 2>/dev/null
+  [ -n "${GAP_PORT2:-}" ] && pkill -f "next start app -p ${GAP_PORT2}" 2>/dev/null
+  [ -n "${BROKEN_DB2:-}" ] && rm -f "$BROKEN_DB2"
 }
 trap cleanup EXIT
 
@@ -799,6 +825,137 @@ done
 check_re "db: proxy, page and API share ONE DuckDBInstance (open handles = 1)" "$HANDLES" '^1$'
 
 # ---------------------------------------------------------------------------------------------
+# 15. M6 Task 8: /watch and the four Top-N leaderboard presets. proxy.ts's matcher grew to
+#     ELEVEN entries for this (M6 Task 7) -- `/watch` (exact path, same shape as `/search`) and
+#     `/watch/:preset` (dynamic segment, same shape as the four ENTITY_ROUTES rows, but gated by
+#     a static slug registry plus `isDataLayerHealthy()` rather than a per-slug resolve()). This
+#     is the section that closes the one gap M5's own whole-branch review left explicit in
+#     hosting.md: "unit-verified only, not yet smoke-curled" -- proxy.test.ts calls proxy()
+#     directly and never crosses Next's own routing, so a matcher entry silently dropped from
+#     `config.matcher` cannot fail any unit test, only a served build. Verified by mutation, not
+#     by inspection: removing "/watch/:preset" from the matcher, rebuilding and serving turned
+#     `/watch/nope`'s 404 body from 9,941 bytes (naming the preset) to 7,816 (a bare error
+#     shell, matching the ~7,740-byte shell M4d measured for the same failure one page family
+#     over) AND degraded /watch/gauge's own Cache-Control from HTML_CACHE to Next's own
+#     force-dynamic fallback, `private, no-cache, no-store, max-age=0, must-revalidate` -- on a
+#     PAGE THAT RENDERS FINE, which is exactly the M4b-shaped bug this file's matcher discipline
+#     exists to catch a second time. Reverted before commit; not re-run automatically here for
+#     the same reason mutant A never is anywhere else in this file (it requires editing source
+#     and rebuilding, which is a one-time verification exercise, not a repeatable gate).
+
+# 15a. /watch, the index: four links, no table, no per-slug resolution -- so only the first two
+# of the five things every leaderboard page below asserts apply.
+BODY=$(curl -s --max-time 15 "${BASE}/watch")
+check "watch: renders the index"        "$BODY" '<h1>Gauge Watch</h1>'
+check "watch: DATA AS OF is present"    "$BODY" 'DATA AS OF'
+check "watch: links every preset (gauge)"        "$BODY" 'href="/watch/gauge"'
+check "watch: links every preset (empty-planes)" "$BODY" 'href="/watch/empty-planes"'
+check "watch: links every preset (new-routes)"   "$BODY" 'href="/watch/new-routes"'
+check "watch: links every preset (death-watch)"  "$BODY" 'href="/watch/death-watch"'
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/watch")
+check "watch: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# 15b. /watch/gauge -- Gauge Watch, "the differentiator" (docs/product/features.md), and the
+# ONE preset that renders two tables (Upgauging / Downgauging, sorted oppositely by the same
+# gauge_delta column -- runPreset() substitutes {{DIRECTION}} into watch_gauge.sql's ORDER BY).
+# Every check below follows the same five-things-in-order discipline §§8-12's own header
+# comment states for the entity pages: renders, Cache-Control, a real code vs. a bare id, the
+# rank column, and (once, after all four presets, since the not-found path is shared) the 404.
+BODY=$(curl -s --max-time 15 "${BASE}/watch/gauge")
+check "watch/gauge: renders"          "$BODY" '<h1>Gauge Watch</h1>'
+check "watch/gauge: DATA AS OF is present" "$BODY" 'DATA AS OF'
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/watch/gauge")
+check "watch/gauge: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+# M4a's rule, per page: a resolved carrier renders its code, never the bare AIRLINE_ID. AS
+# (19930) leads Upgauging, DL (19790) leads Downgauging -- both checked, since a page that
+# resolved neither carrier would still pass a check written against only one.
+check     "watch/gauge: renders a carrier code (AS)"   "$BODY" '>AS<'
+check     "watch/gauge: renders a carrier code (DL)"   "$BODY" '>DL<'
+check_not "watch/gauge: renders no bare AIRLINE_ID (AS)" "$BODY" '>19930<'
+check_not "watch/gauge: renders no bare AIRLINE_ID (DL)" "$BODY" '>19790<'
+
+# The rank column, DataTable's own `rank` prop (`<td class="rank" data-testid="rank-cell">`).
+# An index-based mutant (`i` instead of `i + 1`) renders a full, plausible table, so absence
+# alone proves nothing -- both halves are load-bearing. The negative half is scoped to the RANK
+# cell specifically, not `>0</td>` in isolation: measured on the served build, `t12_quarantined_
+# rows` legitimately renders bare "0" for an unquarantined row (`<td class="num">0</td>`,
+# several per page), so a plain `check_not ... '>0</td>'` red-flags a CORRECT table on its own
+# data. `check_not_re` anchored to `rank` is what actually distinguishes "the rank column is
+# 1-based" from "some unrelated count column happens to be zero".
+check_re     "watch/gauge: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
+check_not_re "watch/gauge: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
+
+# The falsifiable pair itself (measured against the real warehouse, mart_route_health, current
+# window): AS LAX-OGG is the single largest upgauge, gauge_delta +75.8; DL BOS-CVG the largest
+# downgauge, -64.3. Presence in $BODY alone would be satisfied by a page that put both routes in
+# ONE table, or the wrong one -- these mean something only checked against the CORRECT table and
+# refuted against its sibling, which is why they're split with `between()` first.
+#
+# The needle is a literal en dash (U+2013), not `&ndash;`: JSX decodes HTML entities at compile
+# time and React's own serializer only escapes & < > " ', so `&ndash;` written in source never
+# reaches the response -- the exact dark-guard class M4c shipped (`can&rsquo;t be read`,
+# smoke.sh's own note above). Verified against the actual served bytes before writing this,
+# not assumed from the source.
+UP_TABLE=$(between "$BODY" '<h2>Upgauging</h2>' '<h2>Downgauging</h2>')
+DOWN_TABLE=$(between "$BODY" '<h2>Downgauging</h2>' '<aside class="legend">')
+check     "watch/gauge: the upgauge table leads with AS LAX-OGG"   "$UP_TABLE"   'LAX–OGG'
+check_not "watch/gauge: ...which is not in the downgauge table"    "$DOWN_TABLE" 'LAX–OGG'
+check     "watch/gauge: the downgauge table leads with DL BOS-CVG" "$DOWN_TABLE" 'BOS–CVG'
+check_not "watch/gauge: ...which is not in the upgauge table"      "$UP_TABLE"   'BOS–CVG'
+
+# 15c. /watch/empty-planes -- one table, lowest load factor at a real-airliner gauge floor.
+BODY=$(curl -s --max-time 15 "${BASE}/watch/empty-planes")
+check "watch/empty-planes: renders"       "$BODY" '<h1>Empty Planes</h1>'
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/watch/empty-planes")
+check "watch/empty-planes: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+check     "watch/empty-planes: renders a carrier code"     "$BODY" '>AS<'
+check_not "watch/empty-planes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
+check_re     "watch/empty-planes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
+check_not_re "watch/empty-planes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
+
+# 15d. /watch/new-routes -- Route Birth Tracker. Every row here has p12_months_present = 0, so
+# health_score is ALWAYS NULL (100% of rows, not the exception the other three presets treat it
+# as) -- formatHealthScore's own docstring measures this; nothing to check here that §15b/c/e
+# don't already cover about that rendering.
+BODY=$(curl -s --max-time 15 "${BASE}/watch/new-routes")
+check "watch/new-routes: renders"       "$BODY" '<h1>Route Birth Tracker</h1>'
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/watch/new-routes")
+check "watch/new-routes: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+check     "watch/new-routes: renders a carrier code"     "$BODY" '>AS<'
+check_not "watch/new-routes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
+check_re     "watch/new-routes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
+check_not_re "watch/new-routes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
+
+# 15e. /watch/death-watch -- the ONE preset whose SQL filters `health_score IS NOT NULL` itself
+# (watch_death_watch.sql), so formatHealthScore's NULL branch is provably unreachable here.
+BODY=$(curl -s --max-time 15 "${BASE}/watch/death-watch")
+check "watch/death-watch: renders"       "$BODY" '<h1>Route Death Watch</h1>'
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/watch/death-watch")
+check "watch/death-watch: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+check     "watch/death-watch: renders a carrier code"     "$BODY" '>OO<'
+check_not "watch/death-watch: renders no bare AIRLINE_ID" "$BODY" '>20304<'
+check_re     "watch/death-watch: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
+check_not_re "watch/death-watch: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
+
+# 15f. /watch/nope -- the shared not-found path (watch/[preset]/not-found.tsx), once: unlike
+# the four entity pages, `presetBySlug` is a pure lookup against a fixed four-entry registry,
+# not a warehouse re-resolution, so there is only one reason, not a per-cause split to pair.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/watch/nope")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/watch/nope")
+BODY=$(curl -s --max-time 15 "${BASE}/watch/nope")
+check     "watch: unknown preset is a 404"          "$CODE" '404'
+check_not "watch: 404 is not long-cached"           "$HDRS" "s-maxage"
+check     "watch: 404 is no-store"                  "$HDRS" "no-store"
+# The SENTENCE, not just the router-state echo: the RSC flight payload always contains the
+# requested pathname ("c":["","watch","nope"]) regardless of what the page renders -- proven by
+# mutant A above, where the 7,816-byte error shell still contains the bare string "nope" in its
+# router state despite naming nothing. The needle below spans the JSON string-escaping between
+# "preset" and the interpolated slug (`preset '","nope","'`, the {slug} JSX expression breaking
+# the sentence into three flight-payload string fragments) the same way §8's ZZZZ-LAX check
+# spans its own escaping, and requires the actual composed sentence, not the router state alone.
+check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize the preset .{1,10}nope"
+
+# ---------------------------------------------------------------------------------------------
 # 14. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.
 #
 # proxy.test.ts pins isDataLayerHealthy() with `vi.mock`/`mockRejectedValueOnce`: a fast, precise
@@ -872,6 +1029,82 @@ else
   pkill -f "next start app -p ${GAP_PORT}" 2>/dev/null
 fi
 rm -f "$BROKEN_DB"; BROKEN_DB=
+
+# ---------------------------------------------------------------------------------------------
+# 16. M6 Task 8's own gap check -- /watch/gauge against a database missing `mart_route_health`,
+#     NOT `meta_pivot_dimensions`. Same method as the block just above (a second, short-lived
+#     `next start` against a broken COPY, never the original), but a different table dropped on
+#     purpose: `mart_route_health` is what every preset query actually reads (runPreset()), and
+#     it is NOT what `isDataLayerHealthy()` probes -- that function calls `loadAllowlist()`
+#     alone (catalog_dimensions.sql / catalog_measures.sql, i.e. `meta_pivot_dimensions` /
+#     `meta_pivot_measures`), which `/watch`'s own proxy branch reuses unchanged from /explore's
+#     Part A fix (proxy.ts's own comment: "gate on isDataLayerHealthy() regardless of how closed
+#     the slug set is").
+#
+#     MEASURED, against a served build, and the reason this section exists rather than restating
+#     task-8-brief.md's own claim: dropping `mart_route_health` alone leaves `loadAllowlist()`
+#     healthy, so the proxy commits to HTML_CACHE BEFORE WatchPresetView's runPreset() ever runs
+#     -- and the page then throws. The response is a 500 WITH the cacheable HTML_CACHE header,
+#     not without one. That is the OPPOSITE of what a first draft of this task assumed (a
+#     database "missing mart_route_health" 5xxing "without a cacheable Cache-Control") -- and it
+#     is exactly CLAUDE.md's already-documented, NOT-closed "residual 5xx cache gap" (M6 backlog
+#     item 3: "a page-specific throw whose proxy resolution already succeeded ... is still
+#     cached for up to an hour"), now shown to cover /watch/gauge too, not only /route and the
+#     other three entity pages. Confirmed as the narrow cause, not guessed: dropping
+#     `meta_pivot_dimensions` INSTEAD (leaving `mart_route_health` intact) correctly 500s
+#     `/watch/gauge` under `no-store` -- the same probe that closes the gap for /explore closes
+#     it here too, for the ONE failure mode it actually covers.
+#
+#     This section therefore asserts the REAL, measured behaviour -- a cacheable 500 -- as a
+#     known, open gap, the same way this file would assert any other true-but-unwanted fact
+#     about a served build. It is not a regression to "fix" in this task (Files: this task
+#     touches `app/smoke.sh` and docs only); closing it would mean giving `isDataLayerHealthy()`
+#     a `mart_route_health`-specific probe of its own, which is exactly the kind of DB round trip
+#     `/route`'s own gap ("The gap", docs/architecture/hosting.md) was left open rather than pay
+#     on every request.
+echo "==> gap check: /watch/gauge against a database missing mart_route_health (M6 Task 8)"
+
+BROKEN_DB2="$(mktemp -u "${TMPDIR:-/tmp}/upgauge-smoke-broken2-XXXXXX.duckdb")"
+cp "${ROOT}/upgauge.duckdb" "$BROKEN_DB2"
+# mart_route_health is a TABLE (CLAUDE.md's one licensed exception to "never store a derived
+# measure" -- it has no time grain, so there is no GROUP BY of it for AVG() to corrupt), not a
+# VIEW like meta_pivot_dimensions above -- DROP TABLE, not DROP VIEW.
+if ! mise exec -- uv run python -c "
+import duckdb
+con = duckdb.connect('${BROKEN_DB2}')
+con.execute('DROP TABLE mart_route_health')
+con.close()
+" >/tmp/upgauge-smoke-break2.log 2>&1; then
+  echo "  FAIL could not break the copy's mart_route_health -- see /tmp/upgauge-smoke-break2.log"
+  FAILED=1
+else
+  GAP_PORT2="${SMOKE_GAP_PORT2:-3195}"
+  GAP_BASE2="http://127.0.0.1:${GAP_PORT2}"
+  UPGAUGE_DB="$BROKEN_DB2" cap 2G mise exec -- npx next start app -p "$GAP_PORT2" \
+    >/tmp/upgauge-smoke-gap2.log 2>&1 &
+  GAP_PID2=$!
+  UP=0
+  for _ in $(seq 1 60); do
+    curl -sf -o /dev/null --max-time 2 "${GAP_BASE2}/" && { UP=1; break; }
+    sleep 1
+  done
+  if [ "$UP" -ne 1 ]; then
+    echo "  FAIL gap server (mart_route_health) never came up"; cat /tmp/upgauge-smoke-gap2.log
+    FAILED=1
+  else
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${GAP_BASE2}/watch/gauge")
+    HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${GAP_BASE2}/watch/gauge")
+    check "gap: /watch/gauge 5xxs against a database missing mart_route_health" "$CODE" '500'
+    # The residual gap, asserted as what IS true rather than what the brief first guessed:
+    # this 500 goes out WITH the cacheable header, because isDataLayerHealthy() never touches
+    # mart_route_health. `check`, not `check_not` -- the positive claim is the finding.
+    check "gap: ...and it is NOT declined -- HTML_CACHE ships on a 500 (the open gap)" \
+      "$HDRS" "$HTML_CACHE_EXPECTED"
+  fi
+  kill "$GAP_PID2" 2>/dev/null; wait "$GAP_PID2" 2>/dev/null; GAP_PID2=
+  pkill -f "next start app -p ${GAP_PORT2}" 2>/dev/null
+fi
+rm -f "$BROKEN_DB2"; BROKEN_DB2=
 
 echo
 if [ "$FAILED" -eq 0 ]; then echo "smoke: all checks passed"; else echo "smoke: FAILURES above"; fi

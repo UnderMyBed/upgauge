@@ -200,8 +200,12 @@ def test_the_completion_cap_is_null_safe(con):
 
 
 def test_the_z_clamp_is_null_safe(con):
-    """Same trap on the other guard. greatest(least(NULL,3),-3) returns -3, so a bare clamp
-    scores EVERY row -- including the new routes whose whole point is a NULL score."""
+    """Same trap on the other guard. least(NULL,3) returns 3 (DuckDB's least/greatest treat
+    NULL as absent, not as the smallest/largest value), so greatest(least(NULL,3),-3) returns
+    3, not -3 -- a bare clamp scores EVERY row, including the new routes whose whole point is
+    a NULL score. Same wrong evidence this docstring itself carried until now was already
+    corrected in docs/data/model.md and in 200_mart_route_health.sql's own comment (M6 Task 2
+    review round 1); this copy was missed."""
     leaked = con.execute("""
         SELECT count(*) FROM mart_route_health
         WHERE p12_months_present = 0 AND health_score IS NOT NULL

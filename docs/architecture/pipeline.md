@@ -125,9 +125,12 @@ covering everything derived-free, and the mart materializes because trailing-12 
 the full window is the one genuinely expensive thing in the layer.
 
 Scope is `fct_route_month`, `dim_city_market`, and `mart_route_health`.
-`mart_leaderboards` is deferred to M5: which leaderboards exist is an editorial `/watch`
-decision, and they are all saved instances of a generic Top-N builder that M3 has not built
-yet. Building them now means guessing the presets twice.
+~~`mart_leaderboards` is deferred to M5~~ **Superseded by M6.** There is no separate
+`mart_leaderboards` table: `/watch`'s four presets (`sql/03_queries/watch_*.sql`) read
+`mart_route_health` directly, add no pivot SQL of their own (no pivot measure expresses a
+delta), and share nothing across them except `DataTable`'s rank column — the same correction
+`docs/product/features.md` and `docs/design/system.md` already carried; this was the third,
+missed copy of the same stale claim (M6 Task 8's doc sweep). See § M6 below.
 
 ### The runner
 
@@ -1676,6 +1679,234 @@ Python's `duckdb` binding (already a pipeline dependency), points a **second**, 
 `no-store` — never the old 30-day value, never `HTML_CACHE` either. The primary server is
 killed first: this repo's own 8GB-memory working agreement does not run two `next start`
 processes at once, so this section runs last in the file.
+
+## M6 — Gauge Watch and the Top-N builder
+
+M5 connected the four islands; M6 adds a fifth surface, `/watch`, and fixes the health-score
+composite that both `mart_route_health`'s D1 status and every preset's ranking depend on. Eight
+tasks; the plan is `.superpowers/sdd/2026-07-31-m6-watch-and-topn/`.
+
+### Tasks 1-2 — the composite: an identity, a NULL trap, and a re-measurement
+
+`mart_route_health.health_score` scores **four independent axes at equal weight (0.25 each)**:
+`z_lf` (raw `lf_delta`), `z_gauge` and `z_freq` (both **logged** ratios — `ln(t12/p12)` — because
+the raw ratio is unbounded and asymmetric, a halving and a doubling should carry equal
+magnitude, and they don't in raw form), and `z_completion` (`completion_factor` capped at 1.5).
+Each is a z-score against the other scored rows (`(x - avg(x)) / stddev_samp(x)`), clamped to
+±3 so no single axis can move the composite by more than 0.75.
+
+**`capacity_delta` is deliberately excluded from the score, though it stays a displayed
+column.** Task 1 found the identity that licenses this: in log space, `capacity_delta` is
+*exactly* `frequency_delta + gauge_delta` — verified to 9.37e-16 over all 7,392 finite rows on
+the real warehouse. Scoring it as a fifth axis would score gauge and frequency a second time
+under a different name, silently doubling their combined weight to 40% of the composite while
+`completion_factor` — no fewer real, but collinear with nothing — carried its nominal 20%.
+
+**The `least`/`greatest` NULL trap, found twice independently (the completion cap, then the
+score clamp) and each time the wrong way round in a first draft:** DuckDB's `least()` and
+`greatest()` **ignore NULL** rather than propagating it — `least(NULL, 3)` returns `3`, not
+`NULL`. A bare `least(completion_factor, 1.5)` therefore fabricates a near-perfect 1.5
+completion rate for the 180 routes that filed no schedule at all (`completion_factor IS NULL`
+for them, not low), and a bare `greatest(least(z, 3), -3)` clamp scores all 8,080 rows,
+including the 813 that have no health score for a data-availability reason and must render as
+"insufficient data," never a number. Both guards are `CASE WHEN x IS NULL THEN NULL ELSE
+least/greatest(...) END`, not the bare form. **Get the arithmetic direction right when citing
+this**: `greatest(least(NULL, 3), -3)` returns **3**, not -3 (`least(NULL, 3)` is 3 first, then
+`greatest(3, -3)` is 3) — an earlier draft of `docs/data/model.md`, `200_mart_route_health.sql`'s
+own comment, and `pipeline/tests/test_route_health.py`'s docstring all stated -3, independently;
+the first two were corrected in Task 2's review round, the test docstring was missed until Task
+8's own doc sweep found it.
+
+**Task 2 re-measured the composite against the real warehouse** rather than trusting the design
+doc's synthetic numbers: four axes span 1.5x mean `|z|` where the original five-axis, double-
+counted design spanned 25.0x. The three-reason NULL population is unchanged at 813 of 8,080 (688
+no prior window, 180 no filed schedule, 55 overlap) — the contract `docs/product/features.md`'s
+"never render NULL as unhealthy" rule rests on, and the same population `/watch/death-watch`'s
+own scope note states on the page.
+
+### Task 3-4 — the Top-N builder, and its first two callers
+
+**`app/src/lib/topn.ts` adds no SQL and no catalog entries — the same property M4c's chart
+has.** A "Top N `<dimension>` by `<measure>`" view *is* an existing pivot: one dimension, the
+first requested measure sorted descending, a limit. What did not exist was one place deriving
+both the query (`topNQuery`) and its Explorer permalink (`topNPermalink`) from a single spec, so
+a page could not silently link to a different query than the table above it renders.
+
+**This is also where a claim already wrong twice over got corrected a third time.** M3's own
+spec, `docs/product/features.md`, and `docs/design/system.md` all described `/watch`'s presets
+as "saved instances of the Top-N builder." They cannot be: every `meta_pivot_measures` row is a
+single-window aggregate, and every preset ranks on a **delta** between two windows (`lf_delta`,
+`gauge_delta`, `health_score`) that no pivot measure expresses. The presets read
+`mart_route_health` directly and share nothing with the Top-N builder except `DataTable`'s rank
+column. `features.md` and `system.md` were fixed in Task 3; this file's own M2 section carried
+the same stale claim ("`mart_leaderboards` is deferred to M5 ... a generic Top-N builder that M3
+has not built yet") — missed until Task 8's doc sweep.
+
+Task 4 gave the builder its first two callers, on `/carrier/<code>`: a **Top routes** table (the
+builder used directly, DL touches 1,873 distinct routes over the trailing 12 months) and a **Top
+origin airports** table, headed exactly that and never "airports served" — the pivot has no
+either-endpoint filter (backlog item 1, below), so an honest heading is the only fix available
+until that filter exists. Full account: this file's own M4d section, "M6 Task 4 gave this page
+its Top-N builder's first two callers."
+
+### Task 5 — the four preset queries, and a bug Task 5 shipped and Task 6 found
+
+`sql/03_queries/watch_gauge.sql`, `watch_empty_planes.sql`, `watch_new_routes.sql`,
+`watch_death_watch.sql` each read `mart_route_health`, excluding same-airport rows
+(`route_key_low <> route_key_high` — 71 of 8,080) throughout. `watch_gauge.sql` is the one
+preset with two directions (Upgauging / Downgauging, same query sorted oppositely on
+`gauge_delta`); its `{{DIRECTION}}` token is substituted from a closed two-value set
+(`"ASC"`/`"DESC"`, chosen by looking up the requesting preset's own `directions` registry entry
+in `lib/watch.ts` — never a value bound into `ORDER BY`, which DuckDB has no bound-parameter form
+for). `watch_death_watch.sql` orders `health_score ASC NULLS LAST` — **currently a no-op**, not
+load-bearing: its `WHERE health_score IS NOT NULL` already excludes every NULL before `ORDER BY`
+runs (verified byte-identical output with the clause present or removed), so there is nothing
+left for `NULLS FIRST` vs. `NULLS LAST` to arbitrate. It is retained as forward defense for a
+future variant that relaxes the `WHERE` clause (e.g. showing unscored routes sorted last instead
+of dropping them), the same "documentation, not the load-bearing mechanism, kept anyway"
+treatment this file already gives `p12_months_present`'s CASE guard.
+
+**Task 5 shipped `runPreset()`'s `{{DIRECTION}}` substitution broken for the one preset it
+exists for, and its own tests could not have caught it.** `maskComments`'s first draft only
+stripped `--` line comments before counting `{{DIRECTION}}` occurrences — and
+`watch_gauge.sql`'s own header comment *names* the token, which is a second textual occurrence.
+Every call to `runPreset("gauge", ...)`, either direction, threw `"expected at most one
+{{DIRECTION}} token, found 2"` unconditionally. Task 5's own `watch.test.ts` never exercised the
+"gauge" slug — only Empty Planes' and Death Watch's `runPreset()` paths, neither of which carries
+the token at all. Found live, wiring up the page, in Task 6; fixed by masking comments before
+counting, not by editing the SQL. Task 6's own review round hardened `maskComments` further —
+block comments and string-literal-embedded comment markers, the identical failure shape one
+syntax variant away from recurring, closed even though no shipped `watch_*.sql` file uses either
+today.
+
+**The route-ordering trap is unit-tested, not smoke-covered, and that is a property of the data,
+not a gap in the gate.** `routeCellHref` (used for each preset row's route link) wraps
+`routeHrefFromCodes` rather than re-deriving the canonical ordering a third time (M5 Task 3
+already built one copy for `/explore`, M4b another for `/route` itself). Watch rows arrive in
+**airport-ID order** (`route_key_low, route_key_high`) while `/route/<pair>` is
+**code-alphabetical** — the same M4b/M5 trap, over `mart_route_health`'s own population: the two
+orderings disagree for **22 of 8,009** rows (`route_key_low <> route_key_high` rows only), not
+M5's 154-of-22,420 (a different, larger population — every route pair the warehouse has ever
+seen, not just the 8,009 that clear `mart_route_health`'s ≥30-departures floor). `XP USA-LAL` is
+the unit fixture (`watch.test.ts`), because **no preset's top 25 contains a disagreeing pair** —
+verified against the real warehouse, not assumed — so `app/smoke.sh` cannot reach this class of
+bug on `/watch` the way it reaches it on `/explore` (M5's `IFP–IAH` fixture) without hand-picking
+a route pair outside any preset's natural ranking, which would test a table `/watch` never
+actually renders.
+
+### Task 6 — the page, and Death Watch's NULL contract
+
+`WatchPresetView` (`app/src/app/watch/[preset]/page.tsx`) renders every preset's **components**,
+not just the composite (`docs/design/system.md`: "the components are the insight, the score is a
+sort key") — `lf_t12`, `lf_delta`, `gauge_t12`, `gauge_delta`, `capacity_delta`,
+`frequency_delta`, `completion_factor`, plus the raw trailing-12 seats/departures/quarantine
+counts, alongside the labeled-as-heuristic health score. A NULL score renders as **"insufficient
+data,"** never DataTable's usual em-dash: `docs/product/features.md`'s "never render NULL as
+unhealthy" requirement forbids it, and in a page whose primary sort is ascending health score, an
+em-dash reads as the worst row on the page.
+
+**The NULL branch is the common case on three of four presets, measured against the real
+warehouse, not the exception a defensive-code reading would suggest**: Route Birth Tracker is
+688 of 688 rows (100%) — by construction, since "new" means `p12_months_present = 0`, i.e. no
+prior window exists to diff against, so every row on that page has no score. Gauge Watch is 122
+of 7,321; Empty Planes 92 of 4,466. **Route Death Watch is the one preset where the branch is
+provably unreachable**, since `watch_death_watch.sql` filters `health_score IS NOT NULL` before a
+row ever reaches `runPreset()` — its own page carries a scope note instead ("813 of 8,080 routes
+... excluded from this leaderboard entirely, never silently ranked worst").
+
+Both floors specific to a preset, not the mart, are stated on the page rather than left implicit:
+`gauge_t12 >= 50` (Empty Planes, Death Watch — the CRJ-200's seat count, a real airframe
+boundary) and the same-airport exclusion (all four). Task 6's review round added an end-to-end
+test rendering the real Route Birth Tracker preset (nothing before it exercised the real
+column-building path against 100%-NULL data), verified by two mutants: pointing the score column
+at the raw `health_score` field, and reverting `formatHealthScore`'s NULL branch to an em-dash —
+both turn it red.
+
+### Task 7 — routing, cache and crawl
+
+`proxy.ts`'s matcher grows from nine entries (M5) to **eleven**: `/watch` (exact path, same
+shape as `/search`) and `/watch/:preset` (dynamic segment, shaped like an `ENTITY_ROUTES` row but
+with no row of its own — its cacheability branch answers "known" from the static `PRESETS`
+registry, not a per-slug `resolve()`). **Cacheability is the allow-list AND the health probe,
+not either alone**: the preset set is static, so the allow-list can answer "is this a real page"
+with no database read, but every preset page still runs a `mart_route_health` query, and this
+file still has to commit to a `Cache-Control` header before that page runs. A slug allow-list
+with no probe would stamp `HTML_CACHE` on a page about to 500 — the exact bug M5's own final
+whole-branch review found on `/sitemap.xml` (unconditional `PROJECT_CACHE`, no probe, justified
+by "it takes no user input" even though `app/sitemap.ts` runs four DuckDB queries that throw by
+design). `/watch`'s branch reuses `isDataLayerHealthy()` unchanged — **and Task 8 found that
+reuse is not sufficient for every failure mode**, below.
+
+`/sitemap.xml` grows from 23,689 to **23,694** URLs: `/watch` plus its four presets, dated by the
+dataset's own `asOf` month rather than a per-entity last-filed month (`watchEntries()`'s own
+header: a dataset-wide leaderboard has no per-entity filing date to anchor to — there is no
+"Gauge Watch's own last-filed month," only the warehouse's).
+
+### Task 8 — the served-build gate, a residual-gap finding, and the close-out
+
+`app/smoke.sh` gained one section per preset (`/watch`, `/watch/gauge`, `/watch/empty-planes`,
+`/watch/new-routes`, `/watch/death-watch`) following the same five-things-in-order discipline
+§§8-12's own header comment states for the four entity pages — renders, `Cache-Control`, a real
+code vs. a bare id, the rank column — plus Gauge Watch's own falsifiable pair (its two tables
+sort oppositely; AS LAX–OGG leads Upgauging, DL BOS–CVG leads Downgauging, each present on its
+own side and absent from the other) and the shared `/watch/nope` 404 (names the slug, `no-store`,
+never long-cached). **227 checks total (was 183 at M5), +44.**
+
+Two traps found writing these needles, both the same class M4c already shipped once:
+
+- **The rank column's negative check cannot be a bare `check_not ... '>0</td>'`.** Measured on
+  the served build, `t12_quarantined_rows` legitimately renders bare `"0"` for an unquarantined
+  row (`<td class="num">0</td>`, several per page) — a plain substring check red-flags a
+  *correct* table on its own data. The fix scopes the negative check to the rank `<td>`
+  specifically (`check_not_re ... '<td[^>]*rank[^>]*>0</td>'`), the same discipline that already
+  distinguishes a real needle from a vacuous one everywhere else in this file.
+- **The 404's slug needle has to span the RSC flight payload's own string-escaping**, the same
+  way `/route`'s `ZZZZ-LAX` 404 check already does: `{slug}`'s JSX interpolation splits the
+  sentence into separate flight-payload string fragments (`"preset ‘\",\"nope\",\"’"`), so a
+  needle written as one contiguous phrase never matches. Verified by mutation, not assumed: with
+  `/watch/:preset` removed from the matcher (Mutant A, below), this exact needle goes red because
+  the only surviving occurrence of `"nope"` is the router-state echo, not the composed sentence —
+  confirming the needle actually discriminates the two.
+
+**The two served-build mutants, run against a real served build and reverted before commit:**
+
+- **Mutant A — `/watch/:preset` removed from the matcher, rebuilt, served.** `/watch/nope`'s 404
+  body drops from 9,941 bytes (naming the preset) to 7,816 (a bare error shell, in the same range
+  M4d measured — ~7,740 bytes — for the identical failure one page family over), because
+  `not-found.tsx` throws without the pathname header the proxy no longer sets. **A page that
+  renders fine is damaged too**: `/watch/gauge`'s own `Cache-Control` degrades from `HTML_CACHE`
+  to Next's own force-dynamic fallback, `private, no-cache, no-store, max-age=0,
+  must-revalidate` — losing correct caching on a healthy page, the exact M4b-shaped bug this
+  file's matcher discipline exists to catch a second time. This closes the gap M5's own
+  whole-branch review left explicit in `hosting.md`: "unit-verified only, not yet smoke-curled" —
+  `proxy.test.ts` calls `proxy()` directly and never crosses Next's routing layer, so this class
+  of regression was provably invisible to every gate except a served build.
+- **Mutant B — a database copy missing `mart_route_health` (not `meta_pivot_dimensions`),
+  served against `/watch/gauge`.** **This is a genuine finding, not a restatement of the brief's
+  first-draft expectation**, which assumed the response would come back *without* a cacheable
+  header. Measured instead: `isDataLayerHealthy()` calls `loadAllowlist()` alone
+  (`catalog_dimensions.sql`/`catalog_measures.sql` — `meta_pivot_dimensions`/
+  `meta_pivot_measures`), which `mart_route_health` has nothing to do with, so the proxy commits
+  to `HTML_CACHE` before `WatchPresetView`'s `runPreset()` ever runs against the broken table —
+  and the page then throws. **`/watch/gauge` 500s WITH the cacheable `HTML_CACHE` header, not
+  without one.** Confirmed as the narrow cause, not guessed: dropping `meta_pivot_dimensions`
+  *instead* (leaving `mart_route_health` intact) correctly 500s under `no-store` — the same probe
+  that closes the gap for `/explore` closes it here too, for the one failure mode it actually
+  covers. This is CLAUDE.md's already-documented, not-yet-closed **residual 5xx cache gap** (a
+  page-specific throw whose proxy resolution already succeeded), now shown to reach `/watch/gauge`
+  too, not only the four entity pages. `app/smoke.sh` asserts the real, measured behaviour — a
+  cacheable 500 — as a known-open gap, not something this task closes: closing it would mean
+  giving `isDataLayerHealthy()` a `mart_route_health`-specific probe of its own, the identical
+  extra-DB-round-trip-per-request tradeoff `/route`'s own gap (`hosting.md` § "The gap") was left
+  open rather than pay.
+
+`make goldens` left `sql/03_queries/goldens/` byte-identical — no task touched a pivot template,
+which is the property Tasks 3/4's "adds no SQL" claim rests on. `make check` is **461** (447 at
+M5 + 6 Task 1 + 0 net Task 1's review round + 5 Task 2 + 1 Task 2's review round's sixth test +
+2 Task 5 = 461 — not the 460 a first pass at this arithmetic gets by counting only Task 2's
+initial commit). `make app-check` is **664**. `make verify` stays `parquet: 17 artifacts
+byte-identical`, `database: 10 objects identical` — M6 touched mart *content* (the composite
+formula) but not the object count.
 
 ## Toolchain
 

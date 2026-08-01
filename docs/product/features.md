@@ -165,7 +165,8 @@ also the one that must *refuse* to link: 530 same-airport pairs carry real traff
 mechanics: `docs/design/system.md` § The data table.
 
 **Two links live outside the tables**, because the tables alone left the graph half-connected —
-`/airport/` and `/route/` were 23,465 of the sitemap's 23,689 URLs with no inbound internal link
+`/airport/` and `/route/` were 23,465 of the sitemap's 23,689 URLs (23,694 as of M6 Task 7's
+`/watch` pages, which don't change this 23,465 numerator) with no inbound internal link
 at all, crawlable but not browsable. So `/route/<pair>`'s title block links both airport names to
 `/airport/<code>`, and the top bar's wordmark links home from every page. Both were in M5's spec
 and both were dropped when it became a plan; the whole-branch review caught them by walking the
