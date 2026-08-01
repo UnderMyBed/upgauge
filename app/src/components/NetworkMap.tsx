@@ -28,10 +28,22 @@ function reachedPanels(input: NetworkMapInput): Panel[] {
  * how to align them.
  */
 export function NetworkMap({ network }: { network: NetworkMapInput }) {
+  const reached = reachedPanels(network);
   const svg = renderNetworkMap({
     ...network,
-    basemapPaths: basemapPathsFor(reachedPanels(network)),
+    basemapPaths: basemapPathsFor(reached),
   });
+
+  // M7 Task 7b widened `car`'s coastline (ne_50m_car.json) but deliberately left `pac` empty
+  // -- 6 fact-present airports (GUM, HNL, ROP, SFO, SPN, TIQ) reach it, against `car`'s 74,
+  // which didn't justify the same fetch-and-filter work. `renderNetworkMap` still draws a
+  // labelled "PACIFIC" inset frame whenever a network reaches that panel (`fits.has("pac")`,
+  // networkMap.ts), same as before this task -- an empty, labelled box with real arcs and
+  // destination dots inside it but no landmass under them, which reads as a rendering defect
+  // unless something on the page says otherwise. Derived from `basemapPathsFor` itself
+  // (never a hardcoded "pac is always empty"), so this caption disappears on its own the day
+  // `pac` gains real geometry, without a code change here.
+  const pacHasNoBasemap = reached.includes("pac") && basemapPathsFor(["pac"]) === "";
 
   return (
     <div className="map">
@@ -39,6 +51,14 @@ export function NetworkMap({ network }: { network: NetworkMapInput }) {
           input reaches it, and the one string that could (the origin/destination codes) is
           a BTS code, already validated by the resolver that produced `network.origin`. */}
       <div dangerouslySetInnerHTML={{ __html: svg }} />
+      {pacHasNoBasemap ? (
+        <p className="foot">
+          {"The Pacific inset has no coastline under its arcs — Natural Earth's " +
+            "public-domain basemap has no polygon at this scale for Guam/CNMI/American " +
+            "Samoa/Midway. Arcs and destinations still render correctly; only the " +
+            "underlying landmass is missing."}
+        </p>
+      ) : null}
     </div>
   );
 }

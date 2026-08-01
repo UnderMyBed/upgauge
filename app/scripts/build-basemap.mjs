@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Generates `app/src/lib/map/basemapPaths.generated.ts` from the committed
- * `app/geo/ne_110m_us.json` -- the coastline + state-outline paths the network map's arcs
- * (M7 Task 6) are drawn over.
+ * `app/geo/ne_110m_us.json` and `app/geo/ne_50m_car.json` -- the coastline + state-outline
+ * paths the network map's arcs (M7 Task 6) are drawn over.
  *
  * INPUT (committed, not fetched here -- `make verify` must work offline and
  * reproducibly):
@@ -10,18 +10,36 @@
  *   Provinces (https://www.naturalearthdata.com/downloads/110m-cultural-vectors/110m-admin-1-states-provinces/),
  *   fetched as GeoJSON from the nvkelso/natural-earth-vector mirror
  *   (https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_1_states_provinces.geojson),
- *   filtered to the 51 US features (`iso_a2 == 'US'`: 50 states + DC). Natural Earth is
- *   public domain (https://www.naturalearthdata.com/about/terms-of-use/ -- "No permission
- *   is needed to use Natural Earth. Crediting the authors is unnecessary."). Full
- *   provenance is recorded again in `app/geo/ne_110m_us.json`'s own `_source` field.
+ *   filtered to the 51 US features (`iso_a2 == 'US'`: 50 states + DC). Feeds the `us`/`ak`/
+ *   `hi` panels (and `pac`, which still gets nothing -- see below).
  *
- *   Natural Earth 1:110m has no separate Admin-1 entry for Guam/Saipan/Tinian/Rota/American
- *   Samoa/Midway (the `pac` panel) or Puerto Rico/the USVI (`car`) -- at this scale those
- *   territories are not resolvable as distinct polygons, so this generator emits no
- *   coastline for either panel. That's a real, documented limitation, not a bug: any point
- *   landing in `pac`/`car` still projects correctly via `albers.ts`'s `project()`, which
- *   falls back to the `us` panel's fit when its own panel has no fit -- the arc just has no
- *   coastline drawn under it.
+ *   `app/geo/ne_50m_car.json` (M7 Task 7b), Natural Earth 1:50m Cultural Vectors, Admin 0 --
+ *   Countries (https://www.naturalearthdata.com/downloads/50m-cultural-vectors/50m-admin-0-countries/),
+ *   same mirror
+ *   (https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_admin_0_countries.geojson),
+ *   filtered to `SOVEREIGNT == 'United States of America'` AND `NAME in ('Puerto Rico',
+ *   'U.S. Virgin Is.')` -- 2 features, feeds ONLY the `car` panel. Admin-0 countries, not
+ *   Admin-1 states/provinces: PR/USVI are not an Admin-1 unit of any country in Natural
+ *   Earth at any resolution (confirmed absent from both the 1:50m and 1:10m Admin-1
+ *   states/provinces files). 1:110m's own Admin-0-countries file carries a lone "Puerto
+ *   Rico" (9 points, no separate USVI at all) -- 1:50m is the first resolution with BOTH
+ *   territories as distinct, multi-island features (PR 69 points: main island + Vieques +
+ *   Culebra; USVI 19 points: St. Thomas + St. Croix + St. John) -- verified by fetching and
+ *   inspecting both before choosing. Natural Earth is public domain
+ *   (https://www.naturalearthdata.com/about/terms-of-use/ -- "No permission is needed to use
+ *   Natural Earth. Crediting the authors is unnecessary."). Full provenance for each file is
+ *   recorded again in its own `_source` field.
+ *
+ *   Neither file has a resolvable entry for Guam/Saipan/Tinian/Rota/American Samoa/Midway
+ *   (the `pac` panel) -- at every resolution checked, those territories are not resolvable
+ *   as distinct polygons cheaply reachable from this mirror, and building that out was
+ *   explicitly out of scope for Task 7b (6 fact-present airports vs. `car`'s 74). `pac`
+ *   remains a real, documented limitation, not a bug: any point landing in `pac` still
+ *   projects correctly via `albers.ts`'s `project()`, which falls back to the `us` panel's
+ *   fit when its own panel has no fit -- the arc just has no coastline drawn under it. The
+ *   page-level disclosure of this gap (so an empty, labelled Pacific inset does not read as a
+ *   rendering bug to a site visitor) lives in `app/src/components/NetworkMap.tsx`'s `pac`-
+ *   empty caption, added alongside this change, and `docs/design/system.md` § The map.
  *
  * WHY COMMITTED, NOT FETCHED AT BUILD TIME: `make verify` builds twice and diffs every
  * artifact byte-for-byte; a build step that reaches the network is not reproducible (no
@@ -88,6 +106,7 @@ import { fitPanels, normalizeLon, project, regionOf } from "../src/lib/map/alber
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const GEO_PATH = path.join(REPO_ROOT, "app", "geo", "ne_110m_us.json");
+const CAR_GEO_PATH = path.join(REPO_ROOT, "app", "geo", "ne_50m_car.json");
 const OUT_PATH = path.join(REPO_ROOT, "app", "src", "lib", "map", "basemapPaths.generated.ts");
 
 // Ramer-Douglas-Peucker simplification, applied to each ring in RAW (lat, lon) degrees,
@@ -172,7 +191,16 @@ function fmt(n) {
 
 function main() {
   const raw = JSON.parse(readFileSync(GEO_PATH, "utf8"));
-  const features = [...raw.features].sort((a, b) =>
+  const rawCar = JSON.parse(readFileSync(CAR_GEO_PATH, "utf8"));
+  // Two committed inputs, two resolutions (110m for the 51 US states/DC, 50m for the 2
+  // Caribbean territories -- see this file's header for why neither carries the other's
+  // features). Concatenated BEFORE sorting so the merged array is ordered purely by postal
+  // code, not by which file a feature happened to come from -- sort order must not depend on
+  // array-concatenation order for the output to be deterministic. "PR"/"VI" interleave
+  // alphabetically among the state codes (e.g. "PR" sorts between "PA" and "RI"); regionOf
+  // still classifies every feature into the right panel below regardless of where in this
+  // list it lands.
+  const features = [...raw.features, ...rawCar.features].sort((a, b) =>
     a.properties.postal.localeCompare(b.properties.postal),
   );
 

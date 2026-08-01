@@ -94,7 +94,12 @@ const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, number]
   ak: [36, 322, 176, 468],
   hi: [192, 392, 292, 468],
   pac: [308, 392, 408, 468],
-  car: [424, 392, 524, 468],
+  // Widened by M7 Task 7b to match albers.ts's own PANEL_RECTS.car -- see that file's
+  // comment for the measurement (real PR/USVI geometry is ~3.89:1 wide, not the original
+  // rect's 1.32:1). Keep this literal in sync with PANEL_RECTS.car; a frame border drawn to
+  // a different rect than the one the coastline was actually fit to would visibly not match
+  // the landmass inside it.
+  car: [424, 392, 720, 468],
 };
 
 /** Order and label text for the four insets. `us` never gets a frame -- it is the base map

@@ -512,6 +512,51 @@ merely *present* does not catch this; only their relative screen order does.
 drawn as straight lines into their inset, and the page says so. Every US map makes this
 compromise; this one admits it.
 
+### Basemap coastline
+
+The committed basemap (`app/geo/ne_110m_us.json` → `app/scripts/build-basemap.mjs` → `app/
+src/lib/map/basemapPaths.generated.ts`) is Natural Earth **1:110m**, which has no polygon at
+all for Guam/CNMI/American Samoa/Midway (`pac`) or Puerto Rico/the USVI (`car`) — both insets
+shipped empty through M7 Task 8. Measured against the real warehouse (trailing 12 months): 74
+of 1,045 fact-present airports reach `car`, 6 reach `pac` — `/airport/SJU` alone drew 65 arcs
+inside a labelled Caribbean frame with no landmass under it, and San Juan is a major airport,
+not an edge case.
+
+**M7 Task 7b fetched a second, finer input for `car` only** (`app/geo/ne_50m_car.json`,
+Natural Earth 1:50m Admin-0 Countries, `SOVEREIGNT == 'United States of America'` AND `NAME
+in ('Puerto Rico', 'U.S. Virgin Is.')` — 2 features). 1:110m's own Admin-0-countries file
+does carry a lone 9-point "Puerto Rico" polygon, but no separate USVI feature at any
+resolution below 1:50m; 1:50m is the first resolution with both as real, multi-island
+features (PR: main island + Vieques + Culebra; USVI: St. Thomas + St. Croix + St. John) —
+confirmed by fetching and inspecting both resolutions before choosing, not assumed.
+`build-basemap.mjs` now reads both committed files and merges their features before the
+existing sort/simplify/project pipeline runs unchanged — no second projection path, no new
+RDP variant. **`pac` is untouched**: still zero committed reference points, a deliberate
+scope decision (6 airports doesn't justify the same fetch-and-filter work `car`'s 74 did),
+and still real rather than hacked around — `project()`'s `us`-fit fallback still renders
+every `pac` arc correctly, just with no coastline under it.
+
+**An empty, labelled inset must not read as a rendering bug to a site visitor.** Now that
+`car` has real coastline, `pac` is the one panel left with a frame and nothing in it — so
+`NetworkMap.tsx` states the gap on the page itself, in a `.foot` caption, whenever a
+network's own points actually reach `pac` (derived from `basemapPathsFor(["pac"]) === ""`,
+never hardcoded, so the caption retires itself the day `pac` gains geometry without a code
+change here).
+
+**`PANEL_RECTS.car` (`albers.ts`) was widened once there was real geometry to check it
+against** — Task 4/7's own open item, carried forward twice with nothing to measure.
+Puerto Rico + the USVI's combined raw-Albers extent under `car`'s own projection parameters
+is ~3.89:1 (wide, not tall — the territories span ~3.4° of longitude against ~0.8° of
+latitude). The original rect was 100×76px (aspect 1.32:1), so `fitPanels`'s `k = min(w/dx,
+h/dy)` bound on width and left the coastline only ~26px tall inside a 76px-tall frame — not
+wrong, but a thin sliver floating in a mostly-empty labelled box. Widened to 296×76px (aspect
+~3.89:1, matching the measured geometry) so both dimensions bind together; height is
+unchanged so the bottom inset row (`ak`/`hi`/`pac`/`car`) keeps one shared baseline.
+`networkMap.ts`'s own `INSET_RECTS.car` (the frame-drawing literal, intentionally duplicated
+from `albers.ts` rather than imported) was updated to match — the two tables drifting would
+mean the drawn frame border no longer matches the rectangle the coastline was actually fit
+to.
+
 ### Arc encoding
 
 | Channel | Encodes |

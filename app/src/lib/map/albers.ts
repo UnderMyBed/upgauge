@@ -107,15 +107,29 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
 };
 
 // Canvas 960x500 (mockup's W/H), 16px outer pad. us/ak/hi rects are the mockup's own,
-// unchanged; pac/car are new, placed in the same bottom strip as hi (y 392-468), each 100px
-// wide, laid out left to right after ak (36-176) and hi (192-292) with the mockup's own
-// 16px gutter: pac 308-408, car 424-524 -- all comfortably inside the 960-wide canvas.
+// unchanged; pac/car are new, placed in the same bottom strip as hi (y 392-468), laid out
+// left to right after ak (36-176) and hi (192-292) with the mockup's own 16px gutter: pac
+// 308-408 (100px wide, still a placeholder -- pac has zero committed geometry, M7 Task 7b),
+// car 424-... (below).
+//
+// `car`'s width was widened by M7 Task 7b once real geometry existed to check the original
+// 100x76 square against (Task 4/7's own open item -- there was nothing to measure it
+// against before). Puerto Rico + the USVI's combined raw-Albers extent under `PANEL_PARAMS
+// .car` is dx=0.0557, dy=0.0143 (measured directly against the committed
+// `ne_50m_car.json`), an aspect ratio of ~3.89:1 -- far wider than tall, since the two
+// territories span ~3.4 degrees of longitude but only ~0.8 degrees of latitude. The old
+// 100x76 rect (aspect 1.32:1) forced `fitPanels`'s `k = min(w/dx, h/dy)` to bind on WIDTH,
+// leaving the coastline only ~26px tall inside a 76px-tall frame -- a thin horizontal sliver
+// floating in the middle of a mostly-empty labelled box, not a rendering bug but a
+// misleading rectangle. Widened to 296px (76 * 3.89, rounded) so both dimensions bind
+// together and the coastline fills its frame the same way every other panel's does; height
+// (392-468, matching hi/pac) is unchanged so the bottom inset row keeps one shared baseline.
 const PANEL_RECTS: Record<Panel, PanelRect> = {
   us: [26, 18, 934, 424],
   ak: [36, 322, 176, 468],
   hi: [192, 392, 292, 468],
   pac: [308, 392, 408, 468],
-  car: [424, 392, 524, 468],
+  car: [424, 392, 720, 468],
 };
 
 const PANEL_ORDER: Panel[] = ["us", "ak", "hi", "pac", "car"];

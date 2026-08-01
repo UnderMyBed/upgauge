@@ -33,12 +33,23 @@ describe("basemapPathsFor", () => {
     expect(basemapPathsFor(["hi"])).toMatch(/data-panel="hi"/);
   });
 
-  it("requesting a panel with no committed geography emits nothing, not an error", () => {
-    // Natural Earth 1:110m has no separate Admin-1 entry for Guam/Samoa/Midway or Puerto
-    // Rico/the USVI (see build-basemap.mjs's header) -- `pac`/`car` have zero reference
-    // points, so `fitPanels` never produces a fit for them and the generator emits no
-    // path. A page reaching into the Pacific or Caribbean still renders (via `project`'s
-    // own `us`-fit fallback); it just draws no coastline under those arcs.
+  it("emits paths for the Caribbean panel (M7 Task 7b: ne_50m_car.json)", () => {
+    // Catches: a generator that reads app/geo/ne_110m_us.json only and never merges in
+    // ne_50m_car.json at all. Puerto Rico and the USVI both land in `car` via `regionOf`,
+    // same as any other feature -- no special-cased panel-assignment path exists for them.
+    expect(basemapPathsFor(["car"])).toMatch(/data-panel="car"/);
+    expect(basemapPathsFor(["car"])).toContain('data-name="PR"');
+    expect(basemapPathsFor(["car"])).toContain('data-name="VI"');
+  });
+
+  it("requesting `pac` still emits nothing, not an error -- the one gap left open", () => {
+    // Guam/Saipan/Tinian/Rota/American Samoa/Midway remain unresolvable as distinct polygons
+    // at any resolution cheaply reachable from this mirror (checked, not assumed -- see
+    // build-basemap.mjs's header) -- out of scope for M7 Task 7b (6 fact-present airports
+    // vs. `car`'s 74). `pac` still has zero committed reference points, so `fitPanels` never
+    // produces a fit for it and the generator emits no path. A page reaching into the
+    // Pacific still renders (via `project`'s own `us`-fit fallback); it just draws no
+    // coastline under those arcs, disclosed on the page itself (NetworkMap.test.tsx).
     expect(() => basemapPathsFor(["pac"])).not.toThrow();
     expect(basemapPathsFor(["pac"])).toBe("");
   });
@@ -56,8 +67,8 @@ describe("geometry survives simplification and projection intact", () => {
   // VA is the fixture (not NC) because its two-ring island geometry means a regression
   // that only collapses, say, the SECOND ring (not both) still has to be caught -- a test
   // that only looked at ring count, or only at the first `M...Z`, would miss that.
-  function pathDataFor(dataName: string): string {
-    const panel = basemapPathsFor(["us"]);
+  function pathDataFor(dataName: string, panelName: "us" | "car" = "us"): string {
+    const panel = basemapPathsFor([panelName]);
     const match = panel.match(new RegExp(`data-name="${dataName}" d="([^"]*)"`));
     if (!match) throw new Error(`no path found for data-name="${dataName}"`);
     return match[1];
@@ -109,6 +120,33 @@ describe("geometry survives simplification and projection intact", () => {
     // without re-measuring VA's own smaller ring first.
     for (const subpath of subpaths) {
       expect(boundingBoxArea(subpath)).toBeGreaterThan(20);
+    }
+  });
+
+  // M7 Task 7b: the `car` panel gained real coastline (ne_50m_car.json, Natural Earth 1:50m
+  // Admin-0 Countries -- 1:110m has no separate USVI feature at all, and only a 9-point
+  // Puerto Rico). Same trap as VA above, on a different panel and a different input file:
+  // Puerto Rico is itself a MultiPolygon (main island + Vieques + Culebra), so a regression
+  // that collapses only ONE of its three rings must still be caught -- a test checking only
+  // ring count, or only the largest ring, would miss it.
+  it("Puerto Rico's committed geometry (car panel)", () => {
+    // Ground truth, measured directly against the current generated artifact: PR emits
+    // THREE closed subpaths after simplification -- the main island (~144.3 x 51.2px, area
+    // ~7,388 px^2), Vieques (~22.1 x 5.5px, area ~122 px^2), and Culebra (~6.7 x 5.8px, area
+    // ~39 px^2, the tightest of the three). A ring collapsed by the closed-ring RDP bug (or
+    // any regression that drops an island to one repeated point) has a bounding-box area of
+    // exactly 0 for that ring, regardless of what the other two rings do -- same reasoning
+    // as VA's test, checked per-subpath, never over the feature's combined coordinate set.
+    const d = pathDataFor("PR", "car");
+    const subpaths = subpathsOf(d);
+    expect(subpaths).toHaveLength(3);
+
+    // Threshold (10 px^2): comfortably between 0 (what any collapsed ring produces) and
+    // Culebra's own measured ~39 px^2, the smallest of the three real rings -- roughly a
+    // 3.9x margin, in the same spirit as VA's own margin above. Don't raise this without
+    // re-measuring Culebra's ring first.
+    for (const subpath of subpaths) {
+      expect(boundingBoxArea(subpath)).toBeGreaterThan(10);
     }
   });
 });

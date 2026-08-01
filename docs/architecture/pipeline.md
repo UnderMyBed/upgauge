@@ -2286,6 +2286,88 @@ checks over the airport section (Tasks 1-8 added none to this file, so this task
 first `app/smoke.sh` coverage the milestone's map work has received). `make goldens` untouched —
 this task added no pivot SQL.
 
+### Task 7b — the `car` panel gets real coastline, added mid-milestone on measured evidence
+
+Not a briefed task — added after Task 8/9 shipped, once the served pages made the gap visible:
+Natural Earth 1:110m (Task 7's own input) has **no polygon at all** for Puerto Rico, the USVI,
+Guam/CNMI, American Samoa, or Midway. Measured against the real warehouse, trailing 12 months:
+**74 of 1,045 fact-present airports reach the `car` panel**, 6 reach `pac`; `/airport/SJU` drew
+65 arcs inside a labelled "CARIBBEAN" frame with no landmass under it — San Juan is a major
+airport, not an edge case. The owner's decision: fetch a finer subset for `car` only; leave
+`pac` disclosed-empty rather than doing the same work for 6 airports.
+
+**Checked both 1:50m and the existing 1:110m before choosing** — 1:110m's own Admin-0-countries
+file (not Admin-1 states/provinces, which has no PR/USVI entry at any resolution up to 1:10m,
+confirmed) already carries a lone 9-point "Puerto Rico" polygon but no separate USVI feature at
+all. 1:50m Admin-0 Countries is the first resolution with **both** as real, multi-island
+features: Puerto Rico 69 points (main island + Vieques + Culebra), USVI 19 points (St. Thomas +
+St. Croix + St. John). Committed as `app/geo/ne_50m_car.json` (10,258 bytes), filtered to
+`SOVEREIGNT == 'United States of America'` AND `NAME in ('Puerto Rico', 'U.S. Virgin Is.')` — 2
+features, properties trimmed to `name`/`postal` (`PR`/`VI`) matching `ne_110m_us.json`'s own
+schema, coordinates rounded to 4 decimals (~11m, finer than `ne_110m_us.json`'s 3, reflecting
+the finer source per that file's own "matching source resolution" convention). British Virgin
+Is. (`SOVEREIGNT == 'United Kingdom'`) is excluded — same neighborhood, outside this dataset's
+US-only scope.
+
+**`build-basemap.mjs` gained a second input, not a second code path.** It now reads both
+`ne_110m_us.json` and `ne_50m_car.json`, concatenates their features BEFORE the existing
+postal-code sort (so output order depends only on postal code, never on which file a feature
+came from), and runs the unchanged sort → `rdpRing` simplify → `fitPanels`/`project` pipeline
+over the merged set. `regionOf` classifies PR/USVI into `car` the same way it classifies every
+other feature — no special-cased assignment. `pac` is untouched: still zero committed reference
+points, a deliberate scope line (6 airports vs. `car`'s 74), and still a real, disclosed
+limitation rather than a bug — `project()`'s `us`-fit fallback still renders every `pac` arc
+correctly, it simply has no coastline under it.
+
+**Artifact grew from 98,654 to 102,557 bytes** (+3,903). Byte-stability re-proven the same way
+Task 7 proved it originally: `make basemap` run twice produced identical
+`sha256sum` output both times, and `git diff --exit-code --stat
+app/src/lib/map/basemapPaths.generated.ts` against the staged artifact exits 0.
+
+**Served-build verification, not just a unit test**: built, served on a local port, and curled
+`/airport/SJU` directly — 204,459 bytes of HTML on **10 lines** (this page is effectively one
+line per response half, body + RSC payload — `grep -c`/`wc -l` would count *lines*, not
+occurrences, and silently under- or over-count; `grep -o <needle> | wc -l` was used instead
+throughout). `data-panel="car"` occurs 2 times (once per response half), `data-name="PR"` and
+`data-name="VI"` each once per half, and PR's own `d` attribute is a real 245-character
+multi-subpath string (three closed rings — main island, Vieques, Culebra — not a collapsed
+single point). `/airport/HNL` (reaches `pac`, not `car`) was curled the same way and confirmed
+the new caption (below) renders exactly there and nowhere on `/airport/SEA` (reaches neither).
+
+**`PANEL_RECTS.car` (`albers.ts`) was widened, the first time there was real geometry to check
+it against.** Measured PR+USVI's combined raw-Albers extent under `car`'s own projection
+parameters: `dx=0.0557`, `dy=0.0143`, aspect **~3.89:1**. The original rect (100×76px, aspect
+1.32:1) forced `fitPanels`'s `k = min(w/dx, h/dy)` to bind on width, so the coastline filled the
+rect's width but only ~26px of its 76px height — a thin horizontal sliver in a mostly-empty
+labelled box, not wrong but misleading. Widened to 296×76px (296 = 76 × 3.89, rounded), so both
+dimensions bind together; height unchanged (392–468, matching `hi`/`pac`) to keep the bottom
+inset row's shared baseline. `networkMap.ts`'s `INSET_RECTS.car` (the frame-drawing literal,
+intentionally duplicated from `albers.ts` rather than imported — Task 6's own design) was
+updated in lockstep; the two tables drifting would mean the drawn frame border no longer
+matches the rectangle the coastline was fit to.
+
+**The `pac` gap is now the only one, and it is disclosed on the page itself, not only in code
+comments.** `NetworkMap.tsx` renders a `.foot` caption — "The Pacific inset has no coastline
+under its arcs…" — whenever a network's own points reach `pac`, derived from
+`basemapPathsFor(["pac"]) === ""` rather than hardcoded, so the caption retires itself
+automatically the day `pac` gains geometry. Verified on both sides: present on `/airport/HNL`
+(reaches `pac`), absent on `/airport/SEA` (reaches neither `pac` nor `car`) and on
+`/airport/SJU` (reaches `car`, which now has coastline, but not `pac`).
+
+**Geometry mutant, same shape as Task 7's own**: `rdpRing` was reverted to plain `rdp` on the
+closed ring directly (collapsing every ring to one repeated point). Both the pre-existing VA
+test and the new Puerto Rico test went red for the reason each names (`expected 0 to be greater
+than 20` / `10`); reverted, `make basemap` + `sha256sum` confirmed byte-identical to the
+pre-mutant artifact, and `git status` clean afterward.
+
+`make app-check` **773** (768 before this task, +5: two `basemap.test.ts` geometry/emission
+tests, three `NetworkMap.test.tsx` tests covering the `car` coastline and the `pac` caption's
+presence/absence). `make app-smoke` unaffected (this task's own verification ran outside the
+committed smoke suite, against a manually served build, per the task brief — no new
+`smoke.sh` section was added). `make goldens` untouched — no pivot SQL. `make verify` not run
+(per instruction, reserved for the milestone's own final task); `make basemap`'s zero-diff
+check against the staged artifact is the narrower proof this task ran directly.
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command
