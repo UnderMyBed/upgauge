@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { presetBySlug, PRESETS, rawRowsPermalink, routeCellHref } from "./watch";
+import { presetBySlug, PRESETS, rawRowsPermalink, routeCellHref, runPreset } from "./watch";
 
 describe("presetBySlug", () => {
   it("resolves all four slugs", () => {
@@ -50,5 +50,44 @@ describe("routeCellHref", () => {
     // cover this -- only this unit test can.
     expect(routeCellHref("USA", "LAL")).toBe("/route/LAL-USA");
     expect(routeCellHref("JFK", "LAX")).toBe("/route/JFK-LAX");
+  });
+});
+
+// No skip guard, same as db.test.ts -- vitest.config.ts sets UPGAUGE_ROOT for exactly this,
+// and runPreset resolves its .sql directory the same way db.ts/sitemap.ts do.
+//
+// This is what closes the gap the Python real-data test
+// (test_the_gauge_floor_excludes_the_bush_and_sightseeing_operators in
+// pipeline/tests/test_route_health_real_data.py) cannot: that test runs its OWN hardcoded SQL
+// against mart_route_health, never reads watch_empty_planes.sql, and stays green even if that
+// file's `AND gauge_t12 >= 50` clause is deleted (confirmed by running the mutant --
+// task-5-report.md). These two tests go through runPreset(), so they exercise the real .sql
+// file on disk.
+describe("runPreset (real database)", () => {
+  it("Empty Planes' gauge floor excludes sub-CRJ-200 aircraft", async () => {
+    const p = presetBySlug("empty-planes")!;
+    const rows = await runPreset(p, "asc", 1);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0].gauge_t12 as number).toBeGreaterThanOrEqual(50);
+  });
+
+  it("Death Watch's gauge floor excludes sub-CRJ-200 aircraft", async () => {
+    // Same clause (`gauge_t12 >= 50`), same reason, in watch_death_watch.sql -- equally cheap
+    // to cover through the same mechanism, so it gets the same test rather than resting on
+    // the Empty Planes coverage alone.
+    //
+    // limit 5, not 1: unlike Empty Planes (sorted BY the measure the floor bounds), Death
+    // Watch sorts by health_score, which is only weakly correlated with gauge size -- on this
+    // warehouse the single worst-health_score row already happens to clear 50 seats, so a
+    // limit-1 version of this test does not go red when the floor is deleted (verified by
+    // running that exact mutant; task-5-report.md). The THIRD-worst row without the floor
+    // carries gauge_t12 ~= 10.65 and would appear inside a top-5, which is what makes this
+    // limit red for the right reason.
+    const p = presetBySlug("death-watch")!;
+    const rows = await runPreset(p, "asc", 5);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.gauge_t12 as number).toBeGreaterThanOrEqual(50);
+    }
   });
 });
