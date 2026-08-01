@@ -175,3 +175,73 @@ def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
         )
     """).fetchone()[0]
     assert bad == 0
+
+
+def test_health_score_is_bounded_by_the_clamp(con):
+    """Each axis is clamped to +/-3 and weighted 0.25, so |health_score| <= 3.0 by
+    construction. Without the clamp a nine-seat aircraft's log gauge ratio reaches z = -17.28
+    on the real warehouse (VD CPX-VQS) and Death Watch fills with bush operators."""
+    worst = con.execute(
+        "SELECT max(abs(health_score)) FROM mart_route_health WHERE health_score IS NOT NULL"
+    ).fetchone()[0]
+    assert worst is None or worst <= 3.0
+
+
+def test_the_completion_cap_is_null_safe(con):
+    """DuckDB's least() IGNORES NULLs: least(NULL, 1.5) returns 1.5, not NULL. Written as a
+    bare least(), the cap fabricates a 1.5 completion rate for every route that filed no
+    schedule at all -- 180 of them on the real warehouse -- and each then gets a health_score
+    it has no basis for."""
+    leaked = con.execute("""
+        SELECT count(*) FROM mart_route_health
+        WHERE completion_factor IS NULL AND health_score IS NOT NULL
+    """).fetchone()[0]
+    assert leaked == 0
+
+
+def test_the_z_clamp_is_null_safe(con):
+    """Same trap on the other guard. greatest(least(NULL,3),-3) returns -3, so a bare clamp
+    scores EVERY row -- including the new routes whose whole point is a NULL score."""
+    leaked = con.execute("""
+        SELECT count(*) FROM mart_route_health
+        WHERE p12_months_present = 0 AND health_score IS NOT NULL
+    """).fetchone()[0]
+    assert leaked == 0
+
+
+def test_health_score_is_always_finite(con):
+    """ln() of a zero gauge is -inf, which sorts to the top of Death Watch and survives the
+    clamp only because least() also bounds infinities. The nullif()s are what stop it."""
+    bad = con.execute("""
+        SELECT count(*) FROM mart_route_health
+        WHERE health_score IS NOT NULL AND NOT isfinite(health_score)
+    """).fetchone()[0]
+    assert bad == 0
+
+
+def test_capacity_is_carried_but_not_scored(con):
+    """capacity_delta stays a DISPLAYED component -- 'capacity down 81%' is the most legible
+    cell on a Death Watch row -- but in log space it is EXACTLY frequency + gauge, so scoring
+    it scores those twice. The identity below is what licenses the exclusion."""
+    cols = [r[0] for r in con.execute("DESCRIBE mart_route_health").fetchall()]
+    assert "capacity_delta" in cols
+    residual = con.execute("""
+        SELECT max(abs( ln(t12_seats / p12_seats)
+                      - ln(t12_departures_performed / p12_departures_performed)
+                      - ln(gauge_t12 / gauge_p12) ))
+        FROM mart_route_health
+        WHERE p12_seats > 0 AND t12_seats > 0
+          AND p12_departures_performed > 0 AND t12_departures_performed > 0
+    """).fetchone()[0]
+    assert residual is None or residual < 1e-12
+
+
+def test_quarantined_rows_are_carried_for_the_trailing_window(con):
+    """CLAUDE.md makes surfacing the quarantine count a hard rule on every data view. The mart
+    did not carry it forward, so /watch could not honour that without this column."""
+    cols = [r[0] for r in con.execute("DESCRIBE mart_route_health").fetchall()]
+    assert "t12_quarantined_rows" in cols
+    negative = con.execute(
+        "SELECT count(*) FROM mart_route_health WHERE t12_quarantined_rows < 0"
+    ).fetchone()[0]
+    assert negative == 0
