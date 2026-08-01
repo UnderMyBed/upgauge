@@ -131,7 +131,9 @@ check_not_re() {
 # GAP_PORT2/GAP_PID2/BROKEN_DB2 are M6 Task 8's own instance of the identical pattern, a THIRD
 # short-lived server run strictly after the second one has been killed (never concurrently --
 # same 8 GB reasoning), against a copy broken a different way (mart_route_health dropped, not
-# meta_pivot_dimensions).
+# meta_pivot_dimensions). GAP_PORT3/GAP_PID3/BROKEN_DB3 are M7 Task 10's own instance, a FOURTH
+# short-lived server, run strictly after the third has been killed, against a copy broken a
+# THIRD way again (dim_airport's lat/lon columns dropped, not a whole catalog view or table).
 cleanup() {
   [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null
   pkill -f "next start app -p ${PORT}" 2>/dev/null
@@ -144,6 +146,11 @@ cleanup() {
   [ -n "${GAP_PID2:-}" ] && kill "$GAP_PID2" 2>/dev/null
   [ -n "${GAP_PORT2:-}" ] && pkill -f "next start app -p ${GAP_PORT2}" 2>/dev/null
   [ -n "${BROKEN_DB2:-}" ] && rm -f "$BROKEN_DB2"
+  # M7 Task 10's own gap check, appended after M6 Task 8's: a THIRD broken copy and a THIRD
+  # short-lived server, same reason the first two pairs exist.
+  [ -n "${GAP_PID3:-}" ] && kill "$GAP_PID3" 2>/dev/null
+  [ -n "${GAP_PORT3:-}" ] && pkill -f "next start app -p ${GAP_PORT3}" 2>/dev/null
+  [ -n "${BROKEN_DB3:-}" ] && rm -f "$BROKEN_DB3"
 }
 trap cleanup EXIT
 
@@ -540,6 +547,78 @@ check_not "airport?y=1999: does not silently fall back to the default view" "$BO
 BODY=$(curl -s --max-time 15 "${BASE}/airport/SEA?y=nonsense")
 check     "airport?y=nonsense: malformed input is the same named error, not a 500" "$BODY" \
   "unknown year 'nonsense'"
+
+# 10c. M7 Tasks 4-8: the airport network map, in the served HTML. ORD, not SEA -- it is the
+# database's own worst case (measured 267 destinations after the same-airport row is excluded,
+# vs. SEA's much smaller network), so this is the section that would first show a truncation or
+# a rendering blow-up if one existed. Same five-part discipline the M4d comment above states for
+# every entity page (renders, Cache-Control, real-vs-bare id, chart/map svg, 404/308 caching),
+# applied to the map specifically since nothing above this line has curled it at all: the map
+# reached 718+ app tests green (docs/architecture/pipeline.md § M7 Task 8) and a clean `next
+# build` while being reachable from no served route this file ever checked -- exactly M4c's
+# "the component reached 262 green unit tests while mounted on no route at all" shape, now on
+# the map.
+#
+# The `<svg ... role="img"` needle is anchored on `viewBox="0 0 960 500"` (this map's own fixed
+# WIDTH/HEIGHT, networkMap.ts), not the bare `<svg role="img"` M4c's chart check uses -- that
+# bare form also matches AircraftMixChart's own SVG (mounted on this same page, M7 Task 3 kept
+# it) and, per the M4d comment two sections up, the per-row sparkline in DataTable. Anchoring on
+# this map's own fixed pixel size is what makes the check a claim about the MAP rather than
+# about any other SVG this page happens to also render.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/ORD")
+check     "airport map: the network SVG is in the served HTML" "$BODY" \
+  '<svg viewBox="0 0 960 500" width="960" height="500" role="img"'
+# EXACTLY 267, not "at least" and not 268. ORD carries a same-airport row (53 rows / 73,082
+# seats over the trailing 12 -- networkMap.ts's own NetworkMapInput doc) that renderNetworkMap
+# deliberately excludes from the drawn set (a same-airport great circle has zero length and
+# would draw an invisible mark atop the origin disc) while keeping its seats in the STATED
+# total -- so 268 arcs worth of destinations produce 267 polylines, and a mutant that drew the
+# same-airport row anyway would produce 268 here without moving any other check in this file.
+# `count`, not `has`: presence alone cannot distinguish "the exclusion runs" from "it doesn't."
+#
+# NOT doubled the way M4c's chart-path checks are (a normal JSX SVG ships once in the HTML body
+# and again, `<`-escaped to `<`, in the RSC flight payload) -- measured directly against
+# this same served build: `<polyline` occurs exactly 267 times in the WHOLE response, because
+# this SVG is a single pre-serialized string injected via `dangerouslySetInnerHTML`
+# (NetworkMap.tsx), and Next's RSC payload re-encodes that string's own `<` as `<` before
+# embedding it, so the literal 4-byte substring `<polyline` never appears a second time. A
+# doubled-count assumption carried over from the chart checks would have made this section
+# assert 534 and fail against the real build.
+check_re  "airport map: exactly 267 polylines (same-airport arc excluded)" \
+  "$(count "$BODY" '<polyline')" '^267$'
+# An inset label -- ORD's own network reaches ak/hi/car (measured against this served build;
+# see the `pac` absence below), each drawn as a labelled `<rect>`+`<text>` frame (INSETS,
+# networkMap.ts). Plain "ALASKA", not the bare `>ALASKA<` M5-style checks use elsewhere in this
+# file: the RSC payload escapes this SVG string's `>`/`<` to `>`/`<` (see the polyline
+# comment just above) but NOT the plain word between them, so the bracketed form appears once
+# and the bare word appears twice -- the bare form is what a mutant that dropped the inset
+# LOOP entirely (rather than just its frame) would still fail, since the loop draws the `<text>`
+# that carries this word and nothing else on the page does.
+check     "airport map: an inset is labelled (ALASKA)" "$BODY" 'ALASKA'
+# The window this map drew, stated in words on the map itself (networkMap.ts's own `body +=
+# ... input.window ...` line) -- not just in the aria-label, mirroring the aircraft-mix chart's
+# `chartWindow` line one panel over. ORD's default view draws the trailing 12, matching the
+# table above it (M7 Task 9's `mapWindowLine`, page.tsx).
+check     "airport map: the window is stated in words" "$BODY" \
+  'map: trailing 12 months, matching the table above'
+
+# The year track's own link to a specific calendar year -- the element a visitor actually
+# clicks, not just the year NUMBER (`>2019<`, already checked against SEA above and satisfied
+# by inert text with no link at all). `href`, on ORD specifically, so this section's checks
+# never depend on the SEA-only ones above having run first.
+check     "airport map: the year track links to ?y=2019" "$BODY" 'href="/airport/ORD?y=2019"'
+
+# The cache-header pair this task's own mutant table exists to prove, repeated against ORD
+# because the SEA-only checks above (M7 Task 9) never curled the map path at all -- a regression
+# scoped to the map's own data fetch (fetchAirportNetwork) could leave every SEA check green.
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/airport/ORD?y=2019")
+check     "airport map ?y=2019: a valid year gets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/ORD?y=nonsense")
+check     "airport map ?y=nonsense: malformed input is no-store"            "$HDRS" "no-store"
+check_not "airport map ?y=nonsense: ...and is never long-cached"           "$HDRS" "s-maxage"
+BODY=$(curl -s --max-time 15 "${BASE}/airport/ORD?y=nonsense")
+check     "airport map ?y=nonsense: names the offending year" "$BODY" "unknown year 'nonsense'"
 
 # 11. /carrier/<code> -- the page has to say what it is counting.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL")
@@ -1209,6 +1288,83 @@ else
   pkill -f "next start app -p ${GAP_PORT2}" 2>/dev/null
 fi
 rm -f "$BROKEN_DB2"; BROKEN_DB2=
+
+# ---------------------------------------------------------------------------------------------
+# 17. M7 Task 10's own gap check -- /airport/ORD against a database whose dim_airport view is
+#     missing its lat/lon COLUMNS, not the whole view and not a whole table. That distinction is
+#     the point: dropping the whole view (or the whole dim_airport TABLE, mirroring section 16's
+#     "TABLE not VIEW" note) would also break resolveAirportCode/airportCodesExist (both query
+#     dim_airport too, for id/code/name -- lookup_airport_by_code.sql, lookup_airport_code_
+#     exists.sql), which proxy.ts's own `isCacheable` call already wraps in a try/catch that
+#     declines the cache on ANY failure -- so a whole-view break would produce the ALREADY-
+#     handled case (a no-store 500), not the residual gap this section exists to demonstrate.
+#     Dropping ONLY the coordinate columns (map_airport_coords.sql selects `lat`/`lon`; neither
+#     entity-resolution query does) leaves slug resolution -- and therefore proxy.ts's
+#     cacheability decision -- completely healthy, so `isCacheable` commits to HTML_CACHE, and
+#     ONLY THEN does `fetchAirportNetwork`'s own query throw, inside the page, after the header
+#     is already written.
+#
+#     MEASURED, against a served build (`next start` needs no rebuild for this -- the broken
+#     copy is swapped in at runtime via UPGAUGE_DB, exactly like sections 15/16 above): the
+#     response is a 500 WITH the cacheable HTML_CACHE header, not without one -- the EXACT same
+#     shape section 16 measured for /watch/gauge against a missing mart_route_health, now
+#     reached by the map path via a DIFFERENT table/columns and a DIFFERENT page.
+#     `isDataLayerHealthy()` only ever probes `loadAllowlist()` (meta_pivot_dimensions /
+#     meta_pivot_measures); it has never had anything to do with dim_airport's coordinates, so
+#     this was not a regression Task 8 introduced -- it is CLAUDE.md's already-documented
+#     "residual 5xx cache gap" (backlog item 3), now confirmed to reach a THIRD page family (the
+#     four entity pages generally, /watch/gauge specifically, and now the map on /airport/<code>
+#     specifically) via a THIRD distinct cause. Not fixed here (Files: this task touches
+#     app/smoke.sh and docs only) -- see docs/architecture/hosting.md § "The gap".
+#
+#     `/route/JFK-LAX` is curled alongside as a sanity check that this break is scoped to the
+#     coordinate columns and not the whole dim_airport view: that page also resolves airport
+#     codes through dim_airport (via resolve.ts) but never reads lat/lon, so it must stay a
+#     healthy 200 under this exact break -- if it didn't, the break would be wider than claimed
+#     and this section would be measuring the wrong thing.
+echo "==> gap check: /airport/ORD against a database missing dim_airport's lat/lon columns (M7 Task 10)"
+
+BROKEN_DB3="$(mktemp -u "${TMPDIR:-/tmp}/upgauge-smoke-broken3-XXXXXX.duckdb")"
+cp "${ROOT}/upgauge.duckdb" "$BROKEN_DB3"
+if ! mise exec -- uv run python -c "
+import duckdb
+con = duckdb.connect('${BROKEN_DB3}')
+con.execute(\"CREATE OR REPLACE VIEW dim_airport AS SELECT * EXCLUDE (lat, lon) FROM read_parquet('data/parquet/dims/dim_airport.parquet')\")
+con.close()
+" >/tmp/upgauge-smoke-break3.log 2>&1; then
+  echo "  FAIL could not break the copy's dim_airport coordinates -- see /tmp/upgauge-smoke-break3.log"
+  FAILED=1
+else
+  GAP_PORT3="${SMOKE_GAP_PORT3:-3196}"
+  GAP_BASE3="http://127.0.0.1:${GAP_PORT3}"
+  UPGAUGE_DB="$BROKEN_DB3" cap 2G mise exec -- npx next start app -p "$GAP_PORT3" \
+    >/tmp/upgauge-smoke-gap3.log 2>&1 &
+  GAP_PID3=$!
+  UP=0
+  for _ in $(seq 1 60); do
+    curl -sf -o /dev/null --max-time 2 "${GAP_BASE3}/" && { UP=1; break; }
+    sleep 1
+  done
+  if [ "$UP" -ne 1 ]; then
+    echo "  FAIL gap server (dim_airport coords) never came up"; cat /tmp/upgauge-smoke-gap3.log
+    FAILED=1
+  else
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${GAP_BASE3}/airport/ORD")
+    HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${GAP_BASE3}/airport/ORD")
+    check "gap: /airport/ORD 5xxs against a database missing dim_airport's lat/lon" "$CODE" '500'
+    # The residual gap, asserted as what IS true rather than a hoped-for fix: `check`, not
+    # `check_not` -- the positive claim (a cacheable 500) is the finding.
+    check "gap: ...and it is NOT declined -- HTML_CACHE ships on a 500 (the open gap)" \
+      "$HDRS" "$HTML_CACHE_EXPECTED"
+    # The scope check: this break must NOT reach a page that resolves airport codes but never
+    # reads their coordinates, or the section would be claiming a wider break than it made.
+    CODE_ROUTE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${GAP_BASE3}/route/JFK-LAX")
+    check "gap: /route/JFK-LAX is unaffected (the break is scoped to coordinates)" "$CODE_ROUTE" '200'
+  fi
+  kill "$GAP_PID3" 2>/dev/null; wait "$GAP_PID3" 2>/dev/null; GAP_PID3=
+  pkill -f "next start app -p ${GAP_PORT3}" 2>/dev/null
+fi
+rm -f "$BROKEN_DB3"; BROKEN_DB3=
 
 echo
 if [ "$FAILED" -eq 0 ]; then echo "smoke: all checks passed"; else echo "smoke: FAILURES above"; fi

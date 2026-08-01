@@ -49,9 +49,10 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 
 ## Status
 
-**M3, M4, M5 and M6 are COMPLETE — M3a, M3b, M4a, M4b, M4c, M4d, M5 (Tasks 1-8), M6 (Tasks
-1-8).** All four entity pages ship, cross-linked, with an omnibox, a sitemap, and a fifth
-surface, `/watch`. M3a's Explorer pivot query contract — templates
+**M3, M4, M5, M6 and M7 are COMPLETE — M3a, M3b, M4a, M4b, M4c, M4d, M5 (Tasks 1-8), M6
+(Tasks 1-8), M7 (Tasks 1-10).** All four entity pages ship, cross-linked, with an omnibox, a
+sitemap, a fifth surface (`/watch`), and — as of M7 — a real map. M3a's Explorer pivot query
+contract — templates
 (`sql/03_queries/pivot_segment.sql` / `pivot_route.sql`), the allowlist as catalog objects
 (`meta_pivot_dimensions` / `meta_pivot_measures`), the CI-only Python reference
 implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`), the mainline-grouping toggle,
@@ -466,42 +467,114 @@ byte-identical`, `database: 10 objects identical` — M6 changed mart *content*,
 `make goldens` leaves `sql/03_queries/goldens/` byte-identical: M6 added no pivot SQL, the
 property Tasks 3/4's Top-N builder and the `/watch` presets both rest on.
 
-Next: **M7.** What it owes, each identified by the work above rather than guessed:
+**M7 is COMPLETE — the airport network map, and the either-endpoint filter it needed first.**
+Tasks 1-2 gave `meta_pivot_dimensions` a filter-only `endpoint_airport_id` dimension
+(`filter_mode = 'either'`, compiling to `(origin_airport_id IN (...) OR dest_airport_id IN
+(...))` in `render.ts` **and** `pipeline/pivot.py`, in lockstep, with two new goldens) — the
+either-endpoint OR the pivot layer could not express before, licensing Task 3's collapse of
+`/airport/<code>` from **three pivots and inclusion-exclusion arithmetic down to one pivot per
+grain**, gated on reproducing SEA's committed 53,373,806-seat figure via a warehouse-coupled
+test before a line of the old `endpoints.ts` was touched.
 
-1. ~~A first-class either-endpoint filter in `meta_pivot_dimensions`~~ **DONE, M7 Tasks 1-2**
-   (`endpoint_airport_id`, `filter_mode = 'either'`, compiling to an OR across
-   `origin_airport_id`/`dest_airport_id` in `render.ts` **and** `pipeline/pivot.py`, in
-   lockstep, with goldens) — **and spent, M7 Task 3**: `/airport` runs ONE pivot per grain
-   instead of three, `inclusionExclusion`/`unionSides`/`unionMix` are deleted, and the SEA
-   figures (53,373,806 seats both ways) are unmoved, gated by a warehouse-coupled test
-   (`pipeline/tests/test_airport_endpoints_real_data.py`). The same shape still owed to a
-   future `/city-market`.
-2. ~~`/airport`'s truncation arithmetic skips the overlap term~~ **MOOT, M7 Task 3** — there is
-   no overlap term to skip once the OR is one pivot; SQL's own `GROUP BY` counts a same-airport
-   row once. The single pivot's own row-count ceiling was re-measured rather than carried over
-   from the old three-pivot figures (which counted a different, pre-folded grouping): worst case
-   is now 1,732 (carrier, origin, dest) groups at ORD against the unchanged 5,000 limit, and the
-   chart's (month, type) worst case is unchanged at 4,118, since that grain never carried a
-   direction to begin with.
-3. **The residual 5xx cache gap** — a page-specific throw whose proxy resolution already
-   succeeded (a catalog view the entity resolvers, `/explore`'s probe, or (M6) `/watch`'s probe
-   don't touch) is still cached for up to an hour. `docs/architecture/hosting.md` § "The gap" has
-   the full account of why the complete fix isn't reachable on this Next version; M6 Task 8
-   confirmed the same shape reaches `/watch/gauge` via `mart_route_health`, not only the four
-   entity pages' own tables.
-4. **The maps** — airport network, carrier network, aircraft type, diff map. `docs/product/
-   features.md` § Maps. None built yet. The **Time-machine diff** preset ("PDX, Jul 2019 vs Jul
-   2025," `docs/product/features.md`) is this item wearing a preset's name, not a fifth `/watch`
-   page — a two-window diff plus a diff map, so it stays out of scope until the maps themselves
-   exist. Still unbuilt after M6.
-5. ~~`/watch` and a generic Top-N builder~~ **DONE, M6.**
-6. **The interactive Explorer builder** — pick dimensions/measures/filters from a UI rather
+**Tasks 4-8 shipped this project's first map, and it is not the map the spec called for.**
+`docs/design/system.md` and `docs/product/features.md` originally specced deck.gl's
+`GreatCircleLayer` over a MapLibre basemap; what shipped is a **from-scratch, dependency-free,
+server-rendered SVG engine** (`app/src/lib/map/{albers,greatCircle,arcs,networkMap,
+basemap}.ts`, composed by `app/src/components/NetworkMap.tsx`) — the same "in the served
+HTML, visible with JS off" property the aircraft-mix chart established for M4c, extended to a
+map, with **zero** client-side charting or mapping library anywhere in the render path.
+Composite Albers, five panels (Task 4: `us`/`ak`/`hi` plus two the mockup's own two-panel math
+silently misfiled — `pac` and `car` — each measured against real fact-present airport
+coordinates, not assumed); great-circle interpolation with an adaptive, screen-distance-scaled
+step count (Task 5); arc encoding by seats/load-factor/departure-floor and the composed `<svg>`
+string itself (Task 6); a committed, reproducibly-generated basemap from Natural Earth 1:110m
+(Task 7), widened mid-milestone to include real Caribbean coastline for `car` from a second,
+finer input once the served pages made the gap visible on `/airport/SJU` (Task 7b — `pac`
+remains disclosed-empty, a deliberate scope line, not a defect); and the map mounted for real
+on `/airport/<code>` (Task 8), which found and fixed a genuine defect the repo's own written
+guidance had recommended the WRONG fix for — a per-page fit must reuse the coastline's own
+baked `fitPanels(BASEMAP_FIT_POINTS)` verbatim, never union a subject's points into it.
+
+**Task 9 added year permalinks, not the animated slider `system.md` originally specified** —
+superseded on measurement: this map is server-rendered SVG with no client library, so
+animating between years means shipping every year's geometry in one response. `/airport/
+<code>?y=<year>` is a track of plain, cacheable, shareable links instead, validated by
+`proxy.ts` before a response commits to a cache header (`y`'s value set is closed — the
+calendar years this dataset covers — which is what licenses validating it rather than
+`/search`'s blanket `no-store`).
+
+**Task 10 closed the milestone out, and found the same class of bug the M4c/M5/M6 closeouts
+each found in their turn: a number written into a permanent doc, never re-measured once the
+real page existed.** The design spec's own arc-byte prediction for ORD (132,178 bytes) was
+carried, uncorrected, into `greatCircle.ts`'s own code comment; the real, measured figure on
+the actual 960px-wide served page is **64,287** — a transcontinental arc projects to only
+~700px there, so the adaptive step count never reaches its own 48-step cap at all, which the
+spec's wider assumption did not anticipate. `/carrier/DL`'s documented page weight (131,316)
+was **2× the real, measured figure (262,697)** — the M6 Task 4 Top-N tables landing in the
+same window that number was last written, never reflected afterward; every other page-weight
+figure below was re-measured, not assumed carried over. Two code comments (`networkMap.ts`,
+`build-basemap.mjs`'s generated-output template) still described `car` as a subject-derived
+fallback panel after Task 7b gave it committed geometry — corrected, `make basemap` re-run,
+artifact changed only in that header comment. `app/smoke.sh` gained a nine-check network-map
+section on `/airport/ORD` (the milestone's own worst case) plus a permanent gap-check section
+(17) proving the residual 5xx cache gap reaches the map path too — a database copy missing
+only `dim_airport`'s `lat`/`lon` columns 500s `/airport/ORD` **with** the cacheable
+`HTML_CACHE` header, confirmed scoped correctly against a healthy `/route/JFK-LAX` under the
+identical broken copy. Every new needle was mutation-run; a one-off matcher-removal mutant
+reconfirmed M4d's own finding (a healthy page loses its cache header, a 404 loses its message)
+on the map-bearing page specifically.
+
+`make check` **474**, `make app-check` **773**, `make app-smoke` **265 checks** (241 at M6,
++24 across M7 — Task 10's own contribution is the last 12: nine map checks plus three in gap
+section 17). `make verify` — **its first real execution against the basemap extension** (Task
+7 wrote the Makefile change but was forbidden from running it) — `parquet: 17 artifacts
+byte-identical`, `database: 10 objects identical`, and `make basemap`'s own zero-diff check
+inside it passed clean. `make goldens` leaves `sql/03_queries/goldens/` byte-identical — M7
+added exactly Task 2's two goldens, `urlstate.json` unchanged across the whole milestone.
+
+**Page weights, measured, not estimated, at M7's close**: the map made the four M7-touched
+pages the heaviest in the app — `/airport/ORD` **360,473** bytes (was 143,427 at M5; the
+milestone's own worst case, three pivots deep), `/airport/ATL` 133,959 → **300,876**,
+`/airport/SEA` 122,152 → **277,711**, `/carrier/DL` 131,316 (documented) / **262,697**
+(measured — the ~2× drift above). Pages the map never touches moved only by M7's catalog
+growth flowing into every page's embedded allowlist: `/route/JFK-LAX` 98,459 → **98,832**,
+`/aircraft/B737-8` 105,358 → **105,799**, `/search?q=Portland` 10,715 → **10,908**.
+
+Next: **M8.** What it owes, each identified by the work above rather than guessed. (Two closed
+M6-carried items are retired from this list entirely rather than kept as strikethrough noise:
+the either-endpoint filter and the truncation-arithmetic question it made moot both finished
+in M7 Tasks 1-3, described above, and neither owes M8 anything further beyond the still-open
+"same shape for a future `/city-market`" note.)
+
+1. **The maps: three of four still unbuilt, plus one disclosed gap on the one that shipped.**
+   Airport network is **DONE, M7** (`/airport/<code>`, Tasks 4-9) on the from-scratch SVG
+   engine described above — carrier network, aircraft type, and the diff map remain
+   (`docs/product/features.md` § Maps), and are expected to reuse that same engine rather than
+   introduce deck.gl/MapLibre after all, since nothing about the three remaining maps needs a
+   client-side mapping library the airport network didn't already need. Also still open: the
+   `pac` inset's missing coastline (Natural Earth has no polygon at this scale for Guam/CNMI/
+   American Samoa/Midway; 6 fact-present airports reach it, against `car`'s 74 which M7 Task 7b
+   already fixed) — disclosed on the page rather than fixed, a deliberate scope line rather
+   than a defect, but still a real gap a future task could close the same way Task 7b closed
+   `car`'s. The **Time-machine diff** preset ("PDX, Jul 2019 vs Jul 2025," `docs/product/
+   features.md`) is the diff-map item wearing a preset's name, not a fifth `/watch` page — a
+   two-window diff plus a diff map, so it stays out of scope until the maps themselves exist.
+2. **The residual 5xx cache gap** — a page-specific throw whose proxy resolution already
+   succeeded (a catalog view the entity resolvers, `/explore`'s probe, `/watch`'s probe (M6), or
+   the map's own coordinate lookup (M7) don't touch) is still cached for up to an hour.
+   `docs/architecture/hosting.md` § "The gap" has the full account of why the complete fix isn't
+   reachable on this Next version. Confirmed to reach three distinct causes now, not two: M6
+   Task 8 found `/watch/gauge` via a missing `mart_route_health`; M7 Task 10 found
+   `/airport/<code>`'s map via `dim_airport` missing only its `lat`/`lon` columns (not the whole
+   view) — `isDataLayerHealthy()` only ever probes `loadAllowlist()`, which has never had
+   anything to do with either table.
+3. **The interactive Explorer builder** — pick dimensions/measures/filters from a UI rather
    than hand-editing the permalink. The permalink contract (M3a/M3b) is done; nothing renders
    a form over it yet.
-7. **The load-factor time-series chart** and the **seasonality heatmap** — both specified,
+4. **The load-factor time-series chart** and the **seasonality heatmap** — both specified,
    neither built. Build the load-factor chart only after confirming nothing else in the backlog
    is a better use of the slot; M4c already made the gauge story the differentiator.
-8. **OG cards** — social-preview images per entity page, for the links `/search` and the
+5. **OG cards** — social-preview images per entity page, for the links `/search` and the
    sitemap now make shareable.
 
 ## Architecture
@@ -517,8 +590,11 @@ app/         Next.js 16 App Router, TS, Tailwind v4
 data/        gitignored. raw/ is the audit trail
 ```
 
-Charts: Observable Plot. Maps: deck.gl + MapLibre + Natural Earth GeoJSON (no tiled
-basemap — tiles are usage-priced).
+Charts: Observable Plot. Maps: **not** deck.gl/MapLibre (the original spec) — a from-scratch,
+dependency-free, server-rendered SVG engine (`app/src/lib/map/`, M7 Tasks 4-8), the same
+"in the served HTML, visible with JS off" property the charts have, extended to maps. Natural
+Earth GeoJSON, pre-projected and committed (no tiled basemap, ever — not merely untiled, no
+map library in the render path at all).
 
 ## Commands
 

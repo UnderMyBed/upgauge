@@ -470,9 +470,17 @@ mark, not only lines.
 
 ## The map
 
-deck.gl `GreatCircleLayer` over a **Natural Earth coastline GeoJSON** — no tiled basemap,
-ever. (The committed mockup substitutes the 737 filing airports as dots, so it depends on no
-external file; production draws the coastline.)
+**Not deck.gl, not MapLibre.** This section's own spec (and, through M7's first cut, this
+line) called for deck.gl's `GreatCircleLayer` over a MapLibre basemap. What shipped (M7 Tasks
+4-8) is a from-scratch, dependency-free, server-rendered SVG engine (`app/src/lib/map/
+{albers,greatCircle,arcs,networkMap,basemap}.ts`, composed by `app/src/components/
+NetworkMap.tsx`) — the same "in the served HTML, visible with JS off" property `Aircraft
+MixChart.tsx` established for M4c's chart, extended to a map: no client charting/mapping
+library ever touches the render path, so the map works with JavaScript off and needs no tile
+budget at all, not merely an untiled one. A great-circle arc over a projected coastline —
+**Natural Earth GeoJSON**, still true — no tiled basemap, ever. (The committed mockup
+substitutes the 737 filing airports as dots, so it depends on no external file; production
+draws the coastline.)
 
 ### Projection
 

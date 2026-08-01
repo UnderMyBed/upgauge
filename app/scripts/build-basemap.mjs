@@ -67,8 +67,9 @@
  *
  * A per-page network map (`app/src/lib/map/networkMap.ts`, M7 Task 8) must reuse `fitPanels(
  * BASEMAP_FIT_POINTS)` VERBATIM -- identical input, identical output -- for any panel this
- * generator produced a fit for (us/ak/hi today), and may fall back to a fit derived from its
- * own subject points ONLY for a panel with zero committed reference points (pac/car).
+ * generator produced a fit for (us/ak/hi/car as of Task 7b, since `ne_50m_car.json`'s
+ * PR/USVI points now feed `BASEMAP_FIT_POINTS` too), and may fall back to a fit derived from
+ * its own subject points ONLY for a panel with zero committed reference points (pac alone).
  *
  * AN EARLIER DRAFT OF THIS COMMENT RECOMMENDED THE WRONG FIX, and it is worth recording why,
  * since the wrong version shipped (unfixed) for one task: it said a per-page map "must call
@@ -279,12 +280,13 @@ ${pathsLiteral}
  * The fixed reference points every panel's coastline was fit to (raw lat/lon, 3 decimals,
  * matching app/geo/ne_110m_us.json's own precision). A per-page network map
  * (app/src/lib/map/networkMap.ts, M7 Task 8) must reuse \`fitPanels(BASEMAP_FIT_POINTS)\`
- * VERBATIM for any panel it has an entry for (us/ak/hi today) rather than re-deriving one
+ * VERBATIM for any panel it has an entry for (us/ak/hi/car as of Task 7b, since
+ * ne_50m_car.json's PR/USVI points feed this same array) rather than re-deriving one
  * from its own subject points -- and must NOT union subject points into this array before
  * fitting (\`fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])\`, an earlier draft's wrong
  * recommendation): a subject point outside this array's own extent changes fitPanels's
  * scale for every point, arcs and this already-baked coastline alike. See
- * build-basemap.mjs's header for the full reasoning. A panel with no entry here (pac/car)
+ * build-basemap.mjs's header for the full reasoning. A panel with no entry here (pac alone)
  * has no coastline to align to, so a subject-derived fit is the legitimate fallback.
  */
 export const BASEMAP_FIT_POINTS: GeoPoint[] = [

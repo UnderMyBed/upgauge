@@ -2145,6 +2145,156 @@ catalog growth (`endpoint_airport_id` and `route`'s new `filter_mode` column) fl
 page's embedded allowlist, not this task's own change; not isolated further, flagged for the
 reviewer.
 
+### Task 4 — composite Albers with five panels and antimeridian normalization
+
+The projection every later task in this milestone renders through (`app/src/lib/map/
+albers.ts`), ported from the committed design mockup (`docs/design/mockups/map-network.html`)
+with its math kept **verbatim** and two panels added. The mockup shipped three panels (`us`,
+`ak`, `hi`) and two region tests written in lower-48-centric terms — the exact shape of bug
+this project's own "measure before shipping a spec's arithmetic" rule exists to catch:
+`docs/data/invariants.md` § Airport coordinates measured **six fact-present airports east of
+the antimeridian** (GUM, UAM, ROP, TIQ, SPN, all ~144-146°E, plus Alaska's own SYA/Shemya at
++174.11°) and the mockup's `lon < -150 && lat < 30` Hawai'i test independently catching
+American Samoa (14.3°S) and Midway (28.2°N) — stretching a panel meant to span Hawai'i's own
+2.3° of latitude across 42°.
+
+**The fix is two-part, and neither half alone closes the gap.** (1) `normalizeLon` (`lon > 0 ?
+lon - 360 : lon`) runs at every call site that decides a panel, never only inside one shared
+helper — SYA's raw +174.11° fails every western-hemisphere test unless it is normalized to
+-185.89° first, and a helper that normalized internally but was skipped by one caller would
+silently misfile it. (2) Two new panels, tested **before** `hi` rather than folded into it:
+`pac` (Guam/Saipan/Tinian/Rota, American Samoa, Midway) and `car` (Puerto Rico, the USVI) —
+`regionOf`'s own ordering is `pac`, `car`, `hi`, `ak`, `us` last as the unconditional fallback,
+most-specific first, because `us`'s test is unconditional and would swallow every point before
+a more specific panel ever ran if it came first (a real mutant, not a hypothetical — reversing
+the order is one of the mutants below).
+
+**`fitPanels` fits each panel to only the points that land in it, independently** — same-scale-
+per-panel, not one global scale across all five — and the returned `Map` **omits any panel
+with zero points**: most airports never touch `pac` or `car`, and a page must not draw a
+labelled empty inset frame for a panel nothing in its own network reaches. `project()` falls
+back to the `us` panel's fit and parameters when a point's own panel has no fit at all (a lone
+Alaska or Hawai'i destination on an otherwise conterminous network), mirroring the mockup's own
+`FIT[rg]||FIT.us` fallback so projection is a total function, never a throw.
+
+**Raw Albers grows northward; screen `y` grows downward.** `albersRaw` negates the `y` term
+for exactly this reason — asserting that two projected points are merely *present* cannot
+catch an unnegated axis, since both projections still produce valid-looking numbers; only
+their *relative order* (does a point known to be north of another render with a smaller `y`)
+catches it, which is why `albers.test.ts` asserts ordering, not presence, for this property.
+
+Ten tests (`albers.test.ts`): `normalizeLon` on and off the antimeridian, `regionOf`'s five
+panels including the two-test discriminators above, `fitPanels` omitting an empty panel,
+`project`'s `us`-fallback, and the y-negation ordering property. Mutants run and reverted: (1)
+delete `normalizeLon`'s conditional (reddens the SYA/GUM antimeridian tests), (2) reorder
+`regionOf` to test `us` first (reddens every non-`us` panel test — the exact "unconditional
+fallback swallows everything" failure the comment above describes), (3) remove the y-negation
+(reddens the ordering test, not a presence test). `make app-check` did not yet have a
+repo-wide baseline worth quoting at this point in the milestone (three more map tasks landed
+in the same window before any gate ran end to end) — see Task 8's own count for the first
+post-map-milestone total. `make goldens` untouched — no pivot SQL.
+
+### Task 5 — great-circle interpolation with an adaptive step count
+
+Pure spherical math (`app/src/lib/map/greatCircle.ts`), ported from the same mockup script,
+kept deliberately independent of `albers.ts` — this module must never import a projection,
+because interpolation happens on the unit sphere and projection is something the *caller*
+applies afterward to whichever points come out. `greatCircle(a, b, steps)` slerps `steps + 1`
+points from `a` to `b`; a great circle between two points at equal latitude bows **poleward**
+of the straight line between them, which is the entire reason to interpolate on the sphere
+rather than lerp `(lat, lon)` directly — a lerp would cut the corner.
+
+**The degenerate-endpoint guard exists for a case this module cannot rule out by itself.**
+`om < 1e-9` (coincident or antipodal-adjacent endpoints) would otherwise divide by
+`sin(om) = 0` and propagate `NaN` into every one of the `steps + 1` points. Same-airport rows
+are excluded upstream by Task 6's `renderNetworkMap` before this function is ever called on
+one — but 359 of 1,045 fact-present airports carry at least one same-airport row (`docs/data/
+invariants.md` § Route identity), so this function stays safe regardless of what calls it
+rather than trusting every future caller to have already filtered.
+
+**Step count scales with screen distance, not angular distance** (`stepsFor`,
+`round(projectedLengthPx / 22)`, floored at 4, capped at 48) — a 40px hop needs a handful of
+points and a transcontinental arc needs dozens, but "transcontinental" is a property of how
+far apart the two points land **on the canvas**, not how far apart they are on the globe: two
+points can be far apart in degrees and close together in the panel they both happen to share.
+Cap 48 and floor 4 are the mockup's own constants, kept verbatim; `PX_PER_STEP = 22` is new.
+The comment this constant used to carry claimed the adaptive scheme cost 132,178 bytes on
+ORD against a flat-48's 192,231 — a number computed before Task 8 wired the real page and
+never re-measured once it existed. Re-measured against the real served page (M7 Task 10):
+adaptive costs **64,287** bytes, not 132,178, and a flat 12 (previously claimed to save more,
+77,384) actually costs **77,572** — *more* than adaptive, not less, because most of ORD's 267
+arcs are short regional hops that adaptive floors at 4 steps, cheaper than a flat 12 across
+the board, while the long-haul minority never reaches the 48 cap at all on a 960px-wide
+canvas (a transcontinental arc projects to ~700px, `round(700/22) = 32`). The corrected
+figures live in `greatCircle.ts`'s own comment and in Task 8's account below, which is where
+the real page's measurement belongs.
+
+Six tests (`greatCircle.test.ts`): the poleward bow (a midpoint's latitude exceeds both
+endpoints'), the degenerate-endpoint guard (no `NaN` in the output), `stepsFor`'s floor, cap,
+and linear region. Mutants run and reverted: removing the `om < 1e-9` guard (reddens the
+degenerate-endpoint test with `NaN` assertions, not a crash — the function still returns an
+array, just one full of `NaN`), and removing the `Math.max`/`Math.min` clamps in `stepsFor`
+(reddens the floor and cap tests independently, proving each bound is load-bearing on its
+own). `make goldens` untouched — no pivot SQL.
+
+### Task 6 — arc encoding, draw order, and the composed SVG string
+
+Two files. `arcs.ts` is pure encoding — one destination's seats, departures, and load factor
+in, one stroke out, no rendering: width `0.7 + 2.9·√(seats/max)` (the mockup's own formula,
+seats scale width and nothing else), dash `"5 3"` when load factor is below 70% **and** the
+arc clears the departure floor, and a complete override below the **30-departure floor**
+(fixed 1px, dotted `"1 3"`, `--ink-3`, opacity 0.75) that consults load factor at all — a
+floor arc's own story is "barely flown," and dashing it too would try to draw two independent
+facts through one channel. `loadFactor === null` (no departures to divide by) is treated as
+*not low* rather than low or high — there is no evidence either way, the same "unknown is not
+zero" rule `docs/data/invariants.md` states for gauge generally. Colour is never the sole
+channel for anything here (CLAUDE.md) — every stroke is one of two CSS variables (`--ink`,
+`--ink-3`), never a hue, so `globals.css` stays the one source of truth the way it already
+does for M4c's chart ramp.
+
+**`arcOrder` is an ordering property, not a filter — CLAUDE.md's own standing warning names
+this exact shape of bug.** Ascending by seats (tiebroken on code, for determinism across
+identical-seat arcs) so the caller draws thinnest first and heaviest last, meaning heavy arcs
+sit visually on top of thin ones. The SET of stroke widths produced is identical whether or
+not this sort runs — a test asserting the set rather than the sequence would stay green under
+a dropped sort, exactly the M4c stack-order mutant CLAUDE.md already documents. `networkMap.
+test.ts`'s draw-order test therefore reads `stroke-width` values off the rendered markup **in
+the order they appear**, not as a set.
+
+`networkMap.ts` composes `albers.ts` (Task 4) and `greatCircle.ts` (Task 5) into one function,
+`renderNetworkMap`, returning a complete `<svg>…</svg>` string — no chart or map library
+anywhere in the path, the same "in the served HTML, visible with JS off" property M4c's chart
+established. Draw order (itself part of the contract, since a set-based test cannot catch a
+misordering): inset frames for panels the network actually reaches → the injected basemap, if
+any (an optional input, never an import — Task 7 wires it with no change here) → arcs in
+`arcOrder` → destination nodes → labels for the top 8 by seats → the origin marker → the
+window line and the same-airport-seats note.
+
+**Same-airport rows are excluded from the drawn arc set here, never upstream, and never
+relying on the caller to have already filtered** — a same-airport great circle has zero
+angular length, and `greatCircle`'s degenerate branch (Task 5) would emit `steps + 1`
+identical points, several hundred bytes drawing an invisible mark on top of the origin disc.
+Their seats are **not** dropped from the total — `sameAirportSeats` is a separate field the
+caller supplies, never derived from the already-filtered arc list, so a map that dropped these
+seats from its own stated total as well as its arcs would silently disagree with the stat
+strip on the same page. Both halves are required; shipping one without the other is a defect
+(`docs/design/system.md` § Arc encoding states this as a standing rule, not a one-off note).
+
+**An arc crossing a panel boundary cannot be a great circle** — the projection is discontinuous
+across panels — so `renderNetworkMap` draws it as a straight two-point line into the inset
+instead, rather than attempting to interpolate across a boundary that has no continuous
+mapping.
+
+Draw-order and encoding tests bring `networkMap.test.ts` to a substantial suite by the time
+Task 8 extends it further (see that task's own count); nine tests in `arcs.test.ts` cover the
+width formula, the dash threshold, the floor override, the `loadFactor === null` non-dashing
+case, and `arcOrder`'s tiebreak. Mutants run and reverted: removing `arcOrder`'s sort (reddens
+the sequence-reading draw-order test, not a set-based one — the property this task's own
+brief called out as the one a naive test would miss), and drawing a same-airport row as an arc
+instead of excluding it (reddens the "268 vs 267" polyline-count property, the same class of
+assertion Task 10's own smoke check later pins on a served build). `make goldens` untouched —
+no pivot SQL.
+
 ### Task 7 — the pre-projected basemap, generated reproducibly
 
 `/airport/<code>`'s network map (Task 6) draws arcs over a coastline and state-outline
@@ -2233,6 +2383,82 @@ untouched — this task added no pivot SQL.
 `PANEL_RECTS` placement is a default, not settled, stands unchanged — this task neither
 confirms nor repositions it, since neither panel has any basemap geometry to render inside
 its rectangle yet.
+
+### Task 8 — the airport network map renders in the served HTML
+
+Wires Tasks 4-7 onto a real page: `fetchAirportNetwork` (`app/src/lib/map/airportNetwork.ts`,
+one route-grain pivot plus a coordinate lookup, `sql/03_queries/map_airport_coords.sql`) and
+`NetworkMap.tsx` compose the projection, arc encoding, and basemap into `/airport/<code>`,
+mounted above the carriers table. The pivot groups `fct_route_month` by the undirected route
+identity (`route_key_low`/`route_key_high`), filtered to rows touching the subject airport at
+either end — no carrier dimension, since a network map draws one arc per destination, not one
+row per (carrier, destination), so every carrier and every month in the window folds into one
+row per route before this file ever sees it. `AIRPORT_NETWORK_LIMIT = 1000` against a measured
+worst case of 268 distinct routes at ORD (the database's own ceiling, checked over every
+fact-present airport, not assumed from ORD alone) — 3.7× headroom, and `NetworkMapInput`
+deliberately carries no truncation field the way `endpoints.ts`'s tables do, so a future
+refresh crossing this needs a fresh measurement and a limit raise, not a silent undercount.
+
+**A confirmed defect, found while wiring the first real page, not by inspection.** `networkMap.
+ts` (Task 6) originally fit every panel to the subject's own arc endpoints — `fitPanels(points)`
+called fresh, per page, on whatever that one airport's network happened to contain. That is a
+**different** fit than the one the coastline in `basemapPaths.generated.ts` was baked with
+(Task 7's `fitPanels(BASEMAP_FIT_POINTS)`, computed once over the full committed geography), so
+every arc rendered scaled and offset relative to a landmass drawn at a different scale —
+geographically wrong on every single page, despite passing every existing test, because no
+existing test asserted on absolute screen position. **The repo's own written guidance
+recommended the wrong fix.** `build-basemap.mjs`'s header, its generated output, and `basemap.
+ts` all said a per-page map should call `fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])`
+— union the subject's points into the fixed reference set before fitting. That is not
+equivalent to reusing the fit verbatim: `fitPanels` derives its scale from the min/max extent
+of whatever points it receives, the coastline's pixels are already baked in at
+`fitPanels(BASEMAP_FIT_POINTS)`'s own extent, and a subject point falling **outside** that
+extent (a coastal airport seaward of a simplified coastline — the ordinary case, since
+simplification pulls the line inward, not the exception) changes the extent, which changes the
+scale for every point, arcs and the already-baked coastline alike. The union recommendation
+silently reopens the exact bug it claims to close.
+
+**The fix**: `BASEMAP_FITS`, computed once at module load from `fitPanels(BASEMAP_FIT_POINTS)`
+— bit-for-bit the same input Task 7's generator used — is reused **verbatim**, identical input
+and output, for any panel it has an entry for (`us`/`ak`/`hi` at the time this task shipped;
+`car` joined this set at Task 7b, once real coastline existed for it to align to). Only a panel
+with zero committed reference points (`pac` alone, after Task 7b) falls back to a subject-
+derived fit, because there is no coastline to align to in the first place. Proven by a test
+that projects a fixed point through two different subject point sets and asserts the SAME
+screen coordinates both times — a test that fails under the reverted (per-page-fit) code, which
+is what makes it a real regression guard rather than a restatement of the fix.
+
+**Measured, not estimated, on the real served page.** `/airport/ORD` renders exactly **267**
+polylines (268 trailing-12 destinations minus the excluded same-airport arc). At
+`PX_PER_STEP = 22` this costs **64,287** bytes of polyline markup — about half the
+pre-implementation estimate the design spec and `greatCircle.ts`'s own comment carried until
+Task 10 re-measured and corrected both (see that task's account, and Task 5's above). `pac` and
+`car` reach 6 and 74 fact-present airports respectively over the trailing 12 months at the time
+this task shipped (before Task 7b gave `car` real coastline) — `/airport/SJU` is the real page
+where the Caribbean inset visibly mattered, drawing 65 arcs inside a labelled frame with no
+landmass under it until Task 7b's fix.
+
+Test additions: `airportNetwork.test.ts` (8 tests — `farEndpoints`'s subject-relative
+direction, the query shape, truncation absence at the measured ceiling), `NetworkMap.test.tsx`
+(7 tests — the component mounts the SVG, supplies `basemapPaths` for exactly the panels its
+own network reaches, and renders the `pac`-empty caption only when warranted), plus 30 lines
+of additional coverage in `networkMap.test.ts` for the `BASEMAP_FITS` reuse property above and
+`basemap.test.ts` gaining the export `basemap.ts` needed to expose `BASEMAP_FIT_POINTS` to
+`networkMap.ts` in the first place. `page.tsx` mounts `<NetworkMap network={network} />` above
+`DataTable`, conditioned on `fetchAirportNetwork` returning non-null (a subject with nothing
+filed in the window gets no map at all, never a second empty-state panel repeating what the
+carriers-table empty state already says below it — the same "gaps are gaps" discipline M4c's
+chart established).
+
+`make app-check` first crosses a full-suite total worth quoting after four map tasks landed in
+the same window: this task's own final run measured 718 (see Task 3's account for the same
+caveat about attributing a repo-wide delta to one task when several land close together).
+`make app-smoke` **unaffected by this task directly** — Task 9 is the one that adds the first
+`app/smoke.sh` coverage of the map at all (that task's own account says so explicitly: "Tasks
+1-8 added none to this file"), which is itself a real gap this milestone's own Task 10 later
+closes with a dedicated map section. `make goldens` untouched — this task added no pivot SQL,
+only `sql/03_queries/map_airport_coords.sql`, a plain lookup outside the pivot template
+contract.
 
 ### Task 9 — the year parameter, its cache key, and the track
 
@@ -2367,6 +2593,143 @@ committed smoke suite, against a manually served build, per the task brief — n
 `smoke.sh` section was added). `make goldens` untouched — no pivot SQL. `make verify` not run
 (per instruction, reserved for the milestone's own final task); `make basemap`'s zero-diff
 check against the staged artifact is the narrower proof this task ran directly.
+
+### Task 10 — the served-build gate, and M7 closed out
+
+Closeout: `app/smoke.sh` coverage for the map, the served-build mutants only a real build can
+produce, the full gate suite, and a documentation truth pass over every stale figure the
+milestone's own review loop had surfaced.
+
+**`app/smoke.sh` gained a network-map section on `/airport/ORD`** — the milestone's own worst
+case, chosen because it is the page that would first show a truncation or a rendering blow-up
+if one existed. Nine checks: the map's own `<svg>` (anchored on its fixed `viewBox="0 0 960
+500"`, not the bare `<svg role="img">` M4c's chart check uses, since that bare form also
+matches the aircraft-mix chart mounted on the same page and the per-row sparkline in
+`DataTable`), exactly **267** `<polyline>` elements via `count`, not `has` (268 would mean the
+same-airport arc was drawn after all — the seats stay in the stated total either way, only the
+polyline is excluded), an inset label, the year track's `href="/airport/ORD?y=2019"`, the
+window stated in words, and the `?y=2019`/`?y=nonsense` Cache-Control pair repeated against
+ORD specifically (the existing Task 9 checks only ever curled SEA, so a regression scoped to
+the map's own data fetch could have left every SEA check green). **The polyline count needed
+`grep -c`'s known failure mode named explicitly**: Next 16 emits this page as effectively one
+line per response half, so `grep -c` returns 1 (lines), not 267 (occurrences) — `grep -o …|
+wc -l` is what this file already uses everywhere else for exactly this reason, restated here
+because two agents on this milestone independently hit it.
+
+**A property worth recording, found while writing the polyline count check, not asserted going
+in**: this map's `<svg>` is injected via `dangerouslySetInnerHTML` as one pre-serialized
+string, and Next's RSC flight payload re-encodes that string's own `<` as `<` before
+embedding its copy — so `<polyline` occurs **exactly once per real polyline in the whole
+response**, not doubled the way M4c's chart-path checks are (a normal JSX-rendered SVG ships
+once in the HTML body and again, unescaped, in the RSC payload). A doubled-count assumption
+carried over from the chart checks would have asserted 534 here and failed against the real
+build.
+
+**Every new needle was mutation-run, not merely read** (five in one combined rebuild — the
+SVG attribute order, the same-airport filter, the inset label text, the window sentence, and
+the year-track `href` param name; a second rebuild for the proxy cache-logic pair and the
+year-error text, inverted together): all seven reddened for the reason each was written to
+catch, confirmed against a served build, then reverted with a clean `git diff`.
+
+**The matcher-removal mutant (Step 4), one-off and not added permanently** — removing
+`/airport/:code` from `proxy.ts`'s matcher, rebuilding and serving reproduced M4d's own
+finding on the map-bearing page specifically: a healthy `/airport/ORD` degrades from
+`HTML_CACHE` to Next's own `private, no-cache, no-store, max-age=0, must-revalidate` fallback,
+and `/airport/ZZZZ`'s 404 loses its entire message (7,861 bytes, zero occurrences of "unknown
+airport code" — down from a message-bearing 404 the healthy build serves). Reverted; this is a
+regression check on existing (M4d-era) matcher discipline, not a new class of bug the map
+introduced, which is why it is recorded here rather than added as a permanent `smoke.sh`
+section the way the next finding is.
+
+**The 5xx cache gap reaches the map path too, and IS added as a permanent gap-check section
+(17), mirroring M5 Task 7 Part A's and M6 Task 8's own** — because, unlike the matcher mutant
+above, this is a live database-corruption shape reachable in production, not a deliberate code
+regression. Serving against a database copy whose `dim_airport` view is missing **only** its
+`lat`/`lon` columns (not the whole view, and not the whole table — dropping either would also
+break `resolveAirportCode`/`airportCodesExist`, both of which query `dim_airport` too, and
+`isCacheable` already declines the cache on ANY failure there, which would reproduce the
+already-handled case rather than the gap) leaves slug resolution, and therefore `proxy.ts`'s
+cacheability decision, completely healthy — `isCacheable` commits to `HTML_CACHE` before
+`fetchAirportNetwork`'s own query ever runs, and only then does it throw inside the page.
+Measured: **500, WITH the cacheable `HTML_CACHE` header**, not without one — confirmed scoped
+correctly by curling `/route/JFK-LAX` under the identical broken copy and getting a healthy
+200, since that page resolves airport codes through the same view but never reads their
+coordinates. `isDataLayerHealthy()` only ever probes `loadAllowlist()`
+(`meta_pivot_dimensions`/`meta_pivot_measures`); it has never had anything to do with
+`dim_airport`'s coordinates, so this is not a regression Task 8 introduced — it is CLAUDE.md's
+already-documented residual 5xx cache gap (backlog item 3), now confirmed to reach a third
+distinct cause (the four entity pages generally, `/watch/gauge` specifically via M6 Task 8,
+and now the map on `/airport/<code>` specifically via a third, different table). Not fixed
+here — `docs/architecture/hosting.md` § "The gap" has the full account of why the complete fix
+isn't reachable on this Next version.
+
+**Two comment-only corrections found and fixed alongside the smoke.sh work, before `make
+verify` ran** (routed in mid-task, since fixing one regenerates the basemap artifact `make
+verify` proves reproducible): Task 7b gave the `car` panel real coastline, which means
+`BASEMAP_FIT_POINTS` (built from the generator's own reference points) now includes PR/USVI
+points too, and `BASEMAP_FITS` therefore has a real `car` entry — but two comments describing
+*why* the subject-derived fallback exists (`networkMap.ts`'s own header, and the template
+literal `build-basemap.mjs` writes into `basemapPaths.generated.ts`'s header) still said the
+fallback covered "pac/car" and that committed fits existed only for "us/ak/hi." Corrected in
+both places to say `car` is covered by `BASEMAP_FITS` as of Task 7b and `pac` is the only
+panel still falling back — the code itself needed no change, since `fits.set(panel,
+BASEMAP_FITS.get(panel) ?? subjectFits.get(panel)!)` is already generic over which panels
+`BASEMAP_FITS` happens to cover. `make basemap` was re-run after the fix; the regenerated
+artifact changed **only** in that header comment (verified with a diff before staging), and a
+second run produced a byte-identical file to the first, confirming the fix didn't disturb
+reproducibility. A third, unrelated stale comment was found the same way while re-measuring
+Task 5's own step-count figures: `greatCircle.ts`'s `stepsFor` comment carried the same
+pre-Task-8 estimate (132,178 bytes) the design spec did, corrected in the same pass with the
+real, re-measured numbers (see Task 5's account above and this task's own re-measurement
+below).
+
+**The design spec's arc-byte target was wrong, and the cause is understood, not merely
+observed.** `docs/superpowers/specs/2026-08-01-m7-maps-design.md` (git-ignored — a planning
+artifact, not a tracked doc, so its own text is left as-is rather than edited) predicted
+132,178 bytes of polyline for ORD; the real, measured figure — on the actual served page, at
+this project's real 960px-wide composite-Albers canvas — is **64,287**. A transcontinental arc
+projects to only ~700px on a 960px-wide canvas, so `stepsFor`'s adaptive scheme
+(`round(700/22) ≈ 32`) never reaches its own 48-step cap at all; the spec's prediction appears
+to have assumed a wider effective canvas (or an unprojected, synthetic distance) under which
+long arcs commonly hit the cap. Re-measured directly, not merely re-derived: a flat 48 costs
+189,274 bytes on the real page (close to, but not identical to, the spec's own 192,231 —
+warehouse content has shifted slightly since); a flat 12 costs 77,572 — **more** than the real
+adaptive figure, not less as both the spec and the pre-existing `greatCircle.ts` comment
+claimed, because most of ORD's 267 drawn arcs are short regional hops that adaptive floors at
+4 steps, cheaper across the board than a flat 12, while only the long-haul minority ever
+approaches the cap. Real, measured `/airport/ORD` page weight at M7's close: **360,473
+bytes** — the milestone's own worst case, 3× `/route/JFK-LAX`'s 98,832, driven by two pivots
+(traffic + mix, unchanged from M4d/M7 Task 3) plus the third, the network-map query, none of
+which existed on this page before M7.
+
+**Every other page-weight figure `CLAUDE.md` carried from M5/M6 was checked against the real
+build rather than assumed unchanged, and one was found wrong by roughly 2×** (`/carrier/DL`:
+documented 131,316, measured **262,697** — the M6 Task 4 Top-N tables (Top routes, Top origin
+airports) landing in the same window that figure was last written, never reflected in the
+prose afterward). The four M7-touched entity pages grew substantially from the map, not from
+anything wrong: `/airport/SEA` 122,152 → **277,711**, `/airport/ATL` 133,959 → **300,876**,
+`/airport/ORD` 143,427 → **360,473** (all M7 Tasks 3-9's own combined effect — the six-pivot-
+to-two collapse in Task 3 shrinks the query count while the map in Tasks 4-9 adds a third
+pivot and the SVG itself, netting a large increase). Pages the map never touches moved only by
+the M7 catalog growth flowing into every page's embedded allowlist (Task 3's own flagged, not
+fully isolated, observation): `/route/JFK-LAX` 98,459 → **98,832**, `/aircraft/B737-8`
+105,358 → **105,799**, `/search?q=Portland` 10,715 → **10,908**. `CLAUDE.md`'s own Status
+section carries the corrected table.
+
+**Final gates, run strictly serialized** (this box's 8 GB / 12-core ceiling hardlocks under
+two concurrent `make` targets — `docs/dev-box-8gb-memory-ceiling.md`), each preceded by a wait
+for no other `make`/`next build`/`next start`/`vitest`/`pytest` process: `make check` **474**
+passed, ruff clean; `make app-check` **773** passed, typecheck and lint clean; `make app-smoke`
+**265** checks, 0 failures (was 241 at M6 close; M7 Tasks 1-9 already landed some of the delta,
+this task's own new sections — nine map checks plus three in gap-check section 17 — account
+for the last 12); `make verify` — **its first real execution against the basemap
+extension** (Task 7 wrote the Makefile change but was expressly forbidden from running it) —
+reports `parquet: 17 artifacts byte-identical` and `database: 10 objects identical`, and the
+basemap regeneration inside it produced zero diff against the staged, corrected artifact;
+`make goldens` leaves `sql/03_queries/goldens/` byte-identical (M7 added no pivot SQL beyond
+Task 2's own committed goldens — `urlstate.json` unchanged across the entire milestone, as
+Task 2's own account already established). `git status` confirmed clean of every mutation
+before this account was written.
 
 ## Toolchain
 

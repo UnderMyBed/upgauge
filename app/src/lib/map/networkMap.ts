@@ -37,15 +37,16 @@ import { BASEMAP_FIT_POINTS } from "./basemap";
  * one that projected the coastline is exactly the misalignment this exists to prevent, so the
  * union recommendation reopens the bug it claims to close.
  *
- * The correct rule: for a panel `BASEMAP_FITS` has an entry for (us/ak/hi today, since
- * Natural Earth 1:110m committed geometry lands there), reuse that fit VERBATIM -- identical
- * input, identical output, so an arc and the coastline beneath it were fit exactly once. For
- * a panel with zero committed reference points (pac/car -- no Guam/CNMI/American
- * Samoa/Midway/Puerto Rico/USVI polygons at this scale, `build-basemap.mjs`'s header), there
- * is no coastline to align to, so a subject-derived fit is the legitimate, documented
- * fallback -- see the merge in `renderNetworkMap` below. An airport that then lands slightly
- * outside the simplified coastline renders slightly outside it; that is geographically
- * honest and must not be "fixed" by rescaling.
+ * The correct rule: for a panel `BASEMAP_FITS` has an entry for (us/ak/hi/car today -- Task 7b
+ * added `ne_50m_car.json`'s Puerto Rico/USVI polygons, so `car` now has committed geometry too
+ * and its reference points feed this same `fitPanels(BASEMAP_FIT_POINTS)` call), reuse that fit
+ * VERBATIM -- identical input, identical output, so an arc and the coastline beneath it were
+ * fit exactly once. For a panel with zero committed reference points (pac alone, as of Task
+ * 7b -- no Guam/CNMI/American Samoa/Midway polygons at this scale, `build-basemap.mjs`'s
+ * header), there is no coastline to align to, so a subject-derived fit is the legitimate,
+ * documented fallback -- see the merge in `renderNetworkMap` below. An airport that then lands
+ * slightly outside the simplified coastline renders slightly outside it; that is
+ * geographically honest and must not be "fixed" by rescaling.
  */
 const BASEMAP_FITS: Map<Panel, PanelFit> = fitPanels(BASEMAP_FIT_POINTS);
 

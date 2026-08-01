@@ -192,14 +192,23 @@ Tied to entities, never global. A global all-routes map is a hairball.
 
 | Map | Encoding | Why |
 |---|---|---|
-| **Airport network** `/airport/PDX` | Arcs from one node; weight = seats, style = LF | A **year track** (`?y=<year>`, M7 Task 9) → step through the network growing/contracting one server-rendered permalink at a time. The screenshot people post. |
-| **Carrier network** `/carrier/OO` | Full network, **filterable by aircraft type** | "Every route SkyWest flies the E175 on" is one filter and a legible map. |
-| **Aircraft type** `/aircraft/A220` | All routes flown by a type | Genuinely novel. |
-| **Diff map** | new vs. dropped vs. downgauged | Death Watch + Birth Tracker rendered *spatially*. 10× more visceral. |
+| **Airport network** `/airport/PDX` — **shipped, M7** | Arcs from one node; weight = seats, style = LF | A **year track** (`?y=<year>`, M7 Task 9) → step through the network growing/contracting one server-rendered permalink at a time. The screenshot people post. |
+| **Carrier network** `/carrier/OO` — M8 | Full network, **filterable by aircraft type** | "Every route SkyWest flies the E175 on" is one filter and a legible map. |
+| **Aircraft type** `/aircraft/A220` — M8 | All routes flown by a type | Genuinely novel. |
+| **Diff map** — M8 | new vs. dropped vs. downgauged | Death Watch + Birth Tracker rendered *spatially*. 10× more visceral. |
 
 **Skip:** a map on the route detail page. A single arc is not information.
 
-**Tech:** deck.gl `GreatCircleLayer` over MapLibre.
+**Tech: not deck.gl, not MapLibre.** The spec called for deck.gl's `GreatCircleLayer` over a
+MapLibre basemap; what shipped for the airport network map is a from-scratch,
+dependency-free, server-rendered SVG engine (`app/src/lib/map/`, M7 Tasks 4-8) — the same
+"in the served HTML, visible with JS off" property the aircraft-mix chart established,
+extended to a map. No tiled basemap, ever, same reasoning as below, but also no map *library*
+at all: a great-circle arc drawn over a projected, pre-simplified Natural Earth coastline
+(`docs/design/system.md` § The map has the full account). The three unbuilt maps (M8) are
+expected to reuse this same engine rather than introduce deck.gl/MapLibre after all — nothing
+in the M8 backlog calls for a client-side mapping library, and the whole point of the
+from-scratch engine was to need none.
 
 > 💰 **No tiled basemap.** Mapbox tiles are usage-priced. Render a **Natural Earth
 > coastline/state GeoJSON** as a static layer beneath the arcs — zero tile cost. If you later

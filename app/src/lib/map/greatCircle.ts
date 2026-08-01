@@ -55,11 +55,22 @@ export function greatCircle(a: GeoPoint, b: GeoPoint, steps: number): GeoPoint[]
 }
 
 /** Steps scale with how long the arc actually is ON SCREEN, not with its angular distance: a
- * 40px hop needs a handful of points and a transcontinental arc needs dozens. Measured on
- * ORD's 268 arcs -- fixed 48 emits 192,231 bytes of polyline, this emits 132,178 with no
- * visible change to the long arcs. A flat 12 saves more (77,384) but visibly polygonizes them,
- * which is why this is adaptive rather than simply lower. Cap 48 is the mockup's original
- * constant; floor 4 keeps a short arc a curve rather than a segment. */
+ * 40px hop needs a handful of points and a transcontinental arc needs dozens.
+ *
+ * RE-MEASURED against the real served page (M7 Task 10; the figures this comment carried
+ * before that -- "192,231 fixed 48, 132,178 adaptive, 77,384 flat 12" -- were a pre-Task-8
+ * design-spec projection, never re-measured once the real page existed, and were roughly 2×
+ * every real number below). Measured on ORD's 267 drawn arcs (268 destinations minus the
+ * excluded same-airport row) against the actual composite-Albers projection this map ships
+ * with (960px wide, so a transcontinental arc projects to only ~700px): a flat 48 emits
+ * 189,274 bytes of polyline; THIS (adaptive) emits 64,287, not merely "with no visible change
+ * to the long arcs" but because a long arc on a 960px-wide canvas needs ~32 steps at
+ * PX_PER_STEP=22, never reaching the 48 cap at all -- the savings are the many short regional
+ * arcs floored at 4 steps AND the few long arcs settling around 32 rather than 48. A flat 12
+ * is 77,572 -- WORSE than adaptive's 64,287, not better as the old comment claimed, because
+ * most of ORD's arcs are short enough that adaptive's floor of 4 beats a flat 12 outright; it
+ * would still visibly polygonize the long arcs it does not help. Cap 48 is the mockup's
+ * original constant; floor 4 keeps a short arc a curve rather than a segment. */
 export const MAX_STEPS = 48;
 export const MIN_STEPS = 4;
 const PX_PER_STEP = 22;
