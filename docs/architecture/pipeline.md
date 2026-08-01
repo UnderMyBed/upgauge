@@ -2017,6 +2017,95 @@ file in the same window; Task 2's own isolated contribution to that total is the
 `render.test.ts` above. `make goldens` leaves `urlstate.json` byte-identical; `pivot.json` gains
 exactly the two new cases above (11 → 13).
 
+### Task 7 — the pre-projected basemap, generated reproducibly
+
+`/airport/<code>`'s network map (Task 6) draws arcs over a coastline and state-outline
+basemap. That basemap is a **committed, pre-projected artifact**
+(`app/src/lib/map/basemapPaths.generated.ts`), not a runtime fetch and not a tiled layer —
+this project bans tiled basemaps outright on cost grounds (`docs/design/system.md` § The
+map), and `make verify` must build offline and reproducibly, which a network fetch at build
+time cannot be.
+
+**Input, committed rather than fetched at build time**: `app/geo/ne_110m_us.json`, Natural
+Earth 1:110m Cultural Vectors, Admin 1 — States, Provinces, fetched as GeoJSON from the
+`nvkelso/natural-earth-vector` mirror
+(`https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_1_states_provinces.geojson`,
+same 1:110m vintage as Natural Earth's own shapefile release), filtered to the 51 US
+features (`iso_a2 == 'US'`: 50 states + DC), properties trimmed to `name`/`postal`,
+coordinates rounded to 3 decimals (~110m, matching source resolution). Natural Earth is
+public domain. **Fetched once, filtered, and committed** — the same discipline this project
+already applies to its Parquet writer (`threads = 1`, since an intermittently-drifting
+writer is worse than a consistent one): a build step that reaches the network cannot be
+part of a reproducibility proof.
+
+**Natural Earth 1:110m has no separate Admin-1 entry for Guam/Saipan/Tinian/Rota/American
+Samoa/Midway (the `pac` panel) or Puerto Rico/the USVI (`car`)** — at this scale those
+territories don't resolve as distinct polygons, so the generated basemap carries coastline
+for `us`/`ak`/`hi` only (49/1/1 `<path>` elements respectively; `pac`/`car` are empty
+strings). This is a real, disclosed limitation, not a bug: `albers.ts`'s `project()`
+already falls back to the `us` panel's fit when a point's own panel has no fit, so an
+airport reaching into the Pacific or Caribbean still projects correctly — its arc simply
+has no coastline drawn under it.
+
+**The generator (`app/scripts/build-basemap.mjs`) imports the app's own `albers.ts`
+(`project`, `fitPanels`, `normalizeLon`, `regionOf`) rather than reimplementing the
+projection** — the same rule that keeps `sql/` shared between the pipeline and the server
+applies here: a basemap projected by separate math from the arcs would be subtly,
+invisibly misaligned. Node's built-in TypeScript type-stripping (unflagged since Node 23.6)
+imports the `.ts` file directly, since `albers.ts` uses only erasable syntax; `make basemap`
+runs `node --no-warnings` to suppress the one cosmetic warning that import produces
+(`app/package.json` has no `"type": "module"`, which is out of this task's scope to add).
+
+**The basemap is fitted to fixed panel rectangles, not to the subject's arcs** — the whole
+reason it needs its own generation step rather than being computed inline by whatever page
+renders it: fitting it to one page's own arc endpoints would scale and offset it
+differently on every page, so the coastline would visibly shift under a fixed set of state
+outlines from one airport to the next. `fitPanels` (Task 4) already accepts any
+`GeoPoint[]`; the fixed-ness is a property of *what* the generator passes it, not a new
+parameter on `albers.ts`. The generator fits every panel to `BASEMAP_FIT_POINTS` — every
+raw coordinate in the committed geography (2,366 points), i.e. the full extent of each
+state's own landmass — and bakes the resulting screen coordinates directly into
+`basemapPaths.generated.ts`; `basemapPathsFor(panels)` takes no points at all; there is no
+per-call fit, so the coastline provably cannot move between pages. `BASEMAP_FIT_POINTS` is
+re-exported from `basemap.ts` precisely so **Task 6's per-page network map can call
+`fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])` and inherit the identical `us`/`ak`/
+`hi` fit** rather than computing its own from just that page's arcs — `basemap.test.ts`
+pins this with a fixture (SEA, well inside the conterminous landmass) proving the `us`
+fit is unchanged whether or not a subject's own point is unioned into the reference set.
+
+**RDP simplification runs on raw (lat, lon) rings, before projection**, at ε = 0.05°
+(~5.5 km at the equator) — small enough to keep every state recognizable at the map's
+~900×400 px canvas, and it materially shrinks Alaska's and Maine's especially convoluted
+coastlines. **GeoJSON rings are closed (first coordinate repeated as the last), which
+breaks the textbook Douglas–Peucker chord**: a plain RDP call measuring perpendicular
+distance from a ring's own first-to-last chord sees a zero-length chord for every ring, so
+the numerator is 0 for every point and the whole ring collapses to its one duplicated
+point. This was not caught by a test — it was caught by running the generator once and
+reading its own output (every state came out as `M x,y L x,y Z`). The fix
+(`rdpRing` in `build-basemap.mjs`) splits each ring at its own midpoint-by-index into two
+open polylines sharing two genuinely distinct endpoints, runs ordinary RDP on each, and
+splices the results back into a closed ring.
+
+**Byte-stability is proven, not assumed**: `make basemap` run twice (before, and again
+after an unrelated lint fix) produced byte-identical output (`sha256sum` matched both
+times), and `make verify` now runs `make basemap` and `git diff --exit-code --stat
+app/src/lib/map/basemapPaths.generated.ts` after its own double-build proof, failing the
+gate on any drift. The mutant the brief names — injecting `Math.random()`-derived jitter
+into the coordinate formatter — was run and reverted: it reddened the `git diff
+--exit-code` check (exit 1, a 3-line coordinate diff) as claimed; reverting restored exit 0.
+
+`basemap.test.ts` adds 7 tests (the 3 the brief specifies, plus 4 written against the
+fixed-reference-points property and the documented `pac`/`car` gap) — a thin-reader test
+suite, since the generator's own reproducibility is what the `make verify` gate and the
+mutant above prove, not something a unit test re-running the same in-process function could
+observe (a byte-diff is a property of two separate `node` invocations). `make goldens`
+untouched — this task added no pivot SQL.
+
+**Carried forward, not resolved here**: Task 4's own note that the `pac`/`car`
+`PANEL_RECTS` placement is a default, not settled, stands unchanged — this task neither
+confirms nor repositions it, since neither panel has any basemap geometry to render inside
+its rectangle yet.
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command

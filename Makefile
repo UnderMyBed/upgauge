@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install ingest build goldens dev app-check app-build app-smoke test lint fmt check clean
+.PHONY: help install ingest build goldens basemap dev app-check app-build app-smoke test lint fmt check clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -29,8 +29,10 @@ normalize:  ## Raw zips -> data/parquet/t100_segment/year=YYYY/
 warehouse:  ## Build facts + all dims from data/raw/ -> data/parquet/
 	$(UV) run python -m pipeline.build $(ARGS)
 
-verify:  ## M2 GATE: build twice, prove every Parquet artifact AND database object is byte-identical
+verify:  ## M2 GATE: build twice, prove every Parquet artifact AND database object is byte-identical; also proves the basemap regenerates byte-identically (M7 Task 7)
 	$(UV) run python -m pipeline.build --verify
+	$(MAKE) basemap
+	git diff --exit-code --stat app/src/lib/map/basemapPaths.generated.ts
 
 ingest: fetch fetch-reference warehouse  ## Fetch + build everything. The full M1 pipeline.
 
@@ -39,6 +41,9 @@ build:  ## Run sql/02_marts/ in order -> upgauge.duckdb
 
 goldens:  ## Regenerate the Explorer contract fixtures from the reference implementation
 	$(UV) run python -m pipeline.pivot --write-goldens
+
+basemap:  ## Regenerate the pre-projected basemap (app/src/lib/map/basemapPaths.generated.ts) from the committed app/geo/ne_110m_us.json
+	$(MISE) node --no-warnings app/scripts/build-basemap.mjs
 
 dev:  ## Next.js dev server
 	# `next dev app` from the REPO ROOT, not `npm --prefix app run dev`. The --prefix form
