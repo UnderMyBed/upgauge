@@ -7,6 +7,7 @@ import { airportSlugFromPath } from "@/lib/airport";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
+import { presetSlugFromPath, presetBySlug } from "@/lib/watch";
 import { loadAllowlist } from "@/lib/db";
 
 // `proxy`, not `middleware`: Next 16 deprecated and renamed the convention
@@ -142,6 +143,31 @@ export async function proxy(request: NextRequest) {
     response.headers.set(
       "Cache-Control",
       (await isDataLayerHealthy()) ? PROJECT_CACHE : NO_STORE,
+    );
+    return response;
+  }
+  // M6 Task 7. `/watch`'s presets are a STATIC, closed set (`PRESETS` in lib/watch.ts, four
+  // entries, never grows from a request) -- unlike an ENTITY_ROUTES row there is no id to
+  // resolve against the warehouse, so the allow-list alone can answer "is this a well-formed,
+  // known page" with no database read at all. That is necessary but NOT SUFFICIENT: every
+  // preset page runs a mart_route_health query (WatchPresetView's runPreset()), and this file
+  // still commits to a Cache-Control header BEFORE the page runs. A slug allow-list with no
+  // probe would happily stamp HTML_CACHE on a page about to 500 -- this is the exact bug M5's
+  // final whole-branch review found on /sitemap.xml (F4, above): that branch set PROJECT_CACHE
+  // unconditionally, justified by "it takes no user input", even though app/sitemap.ts runs
+  // four DuckDB queries that throw by design. Same reasoning here, same fix: gate on
+  // isDataLayerHealthy() regardless of how closed the slug set is. Declining to cache costs a
+  // cache miss; skipping the probe costs a 500 pinned in a shared CDN cache for up to an hour.
+  //
+  // Unknown preset -> NO_STORE unconditionally, same as every ENTITY_ROUTES 404: the dataset
+  // is rebuilt monthly, so a 404 pinned in a shared cache outlives the condition that caused
+  // it. `/watch` itself (the index, no slug) is always "known" -- there is no id to fail to
+  // resolve for the bare path -- so its ONLY gate is the health probe.
+  if (pathname === "/watch" || presetSlugFromPath(pathname) !== null) {
+    const known = pathname === "/watch" || presetBySlug(presetSlugFromPath(pathname)!) !== null;
+    response.headers.set(
+      "Cache-Control",
+      known && (await isDataLayerHealthy()) ? HTML_CACHE : NO_STORE,
     );
     return response;
   }
@@ -304,8 +330,12 @@ async function isCacheable(
   }
 }
 
-/** The HTML page routes' Cache-Control -- `/explore` and every `ENTITY_ROUTES` page -- and
- * ONLY those. Do not reuse this for `/api/pivot` (it already sets its own, and stays at the
+/** The HTML page routes' Cache-Control -- `/explore`, every `ENTITY_ROUTES` page, and (M6 Task
+ * 7) `/watch` plus every `/watch/:preset` -- and ONLY those. `/watch`'s pages belong here for
+ * the identical reason `/explore` does: each preset page reads live `mart_route_health` state
+ * per request (`WatchPresetView`'s `runPreset()`), not a fixed catalog query the way
+ * `/sitemap.xml`/`robots.txt` do, so it carries the same per-request-resolution risk this
+ * shortened value exists to bound. Do not reuse this for `/api/pivot` (it already sets its own, and stays at the
  * project's full `s-maxage=2592000`, see route.ts) or for `/sitemap.xml`/`robots.txt` (M5 Task
  * 8, below: `PROJECT_CACHE`, not this constant -- neither reads live warehouse state per
  * request the way an entity page's pivot does, so neither carries the risk this shortened
@@ -370,9 +400,14 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // build, a unit test, or a rendered page -- only `app/smoke.sh` sees them, which is why every
 // row here has a served-build header assertion and a served-build `no-store` assertion there.
 //
-// NINE entries as of M5 Task 8 (was six through M4d) -- `/search`, `/sitemap.xml` and
-// `/robots.txt` added here. `app/sitemap.ts` is a single default export (23,689 URLs is well
-// under the sitemap protocol's 50,000-per-file limit -- see that file's own header), not
+// ELEVEN entries as of M6 Task 7 (was nine through M5 Task 8) -- `/watch` and `/watch/:preset`
+// added here. `/watch` is an exact-path entry, same reasoning as `/search`/`/sitemap.xml`/
+// `/robots.txt`: one literal pathname, not a dynamic segment. `/watch/:preset` IS a dynamic
+// segment, same shape as the four ENTITY_ROUTES entries -- but it has no ENTITY_ROUTES row of
+// its own, because its cacheability branch (above) answers "known" from the static `PRESETS`
+// registry rather than a database resolve(). `app/sitemap.ts` is a single default export
+// (23,694 URLs -- was 23,689 through M5, +5 for `/watch` and its four presets -- well under
+// the sitemap protocol's 50,000-per-file limit, see that file's own header), not
 // `generateSitemaps()`'s multi-file convention, so there is exactly one `/sitemap.xml` route to
 // list, not a family of numbered children.
 export const config = {
@@ -386,5 +421,7 @@ export const config = {
     "/search",
     "/sitemap.xml",
     "/robots.txt",
+    "/watch",
+    "/watch/:preset",
   ],
 };

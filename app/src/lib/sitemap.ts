@@ -1,10 +1,11 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { connect } from "@/lib/db";
+import { connect, dataAsOf } from "@/lib/db";
 import { AIRPORT_PREFIX } from "@/lib/airport";
 import { CARRIER_PREFIX } from "@/lib/carrier";
 import { AIRCRAFT_PREFIX, slugFor } from "@/lib/aircraftSlug";
 import { routeHrefFromCodes } from "@/lib/entityLink";
+import { PRESETS, WATCH_PREFIX } from "@/lib/watch";
 
 // Same anchor, same reason, as db.ts's ROOT / resolve.ts's ROOT: process.cwd() is correct in
 // production; Vitest gets a chdir of its own from vitest.config.ts's setupFiles.
@@ -15,7 +16,7 @@ function sql(name: string): string {
   return readFileSync(path.join(QUERIES_DIR, `${name}.sql`), "utf8");
 }
 
-export type SitemapKind = "routes" | "airports" | "carriers" | "aircraft";
+export type SitemapKind = "routes" | "airports" | "carriers" | "aircraft" | "watch";
 
 export interface SitemapEntry {
   url: string;
@@ -139,12 +140,38 @@ async function aircraftEntries(): Promise<SitemapEntry[]> {
   }));
 }
 
+/** `/watch` plus its four presets (M6 Task 7) -- five URLs, ALL dated by the dataset's own
+ * `asOf` month, deliberately NOT the per-entity last-filed month the four functions above use.
+ * The distinction those functions draw (`/carrier/VX`'s own header, immediately below) exists
+ * because an entity page's content is anchored to what THAT entity filed, so its own last-filed
+ * month is the honest "this changed last" answer and the build date would lie about a dormant
+ * carrier. None of that applies here: `/watch` and every preset are dataset-WIDE views over
+ * `mart_route_health`'s current trailing-12 window (`lib/watch.ts`'s `runPreset()`) -- there is
+ * no single underlying entity whose own filing date could anchor them, and the one date that
+ * actually describes "what this leaderboard is current as of" is the same `asOf` value the
+ * page's own `DATA AS OF` badge shows. Reusing `parseLastmod` (rather than constructing a `Date`
+ * inline) keeps the one malformed-input guard shared across every sitemap section instead of a
+ * fifth copy of it. */
+async function watchEntries(): Promise<SitemapEntry[]> {
+  const asOf = await dataAsOf();
+  const lastModified = parseLastmod(`${asOf}-01`, "watch");
+  const watchIndexUrl = WATCH_PREFIX.slice(0, -1); // "/watch/" -> "/watch"
+  return [watchIndexUrl, ...PRESETS.map((slug) => `${WATCH_PREFIX}${slug}`)].map((url) => ({
+    url,
+    lastModified,
+  }));
+}
+
 /** Every URL for one section of the crawl graph, with the entity's own last-filed month as
  * `lastModified` -- never the build date (see sitemap_*.sql: `lastmod` is `max(year_month)`
  * per entity, not `data_as_of.sql`'s single dataset-wide value). `/carrier/VX` (Virgin
  * America, last filed 2018-03) is the fixture this distinction needs: an active entity's last
  * filed month and the current window coincide, so a bug that reports the build date instead
- * would still pass a test anchored on an active carrier. */
+ * would still pass a test anchored on an active carrier.
+ *
+ * `"watch"` (M6 Task 7) is the one kind that does NOT follow that rule, on purpose --
+ * `watchEntries()`'s own header explains why a dataset-wide view has no per-entity date to
+ * anchor to and uses `asOf` instead. */
 export async function sitemapEntries(kind: SitemapKind): Promise<SitemapEntry[]> {
   switch (kind) {
     case "routes":
@@ -155,5 +182,7 @@ export async function sitemapEntries(kind: SitemapKind): Promise<SitemapEntry[]>
       return carriersEntries();
     case "aircraft":
       return aircraftEntries();
+    case "watch":
+      return watchEntries();
   }
 }

@@ -20,21 +20,26 @@ export const dynamic = "force-dynamic";
 
 /** The full crawl graph: every entity page this dataset can serve today, each dated by its
  * OWN last-filed month rather than the build date (`@/lib/sitemap`'s header explains why that
- * distinction needs a dormant-entity fixture, not an active one, to catch a regression).
+ * distinction needs a dormant-entity fixture, not an active one, to catch a regression) --
+ * except the five `"watch"` URLs, dated by the dataset's `asOf` month instead
+ * (`watchEntries()`'s own header explains why a dataset-wide leaderboard has no per-entity
+ * filing date to anchor to).
  *
- * 23,689 URLs, quarantine-inclusive throughout (`sql/03_queries/sitemap_routes.sql`'s header:
- * a quarantined row is still a real filing and a real 200-serving page) --
- * `docs/product/scope.md` § D2 records the breakdown: 22,420 routes + 1,045 airports +
- * 114 carriers + 110 aircraft. Well under Google's 50,000-URL-per-sitemap limit, so one
- * sitemap file is enough and `generateSitemaps()`'s multi-file split is not needed. */
+ * **23,694** URLs, quarantine-inclusive throughout (`sql/03_queries/sitemap_routes.sql`'s
+ * header: a quarantined row is still a real filing and a real 200-serving page) --
+ * `docs/product/scope.md` § D2 records the entity-page breakdown: 22,420 routes + 1,045
+ * airports + 114 carriers + 110 aircraft (23,689), plus M6 Task 7's `/watch` + its four
+ * presets (+5) = 23,694. Well under Google's 50,000-URL-per-sitemap limit, so one sitemap file
+ * is enough and `generateSitemaps()`'s multi-file split is not needed. */
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
-  const [routes, airports, carriers, aircraft] = await Promise.all([
+  const [routes, airports, carriers, aircraft, watch] = await Promise.all([
     sitemapEntries("routes"),
     sitemapEntries("airports"),
     sitemapEntries("carriers"),
     sitemapEntries("aircraft"),
+    sitemapEntries("watch"),
   ]);
-  return [...routes, ...airports, ...carriers, ...aircraft].map((entry) => ({
+  return [...routes, ...airports, ...carriers, ...aircraft, ...watch].map((entry) => ({
     url: `${BASE_URL}${entry.url}`,
     lastModified: entry.lastModified,
   }));
