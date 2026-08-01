@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import { cache } from "react";
+import { headers } from "next/headers";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveAirportCode } from "./resolveAirport";
+import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { BASE_URL } from "@/lib/siteUrl";
 import {
   AIRPORT_ENDPOINT_LIMIT,
@@ -458,6 +460,27 @@ export async function generateMetadata({
   return { alternates: { canonical: `${BASE_URL}/airport/${canonical}` } };
 }
 
+/** The redirect target for a case-normalized airport code, carrying the ORIGINAL raw query
+ * string through UNCHANGED.
+ *
+ * Fix round 1 finding: `AirportPage` used to build `/airport/${canonical}` from the slug
+ * alone, silently dropping every query key -- `/airport/sea?y=2019` 308ed to `/airport/SEA`
+ * with `y` gone entirely, and the destination silently rendered the trailing-12 default
+ * instead of 2019, with no error anywhere. That is precisely the "silently renders a
+ * different query than the URL encodes" failure this project refuses everywhere else --
+ * it is why `/explore`'s decode is total (never a fallback to a default view) and why an
+ * out-of-range `y` here renders a named error rather than quietly reverting.
+ *
+ * The query is appended VERBATIM from the raw string, never reconstructed from parsed
+ * `searchParams` -- reassembling a query from decoded params is exactly the re-encoding
+ * corruption `lib/rawQuery.ts`'s whole header exists to prevent (CLAUDE.md's `proxy.ts`
+ * section: a comma or colon in a value becomes indistinguishable from a separator once
+ * decoded and re-serialized). An empty raw query (no `?` at all on the original request)
+ * appends nothing, so a bare `/airport/sea` still redirects to the bare `/airport/SEA`. */
+export function airportRedirectTarget(canonical: string, rawQuery: string): string {
+  return rawQuery.length > 0 ? `/airport/${canonical}?${rawQuery}` : `/airport/${canonical}`;
+}
+
 /** Thin wrapper: resolve the slug, handle the three-way result, hand the "ok" case to
  * `AirportView`. Same split, same reason, as `RoutePage`/`RouteView`. */
 export default async function AirportPage({
@@ -478,7 +501,16 @@ export default async function AirportPage({
     // 308, not 307: /airport/SEA IS the canonical URL for this airport, not a temporary
     // relocation. route/[pair]/page.tsx's comment records where that is pinned in Next's own
     // source; page.test.tsx pins the exact digest here too.
-    permanentRedirect(`/airport/${resolved.canonical}`);
+    //
+    // Fix round 1: the raw query string must survive this redirect, or `?y=<year>` is
+    // silently lost on a miscased code (`airportRedirectTarget`'s own doc comment has the
+    // full account). Read off the same `RAW_QUERY_HEADER` proxy.ts sets, never off
+    // `searchParams` -- by the time this branch runs, `searchParams` has not been read yet,
+    // and even if it had, reconstructing a query string from decoded params is the exact
+    // corruption this header exists to avoid.
+    const requestHeaders = await headers();
+    const rawQuery = rawQueryFromHeaders(requestHeaders);
+    permanentRedirect(airportRedirectTarget(resolved.canonical, rawQuery));
   }
   if (resolved.kind === "notFound") {
     notFound();

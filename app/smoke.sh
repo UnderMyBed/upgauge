@@ -474,6 +474,15 @@ check     "airport: redirect targets canonical" "$LOC"  '/airport/SEA'
 # 404s no-store. That is the correct split: the redirect is a fact about the string.)
 check     "airport: 308 keeps the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
+# Fix round 1 (M7 Task 9 review): a handler returning a redirect Response object and a served
+# app returning one over the wire are not the same claim -- this is the smoke half of the
+# unit-tested "preserves a valid year query param across the case-normalization redirect", and
+# the reason this repo keeps app/smoke.sh at all. Without this check, a served build could still
+# silently drop `?y=2019` on this exact path with every other gate green.
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/sea?y=2019")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check "airport?y: the case-redirect preserves the query string, not just the code" "$LOC" '/airport/SEA?y=2019'
+
 for A in ZZZZ LHR; do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/airport/${A}")
   HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/${A}")

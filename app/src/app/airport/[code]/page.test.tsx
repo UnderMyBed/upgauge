@@ -1,8 +1,30 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+
+// `next/headers` throws "called outside a request scope" when invoked directly in a test
+// (verified against this exact vitest setup before writing this mock) -- the same reason
+// explore/page.tsx's default export, which also calls `headers()` unconditionally, is never
+// unit-tested directly here, only its `*View` counterpart is. AirportPage now needs `headers()`
+// on its redirect branch (fix round 1: preserving the raw query string across a
+// case-normalization redirect), and that branch IS already exercised by the pre-existing
+// "redirects a lowercase code" test below, so it has to be mocked rather than left real. The
+// factory awaits a dynamic `import()` of the real module for `RAW_QUERY_HEADER` -- a top-level
+// `import` binding referenced inside `vi.mock` would break on hoisting, since `vi.mock` calls
+// are hoisted above every import statement in the file.
+import { describe, expect, it, vi } from "vitest";
+vi.mock("next/headers", async () => {
+  const { RAW_QUERY_HEADER } = await import("@/lib/rawQuery");
+  // Default: an empty raw query, matching a bare `/airport/<code>` request with no `?` at
+  // all -- this is what keeps every PRE-EXISTING test in this file (none of which anticipated
+  // `headers()` being called at all) passing unmodified, including the lowercase-redirect test
+  // whose digest must stay exactly `/airport/SEA`, no stray `?`.
+  return { headers: vi.fn(async () => new Headers({ [RAW_QUERY_HEADER]: "" })) };
+});
+
 import { render, screen } from "@testing-library/react";
-import AirportPage, { AirportView, generateMetadata } from "@/app/airport/[code]/page";
+import { headers } from "next/headers";
+import AirportPage, { AirportView, airportRedirectTarget, generateMetadata } from "@/app/airport/[code]/page";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
+import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { decode } from "@/lib/pivot/urlstate";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
 
@@ -259,9 +281,40 @@ describe("/airport/<code> truncation disclosure", () => {
   });
 });
 
+describe("airportRedirectTarget", () => {
+  it("appends the raw query string verbatim", () => {
+    expect(airportRedirectTarget("SEA", "y=2019")).toBe("/airport/SEA?y=2019");
+  });
+
+  it("appends nothing for an empty raw query, rather than a stray '?'", () => {
+    expect(airportRedirectTarget("SEA", "")).toBe("/airport/SEA");
+  });
+});
+
 describe("/airport/<code> redirect and 404", () => {
   it("redirects a lowercase code permanently (308) to the canonical URL", async () => {
     expect(await catchDigest("sea")).toBe("NEXT_REDIRECT;replace;/airport/SEA;308;");
+  });
+
+  // Fix round 1 finding: this redirect used to build `/airport/SEA` from the slug alone,
+  // silently dropping every query key -- `/airport/sea?y=2019` 308ed to `/airport/SEA` with
+  // no `y` at all, and the destination silently rendered the trailing-12 default instead of
+  // 2019, with no error anywhere. Asserting the digest STRING (not merely that a redirect
+  // fired, which the test immediately above already does and would keep passing under the
+  // bug) is what catches this -- "a redirect happened" is true both before and after the fix.
+  it("preserves a valid year query param across the case-normalization redirect", async () => {
+    vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: "y=2019" }));
+    expect(await catchDigest("sea")).toBe("NEXT_REDIRECT;replace;/airport/SEA?y=2019;308;");
+  });
+
+  it("preserves an INVALID year across the same redirect, rather than silently dropping it", async () => {
+    // A redirect that stripped a bad `y` would be the identical silent-fallback bug in a
+    // different coat: the canonical URL must render the SAME named error the direct URL does
+    // (pinned separately in the "M7 Task 9" describe block above, for /airport/SEA?y=1999
+    // directly), not quietly default to the trailing-12 view because the redirect erased the
+    // evidence that anything was ever wrong.
+    vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: "y=1999" }));
+    expect(await catchDigest("sea")).toBe("NEXT_REDIRECT;replace;/airport/SEA?y=1999;308;");
   });
 
   it("404s an unknown code", async () => {
