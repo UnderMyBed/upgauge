@@ -164,13 +164,24 @@ also the one that must *refuse* to link: 530 same-airport pairs carry real traff
 `/route/ORD-ORD` is a 404 by design, so a route cell whose halves match renders as text. Full
 mechanics: `docs/design/system.md` § The data table.
 
-**Two links live outside the tables**, because the tables alone left the graph half-connected —
+**Three links live outside the tables**, because the tables alone left the graph half-connected —
 `/airport/` and `/route/` were 23,465 of the sitemap's 23,689 URLs (23,694 as of M6 Task 7's
 `/watch` pages, which don't change this 23,465 numerator) with no inbound internal link
 at all, crawlable but not browsable. So `/route/<pair>`'s title block links both airport names to
 `/airport/<code>`, and the top bar's wordmark links home from every page. Both were in M5's spec
 and both were dropped when it became a plan; the whole-branch review caught them by walking the
 graph from the front door, which no per-task review could have done.
+
+**M6 re-created the same island one milestone later, and the third link is the fix.** `/watch`
+shipped with **zero** inbound internal links — nothing outside `app/watch/`, `lib/watch.ts`,
+`proxy.ts` and `sitemap.ts` referenced it, so the product's entire editorial surface was
+reachable only by typing the URL or through `/sitemap.xml`. The top bar now carries a standing
+`/watch` link (`TopBar`'s `nav.nav`, `prefetch={false}` for the wordmark's own reason), which
+covers all eleven pages in one place, and the front door names it in prose. `TopBar.test.tsx`'s
+"links to /watch from every page" is what makes removing it red. **The lesson generalizes: a
+new top-level route is not shipped until something already-reachable links to it**, and neither
+`sitemap.ts` nor `proxy.ts`'s matcher counts, because both are satisfied by a page no visitor
+can navigate to.
 
 > **Build the aircraft-type-mix chart before the load-factor chart.** Everyone does load
 > factor. The gauge story is what makes this yours.
@@ -196,8 +207,18 @@ Tied to entities, never global. A global all-routes map is a hairball.
 
 ## Insight presets (`/watch`)
 
-Saved Explorer queries with editorial framing. Each row links back into the Explorer with its
-filters pre-applied. Ship whichever three are ready first; **lead with Gauge Watch.**
+Four leaderboards over `mart_route_health` with editorial framing. Each row links back into the
+Explorer for the raw monthly rows behind it. Ship whichever three are ready first; **lead with
+Gauge Watch.**
+
+**Not saved Explorer queries.** This section, `system.md` and the shipped `/watch` index all
+said they were, through M6. They cannot be: every `meta_pivot_measures` row is a single-window
+aggregate and **no pivot measure expresses a delta** (there is no `gauge_delta` in the
+catalog), while every preset here ranks on one — Δ load factor, log Δ gauge — against the prior
+12 months, which only `mart_route_health` computes. The presets share `DataTable`'s rank column
+with the generic Top-N builder (`app/src/lib/topn.ts`) and nothing else. The claim is checkable
+by any reader who tries to reproduce Gauge Watch in `/explore` and cannot, which is why it is
+called out here rather than quietly deleted.
 
 - **Gauge Watch** — biggest upgauges/downgauges, trailing 12mo. *The differentiator.*
 - **Empty Planes** — lowest trailing-12 load factor, with a `gauge_t12 >= 50` floor (min 30
@@ -208,10 +229,30 @@ filters pre-applied. Ship whichever three are ready first; **lead with Gauge Wat
   excludes very-small-aircraft operators (e.g. a 9-seat commuter) whose load factor swings
   wildly on a handful of passengers and would otherwise dominate a "lowest LF" ranking with
   noise rather than a genuinely underperforming route.
-- **Route Birth Tracker** — first appearance of a carrier × O&D pair **since 2015**. Label it
-  that way. It is *not* "first ever" — the window starts in 2015, so a route flown in 2014 and
-  resumed in 2019 looks new. Claiming "first ever" is exactly the false precision the honesty
-  rules forbid. *Cheap + fun.*
+
+  **Two floors, and the page must state both.** The "min 30 departures/mo" above is
+  `t12_departures_performed >= 360` in `watch_empty_planes.sql` (30 × 12), and it is the **more
+  restrictive** of the two — 12× stronger than `mart_route_health`'s own 30-per-year floor,
+  which every row already clears. Through M6 the page disclosed only `gauge_t12 >= 50`. A page
+  that enumerates its filters and omits one cannot be reproduced from what it says; Death Watch
+  carries the gauge floor and **not** this one, which is what makes the disclosure per-preset
+  rather than shared.
+- **Route Birth Tracker** — a carrier × O&D pair that filed **nothing in the prior 12 months**
+  and something in the trailing 12. Label it **re-entry, not first appearance** — and
+  emphatically not "first appearance since 2015", which is what this line said through M6 and
+  what `/watch/new-routes` told every visitor. `watch_new_routes.sql` selects
+  `p12_months_present = 0` and nothing else; `mart_route_health` carries **no lookback past the
+  prior 12 months**, so the query cannot distinguish a brand-new route from a resumed one.
+
+  Measured on the 2026-04 warehouse: **334 of the 688 qualifying rows (48.5%) filed in at least
+  one month before the p12 window**, including **17 of the 25 the page renders**. Worst case
+  `MQ AZO–ORD` — **93 distinct months filed, first filed 2015-01** — was presented as brand-new
+  service. Also `9E DTW–MDW` (55 months), `9E AUS–RDU` (53), `OH DAY–ORD` (38), `F9 LAX–ORD`
+  (31). The old reasoning here ("a route flown in 2014 and resumed in 2019 looks new") had the
+  right failure mode and stopped one rung too high: a route flown in **2023** and resumed in
+  2025 looks new too, and that is 48% of the rows. The mirror-image limitation is unchanged — a
+  route that stopped and resumed *within* the p12/t12 windows has some p12 presence and never
+  appears here at all. Both are stated on the page (`ReEntryNote`). *Cheap + fun.*
 - **Route Death Watch** — risk score desc. *Follows once the score model's in.*
 - **Time-machine diff** — "PDX, Jul 2019 vs Jul 2025." Added/dropped/upgauged side by side,
   table + diff map. *Most shareable artifact in the product.*

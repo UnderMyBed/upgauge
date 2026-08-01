@@ -39,7 +39,8 @@ describe("/route/<pair>", () => {
   // Final whole-branch review, F5: the spec required "both airport names in the title block
   // -> /airport/<code>", and it was never carried in -- `{a.name} ↔ {b.name}` rendered as
   // plain text. Measured consequence: no page in the product links to /airport/ or /route/ at
-  // all, so 23,465 of the sitemap's 23,689 URLs (/airport 1,045 + /route 22,420) have zero
+  // all, so 23,465 of the sitemap's 23,689 URLs at the time (23,694 as of M6 Task 7, whose
+  // five `/watch` pages do not change this 23,465 numerator) (/airport 1,045 + /route 22,420) have zero
   // inbound internal links. This is the fix at the one place that can carry it: both airport
   // halves of the title block link to their own /airport/<code>.
   it("links both airport names in the title block to their own /airport/<code>", async () => {

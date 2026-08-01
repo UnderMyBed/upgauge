@@ -188,11 +188,75 @@ describe("/watch/<preset>", () => {
     expect(content(container)).toContain("813 of 8,080");
   });
 
-  // The brief's own Step 2 test, verbatim intent.
-  it("says 'since 2015', never 'first ever'", async () => {
+  // Final whole-branch review (M6), CRITICAL. This test previously read:
+  //
+  //     it("says 'since 2015', never 'first ever'", ...)
+  //       expect(content(container)).toContain("since 2015");
+  //
+  // -- and it PINNED A FALSE CLAIM. The Task-6 brief asked for "first appearance since 2015"
+  // and this test enforced it, so the eighth test in this milestone unable to fail for the
+  // reason it names: it asserted a phrase, not a fact, and the phrase was wrong.
+  // watch_new_routes.sql selects `p12_months_present = 0` -- nothing filed in the PRIOR 12
+  // months -- which is a re-entry, not a first appearance. Measured on the 2026-04 warehouse:
+  // 334 of 688 qualifying rows (48.5%) filed before that window, 17 of the 25 the page renders,
+  // worst case MQ AZO-ORD at 93 distinct months back to 2015-01.
+  //
+  // The replacement asserts the accurate claim AND the absence of the false one -- the pair is
+  // the point. `toContain("...first appearance")` alone would still pass against the old
+  // wording ("First appearance since 2015"), which is exactly how the original slipped through.
+  it("states re-entry, not first appearance, and never claims 'since 2015'", async () => {
     const { container } = await renderPreset("new-routes");
-    expect(content(container)).toContain("since 2015");
-    expect(content(container)).not.toContain("first ever");
+    const text = content(container);
+    expect(text).toContain("not necessarily a first appearance");
+    expect(text).toContain("Re-entry, not first appearance");
+    expect(text).toContain("334 of the 688");
+    expect(text).not.toContain("since 2015");
+    expect(text).not.toContain("first ever");
+  });
+
+  it("states the prior-12 window it actually tests, derived from asOf rather than written out", async () => {
+    // The window moves every monthly rebuild. A hardcoded "2024-05 to 2025-04" would be a
+    // second false claim on the same page one rebuild later, so ReEntryNote computes it --
+    // this pins that it is computed AND consistent with the DATA AS OF badge the page shows.
+    const { container } = await renderPreset("new-routes");
+    const asOf = screen.getByText(/DATA AS OF/).textContent!.replace("DATA AS OF ", "").trim();
+    const [y, m] = asOf.split("-").map(Number);
+    const fmt = (n: number) => {
+      const d = new Date(Date.UTC(y, m - 1 - n, 1));
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+    };
+    expect(content(container)).toContain(`prior 12 months (${fmt(23)} to ${fmt(12)})`);
+  });
+
+  it("does not claim re-entry framing on the three presets that do not select for it", async () => {
+    // The pair the two tests above need: a note that appears on every preset proves nothing
+    // about the one preset whose SQL it describes.
+    for (const slug of ["gauge", "empty-planes", "death-watch"] as const) {
+      const { container } = await renderPreset(slug);
+      expect(content(container)).not.toContain("Re-entry, not first appearance");
+    }
+  });
+
+  // Final whole-branch review (M6), Minor #5: Empty Planes enumerated ONE of its two floors.
+  // `t12_departures_performed >= 360` (watch_empty_planes.sql) is the more restrictive of the
+  // two, and a page that lists its filters and omits one cannot be reproduced from what it
+  // says. Death Watch is the falsifying half -- its SQL carries no departures floor at all, so
+  // a note printed on both presets would be as wrong as printing neither.
+  //
+  // The needles are anchored on the note's OWN distinguishing words, never on the bare digits:
+  // this suite already learned (the "50" mutant, task-6-report.md) that a 25-row table of real
+  // seat counts and load factors contains any three-digit substring by coincidence -- "360"
+  // appears inside a rendered `t12_seats` of 360,442 on its own.
+  it("states BOTH of Empty Planes' floors, and the departures floor only there", async () => {
+    const { container: empty } = await renderPreset("empty-planes");
+    const emptyText = content(empty);
+    expect(emptyText).toMatch(/excluded from this leaderboard/i);
+    expect(emptyText).toContain("360 performed departures");
+    expect(emptyText).toContain("t12_departures_performed >= 360");
+
+    const { container: death } = await renderPreset("death-watch");
+    expect(content(death)).not.toContain("360 performed departures");
+    expect(content(death)).not.toContain("t12_departures_performed");
   });
 
   it("404s an unknown preset rather than falling back to a default one", async () => {

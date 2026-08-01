@@ -251,6 +251,26 @@ body { background: var(--panel); color: var(--ink); }
   color: var(--ink);
   border-color: var(--ink);
 }
+/* Top-bar nav (M6 final review): the standing link to /watch, which shipped with no inbound
+   internal link at all. Sits between the wordmark and the search form, styled off `.top .search
+   button` rather than as body text -- same mono/uppercase/letter-spaced chrome vocabulary, no
+   box, so it reads as navigation and not as a control. `white-space: nowrap` for the same
+   reason `.mark` and `.asof` carry it: `.top` wraps as a whole, and a two-word nav item
+   breaking mid-label at 375px is worse than the form moving to its own line. */
+.top .nav a {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+.top .nav a:hover {
+  color: var(--signal);
+}
+
 .asof {
   font-family: var(--font-mono);
   font-size: 11px;
@@ -430,6 +450,69 @@ svg.plot {
   color: var(--signal);
   text-decoration: underline;
   text-underline-offset: 2px;
+}
+
+/* ---------- /watch: the editorial frame and the preset index (M6) ---------- */
+/* Same class of gap as `.search-results` below and `.data-table td.id a` above: `.frame` and
+   `.watch-list` shipped in M6 with NO rule anywhere in this file, so Tailwind's preflight
+   collapsed them to 16px body text and a default bulleted `<ul>`. docs/design/system.md's
+   `/watch` leaderboard section calls the frame "the only place on the site with a voice" and it
+   was rendering less distinguished than the `.foot` notes beneath it -- the disclosures were
+   out-designing the point of the page.
+
+   A left hairline in --signal, not a box: this product has no cards (system.md, "Layout and
+   density"), and the accent rule is the same device `.permalink` and `.asof` already use to
+   mark something as authored rather than tabulated. --ink, not --ink-2: the frame is the claim,
+   the notes under it are the caveats, and the colour order has to say so. */
+.frame {
+  margin: 14px 0 4px;
+  padding-left: 11px;
+  border-left: 2px solid var(--signal);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  max-width: 660px;
+}
+/* The preset index: four rows, hairline-separated, no bullets -- the same list-as-table
+   density the rest of the product uses. Each row is a linked title plus its own frame, so the
+   frame here is the muted half and the title carries the weight (the inverse of the preset
+   page, where the frame is the only voiced element on screen). */
+.watch-list {
+  list-style: none;
+  padding: 0;
+  margin: 20px 0 0;
+  max-width: 660px;
+}
+.watch-list li {
+  padding: 13px 0;
+  border-bottom: 1px solid var(--rule);
+}
+.watch-list li:first-child {
+  border-top: 1px solid var(--ink);
+}
+.watch-list h2 {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.watch-list h2 a {
+  color: var(--signal);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.watch-list li p {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  margin: 0;
+}
+/* The index's own `.frame` is introductory copy above a list, not the single voiced line a
+   preset page carries -- it keeps the accent rule and drops back to caption size so the four
+   titles beneath it stay the loudest thing on the page. */
+.watch-list-intro.frame {
+  font-size: 13px;
+  color: var(--ink-2);
 }
 
 /* ---------- /search results (M5 "connect the graph") ---------- */

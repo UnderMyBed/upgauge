@@ -1557,8 +1557,9 @@ rather than truncating silently — CLAUDE.md's empty-result rule, generalized t
 ### Task 5 — sitemap, robots.txt, and the four `lastmod` queries
 
 `app/sitemap.ts` (fed by `app/src/lib/sitemap.ts` and
-`sql/03_queries/sitemap_{routes,airports,carriers,aircraft}.sql`) emits **23,689** URLs —
-22,420 routes + 1,045 airports + 114 carriers + 110 aircraft — every count
+`sql/03_queries/sitemap_{routes,airports,carriers,aircraft}.sql`) emitted **23,689** URLs at
+M5 — 22,420 routes + 1,045 airports + 114 carriers + 110 aircraft; **23,694 as of M6 Task 7**,
+which added `/watch` and its four presets (see § M6 Task 7 below) — every count
 **quarantine-inclusive**: a quarantined row is still a real filing whose page still 200s, and
 excluding it would silently drop 4 airports, 2 aircraft types and 31 route pairs that serve
 today. `lastmod` is each entity's **own last-filed month**, `max(year_month)` per entity, never
@@ -1852,6 +1853,29 @@ sort oppositely; AS LAX–OGG leads Upgauging, DL BOS–CVG leads Downgauging, e
 own side and absent from the other) and the shared `/watch/nope` 404 (names the slug, `no-store`,
 never long-cached). **227 checks total (was 183 at M5), +44.**
 
+**Final whole-branch review fix wave** (one Critical, two Important, five Minor — all fixed in
+one pass; the ledger and the full report are in
+`.superpowers/sdd/2026-07-31-m6-watch-and-topn/`). The Critical was a **false claim on a shipped
+page**: `/watch/new-routes` read "First appearance since 2015" about rows that had filed for
+years, because `p12_months_present = 0` selects a **re-entry**, not a first appearance — 334 of
+688 qualifying rows (48.5%), 17 of the 25 rendered, `MQ AZO–ORD` at 93 distinct months back to
+2015-01. Corrected in the frame (`lib/watch.ts`), on the page (`ReEntryNote`, which states the
+computed prior-12 window and the measured count), in `watch_new_routes.sql`'s header, in
+`docs/product/features.md` § Insight presets and in `docs/design/system.md` § `/watch`
+leaderboard; the test that pinned the false phrase was replaced with one asserting the accurate
+claim **and** the absence of the false one, both halves mutant-verified.
+
+The two Important findings were **reachability and copy**: `/watch` had zero inbound internal
+links (fixed by `TopBar`'s `nav.nav` plus a front-door paragraph — `features.md` § the links
+outside the tables), and the index's own frame still called the presets "four saved Explorer
+queries", M6's own headline correction left standing in the one sentence a visitor reads. The
+Minors: the 23,689 → 23,694 sweep's fourth and fifth copies (§ Task 5 above and
+`sitemap.test.ts`), Empty Planes disclosing only one of its two floors (`DeparturesFloorNote`,
+`t12_departures_performed >= 360`), `.frame` and `.watch-list` having no CSS rule at all, the
+`health_score` column's left-aligned `td.id` becoming a *declared* rather than undeclared
+deviation, and a stale five-component docstring in `pipeline/tests/test_route_health.py`.
+`app/smoke.sh` gained 8 checks for the served-build halves of these — **235 total.**
+
 Two traps found writing these needles, both the same class M4c already shipped once:
 
 - **The rank column's negative check cannot be a bare `check_not ... '>0</td>'`.** Measured on
@@ -1904,7 +1928,7 @@ Two traps found writing these needles, both the same class M4c already shipped o
 which is the property Tasks 3/4's "adds no SQL" claim rests on. `make check` is **461** (447 at
 M5 + 6 Task 1 + 0 net Task 1's review round + 5 Task 2 + 1 Task 2's review round's sixth test +
 2 Task 5 = 461 — not the 460 a first pass at this arithmetic gets by counting only Task 2's
-initial commit). `make app-check` is **664**. `make verify` stays `parquet: 17 artifacts
+initial commit). `make app-check` is **670** (664 through Task 8, +6 from the final review's fix wave), and `make app-smoke` **235 checks**. `make verify` stays `parquet: 17 artifacts
 byte-identical`, `database: 10 objects identical` — M6 touched mart *content* (the composite
 formula) but not the object count.
 

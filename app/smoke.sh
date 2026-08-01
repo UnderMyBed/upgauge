@@ -854,6 +854,25 @@ check "watch: links every preset (new-routes)"   "$BODY" 'href="/watch/new-route
 check "watch: links every preset (death-watch)"  "$BODY" 'href="/watch/death-watch"'
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/watch")
 check "watch: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+# Final whole-branch review (M6), Important #3: the shipped index told visitors the presets were
+# "Four saved Explorer queries, editorially framed" -- the exact claim M6 corrected in six other
+# places on the grounds that no pivot measure expresses a delta, so they CANNOT be Explorer
+# queries. The pair, not either half: a page printing both sentences would satisfy the positive
+# alone. Needles are pure ASCII on purpose -- the sentence's own em dash is a `&mdash;` in JSX,
+# which the compiler decodes and React emits as raw U+2014, so a needle copied from the source
+# would never match (this file's own documented dark-guard failure).
+check     "watch: refuses the 'saved Explorer queries' claim" "$BODY" 'Not saved Explorer queries'
+check_not "watch: ...and does not still make it"             "$BODY" 'Four saved Explorer queries'
+
+# Final whole-branch review (M6), Important #2: /watch shipped with ZERO inbound internal links.
+# Checked against an ENTITY page and the front door, never against /watch itself -- the index's
+# own preset links are `href="/watch/gauge"` etc., so a needle tested only there would pass on a
+# top bar that had lost the link entirely. `href="/watch"` (closing quote included) matches the
+# nav link and nothing else.
+NAVBODY=$(curl -s --max-time 15 "${BASE}/route/JFK-LAX")
+check "watch: the top bar links to it from an entity page" "$NAVBODY" 'href="/watch"'
+NAVBODY=$(curl -s --max-time 15 "${BASE}/")
+check "watch: the front door links to it in prose"         "$NAVBODY" 'href="/watch"'
 
 # 14b. /watch/gauge -- Gauge Watch, "the differentiator" (docs/product/features.md), and the
 # ONE preset that renders two tables (Upgauging / Downgauging, sorted oppositely by the same
@@ -910,6 +929,11 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/watch/empty-planes")
 check "watch/empty-planes: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 check     "watch/empty-planes: renders a carrier code"     "$BODY" '>AS<'
 check_not "watch/empty-planes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
+# Final whole-branch review (M6), Minor #5: this page enumerated ONE of its two floors. The
+# needle is the note's own words, never the bare digits -- a 25-row table of real seat counts
+# contains "360" by coincidence (t12_seats of 360,442), the same trap the "50" mutant already
+# sprang on this preset (task-6-report.md).
+check "watch/empty-planes: discloses the departures floor too" "$BODY" '360 performed departures'
 check_re     "watch/empty-planes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/empty-planes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
 
@@ -923,6 +947,15 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/watch/new-routes")
 check "watch/new-routes: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 check     "watch/new-routes: renders a carrier code"     "$BODY" '>AS<'
 check_not "watch/new-routes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
+# Final whole-branch review (M6), CRITICAL: this page told visitors "First appearance since
+# 2015" about rows that had filed for years. `p12_months_present = 0` is a RE-ENTRY -- 334 of
+# 688 qualifying rows (48.5%) and 17 of the 25 rendered had filed before the p12 window, worst
+# case MQ AZO-ORD at 93 distinct months back to 2015-01. Both halves, in the served bytes: the
+# accurate claim present AND the false one gone. All-ASCII needles for the reason above; the
+# frame itself is a plain TS string literal (lib/watch.ts), not JSX, so it ships verbatim.
+check     "watch/new-routes: states re-entry, not first appearance" "$BODY" 'not necessarily a first appearance'
+check     "watch/new-routes: carries the measured count"            "$BODY" '334 of the 688'
+check_not "watch/new-routes: no longer claims 'since 2015'"         "$BODY" 'since 2015'
 check_re     "watch/new-routes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/new-routes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
 

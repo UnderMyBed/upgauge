@@ -658,14 +658,39 @@ frame per preset — the only place on the site with a voice. Each row carries t
 values, not just the composite score**: the components are the insight, the score is a sort
 key. Label the score plainly as a heuristic.
 
-**Not saved instances of the generic Top-N builder** (`app/src/lib/topn.ts`), despite reusing
-its rank column: every `meta_pivot_measures` row is a single-window aggregate and no pivot
-measure expresses a delta, while these presets rank on one (Δ load factor, log Δ gauge)
-against prior-12, which only `mart_route_health` computes. The two share `DataTable`'s rank
-column and nothing else.
+**Not saved instances of the generic Top-N builder** (`app/src/lib/topn.ts`), and **not saved
+Explorer queries** — despite reusing the rank column: every `meta_pivot_measures` row is a
+single-window aggregate and no pivot measure expresses a delta, while these presets rank on one
+(Δ load factor, log Δ gauge) against prior-12, which only `mart_route_health` computes. The two
+share `DataTable`'s rank column and nothing else. **The user-facing copy has to say this too**,
+not just the docs: `/watch`'s own index read "Four saved Explorer queries, editorially framed"
+through M6, one milestone after the correction landed in six other places.
 
-Route Birth Tracker rows must read **"first appearance since 2015"**, never "first ever". The
-window starts in 2015.
+Route Birth Tracker rows must read **"re-entry, not first appearance"** — never "first ever",
+and **never "first appearance since 2015"**, which is what this line mandated through M6 and
+what the shipped page told every visitor. `p12_months_present = 0` means *nothing filed in the
+prior 12 months*, full stop; the mart has no lookback past that window. Measured: 334 of 688
+qualifying rows (48.5%), and 17 of the 25 rendered, had already filed earlier — `MQ AZO–ORD` in
+93 distinct months back to 2015-01. `docs/product/features.md` § Insight presets owns the rule
+and the rest of the evidence.
+
+**Every filter a preset applies is stated on the preset's own page**, in a `.foot` note, or the
+page cannot be reproduced from what it says. Empty Planes has two (`gauge_t12 >= 50` and
+`t12_departures_performed >= 360`, the latter the more restrictive) and disclosed only the
+first through M6.
+
+**`health_score` renders in a left-aligned `td.id`, not a `.num` cell** — a deliberate,
+declared exception to "all numerics right-aligned, tabular-figure". The cell's value is
+`formatHealthScore`'s output, either two decimals or the literal string "insufficient data",
+and on Route Birth Tracker it is that string on 100% of rows. `DataTable`'s `kind` is per
+column, not per cell. It keeps its monospace; it gives up the right edge. See the comment on
+`buildColumns` in `app/src/app/watch/[preset]/page.tsx`.
+
+The editorial frame is `.frame`: a left hairline in `--signal`, `--ink` text at 14px, no box.
+The preset index is `.watch-list`: hairline-separated rows, no bullets, the linked title
+carrying the weight and its frame muted to `--ink-2`. Both shipped in M6 with **no CSS rule at
+all**, which left the one voiced line on the site rendering as plain body text beneath its own
+disclosures.
 
 ### OG / social card
 

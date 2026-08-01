@@ -65,6 +65,30 @@ describe("TopBar", () => {
     expect(link?.textContent).toBe("UPGAUGE");
   });
 
+  // Final whole-branch review (M6), Important #2: /watch had ZERO inbound internal links --
+  // nothing in app/src outside app/watch/, lib/watch.ts, proxy.ts and sitemap.ts referenced it,
+  // so it was reachable only by typing the URL or through /sitemap.xml. That is the identical
+  // "crawlable but not browsable" island M5's own final review named and fixed for the entity
+  // pages (docs/product/features.md), re-created one milestone later. This test is what makes
+  // removing the link a red build rather than a silent regression: the top bar is the one
+  // surface every page renders, so this single assertion covers all eleven.
+  it("links to /watch from every page", () => {
+    const { container } = render(<TopBar asOf="2026-04" />);
+    const link = container.querySelector('nav.nav a[href="/watch"]');
+    expect(link).not.toBeNull();
+    expect(link?.textContent).toBe("Watch");
+  });
+
+  it("does not prefetch /watch", () => {
+    // Same reasoning the wordmark's own `prefetch={false}` carries, and the same reason it is
+    // load-bearing rather than a micro-optimisation: this link is above the fold on all eleven
+    // pages, and `/watch` is `force-dynamic` with a `dataAsOf()` query per request. Next's
+    // default (`auto`) would fire one origin request per page view. Read off the SOURCE, not
+    // the DOM: `prefetch` is a `Link` prop that leaves no attribute on the rendered <a>.
+    const source = readFileSync(SOURCE_PATH, "utf-8");
+    expect(source).toMatch(/<Link\s+href="\/watch"\s+prefetch=\{false\}>/);
+  });
+
   it("is a Server Component: no client directive, no onChange, no useState", () => {
     // Every other view in this product works with JS off (app/AGENTS.md). Reading the
     // source rather than the render output is deliberate -- rendering with

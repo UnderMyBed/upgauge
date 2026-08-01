@@ -72,7 +72,13 @@ const REGISTRY: ReadonlyMap<PresetSlug, Preset> = new Map([
     {
       slug: "new-routes",
       title: "Route Birth Tracker",
-      frame: "First appearance since 2015 -- new service nobody flew last year.",
+      // NOT "first appearance since 2015" -- that phrasing shipped through M6 and was false.
+      // watch_new_routes.sql selects `p12_months_present = 0`: nothing filed in the PRIOR 12
+      // months. That is a re-entry, not a first appearance, and 334 of the 688 qualifying
+      // routes (48.5%) filed in some month before that window -- MQ AZO-ORD carries 93 distinct
+      // months back to 2015-01 and still qualifies. The page's ReEntryNote states the rule and
+      // carries the measurement; docs/product/features.md § Insight presets owns it.
+      frame: "New service nobody flew last year -- a route back on the map, not necessarily a first appearance.",
       sqlFile: "watch_new_routes",
       directions: [{ heading: "Newest", direction: "desc" }],
     },

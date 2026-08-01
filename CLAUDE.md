@@ -402,7 +402,35 @@ reach this class of bug on `/watch` without hand-picking a route outside any pre
 ranking, which would test a table the product never actually renders. `XP USA-LAL` is the unit
 fixture (`watch.test.ts`), the counterpart to M5's `IFP–IAH`.
 
-**`app/smoke.sh` gained one section per preset (227 checks total, +44) and two served-build
+**The final whole-branch review's Critical was a false claim on a shipped page, and its shape is
+the one to remember: a phrase the plan mandated, pinned by a test that asserted the phrase
+rather than the fact.** `/watch/new-routes` told every visitor "First appearance since 2015"
+about rows that had filed for years. `watch_new_routes.sql` selects `p12_months_present = 0` —
+nothing filed in the **prior 12 months**, which is a **re-entry, not a first appearance**, and
+`mart_route_health` carries no lookback past that window. Measured: **334 of the 688 qualifying
+rows (48.5%)**, and **17 of the 25 the page renders**, had already filed earlier; `MQ AZO–ORD`
+carries **93 distinct months back to 2015-01**. `features.md`'s own reasoning ("a route flown in
+2014 and resumed in 2019 looks new") was right about the failure and one rung too high about the
+window — a route flown in **2023** and resumed in 2025 looks new too. The test that pinned it
+(`page.test.tsx`, `toContain("since 2015")`) is the **eighth** test in this milestone found
+unable to fail for the reason it named; its replacement asserts the accurate claim **and** the
+absence of the false one, and both halves were mutant-verified independently.
+
+**Two more from that wave are standing rules now.** (1) **A new top-level route is not shipped
+until something already-reachable links to it** — `/watch` had **zero** inbound internal links,
+one milestone after M5 existed to remove exactly that island, and neither `sitemap.ts` nor
+`proxy.ts`'s matcher counts as one. `TopBar` carries the standing link (`nav.nav`,
+`prefetch={false}`, labelled "Watch" not "Gauge Watch" — the latter is both the index's `<h1>`
+and the `gauge` preset's title, and a nav item carrying it made `getByText` ambiguous in two
+existing tests). (2) **A correction is not landed until the user-facing copy carries it**: the
+"saved Explorer queries" claim was fixed in six places (`CLAUDE.md` ×2, `features.md`,
+`system.md`, `pipeline.md` ×2, `topn.ts`) and left standing in the one sentence a visitor reads,
+on `/watch`'s own index. Same class: **a page that enumerates its filters and omits one cannot
+be reproduced from what it says** — Empty Planes disclosed `gauge_t12 >= 50` and hid
+`t12_departures_performed >= 360`, the more restrictive of the two.
+
+**`app/smoke.sh` gained one section per preset (235 checks total, +52 — 227 at M6 Task 8, plus
+the final review's eight) and two served-build
 mutants that only running the heavy gates could produce.** Mutant A (matcher entry removed,
 rebuilt, served) confirms `/watch/nope`'s 404 loses its entire message (9,941 → 7,816 bytes) and
 degrades a *healthy* page's `Cache-Control` to Next's own fallback — closing the exact gap M5's
@@ -416,8 +444,8 @@ reach `/watch/gauge` too, not only the four entity pages — confirmed as the na
 dropping `meta_pivot_dimensions` instead, which correctly 500s under `no-store`.
 
 `make check` **461** (447 at M5 + 14 net across Tasks 1, 2 and 5 — reconciled test by test, not
-assumed, in `docs/architecture/pipeline.md` § M6), `make app-check` **664**, `make app-smoke`
-**227 checks** (183 at M5). `make verify` unchanged in shape — `parquet: 17 artifacts
+assumed, in `docs/architecture/pipeline.md` § M6), `make app-check` **670** (664 at Task 8, +6
+from the final review's fix wave), `make app-smoke` **235 checks** (227 at Task 8, 183 at M5). `make verify` unchanged in shape — `parquet: 17 artifacts
 byte-identical`, `database: 10 objects identical` — M6 changed mart *content*, not object count.
 `make goldens` leaves `sql/03_queries/goldens/` byte-identical: M6 added no pivot SQL, the
 property Tasks 3/4's Top-N builder and the `/watch` presets both rest on.

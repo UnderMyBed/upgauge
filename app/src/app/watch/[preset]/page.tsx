@@ -23,10 +23,22 @@ export const dynamic = "force-dynamic";
 /** The trailing-12-month window every preset ranks over, computed from `asOf` the same way
  * mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql), and the same
  * derivation carrier/[code]/page.tsx and route/[pair]/page.tsx each carry their own copy of. */
-function trailing12From(asOf: string): string {
+function monthsBefore(asOf: string, n: number): string {
   const [y, m] = asOf.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 - 11, 1));
+  const d = new Date(Date.UTC(y, m - 1 - n, 1));
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function trailing12From(asOf: string): string {
+  return monthsBefore(asOf, 11);
+}
+
+/** The PRIOR 12-month window mart_route_health diffs against: `asOf-23 .. asOf-12`, exactly the
+ * `p12_start_month`/`p12_end_month` sql/02_marts/200_mart_route_health.sql derives. Computed
+ * from `asOf` rather than written out, so ReEntryNote below cannot state a window the mart has
+ * moved past after a monthly rebuild. */
+function prior12Window(asOf: string): { from: string; to: string } {
+  return { from: monthsBefore(asOf, 23), to: monthsBefore(asOf, 12) };
 }
 
 /** Rows per direction. Every preset's SQL already floors and filters heavily (a gauge floor, a
@@ -151,6 +163,18 @@ function buildColumns(
       href: (row) => routeLinkHref(row as unknown as WatchRow, resolved, routeCols),
     },
     { key: "op_airline_id", label: "Carrier", kind: "identifier", dimKey: "op_airline_id" },
+    // `kind: "identifier"` on a NUMERIC column is a DELIBERATE, disclosed deviation from
+    // CLAUDE.md's "all numerics monospaced, tabular-figure, right-aligned, fixed decimals" --
+    // flagged as undeclared by the final whole-branch review and declared here rather than
+    // silently changed. `__health_score` is not a number: it is `formatHealthScore`'s output,
+    // which is either a two-decimal score or the literal string "insufficient data", and on
+    // Route Birth Tracker it is that string on 100% of rows (688 of 688 -- see
+    // formatHealthScore's own docstring). DataTable's `kind` is per COLUMN, not per cell, so
+    // the alternatives are (a) right-align a column whose every cell on one preset is a
+    // sentence, or (b) teach DataTable a per-cell kind for one column on one page. Neither is
+    // worth it: `td.id` still renders mono (globals.css), so the score keeps its monospace and
+    // loses only the right edge and the tabular-figure lining. If this column ever becomes
+    // numeric-only, it should become `kind: "count"`-styled and this comment should go.
     { key: "__health_score", label: "Health score (heuristic)", kind: "identifier", derived: true },
     ...MEASURE_COLUMNS.map((c) => ({ key: c.key, label: c.label, kind: c.kind, derived: c.derived })),
     {
@@ -216,6 +240,51 @@ function GaugeFloorNote() {
       floor, tiny bush and sightseeing operators dominate with trivial absolute swings rather
       than a genuinely underperforming mainline route (gauge_t12 &gt;= 50, the CRJ-200&rsquo;s
       seat count).
+    </p>
+  );
+}
+
+/** Empty Planes carries a SECOND floor, and it is the more restrictive of the two:
+ * `t12_departures_performed >= 360` (watch_empty_planes.sql), features.md's "min 30
+ * departures/mo" restated over the trailing twelve. Death Watch does NOT carry it -- its SQL
+ * floors only on gauge -- so this note is Empty Planes' alone, not a second sentence bolted
+ * onto GaugeFloorNote.
+ *
+ * Final whole-branch review: the page enumerated the gauge floor and stopped, and a page that
+ * enumerates its filters and omits one cannot be reproduced from what it says. The mart's own
+ * 30-departures-per-12-months floor (200_mart_route_health.sql's `derived` CTE) is a different,
+ * 12x weaker thing and is not what this states. */
+function DeparturesFloorNote() {
+  return (
+    <p className="foot">
+      Routes below 360 performed departures over the trailing 12 months are also excluded
+      (t12_departures_performed &gt;= 360 &mdash; the &ldquo;min 30 departures/mo&rdquo; floor,
+      restated over twelve months). It is the more restrictive of this leaderboard&rsquo;s two
+      filters, and it is 12x stronger than mart_route_health&rsquo;s own 30-departures-per-year
+      floor, which every row in the table already clears.
+    </p>
+  );
+}
+
+/** Route Birth Tracker's own scope note, and the correction the final whole-branch review
+ * forced: this preset shipped through M6 claiming &ldquo;first appearance since 2015&rdquo;,
+ * which watch_new_routes.sql does not select and the real warehouse contradicts.
+ *
+ * `p12_months_present = 0` means nothing filed in the PRIOR 12 months and something filed in
+ * the trailing 12. mart_route_health carries no lookback past that window, so the query cannot
+ * distinguish a first appearance from a resumption -- measured, 334 of the 688 qualifying
+ * routes (48.5%) filed in some earlier month, MQ AZO-ORD as far back as 2015-01 with 93
+ * distinct months on file. The counts are written out the same way SameAirportNote's and
+ * DeathWatchScopeNote's are; the window is computed, since it moves every rebuild. */
+function ReEntryNote({ p12From, p12To }: { p12From: string; p12To: string }) {
+  return (
+    <p className="foot">
+      Re-entry, not first appearance. A route qualifies by filing nothing at all in the prior 12
+      months ({p12From} to {p12To}) and something in the trailing 12. This database carries no
+      lookback beyond that window, so it cannot tell a brand-new route from a resumed one:
+      measured, 334 of the 688 qualifying routes (48.5%) had already filed in some earlier
+      month, one of them in 93 distinct months going back to 2015-01. A route that stopped and
+      resumed <em>within</em> these two windows is excluded for the mirror-image reason.
     </p>
   );
 }
@@ -290,6 +359,7 @@ export async function WatchPresetView({ preset }: { preset: Preset }) {
   );
 
   const showGaugeFloor = preset.slug === "empty-planes" || preset.slug === "death-watch";
+  const p12 = prior12Window(asOf);
 
   return (
     <div className="wrap">
@@ -301,6 +371,8 @@ export async function WatchPresetView({ preset }: { preset: Preset }) {
             <p className="frame">{preset.frame}</p>
             <SameAirportNote />
             {showGaugeFloor ? <GaugeFloorNote /> : null}
+            {preset.slug === "empty-planes" ? <DeparturesFloorNote /> : null}
+            {preset.slug === "new-routes" ? <ReEntryNote p12From={p12.from} p12To={p12.to} /> : null}
             {preset.slug === "death-watch" ? <DeathWatchScopeNote /> : null}
             {directions.map((d) => (
               <DirectionTable

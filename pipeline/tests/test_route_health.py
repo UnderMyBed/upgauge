@@ -162,11 +162,21 @@ def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
     against real performed ones (on-demand/charter carriers). `lf_delta`-only parity holds
     on the small fixture purely because its single surviving row happens to have every
     component NULL at once -- it can't produce a route with a populated prior window AND
-    completion_factor NULL. Checking parity against ALL FIVE components is the invariant
-    that is actually true everywhere: health_score is NULL exactly when any one of them is
-    unknown, per features.md's "components are the insight, score is only a sort key" --
-    synthesising a partial score from four of five would be exactly the over-engineering
-    that forbids."""
+    completion_factor NULL.
+
+    The composite is FOUR axes, not five: M6 removed capacity_delta from the score, because
+    in log space it is exactly frequency + gauge (verified to 9.37e-16 over all 7,392 finite
+    rows -- docs/data/model.md), so scoring it scored those two a second time. It keeps its
+    column and stays on the page; it is the composite it has no place in.
+
+    The predicate below still names all FIVE displayed components, and that is deliberate,
+    not a leftover: capacity_delta is not scored, but it is NULL under the same
+    data-availability conditions as the axes that are (p12_months_present = 0, or a zero p12
+    denominator), so including it is redundant-but-true on the real warehouse and states the
+    invariant the page actually depends on -- a row missing ANY displayed component is
+    unscored, never partially scored. Synthesising a score from a subset of what it shows
+    would be exactly the over-engineering features.md's "components are the insight, score is
+    only a sort key" forbids."""
     bad = con.execute("""
         SELECT count(*) FROM mart_route_health
         WHERE (health_score IS NULL) <> (
