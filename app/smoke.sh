@@ -825,7 +825,7 @@ done
 check_re "db: proxy, page and API share ONE DuckDBInstance (open handles = 1)" "$HANDLES" '^1$'
 
 # ---------------------------------------------------------------------------------------------
-# 15. M6 Task 8: /watch and the four Top-N leaderboard presets. proxy.ts's matcher grew to
+# 14. M6 Task 8: /watch and the four Top-N leaderboard presets. proxy.ts's matcher grew to
 #     ELEVEN entries for this (M6 Task 7) -- `/watch` (exact path, same shape as `/search`) and
 #     `/watch/:preset` (dynamic segment, same shape as the four ENTITY_ROUTES rows, but gated by
 #     a static slug registry plus `isDataLayerHealthy()` rather than a per-slug resolve()). This
@@ -843,7 +843,7 @@ check_re "db: proxy, page and API share ONE DuckDBInstance (open handles = 1)" "
 #     the same reason mutant A never is anywhere else in this file (it requires editing source
 #     and rebuilding, which is a one-time verification exercise, not a repeatable gate).
 
-# 15a. /watch, the index: four links, no table, no per-slug resolution -- so only the first two
+# 14a. /watch, the index: four links, no table, no per-slug resolution -- so only the first two
 # of the five things every leaderboard page below asserts apply.
 BODY=$(curl -s --max-time 15 "${BASE}/watch")
 check "watch: renders the index"        "$BODY" '<h1>Gauge Watch</h1>'
@@ -855,7 +855,7 @@ check "watch: links every preset (death-watch)"  "$BODY" 'href="/watch/death-wat
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/watch")
 check "watch: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
-# 15b. /watch/gauge -- Gauge Watch, "the differentiator" (docs/product/features.md), and the
+# 14b. /watch/gauge -- Gauge Watch, "the differentiator" (docs/product/features.md), and the
 # ONE preset that renders two tables (Upgauging / Downgauging, sorted oppositely by the same
 # gauge_delta column -- runPreset() substitutes {{DIRECTION}} into watch_gauge.sql's ORDER BY).
 # Every check below follows the same five-things-in-order discipline §§8-12's own header
@@ -903,7 +903,7 @@ check_not "watch/gauge: ...which is not in the downgauge table"    "$DOWN_TABLE"
 check     "watch/gauge: the downgauge table leads with DL BOS-CVG" "$DOWN_TABLE" 'BOS–CVG'
 check_not "watch/gauge: ...which is not in the upgauge table"      "$UP_TABLE"   'BOS–CVG'
 
-# 15c. /watch/empty-planes -- one table, lowest load factor at a real-airliner gauge floor.
+# 14c. /watch/empty-planes -- one table, lowest load factor at a real-airliner gauge floor.
 BODY=$(curl -s --max-time 15 "${BASE}/watch/empty-planes")
 check "watch/empty-planes: renders"       "$BODY" '<h1>Empty Planes</h1>'
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/watch/empty-planes")
@@ -913,9 +913,9 @@ check_not "watch/empty-planes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
 check_re     "watch/empty-planes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/empty-planes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
 
-# 15d. /watch/new-routes -- Route Birth Tracker. Every row here has p12_months_present = 0, so
+# 14d. /watch/new-routes -- Route Birth Tracker. Every row here has p12_months_present = 0, so
 # health_score is ALWAYS NULL (100% of rows, not the exception the other three presets treat it
-# as) -- formatHealthScore's own docstring measures this; nothing to check here that §15b/c/e
+# as) -- formatHealthScore's own docstring measures this; nothing to check here that §14b/c/e
 # don't already cover about that rendering.
 BODY=$(curl -s --max-time 15 "${BASE}/watch/new-routes")
 check "watch/new-routes: renders"       "$BODY" '<h1>Route Birth Tracker</h1>'
@@ -926,7 +926,7 @@ check_not "watch/new-routes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
 check_re     "watch/new-routes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/new-routes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
 
-# 15e. /watch/death-watch -- the ONE preset whose SQL filters `health_score IS NOT NULL` itself
+# 14e. /watch/death-watch -- the ONE preset whose SQL filters `health_score IS NOT NULL` itself
 # (watch_death_watch.sql), so formatHealthScore's NULL branch is provably unreachable here.
 BODY=$(curl -s --max-time 15 "${BASE}/watch/death-watch")
 check "watch/death-watch: renders"       "$BODY" '<h1>Route Death Watch</h1>'
@@ -937,7 +937,7 @@ check_not "watch/death-watch: renders no bare AIRLINE_ID" "$BODY" '>20304<'
 check_re     "watch/death-watch: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/death-watch: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
 
-# 15f. /watch/nope -- the shared not-found path (watch/[preset]/not-found.tsx), once: unlike
+# 14f. /watch/nope -- the shared not-found path (watch/[preset]/not-found.tsx), once: unlike
 # the four entity pages, `presetBySlug` is a pure lookup against a fixed four-entry registry,
 # not a warehouse re-resolution, so there is only one reason, not a per-cause split to pair.
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/watch/nope")
@@ -956,7 +956,7 @@ check     "watch: 404 is no-store"                  "$HDRS" "no-store"
 check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize the preset .{1,10}nope"
 
 # ---------------------------------------------------------------------------------------------
-# 14. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.
+# 15. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.
 #
 # proxy.test.ts pins isDataLayerHealthy() with `vi.mock`/`mockRejectedValueOnce`: a fast, precise
 # unit test, but one that never crosses Next's own routing or a real DuckDB open the way this

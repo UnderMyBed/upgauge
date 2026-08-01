@@ -94,8 +94,10 @@ excluded, trailing 12 (2025-05 → 2026-04) and all-time (2015-01 → 2026-04):
 the sitemap** — do not quote them as "how many entity pages exist." A quarantined row
 (`load_factor > 1.0`, CLAUDE.md) is still a real filing and its page still 200s, so excluding
 it silently undercounts. `docs/product/scope.md` § D2 has the number that actually answers
-"how many entity pages get indexed" — M5's `/sitemap.xml`, **quarantine-INCLUDED**: 1,045
-airports, 114 carriers, 110 aircraft, 22,420 routes (23,689 total). Airports and carriers here
+"how many entity pages get indexed" — `/sitemap.xml`, **quarantine-INCLUDED**: 1,045
+airports, 114 carriers, 110 aircraft, 22,420 routes (23,689 total at M5; **23,694** as of M6
+Task 7, +5 for `/watch` and its four presets, which are not entity pages and are not part of
+this table's own breakdown). Airports and carriers here
 happen to be close to those figures (1,041 vs. 1,045; 114 both ways — no fact-present carrier's
 entire row history is quarantined), but **aircraft types' `110` here is a different count
 entirely and its match to the sitemap's `110` is coincidence, not agreement**: this row counts
