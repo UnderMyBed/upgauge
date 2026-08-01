@@ -11,7 +11,9 @@ import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { encode } from "@/lib/pivot/urlstate";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
-import type { CarrierRef } from "@/lib/resolve";
+import { resolutionKey, displayValue, type CarrierRef, type Resolved } from "@/lib/resolve";
+import { routeHrefFromCodes } from "@/lib/entityLink";
+import { topNQuery, topNPermalink, type TopNSpec } from "@/lib/topn";
 import type { Allowlist } from "@/lib/pivot/allowlist";
 import type { PivotQuery } from "@/lib/pivot/types";
 
@@ -93,6 +95,95 @@ function buildColumns(allowlist: Allowlist, resultColumns: string[]): ColumnSpec
       derived: allowlist.meas.get(c)?.isAdditive === false,
       dimKey: allowlist.dims.get(c)?.joinDim ? c : undefined,
     }));
+}
+
+/** M6's Top-N builder (lib/topn.ts) gives this page its first two callers. 25 clears this
+ * page's own truncation-worthy scale by a wide margin (measured: the busiest carrier's
+ * trailing-12 route count is in the low hundreds, not tens) -- this is a "top of" limit by
+ * design, not a truncation boundary, so unlike CARRIER_TYPE_LIMIT above it carries no
+ * disclosure paragraph. */
+const TOPN_LIMIT = 25;
+
+/** The route dimension's two underlying columns, same derivation as explore/page.tsx's
+ * identically-named function: read from the catalog's own `column_expr`, never hand-copied,
+ * so a renamed fact column breaks loudly at the catalog rather than silently here. */
+function routeDimColumns(allowlist: Allowlist): string[] {
+  return (
+    allowlist.dims
+      .get("route")
+      ?.columnExpr.split(",")
+      .map((c) => c.trim()) ?? []
+  );
+}
+
+/** Same three functions as explore/page.tsx's routeCodes/routeCode/routeHref, duplicated
+ * rather than shared -- this page's `buildColumns` above is already its own local copy of the
+ * same per-page column-building shape explore.tsx and route/[pair]/page.tsx each keep, and
+ * `route`'s composite id has no single dimKey to hand DataTable's generic path (DataTable.tsx's
+ * own docstring: "the page that assembles the column is the only place that knows both halves
+ * resolved"). */
+function routeCodes(
+  row: Record<string, unknown>,
+  resolved: Map<string, Resolved>,
+  columns: string[],
+): string[] {
+  return columns.map((c) => displayValue(resolved.get(resolutionKey(c, row[c])), row[c]));
+}
+
+function routeCode(
+  row: Record<string, unknown>,
+  resolved: Map<string, Resolved>,
+  columns: string[],
+): string {
+  return routeCodes(row, resolved, columns).join("–");
+}
+
+/** `null` for a row where either half didn't resolve to a real code, or where both halves
+ * resolve to the SAME code (a same-airport row -- `routePair.ts` refuses "X to itself" as a
+ * named 404, so linking there would be wrong). Same guard, same reason, as explore/page.tsx's
+ * `routeHref`. */
+function routeLinkHref(
+  row: Record<string, unknown>,
+  resolved: Map<string, Resolved>,
+  columns: string[],
+): string | null {
+  const hits = columns.map((c) => resolved.get(resolutionKey(c, row[c])));
+  if (hits.some((h) => h === undefined || h.code === null)) return null;
+  const [a, b] = hits as Resolved[];
+  if (a.code === b.code) return null;
+  return routeHrefFromCodes(a.code as string, b.code as string);
+}
+
+/** Columns for the Top routes table: one composite `__route` identifier column (the same
+ * PDX–SEA collapse explore/page.tsx renders), then the measure columns through the existing
+ * `buildColumns` machinery, with the two raw route key columns filtered out first so they don't
+ * also appear as their own bare-id columns. */
+function buildRouteColumns(
+  allowlist: Allowlist,
+  result: PivotResult,
+  routeCols: string[],
+): ColumnSpec[] {
+  return [
+    {
+      key: "__route",
+      label: allowlist.dims.get("route")?.label ?? "Route",
+      kind: "identifier",
+      href: (row: Record<string, unknown>) => routeLinkHref(row, result.resolved, routeCols),
+    },
+    ...buildColumns(
+      allowlist,
+      result.columns.filter((c) => !routeCols.includes(c)),
+    ),
+  ];
+}
+
+/** `result.rows` with the composite `__route` display string folded in, same shape as
+ * explore/page.tsx's identically-named local. */
+function routeDisplayRows(
+  result: PivotResult,
+  routeCols: string[],
+): Record<string, unknown>[] {
+  return result.rows.map((r) => ({ ...r, __route: routeCode(r, result.resolved, routeCols) }));
 }
 
 function Stat({ label, value, derived }: { label: string; value: string; derived?: boolean }) {
@@ -209,25 +300,63 @@ export async function CarrierView({
     grouping: "operating",
   };
 
-  // CONCURRENT, not two sequential awaits -- the two pivots share nothing and `connect()`
-  // hands each its own DuckDBConnection off the single memoized instance. Same measurement,
-  // same reasoning, as route/[pair]/page.tsx (docs/architecture/hosting.md § What the proxy's
-  // query actually costs).
+  // The Top-N builder's first two callers (M6 Task 4, lib/topn.ts). `topNQuery` sorts on
+  // measures[0] descending and defaults grouping to "operating" -- the same subject-is-the-
+  // grain choice `query` above makes explicitly, so these inherit it without restating it.
+  //
+  // originsSpec is ORIGIN ONLY, not "airports served": the pivot has no either-endpoint filter
+  // (an origin-OR-dest question -- that is M6 backlog item 1, not built), so a carrier's
+  // destination-only airports are invisible to this table. The heading below says "origin" and
+  // the page states the limitation in words -- the same failure shape as /airport's measured
+  // 26,710,000-vs-53,373,806 seats when a union term was dropped (CLAUDE.md).
+  const routesSpec: TopNSpec = {
+    grain: "route",
+    dimension: "route",
+    measures: ["seats", "departures_performed", "load_factor", "avg_gauge"],
+    timeFrom: TRAILING_12_FROM,
+    timeTo: asOf,
+    filters: [["op_airline_id", [filterValue]]],
+    limit: TOPN_LIMIT,
+  };
+  const originsSpec: TopNSpec = {
+    grain: "segment",
+    dimension: "origin_airport_id",
+    measures: ["seats", "departures_performed", "load_factor", "avg_gauge"],
+    timeFrom: TRAILING_12_FROM,
+    timeTo: asOf,
+    filters: [["op_airline_id", [filterValue]]],
+    limit: TOPN_LIMIT,
+  };
+
+  // CONCURRENT, not sequential awaits -- all four pivots share nothing and `connect()` hands
+  // each its own DuckDBConnection off the single memoized instance. Same measurement, same
+  // reasoning, as route/[pair]/page.tsx (docs/architecture/hosting.md § What the proxy's query
+  // actually costs); the two Top-N pivots join the SAME Promise.all rather than adding a
+  // sequential await after it.
   //
   // The mix takes the FULL window, not `query`'s trailing 12: a twelve-point stacked area of a
   // carrier's fleet says almost nothing, and the arrival of the A321 and the 737-9 across a
   // decade is the entire point of putting a chart on this page. The two windows are genuinely
   // different, which is why the `.window` line below names both.
-  const [result, mix]: [PivotResult, Awaited<ReturnType<typeof fetchAircraftMix>>] =
-    await Promise.all([
-      runPivot(query),
-      fetchAircraftMix([["op_airline_id", [filterValue]]], EARLIEST_MONTH, asOf),
-    ]);
+  const [result, mix, routesResult, originsResult]: [
+    PivotResult,
+    Awaited<ReturnType<typeof fetchAircraftMix>>,
+    PivotResult,
+    PivotResult,
+  ] = await Promise.all([
+    runPivot(query),
+    fetchAircraftMix([["op_airline_id", [filterValue]]], EARLIEST_MONTH, asOf),
+    runPivot(topNQuery(routesSpec)),
+    runPivot(topNQuery(originsSpec)),
+  ]);
 
   const totals = carrierTotals(result.rows);
   const truncated = result.rows.length >= limit;
   const isEmpty = result.rows.length === 0;
   const hasMix = mix.length > 0;
+  const routeCols = routeDimColumns(allowlist);
+  const hasRoutes = routesResult.rows.length > 0;
+  const hasOrigins = originsResult.rows.length > 0;
 
   // The range the chart can DRAW, which is not the range it was fetched over. 45 of 114
   // fact-present carriers last filed before the trailing-12 window, so a chart whose x axis
@@ -242,6 +371,9 @@ export async function CarrierView({
   const chartWindow = `chart: ${drawsFullWindow ? "the full window · " : ""}${drawnFrom} → ${drawnTo}`;
 
   const columns = buildColumns(allowlist, result.columns);
+  const routeTableColumns = hasRoutes ? buildRouteColumns(allowlist, routesResult, routeCols) : [];
+  const routeTableRows = hasRoutes ? routeDisplayRows(routesResult, routeCols) : [];
+  const originColumns = hasOrigins ? buildColumns(allowlist, originsResult.columns) : [];
 
   return (
     <div className="wrap">
@@ -287,6 +419,48 @@ export async function CarrierView({
                 Showing the top {limit} aircraft types by seats; the totals above cover only
                 these rows.
               </p>
+            )}
+            {/* The Top-N builder's first two callers (M6 Task 4). Gated on each table's OWN
+                row count, not on `isEmpty` above -- a carrier with nothing in the trailing 12
+                months has nothing in either of these groupings either, but deriving that from
+                a different query's emptiness would be a guess this page doesn't need to make. */}
+            {hasRoutes && (
+              <>
+                <h2>Top routes</h2>
+                <DataTable
+                  columns={routeTableColumns}
+                  rows={routeTableRows}
+                  resolved={routesResult.resolved}
+                  rank
+                />
+                <p className="foot">
+                  <a href={topNPermalink(routesSpec)}>Open the routes query in the Explorer</a>{" "}
+                  for the identical query.
+                </p>
+              </>
+            )}
+            {hasOrigins && (
+              <>
+                <h2>Top origin airports</h2>
+                <DataTable
+                  columns={originColumns}
+                  rows={originsResult.rows}
+                  resolved={originsResult.resolved}
+                  rank
+                />
+                <p className="foot">
+                  This table counts departures from each airport as the ORIGIN only, not
+                  either-endpoint activity -- the pivot filters origin and destination
+                  separately, and there is no either-endpoint filter yet (M6 backlog). An
+                  airport {carrier.code} only ever flies INTO does not appear here.
+                </p>
+                <p className="foot">
+                  <a href={topNPermalink(originsSpec)}>
+                    Open the origin airports query in the Explorer
+                  </a>{" "}
+                  for the identical query.
+                </p>
+              </>
             )}
             {/* The two claims this page cannot omit, both CLAUDE.md hard rules, both stated
                 about THIS carrier rather than in the abstract -- and rendered whether or not

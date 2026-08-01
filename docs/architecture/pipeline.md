@@ -1271,10 +1271,25 @@ other-endpoint ids including itself, 143 without.
 
 The composition is `/route`'s, one dimension over: title block, stat strip, full-window
 aircraft-mix chart, trailing-12 table, Explorer link, legend rail. The table is **aircraft
-types operated** (17 for DL, measured) because the fleet is this product's subject; the routes
-(1,873) and airports (186) a carrier touches both want the Top-N builder, which does not exist.
+types operated** (17 for DL, measured) because the fleet is this product's subject.
 `AircraftMixChart` mounts unchanged — the page is a filter on `op_airline_id`, not a new
 dimension — so nothing in M4c had to move.
+
+**M6 Task 4 gave this page its Top-N builder's first two callers** (`lib/topn.ts`, built in
+Task 3): a **Top routes** table and a **Top origin airports** table, each `topNQuery`
+(dimension = the grouping, `measures[0]` sorted descending, `grouping: "operating"` by
+default) filtered on this page's own `op_airline_id`, limit 25, joining the page's existing
+`Promise.all` rather than adding a sequential await. Routes use the builder directly — DL
+touches 1,873 distinct routes over the trailing 12 months (measured), so the table is a top-25
+view of that, not the whole set. **Airports are `origin_airport_id` only, headed "Top origin
+airports", never "airports served."** The pivot has no either-endpoint filter — that is M6
+backlog item 1, not built — so a table asking "which airports did this carrier touch" would
+need `origin OR dest`, and rendering it from an origin-only query would repeat the exact
+failure class `/airport` already paid for: dropping a union term read SEA at 26,710,000 seats
+instead of 53,373,806. For DL, origin-only counts 186 airports (measured) against 188
+either-endpoint airports — a small gap today, but the heading has to be honest about which
+question the query answers regardless of how large the gap happens to measure. The page states
+the limitation in words under the table, not just in the heading.
 
 **Two `CLAUDE.md` hard rules stop being background here and become the page's own claims,
 because the entity *is* the carrier.** Both read as bugs if left unsaid:
