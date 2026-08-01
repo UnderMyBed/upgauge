@@ -252,6 +252,26 @@ So `/airport` computes `origin + dest − (origin ∧ dest)`, with the third ter
 (`app/src/app/airport/[code]/endpoints.ts`); the M4d design spec's claim that a segment with
 one airport at both ends "does not exist" is true of route identity above and false here.
 
+**A count of an airport's distinct destinations includes the airport itself unless it is
+explicitly excluded, and the two answers are both defensible — so an unlabelled one is not
+evidence.** This is the same-airport rows above surfacing as an off-by-one in a *count* rather
+than in a sum. Measured over the trailing 12 (2025-05 → 2026-04), quarantined rows excluded:
+
+| Airport | Distinct far-endpoints | Excluding the airport itself | Its own same-airport rows |
+|---|---:|---:|---|
+| SEA | 144 | **143** | 18 rows / 12,646 seats |
+| ORD | 268 | **267** | 53 rows / 73,082 seats |
+
+The bolded column is what `endpoints.ts` commits for SEA (143) and what a map of the airport's
+network can draw, since a same-airport filing has no second endpoint to draw an arc *to*: its
+great circle has zero length. The unbolded column is what the naive `count(distinct
+far_endpoint)` returns.
+
+**A fixture built on an airport with no same-airport rows cannot catch this** — but 359 of the
+1,045 fact-present airports have at least one in the trailing 12 window (the `359` in the table
+above), so the population that can catch it is a third of all airports, not a curiosity. SEA and
+ORD are both in it.
+
 **Route storage order (by airport ID) and the alphabetical order a person would type
 disagree for 154 of 22,420 routes (0.69%, excluding the 530 same-airport "routes" just
 above, which are not routes)** — e.g. `HPN` (12197) and `BNH` (16954): id order is
@@ -538,6 +558,46 @@ but the same test rejects a plausible near-miss: an `origin`-only predicate lose
 destination-only airports. Two other rewrites were measured and rejected: `id IN (origins) OR
 id IN (dests)` is 80 ms (two mark joins, no shared scan), and `UNION ALL` in place of `UNION`
 is 21–22 ms (6.7 M probe values instead of 1,045 distinct ones).
+
+### Airport coordinates, and the six that are east of the antimeridian
+
+Measured 2026-08-01 against the 1,045 fact-present airports (`fct_segment_month`'s origin ∪
+dest, joined on `is_latest`). Recorded here because anything that places an airport
+geographically depends on both facts, and neither is guessable from the schema.
+
+**Every fact-present airport has coordinates.** `lat` and `lon` are NULL for **0** of the
+1,045. A geographic view needs no "not drawn, coordinates missing" disclosure, which is
+otherwise exactly the kind of gap this repo insists on stating.
+
+**Six carry a POSITIVE longitude**, and a naive `lon < some_western_bound` test silently
+misfiles all of them:
+
+| Code | Name | State | Lat | Lon |
+|---|---|---|---:|---:|
+| GUM | Guam International | TT | 13.48 | 144.80 |
+| UAM | Andersen AFB | TT | 13.58 | 144.93 |
+| ROP | Benjamin Taisacan Manglona International | TT | 14.17 | 145.24 |
+| TIQ | Francisco Manglona Borja Tinian International | TT | 15.00 | 145.62 |
+| SPN | Francisco C. Ada Saipan International | TT | 15.12 | 145.73 |
+| **SYA** | **Eareckson AS (Shemya)** | **AK** | **52.71** | **174.11** |
+
+**SYA is the trap.** It is in *Alaska*, and the western Aleutians cross the antimeridian, so a
+predicate of the shape "Alaska means `lon < −129`" excludes a genuinely Alaskan airport while
+handing it to whatever branch catches everything else. Normalizing `lon > 0 → lon − 360` puts
+Shemya at −185.9°, contiguous with the rest of the Aleutian chain (which reaches −176.6°), and
+Guam at −215.2°.
+
+Two further groupings that a "lower 48 / Alaska / Hawai'i" split gets wrong, for the same
+reason — the fallback branch catches whatever the two explicit tests miss:
+
+- **American Samoa is in the southern hemisphere.** PPG (Pago Pago) is at **−14.3°** latitude,
+  and Midway (MDY) at 28.2° / −177.4°. A `lon < −150 AND lat < 30` test for Hawai'i catches
+  both, giving a "Hawai'i" population spanning 42° of latitude when Hawai'i itself spans 2.3°.
+- **Puerto Rico and the USVI extend the conterminous bounding box in BOTH directions**, so no
+  single rectangle holds them and the lower 48 legibly. They span lat 17.70 → 18.49 and lon
+  −67.15 → −64.71, against a conterminous fact-present extreme of **PQI (Maine, −68.05°)** in
+  the east and **EYW (Key West, 24.56°)** in the south. Every one of them is therefore east of
+  every airport in the lower 48 — by up to 3.34° — *and* 6.86° south of the southernmost.
 
 ### The other two reverse lookups (M4d)
 
