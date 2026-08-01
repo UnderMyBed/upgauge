@@ -209,14 +209,32 @@ def test_the_z_clamp_is_null_safe(con):
     assert leaked == 0
 
 
-def test_health_score_is_always_finite(con):
-    """ln() of a zero gauge is -inf, which sorts to the top of Death Watch and survives the
-    clamp only because least() also bounds infinities. The nullif()s are what stop it."""
-    bad = con.execute("""
-        SELECT count(*) FROM mart_route_health
-        WHERE health_score IS NOT NULL AND NOT isfinite(health_score)
-    """).fetchone()[0]
-    assert bad == 0
+def test_the_gauge_log_nullif_guard_prevents_a_ln_of_zero_crash(con):
+    """Neither the synthetic fixture nor the real 2026-04 warehouse currently has a
+    gauge_t12 = 0 row (the seats=0 quarantine upstream already removes the rows that would
+    produce one -- measured min(gauge_t12) = 0.958 on the real warehouse), so a mutant that
+    drops the nullif() guard on gauge_t12/gauge_p12 cannot be killed by querying
+    mart_route_health on any data this project has. Constructed directly against a tiny
+    in-test relation instead, so the guard itself -- not the whole mart -- is what is
+    asserted, and it can genuinely fail.
+
+    This also corrects an assumption in docs/superpowers/specs/2026-07-31-m6-watch-and-topn-
+    design.md A.7 ("a zero-seat route otherwise yields -inf"): DuckDB's ln(0) does not
+    silently return -inf the way IEEE-754 float division does -- it raises 'Out of Range
+    Error: cannot take logarithm of zero', a hard runtime error that would abort the ENTIRE
+    mart build the instant any row had a zero gauge, not merely sort a bad row to the top of
+    Death Watch. The nullif() guard's real job is converting the zero to NULL *before* ln()
+    ever sees it (ln(NULL) is NULL, not an error) -- worth a docs correction, flagged here for
+    whichever task next touches model.md rather than fixed in a task scoped to SQL + tests."""
+    rel = con.sql("SELECT * FROM (VALUES (0.0, 3.0), (5.0, 0.0)) AS t(gauge_t12, gauge_p12)")
+
+    guarded = rel.project(
+        "ln(nullif(gauge_t12, 0) / nullif(gauge_p12, 0)) AS gauge_log"
+    ).fetchall()
+    assert guarded == [(None,), (None,)]
+
+    with pytest.raises(duckdb.Error, match="logarithm of zero"):
+        rel.project("ln(gauge_t12 / nullif(gauge_p12, 0)) AS gauge_log").fetchall()
 
 
 def test_capacity_is_carried_but_not_scored(con):
@@ -245,3 +263,17 @@ def test_quarantined_rows_are_carried_for_the_trailing_window(con):
         "SELECT count(*) FROM mart_route_health WHERE t12_quarantined_rows < 0"
     ).fetchone()[0]
     assert negative == 0
+
+
+def test_quarantined_rows_is_bigint_not_hugeint(con):
+    """DuckDB promotes sum() over a BIGINT column to HUGEINT unless explicitly cast back down.
+    The brief's interface spec is `t12_quarantined_rows BIGINT`; Task 6 reads this column
+    through @duckdb/node-api into TypeScript, and this repo has a documented history of DuckDB
+    runtime types surfacing differently than expected -- so the type itself is the invariant,
+    not just the column's presence and sign (which the previous test already covers and which
+    passes under either type)."""
+    dtype = con.execute("""
+        SELECT data_type FROM information_schema.columns
+        WHERE table_name = 'mart_route_health' AND column_name = 't12_quarantined_rows'
+    """).fetchone()[0]
+    assert dtype == "BIGINT"

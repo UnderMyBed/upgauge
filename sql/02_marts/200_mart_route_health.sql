@@ -40,7 +40,12 @@ agg AS (
         sum(r.passengers)           FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_passengers,
         sum(r.departures_performed) FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_departures_performed,
         sum(r.departures_scheduled) FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_departures_scheduled,
-        sum(r.quarantined_rows)     FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_quarantined_rows,
+        -- ::BIGINT after the FILTER (a cast between sum() and FILTER is a parser error):
+        -- DuckDB promotes sum() over a BIGINT column to HUGEINT. Left unguarded the column
+        -- ships as HUGEINT, not the BIGINT the brief specifies -- silent here, but Task 6
+        -- reads this through @duckdb/node-api into TypeScript, and this repo has a
+        -- documented history of DuckDB runtime types surfacing differently than expected.
+        sum(r.quarantined_rows) FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month)::BIGINT AS t12_quarantined_rows,
 
         count(DISTINCT r.year_month) FILTER (
             WHERE r.year_month BETWEEN w.p12_start_month AND w.p12_end_month) AS p12_months_present,
