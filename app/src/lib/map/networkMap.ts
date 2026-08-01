@@ -10,10 +10,44 @@
  * Contract: `docs/design/system.md` § The map § Arc encoding.
  */
 
-import type { GeoPoint, Panel } from "./albers";
+import type { GeoPoint, Panel, PanelFit } from "./albers";
 import { fitPanels, normalizeLon, project, regionOf } from "./albers";
 import { greatCircle, stepsFor } from "./greatCircle";
 import { arcOrder, strokeFor, DEPARTURE_FLOOR, type ArcDatum } from "./arcs";
+import { BASEMAP_FIT_POINTS } from "./basemap";
+
+/**
+ * THE FIT THE COASTLINE WAS BAKED AGAINST -- computed once, at module load, from the same
+ * fixed reference points `basemap.ts`'s generator used (`fitPanels(BASEMAP_FIT_POINTS)`,
+ * bit-for-bit identical input). This is the fix for a real, confirmed defect (M7 Task 8):
+ * an earlier draft of this file called `fitPanels(points)` with ONLY the origin and its own
+ * destinations, which is a DIFFERENT fit than the one `basemapPaths.generated.ts`'s
+ * coordinates were baked with -- every arc was scaled/offset relative to a landmass drawn at
+ * a different scale, geographically wrong on every render despite passing every existing
+ * test (none of which asserted on absolute screen position).
+ *
+ * The WRONG fix -- and it was the fix this codebase's own generator comment, header, and
+ * `basemap.ts` all recommended before Task 8 -- is `fitPanels([...BASEMAP_FIT_POINTS,
+ * ...subjectPoints])`. `fitPanels` derives its scale `k` and offsets from the min/max extent
+ * of whatever points it is given; the coastline's pixels are already baked in at
+ * `fitPanels(BASEMAP_FIT_POINTS)`'s own extent, and a subject point that falls OUTSIDE that
+ * extent (a coastal airport seaward of a simplified coastline -- the ordinary case, since
+ * simplification pulls the line inward, not the exception) changes the extent, which changes
+ * `k` for every point, arcs and the already-baked coastline alike. A different `k` from the
+ * one that projected the coastline is exactly the misalignment this exists to prevent, so the
+ * union recommendation reopens the bug it claims to close.
+ *
+ * The correct rule: for a panel `BASEMAP_FITS` has an entry for (us/ak/hi today, since
+ * Natural Earth 1:110m committed geometry lands there), reuse that fit VERBATIM -- identical
+ * input, identical output, so an arc and the coastline beneath it were fit exactly once. For
+ * a panel with zero committed reference points (pac/car -- no Guam/CNMI/American
+ * Samoa/Midway/Puerto Rico/USVI polygons at this scale, `build-basemap.mjs`'s header), there
+ * is no coastline to align to, so a subject-derived fit is the legitimate, documented
+ * fallback -- see the merge in `renderNetworkMap` below. An airport that then lands slightly
+ * outside the simplified coastline renders slightly outside it; that is geographically
+ * honest and must not be "fixed" by rescaling.
+ */
+const BASEMAP_FITS: Map<Panel, PanelFit> = fitPanels(BASEMAP_FIT_POINTS);
 
 export interface NetworkMapInput {
   origin: ArcDatum;
@@ -30,10 +64,13 @@ export interface NetworkMapInput {
    * of step with the stat strip directly above it on the page. Both halves are required. */
   sameAirportSeats: number;
   /** Projected coastline path/circle markup, already in screen coordinates. An INJECTED
-   * INPUT, never an import: Task 7 (not yet written, as of this task) generates it, and this
-   * module must not import a module that does not exist yet nor stub one in its place.
-   * Rendered beneath the arcs when present; omitted entirely -- no empty `<g>`, no comment --
-   * when absent, so Task 7 can wire it with no change to this file. */
+   * INPUT, never an import -- this stays true of the PATH MARKUP even after Task 7 shipped:
+   * a caller supplies whichever panels' paths it wants drawn (`basemapPathsFor`), and this
+   * file has no opinion on which those are. The FIT those paths were projected with is a
+   * different matter and IS imported now that Task 7's `basemap.ts` exists (`BASEMAP_FITS`,
+   * above) -- reusing it verbatim is what keeps this markup and the arcs drawn over it in the
+   * same reference frame. Rendered beneath the arcs when present; omitted entirely -- no
+   * empty `<g>`, no comment -- when absent. */
   basemapPaths?: string;
 }
 
@@ -137,13 +174,25 @@ export function renderNetworkMap(input: NetworkMapInput): string {
     { lat: origin.lat, lon: origin.lon },
     ...drawn.map((a) => ({ lat: a.lat, lon: a.lon })),
   ];
-  const fits = fitPanels(points);
+  // subjectFits decides WHICH panels this network reaches (unchanged from before the fix --
+  // still exactly "the panels the subject's own points land in", which is what the inset-
+  // frame loop below needs), and its own fit values are the FALLBACK for a panel with no
+  // committed basemap reference points (pac/car). For every other panel (us/ak/hi), the
+  // VALUE this map actually projects with is BASEMAP_FITS's -- the one the coastline was
+  // baked against -- never a fit re-derived from this one page's own arc endpoints. See
+  // BASEMAP_FITS's own comment for why the naive `fitPanels([...BASEMAP_FIT_POINTS,
+  // ...points])` union is wrong rather than merely different.
+  const subjectFits = fitPanels(points);
+  const fits = new Map<Panel, PanelFit>();
+  for (const panel of subjectFits.keys()) {
+    fits.set(panel, BASEMAP_FITS.get(panel) ?? subjectFits.get(panel)!);
+  }
   const originRegion = regionOf(origin.lat, normalizeLon(origin.lon));
 
   let body = "";
 
-  // Inset frames -- only for panels with at least one point in them (`fits` already omits
-  // empty panels; see albers.ts's fitPanels), and `us` is never framed.
+  // Inset frames -- only for panels with at least one point in them (`fits` is keyed
+  // exactly on `subjectFits`'s panels; see albers.ts's fitPanels), and `us` is never framed.
   for (const { panel, label } of INSETS) {
     if (!fits.has(panel)) continue;
     const [x0, y0, x1, y1] = INSET_RECTS[panel];

@@ -10,6 +10,10 @@ const COORDS = {
   ORD: { lat: 41.98, lon: -87.9 },
   SEA: { lat: 47.45, lon: -122.31 },
   JFK: { lat: 40.64, lon: -73.78 },
+  // Far south of ORD/SEA/JFK's own bounding box -- used only by the fit-alignment test
+  // below, to extend the SUBJECT's bounding box without changing which panel ("us") any of
+  // these airports land in.
+  MIA: { lat: 25.79, lon: -80.29 },
 } as const;
 
 function originArc(code: keyof typeof COORDS): ArcDatum {
@@ -216,5 +220,31 @@ describe("renderNetworkMap", () => {
     const svg = renderNetworkMap(fixture());
     const polylines = svg.match(/<polyline/g) ?? [];
     expect(polylines).toHaveLength(2);
+  });
+
+  it("projects a fixed point identically regardless of which other subject points are present", () => {
+    // THE bug this task exists to fix: an earlier draft fit each panel to `fitPanels(points)`
+    // -- the subject's OWN points alone -- which is a DIFFERENT fit than the one
+    // basemapPaths.generated.ts's coastline was baked with (fitPanels(BASEMAP_FIT_POINTS)).
+    // Under that bug, adding a subject point far outside the original bounding box changes
+    // k/ox/oy and moves EVERY existing point's projected pixel -- silently misaligning the
+    // arcs from the coastline drawn beneath them. The fix reuses the fixed basemap fit for
+    // any panel it covers (us/ak/hi), so ORD's own screen position must not move when MIA (a
+    // real airport, far south of ORD/SEA/JFK's own bounding box, still squarely in the `us`
+    // panel) is added to the network.
+    //
+    // This is a GEOMETRY assertion, not a presence assertion, on purpose (CLAUDE.md's
+    // standing warning: an ordering/position/window property needs the ordering, position or
+    // window checked directly, never a proxy that happens to pass under the bug too).
+    const narrow = renderNetworkMap(fixture()); // ORD -> SEA, JFK
+    const wide = renderNetworkMap({ ...fixture(), arcs: [...fixture().arcs, destArc("MIA")] });
+
+    const originMarker = (svg: string): [string, string] => {
+      const m = svg.match(/<circle cx="([\d.]+)" cy="([\d.]+)" r="4\.5"/);
+      if (!m) throw new Error("origin marker not found");
+      return [m[1], m[2]];
+    };
+
+    expect(originMarker(wide)).toEqual(originMarker(narrow));
   });
 });

@@ -15,10 +15,15 @@ export const BASEMAP_PATHS: Record<Panel, string> = {
 
 /**
  * The fixed reference points every panel's coastline was fit to (raw lat/lon, 3 decimals,
- * matching app/geo/ne_110m_us.json's own precision). A future per-page network map (M7 Task
- * 6) must call `fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])`, never
- * `fitPanels(subjectPoints)` alone, or its arcs will be scaled/offset differently from
- * this coastline.
+ * matching app/geo/ne_110m_us.json's own precision). A per-page network map
+ * (app/src/lib/map/networkMap.ts, M7 Task 8) must reuse `fitPanels(BASEMAP_FIT_POINTS)`
+ * VERBATIM for any panel it has an entry for (us/ak/hi today) rather than re-deriving one
+ * from its own subject points -- and must NOT union subject points into this array before
+ * fitting (`fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])`, an earlier draft's wrong
+ * recommendation): a subject point outside this array's own extent changes fitPanels's
+ * scale for every point, arcs and this already-baked coastline alike. See
+ * build-basemap.mjs's header for the full reasoning. A panel with no entry here (pac/car)
+ * has no coastline to align to, so a subject-derived fit is the legitimate fallback.
  */
 export const BASEMAP_FIT_POINTS: GeoPoint[] = [
   { lat: 57.969, lon: -153.229 },

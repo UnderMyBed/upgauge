@@ -45,11 +45,28 @@
  * (`BASEMAP_FIT_POINTS`, exported from the generated module) -- the full extent of each
  * state's own landmass -- and bakes the resulting screen coordinates directly into the
  * generated file. `basemapPathsFor` therefore takes no points at all: there is no
- * per-call fit, so the coastline provably cannot move between pages. A FUTURE per-page
- * network map (M7 Task 6) must call `fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])`,
- * never `fitPanels(subjectPoints)` alone, or its arcs will be scaled/offset differently
- * from the coastline this module already drew -- `basemap.test.ts`'s
- * "does not move when a subject's own points are unioned in" test pins exactly this.
+ * per-call fit, so the coastline provably cannot move between pages.
+ *
+ * A per-page network map (`app/src/lib/map/networkMap.ts`, M7 Task 8) must reuse `fitPanels(
+ * BASEMAP_FIT_POINTS)` VERBATIM -- identical input, identical output -- for any panel this
+ * generator produced a fit for (us/ak/hi today), and may fall back to a fit derived from its
+ * own subject points ONLY for a panel with zero committed reference points (pac/car).
+ *
+ * AN EARLIER DRAFT OF THIS COMMENT RECOMMENDED THE WRONG FIX, and it is worth recording why,
+ * since the wrong version shipped (unfixed) for one task: it said a per-page map "must call
+ * `fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])`, never `fitPanels(subjectPoints)`
+ * alone." That union is NOT equivalent to reusing the fit verbatim. `fitPanels` derives its
+ * scale `k` and offsets from the MIN/MAX EXTENT of whatever points it is given; this
+ * generator already baked the coastline's pixels in at `fitPanels(BASEMAP_FIT_POINTS)`'s own
+ * extent, and unioning in a subject point that falls OUTSIDE that extent -- a coastal airport
+ * seaward of a simplified coastline, the ordinary case, since simplification pulls the line
+ * inward rather than the exception -- changes the extent, which changes `k` for every point,
+ * arcs and the already-baked coastline alike. A different `k` from the one that projected
+ * the coastline is exactly the misalignment this design exists to prevent, so the union
+ * recommendation silently reopens the bug it claims to close. `basemap.test.ts`'s "does not
+ * move when a subject's own points are unioned in" test only ever exercised an IN-BOUNDS
+ * point (SEA), which cannot distinguish the correct rule from the wrong one -- see that
+ * file's own second test for a point that does.
  *
  * DETERMINISM / BYTE-STABILITY (the requirement, not a nicety -- mirrors this project's
  * `threads = 1` Parquet-writer discipline): no `Date`, no `Math.random`, no iteration over
@@ -232,10 +249,15 @@ ${pathsLiteral}
 
 /**
  * The fixed reference points every panel's coastline was fit to (raw lat/lon, 3 decimals,
- * matching app/geo/ne_110m_us.json's own precision). A future per-page network map (M7 Task
- * 6) must call \`fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])\`, never
- * \`fitPanels(subjectPoints)\` alone, or its arcs will be scaled/offset differently from
- * this coastline.
+ * matching app/geo/ne_110m_us.json's own precision). A per-page network map
+ * (app/src/lib/map/networkMap.ts, M7 Task 8) must reuse \`fitPanels(BASEMAP_FIT_POINTS)\`
+ * VERBATIM for any panel it has an entry for (us/ak/hi today) rather than re-deriving one
+ * from its own subject points -- and must NOT union subject points into this array before
+ * fitting (\`fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])\`, an earlier draft's wrong
+ * recommendation): a subject point outside this array's own extent changes fitPanels's
+ * scale for every point, arcs and this already-baked coastline alike. See
+ * build-basemap.mjs's header for the full reasoning. A panel with no entry here (pac/car)
+ * has no coastline to align to, so a subject-derived fit is the legitimate fallback.
  */
 export const BASEMAP_FIT_POINTS: GeoPoint[] = [
 ${pointsLiteral}

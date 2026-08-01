@@ -5,6 +5,15 @@
  * reference points (`BASEMAP_FIT_POINTS`) rather than any one page's subject -- see the
  * generator's own header comment for why that is what keeps the coastline from moving
  * page to page.
+ *
+ * A per-page network map (`app/src/lib/map/networkMap.ts`) must project its own arcs with
+ * `fitPanels(BASEMAP_FIT_POINTS)` VERBATIM, for any panel that fit has an entry for, rather
+ * than unioning subject points into this array before fitting -- `fitPanels` scales to the
+ * min/max extent of whatever it is given, and a subject point outside `BASEMAP_FIT_POINTS`'s
+ * own extent (an airport seaward of a simplified coastline, the ordinary case) would change
+ * that extent, and therefore the scale, for every point -- arcs AND the already-baked
+ * coastline alike. An earlier draft of this file recommended exactly that union; it was
+ * wrong, and M7 Task 8's own header records the confirmed defect and the fix.
  */
 import type { Panel } from "./albers";
 import { BASEMAP_FIT_POINTS, BASEMAP_PATHS } from "./basemapPaths.generated";

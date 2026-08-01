@@ -15,7 +15,9 @@ import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
+import { NetworkMap } from "@/components/NetworkMap";
 import { AIRCRAFT_MIX_LIMIT } from "@/lib/chart/aircraftMix";
+import { fetchAirportNetwork } from "@/lib/map/airportNetwork";
 import { encode } from "@/lib/pivot/urlstate";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
 import type { AirportRef } from "@/lib/resolve";
@@ -168,17 +170,20 @@ export async function AirportView({
   const asOf = await dataAsOf();
   const trailing12 = trailing12From(asOf);
 
-  // CONCURRENT: two pivots in one wave, one per grain, as of M7 Task 3 (six through M6 -- three
-  // per grain, the inclusion-exclusion assembly this page no longer needs). They share nothing,
-  // and connect() hands each its own DuckDBConnection off the single memoized instance, so the
-  // serial form would pay for both in turn for no reason.
+  // CONCURRENT: three pivots in one wave (two through M7 Task 7 -- the map is the third, M7
+  // Task 8). They share nothing, and connect() hands each its own DuckDBConnection off the
+  // single memoized instance, so the serial form would pay for all three in turn for no
+  // reason.
   //
   // The chart takes the FULL window, not the table's trailing 12: a twelve-point stacked area
-  // of an airport's fleet mix says almost nothing, and the whole point is the trend. The two
-  // windows genuinely differ, which is why the `.window` line below names both.
-  const [traffic, mix] = await Promise.all([
+  // of an airport's fleet mix says almost nothing, and the whole point is the trend. The map
+  // takes the trailing 12, matching the carriers table it sits above (docs/design/system.md
+  // § The map) -- a decade of network growth is the year slider's job (M7 Task 9), not this
+  // page's default view. The three windows are why the `.window` line below names two of them.
+  const [traffic, mix, network] = await Promise.all([
     fetchAirportTraffic(airport.id, trailing12, asOf, limit),
     fetchAirportMix(airport.id, EARLIEST_MONTH, asOf, mixLimit),
+    fetchAirportNetwork(airport, trailing12, asOf),
   ]);
 
   const rows = carrierRows(traffic.rows);
@@ -233,6 +238,12 @@ export async function AirportView({
             </>
           ) : null}
         </p>
+        {/* The network map, above the carriers table: `network` is null exactly when the
+            airport filed nothing in the trailing 12 (fetchAirportNetwork's own contract,
+            mirroring /route's chart -- a subject with nothing in the window gets NO map,
+            never a second empty-state panel repeating what AirportEmptyState already says
+            below). */}
+        {network !== null ? <NetworkMap network={network} /> : null}
         <div className="body">
           <div>
             {hasMix ? <AircraftMixChart rows={mix.rows} title={airport.code} /> : null}

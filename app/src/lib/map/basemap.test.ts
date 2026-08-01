@@ -118,16 +118,39 @@ describe("BASEMAP_FIT_POINTS", () => {
     expect(BASEMAP_FIT_POINTS.length).toBeGreaterThan(1000);
   });
 
-  it("establishes a fit that does not move when a subject's own points are unioned in", () => {
+  it("stays unchanged when an IN-BOUNDS subject point happens to be unioned in", () => {
     // This is the property the brief calls out: "the basemap is fitted to fixed panel
     // rectangles, not to the subject's arcs -- otherwise the coastline would move from
-    // page to page." A future per-page network map must call
-    // `fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])`, never
-    // `fitPanels(subjectPoints)` alone, or its arcs will be scaled/offset differently
-    // from the coastline this module drew. SEA (47.45, -122.31) sits well inside the
-    // conterminous landmass, so unioning it in must not change the `us` panel's fit.
+    // page to page." SEA (47.45, -122.31) sits well inside the conterminous landmass, so
+    // unioning it into BASEMAP_FIT_POINTS happens not to move the `us` panel's fit.
+    //
+    // This test ALONE cannot tell a correct caller from a buggy one -- see the next test,
+    // which is the one that can. A per-page network map (`networkMap.ts`, M7 Task 8) does
+    // NOT union subject points into BASEMAP_FIT_POINTS at all; it reuses
+    // `fitPanels(BASEMAP_FIT_POINTS)`'s fit verbatim. An earlier draft of this codebase's own
+    // guidance (this file, the generator, and its header template) recommended the union
+    // instead, and this in-bounds-only test is exactly why that wrong recommendation survived
+    // unnoticed: it happened to pass under both the correct rule and the wrong one.
     const fitsAlone = fitPanels(BASEMAP_FIT_POINTS);
     const fitsWithSubject = fitPanels([...BASEMAP_FIT_POINTS, { lat: 47.45, lon: -122.31 }]);
     expect(fitsWithSubject.get("us")).toEqual(fitsAlone.get("us"));
+  });
+
+  it("WOULD move if an out-of-bounds subject point were unioned in -- why the union is wrong", () => {
+    // The property the test above cannot show: fitPanels scales to the min/max extent of
+    // whatever it is given, so a point outside BASEMAP_FIT_POINTS's own extent (a real,
+    // ordinary case -- a coastal airport seaward of a simplified coastline, since
+    // simplification pulls the line inward) genuinely changes the `us` fit. This is exactly
+    // why `networkMap.ts` must reuse `fitPanels(BASEMAP_FIT_POINTS)` VERBATIM rather than
+    // unioning anything into it -- a union-based caller would silently draw its arcs at a
+    // different scale than the coastline beneath them. (20, -80) regionOf's to `us` (it is
+    // south of Alaska's/Hawai'i's/the Pacific panel's own tests and not in the Caribbean
+    // panel's lon>-70 band either) but sits south of Key West (~24.5N), the conterminous
+    // landmass's own southernmost point -- outside every committed `us` reference point's
+    // extent, exactly the "coastal airport seaward of the simplified line" shape this test
+    // exists to demonstrate.
+    const fitsAlone = fitPanels(BASEMAP_FIT_POINTS);
+    const fitsWithOutOfBoundsSubject = fitPanels([...BASEMAP_FIT_POINTS, { lat: 20, lon: -80 }]);
+    expect(fitsWithOutOfBoundsSubject.get("us")).not.toEqual(fitsAlone.get("us"));
   });
 });
