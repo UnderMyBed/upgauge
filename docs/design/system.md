@@ -524,6 +524,28 @@ compromise; this one admits it.
 Never hue. Thin arcs draw first so heavy ones sit on top. Destination nodes are 2px `--ink`
 (1.3px `--ink-3` below floor); the origin is a 4.5px `--field` disc ringed in `--signal`.
 
+**A same-airport row is never an arc, on any page, standing rule.** `fct_segment_month`
+really carries rows whose origin and destination are the same airport — 359 of 1,045
+fact-present airports have at least one over the trailing 12 months; ORD alone is 53 rows,
+73,082 seats. Such a row's great circle has zero angular length, and `greatCircle`'s own
+degenerate-endpoint branch (`om < 1e-9`) would emit `steps + 1` identical points — several
+hundred bytes of polyline drawing an invisible mark directly on top of the origin disc. So
+the drawn arc set always excludes any row whose code equals the origin's (`app/src/lib/map/
+networkMap.ts`'s `renderNetworkMap`: ORD draws 267 arcs, not 268) — but the row's seats stay
+in whatever total the map states, passed in separately (`sameAirportSeats`), never derived
+from the already-filtered arc list. A map that dropped these seats from its own total as well
+as from its arcs would disagree with the stat strip directly above it on the same page. Both
+halves are required; shipping one without the other is a defect.
+
+**Step count is adaptive, not fixed** (`app/src/lib/map/greatCircle.ts`'s `stepsFor`): points
+scale with the arc's length ON SCREEN (`round(projectedLengthPx / 22)`, floor 4, cap 48), not
+with its angular distance — a 40px hop needs a handful of points and a transcontinental arc
+needs dozens. Measured on ORD's 268 arcs: a flat 48 emits 192,231 bytes of polyline; adaptive
+emits 132,178 with no visible change to the long arcs, and a flat 12 would save more but
+visibly polygonizes them. A great circle cannot cross a panel boundary at all (above), so
+`stepsFor` is only ever consulted for an arc `greatCircle` actually draws — a cross-panel arc
+is the two projected endpoints, straight, regardless of its geographic length.
+
 ### The year slider
 
 **The one orchestrated motion moment.** A 2015→2026 track that animates the network growing
