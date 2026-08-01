@@ -658,8 +658,11 @@ frame per preset — the only place on the site with a voice. Each row carries t
 values, not just the composite score**: the components are the insight, the score is a sort
 key. Label the score plainly as a heuristic.
 
-Every row links into the Explorer with its filters pre-applied — the `/watch` presets are
-saved instances of the Top-N builder, so their links are ordinary permalinks.
+**Not saved instances of the generic Top-N builder** (`app/src/lib/topn.ts`), despite reusing
+its rank column: every `meta_pivot_measures` row is a single-window aggregate and no pivot
+measure expresses a delta, while these presets rank on one (Δ load factor, log Δ gauge)
+against prior-12, which only `mart_route_health` computes. The two share `DataTable`'s rank
+column and nothing else.
 
 Route Birth Tracker rows must read **"first appearance since 2015"**, never "first ever". The
 window starts in 2015.

@@ -136,6 +136,18 @@ body { background: var(--panel); color: var(--ink); }
   text-decoration: none;
 }
 
+/* /watch leaderboard's leading rank column (system.md, "`/watch` leaderboard": "mono, --ink-3")
+   -- opt-in via DataTable's `rank` prop, never shown by default. */
+.data-table th.rank,
+.data-table td.rank {
+  width: 26px;
+  padding-right: 6px;
+  text-align: right;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+}
+
 /* ---------- the gauge rail -- signature, 1 of 3 ---------- */
 /* Fixed 0-260 seats-per-departure axis. Position encodes the value; hue never does. */
 .rail {

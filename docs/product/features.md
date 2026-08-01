@@ -78,8 +78,12 @@ table" section.
    means guessing what the chart needs.
 5. **Seasonality heatmap.** Year × month grid per route. Cheap, satisfying, and the *honest*
    way to present an "empty plane" claim.
-6. **Generic Top-N builder.** "Top N `<dimension>` by `<measure>` in `<period>`." The
-   `/watch` presets are all saved instances of this. Build the generic thing once.
+6. **Generic Top-N builder — shipped, M6.** "Top N `<dimension>` by `<measure>` in
+   `<period>`" is an existing pivot query, not a new one: one dimension, sorted descending on
+   a measure, limited (`app/src/lib/topn.ts`'s `topNQuery`/`topNPermalink`, plus `DataTable`'s
+   `rank` prop). The `/watch` presets are **not** saved instances of it — every
+   `meta_pivot_measures` row is a single-window aggregate and the presets need deltas against
+   `mart_route_health` — they share only the rank column.
 7. **The omnibox — shipped, M5.** `/search?q=...` (`app/src/lib/search.ts`,
    `app/src/app/search/page.tsx`, `sql/03_queries/search_by_name.sql`). One field resolving
    `PDX` · `Portland` · `Alaska` · `AS` · `A220` · `PDX-AUS`. Sounds trivial. It is the whole

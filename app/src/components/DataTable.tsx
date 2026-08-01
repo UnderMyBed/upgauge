@@ -134,16 +134,23 @@ export function DataTable({
   columns,
   rows,
   resolved,
+  rank = false,
 }: {
   columns: ColumnSpec[];
   rows: Record<string, unknown>[];
   resolved?: Map<string, Resolved>;
+  /** A leading 1-based rank column -- `/watch`'s leaderboard shape (system.md, "`/watch`
+   * leaderboard": "the standard table plus a leading rank column, mono, --ink-3"). The rank IS
+   * the row's position in `rows`; DataTable never re-sorts or re-derives it from a column, so a
+   * caller that wants rank-by-measure must sort `rows` itself before handing them here. */
+  rank?: boolean;
 }) {
   return (
     <table className="data-table">
       <thead>
         <tr>
           <th className="gut" scope="col" />
+          {rank && <th className="rank" scope="col" aria-label="Rank" />}
           {columns.map((c) => (
             <th
               key={c.key}
@@ -169,6 +176,11 @@ export function DataTable({
                   typeof row.quarantine_reasons === "string" ? row.quarantine_reasons : null
                 }
               />
+              {rank && (
+                <td className="rank" data-testid="rank-cell">
+                  {i + 1}
+                </td>
+              )}
               {columns.map((c) => (
                 <td key={c.key} className={c.kind === "identifier" ? "id" : "num"}>
                   {c.dimKey ? (
