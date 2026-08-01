@@ -1949,6 +1949,74 @@ initial commit). `make app-check` is **671** (664 through Task 8, +7 from the fi
 byte-identical`, `database: 10 objects identical` — M6 touched mart *content* (the composite
 formula) but not the object count.
 
+## M7 — maps, and the either-endpoint filter they need first
+
+Backlog item 1 from M6: `/airport/<code>` assembles "this airport at either end" from THREE
+pivots and inclusion-exclusion because the pivot layer could not express an OR across two
+columns. The plan is `.superpowers/sdd/2026-08-01-m7-maps/`.
+
+### Task 1 — the filter-only endpoint dimension enters the catalog
+
+`endpoint_airport_id` joins `meta_pivot_dimensions` as `column_expr = 'origin_airport_id,
+dest_airport_id'`, `filter_only = TRUE`, `filter_mode = 'either'`. `route` gains the same
+`filter_mode` column, `'pair'`, so the two composite dimensions that share a column count are
+distinguishable by what they compile to. No emitted SQL changed (`make goldens`: zero diff) —
+Task 1 only extends the catalog's shape; Task 2 is what makes either mode compile. Full account:
+`docs/data/model.md`.
+
+### Task 2 — `either` filter semantics and `filter_only` rejection, in lockstep
+
+Two behaviors, added to `app/src/lib/pivot/render.ts` and `pipeline/pivot.py` in the same task so
+`make goldens` proves them byte-identical rather than trusting two hand-written implementations
+to agree:
+
+1. **A filter on an `either`-mode dimension compiles to an OR across both its columns**, sharing
+   one parameter list between both `IN`s — `(origin_airport_id IN ($f0_0, $f0_1) OR
+   dest_airport_id IN ($f0_0, $f0_1))`. This is what a future `/airport` can run as ONE pivot
+   instead of M4d's three-pivot inclusion-exclusion assembly: same-airport rows satisfy both
+   sides of the OR and are counted once, which is exactly what the third inclusion-exclusion
+   term existed to achieve arithmetically.
+2. **A `filter_only` dimension used as a *grouping* dimension is rejected**, not silently
+   accepted — `dimension 'endpoint_airport_id' cannot be grouped by; it is filter-only`.
+   Grouping by it would put one segment row (ORD→LAX) into both the ORD group and the LAX
+   group, so summing the column double-counts every row it touches. `validateDimension` /
+   `_validate_dimension` grew a `forGrouping`/`for_grouping` parameter, `True` only at the
+   dimension-list call site, `False` (the default) at the filter call site — the ONE function
+   that already validates both a dimension key and every filter key stays that way.
+
+**The sharpest risk was the `either` branch swallowing `pair`.** `route` and
+`endpoint_airport_id` both span two columns, but they mean opposite things: `route` is ONE route
+pair (`least()`/`greatest()` equality), `endpoint_airport_id` is two alternatives (OR). Both
+renderers branch on `filterMode`/`filter_mode`, never on column count, before falling through to
+the `pair` branch — a route filter compiled as an OR would match same-airport rows again and
+reopen the measured 18,895-seat inflation on JFK-LAX that `pair`'s own `least()`/`greatest()`
+rendering exists to prevent. Mutant 4 (below) pins this branch condition directly, not merely the
+`either` output.
+
+Two new goldens (`filter_either_endpoint_airport`, `..._multiple`), 11 → 13 cases;
+`urlstate.json` is unchanged — an `either` filter's URL encoding is identical to every other
+dimension's, so the codec needed no new case. Four mutants run and reverted, each against the
+real warehouse or the fixture allowlist, never merely re-read:
+
+| # | Mutation | Gate | Test(s) reddened |
+|---|---|---|---|
+| 1 | Delete the `either` branch from `render.ts` only | `npm test -- render` | The 2 golden-comparison tests (`filter_either_endpoint_airport[_multiple]`) plus the 2 hand-written either-filter tests — the golden fixture itself is what catches the one-sided TS/Python drift, since `pipeline/pivot.py` still emits the OR and the committed golden still pins it |
+| 2 | Emit `AND` instead of `OR` across the two columns | `npm test -- render` | The same 4 tests — the OR-specific substring assertion in each |
+| 3 | Remove the `forGrouping`/`filter_only` check | `npm test -- render` | `rejects a filter-only dimension used as a grouping dimension` (exactly one) |
+| 4 | Set `route`'s `filter_mode` to `'either'` in `300_meta_pivot_dimensions.sql`, `make build` | `pytest pipeline/tests/test_pivot.py -k route` | `test_route_still_compiles_as_a_least_greatest_pair_not_an_or` — the fixture-backed TS test is blind to this one (its allowlist is a hardcoded fixture, not the live catalog), so only the Python test, which builds a real warehouse from the SQL catalog file, can catch a catalog-level regression here |
+
+`make check` **472** (464 measured immediately after Task 1, before this task's own tests existed
++ 4 hand-written `test_pivot.py` tests + 4 from the 2 new golden cases, each of which adds 2
+parametrized `test_pivot_goldens.py` cases — reconciled against the actual `pytest` count at each
+step, not assumed, since this file's own arithmetic for M6 was wrong on a first pass). TS:
+`render.test.ts` went 34 → 40 (+4 hand-written either/pair tests, +2 golden-loop — the TS golden
+comparison runs ONE test per case, unlike Python's two, so 13 − 11 = 2 new cases add only 2 TS
+tests against Python's 4). `make app-check`'s repo-wide total moved 688 → 694 across this task's
+own gate runs, but that +6 is NOT Task 2's delta — a concurrent M7 task landed its own new test
+file in the same window; Task 2's own isolated contribution to that total is the +6 in
+`render.test.ts` above. `make goldens` leaves `urlstate.json` byte-identical; `pivot.json` gains
+exactly the two new cases above (11 → 13).
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command

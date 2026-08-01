@@ -31,9 +31,17 @@ function stripAsciiWhitespace(s: string): string {
   return s.replace(ASCII_WHITESPACE_RE, "");
 }
 
-function validateDimension(key: string, a: Allowlist, grain: string): DimensionEntry {
+function validateDimension(
+  key: string,
+  a: Allowlist,
+  grain: string,
+  forGrouping = false,
+): DimensionEntry {
   const entry = a.dims.get(key);
   if (!entry) throw new PivotError(`unknown dimension '${key}'`);
+  if (forGrouping && entry.filterOnly) {
+    throw new PivotError(`dimension '${key}' cannot be grouped by; it is filter-only`);
+  }
   if (entry.grain !== "both" && entry.grain !== grain) {
     throw new PivotError(
       `dimension '${key}' is '${entry.grain}'-grain, not offered at '${grain}' grain`,
@@ -76,7 +84,7 @@ export function renderPivot(
     if (values.length === 0) throw new PivotError(`filter '${key}' has no values`);
   }
 
-  const dimEntries = q.dimensions.map((k) => validateDimension(k, a, q.grain));
+  const dimEntries = q.dimensions.map((k) => validateDimension(k, a, q.grain, true));
   const measureEntries = q.measures.map((k) => {
     const e = a.meas.get(k);
     if (!e) throw new PivotError(`unknown measure '${k}'`);
@@ -107,6 +115,33 @@ export function renderPivot(
         return `$${pname}`;
       });
       filterClauses.push(`${columns[0]} IN (${placeholders.join(", ")})`);
+      return;
+    }
+
+    // An `either` dimension's two columns are ALTERNATIVES, not a pair: the value list is
+    // shared by both sides, so one parameter per value serves both IN-lists. This is what
+    // lets ONE pivot express `origin = X OR dest = X` -- the OR /airport used to assemble
+    // arithmetically from three pivots (inclusion-exclusion), and which no AND-ed filter can
+    // express. Same-airport rows satisfy both sides and are counted ONCE by the OR, which is
+    // exactly what the third inclusion-exclusion term existed to achieve.
+    //
+    // Branch on filterMode, not on column count: `route` also spans two columns but means the
+    // OPPOSITE thing (one route pair, least()/greatest() equality) -- if an `either` OR ever
+    // swallowed `route`'s filter, same-airport rows would match again and reopen the measured
+    // 18,895-seat inflation on JFK-LAX this file's `pair` branch exists to prevent.
+    if (entry.filterMode === "either") {
+      if (columns.length !== 2) {
+        throw new PivotError(
+          `dimension '${key}' is 'either'-mode but spans ${columns.length} columns`,
+        );
+      }
+      const placeholders = values.map((value, j) => {
+        const pname = `f${i}_${j}`;
+        params[pname] = value;
+        return `$${pname}`;
+      });
+      const list = placeholders.join(", ");
+      filterClauses.push(`(${columns[0]} IN (${list}) OR ${columns[1]} IN (${list}))`);
       return;
     }
 

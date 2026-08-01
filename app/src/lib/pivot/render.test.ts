@@ -14,8 +14,8 @@ const goldens = JSON.parse(
 // goldens.cases)` emits zero tests -- and therefore passes -- if pivot.json is ever truncated
 // or reshaped. A suite that cannot fail is worse than no suite: it reports green.
 describe("golden fixture sanity", () => {
-  it("has exactly 11 cases -- a reshaped fixture must not silently emit zero tests", () => {
-    expect(goldens.cases).toHaveLength(11);
+  it("has exactly 13 cases -- a reshaped fixture must not silently emit zero tests", () => {
+    expect(goldens.cases).toHaveLength(13);
   });
 });
 
@@ -232,5 +232,46 @@ describe("composite-dimension filters", () => {
       { ...BASE, filters: [["origin_state", ["OR", "WA"]]] }, FIXTURE);
     expect(sql).toContain("origin_state IN ($f0_0, $f0_1)");
     expect(params.f0_0).toBe("OR");
+  });
+});
+
+// M7 Task 2: endpoint_airport_id also spans two columns, but unlike route -- ONE route pair,
+// least()/greatest() equality -- its two columns are ALTERNATIVES, compiled to an OR. filter_only
+// is the other half of the same catalog row: accepted in a filter, rejected as a grouping
+// dimension, since grouping by it would double-count every segment row into both its origin's
+// group and its dest's group.
+describe("either-mode filters (endpoint_airport_id)", () => {
+  it("compiles an either-mode filter to an OR across both columns", () => {
+    // Catches: compiling `either` through the single-column branch (origin only), which is
+    // the SILENT half of an airport query -- SEA reads 26,710,000 seats instead of
+    // 53,373,806 and every row still renders perfectly.
+    const { sql } = renderPivot(q({ filters: [["endpoint_airport_id", ["14747"]]] }), FIXTURE);
+    expect(sql).toContain("(origin_airport_id IN ($f0_0) OR dest_airport_id IN ($f0_0))");
+  });
+
+  it("ORs multiple values inside each side of an either filter", () => {
+    const { sql, params } = renderPivot(
+      q({ filters: [["endpoint_airport_id", ["14747", "13930"]]] }),
+      FIXTURE,
+    );
+    expect(sql).toContain(
+      "(origin_airport_id IN ($f0_0, $f0_1) OR dest_airport_id IN ($f0_0, $f0_1))",
+    );
+    expect(params).toMatchObject({ f0_0: "14747", f0_1: "13930" });
+  });
+
+  it("rejects a filter-only dimension used as a grouping dimension", () => {
+    // Catches: allowing endpoint_airport_id in `d`, which double-counts every row.
+    expect(() =>
+      renderPivot(q({ dimensions: ["endpoint_airport_id"] }), FIXTURE),
+    ).toThrow(/cannot be grouped by; it is filter-only/);
+  });
+
+  it("still compiles route as a least/greatest pair, not an OR", () => {
+    // Catches: the new `either` branch swallowing `pair` -- which would make a route filter
+    // match same-airport rows again (18,895 seats on JFK-LAX).
+    const { sql } = renderPivot(q({ filters: [["route", ["12478-12892"]]] }), FIXTURE);
+    expect(sql).toContain("least(route_key_low, route_key_high) = $f0_0a");
+    expect(sql).not.toContain(" OR dest_airport_id IN ");
   });
 });
