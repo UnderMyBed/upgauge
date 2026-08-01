@@ -1874,7 +1874,24 @@ Minors: the 23,689 → 23,694 sweep's fourth and fifth copies (§ Task 5 above a
 `t12_departures_performed >= 360`), `.frame` and `.watch-list` having no CSS rule at all, the
 `health_score` column's left-aligned `td.id` becoming a *declared* rather than undeclared
 deviation, and a stale five-component docstring in `pipeline/tests/test_route_health.py`.
-`app/smoke.sh` gained 8 checks for the served-build halves of these — **235 total.**
+`app/smoke.sh` gained 8 checks for the served-build halves of these — 235 total.
+
+**Re-review of that wave found one new defect of the same class, plus one vacuous needle.** The
+wave's own copy stated the wrong **grain**: `mart_route_health` is one row per
+`(op_airline_id, route)`, so `p12_months_present = 0` says nothing about the other carriers on
+that airport pair, and both the carried-over frame clause ("nobody flew last year") and the new
+`ReEntryNote` ("A route qualifies by…") claimed otherwise. Measured: **521 of 688 (75.7%) and
+25 of the 25 rendered** had another carrier flying the pair inside the prior window — `AS HNL–ITO`
+leads the page while HA, UA and WN filed 1,787,347 seats on it, 4.9× its own trailing 12. Fixed
+in the frame, `ReEntryNote`, `watch_new_routes.sql`'s header, `features.md` and `system.md`, with
+a new test (`states the carrier-route grain, never route grain`) and three mutants. The vacuous
+needle: `check … "$BODY" 'href="/watch"'` against `/` could not fail, because `/` renders
+`TopBar` and `TopBar` emits that href — deleting the front-door prose link left it green. Now
+bounded to `<main>` via `between()`, with a paired `check_not` proving the bound still excludes
+the top bar and a `check` proving the wordmark needle is live at all. `ReEntryNote` also stopped
+saying "this database carries no lookback" (false — `fct_route_month` spans 2015-01 onward, and
+is what both measurements were taken from); the limitation is `mart_route_health`'s.
+**241 checks total.**
 
 Two traps found writing these needles, both the same class M4c already shipped once:
 
@@ -1928,7 +1945,7 @@ Two traps found writing these needles, both the same class M4c already shipped o
 which is the property Tasks 3/4's "adds no SQL" claim rests on. `make check` is **461** (447 at
 M5 + 6 Task 1 + 0 net Task 1's review round + 5 Task 2 + 1 Task 2's review round's sixth test +
 2 Task 5 = 461 — not the 460 a first pass at this arithmetic gets by counting only Task 2's
-initial commit). `make app-check` is **670** (664 through Task 8, +6 from the final review's fix wave), and `make app-smoke` **235 checks**. `make verify` stays `parquet: 17 artifacts
+initial commit). `make app-check` is **671** (664 through Task 8, +7 from the final review's fix wave and its re-review), and `make app-smoke` **241 checks**. `make verify` stays `parquet: 17 artifacts
 byte-identical`, `database: 10 objects identical` — M6 touched mart *content* (the composite
 formula) but not the object count.
 

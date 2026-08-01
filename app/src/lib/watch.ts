@@ -72,13 +72,26 @@ const REGISTRY: ReadonlyMap<PresetSlug, Preset> = new Map([
     {
       slug: "new-routes",
       title: "Route Birth Tracker",
-      // NOT "first appearance since 2015" -- that phrasing shipped through M6 and was false.
-      // watch_new_routes.sql selects `p12_months_present = 0`: nothing filed in the PRIOR 12
-      // months. That is a re-entry, not a first appearance, and 334 of the 688 qualifying
-      // routes (48.5%) filed in some month before that window -- MQ AZO-ORD carries 93 distinct
-      // months back to 2015-01 and still qualifies. The page's ReEntryNote states the rule and
-      // carries the measurement; docs/product/features.md § Insight presets owns it.
-      frame: "New service nobody flew last year -- a route back on the map, not necessarily a first appearance.",
+      // TWO false claims were packed into one sentence here, and they failed at different
+      // levels. The frame read "First appearance since 2015 -- new service nobody flew last
+      // year."
+      //
+      // (1) NOT "first appearance since 2015". watch_new_routes.sql selects
+      //     `p12_months_present = 0`: nothing filed in the PRIOR 12 months. That is a re-entry.
+      //     334 of the 688 qualifying rows (48.5%) filed before that window -- MQ AZO-ORD in 93
+      //     distinct months back to 2015-01.
+      // (2) NOT "nobody flew last year". mart_route_health's grain is (op_airline_id, route) --
+      //     a CARRIER-ROUTE PAIR, not a route -- so `p12_months_present = 0` says nothing
+      //     whatever about the other carriers on that airport pair. 521 of the 688 (75.7%), and
+      //     ALL 25 rows the page renders, had another carrier flying the same pair inside the
+      //     prior window. The #1 row is AS HNL-ITO, where HA, UA and WN filed 1,787,347 seats
+      //     in that window -- 4.9x the subject's own trailing 12.
+      //
+      // (2) survived the fix wave that caught (1), because "nobody flew last year" reads as the
+      // accurate half of the old sentence and was carried over unexamined. The page's
+      // ReEntryNote states both limits and carries the measurements;
+      // docs/product/features.md § Insight presets owns the rule.
+      frame: "A route this carrier flew nothing on last year -- not necessarily a first appearance, and usually not an unserved route.",
       sqlFile: "watch_new_routes",
       directions: [{ heading: "Newest", direction: "desc" }],
     },

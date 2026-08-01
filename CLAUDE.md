@@ -416,6 +416,21 @@ window — a route flown in **2023** and resumed in 2025 looks new too. The test
 unable to fail for the reason it named; its replacement asserts the accurate claim **and** the
 absence of the false one, and both halves were mutant-verified independently.
 
+**That fix wave then shipped a second false claim of the same class, and the shape of THAT is
+worth more than either bug: the surviving clause was the one that read accurate.** The original
+sentence was "First appearance since 2015 — new service **nobody flew last year**." The wave
+fixed the first clause and carried the second over unexamined, because next to a provably false
+half it read as the true half. It is not. **`mart_route_health`'s grain is `(op_airline_id,
+route)` — a carrier–route pair, never a route** — so `p12_months_present = 0` is silent about
+every *other* carrier on that airport pair. Measured: **521 of the 688 qualifying rows (75.7%),
+and 25 of the 25 the page renders**, had a different carrier flying the pair inside the prior
+window; the #1 row `AS HNL–ITO` ranked first while HA, UA and WN filed **1,787,347 seats** on it
+in that window, 4.9× the subject's own trailing 12. `AS DEN–SAN` had **eight** other operators.
+So the claim was false about **every row on the page**, on a page whose copy had just been
+audited. **Any sentence about a `mart_route_health` row names the carrier, or it is a claim
+about a route the query never made** — and when a compound sentence is found false, each clause
+is re-derived from the query, never triaged by how true it sounds.
+
 **Two more from that wave are standing rules now.** (1) **A new top-level route is not shipped
 until something already-reachable links to it** — `/watch` had **zero** inbound internal links,
 one milestone after M5 existed to remove exactly that island, and neither `sitemap.ts` nor
@@ -429,8 +444,8 @@ on `/watch`'s own index. Same class: **a page that enumerates its filters and om
 be reproduced from what it says** — Empty Planes disclosed `gauge_t12 >= 50` and hid
 `t12_departures_performed >= 360`, the more restrictive of the two.
 
-**`app/smoke.sh` gained one section per preset (235 checks total, +52 — 227 at M6 Task 8, plus
-the final review's eight) and two served-build
+**`app/smoke.sh` gained one section per preset (241 checks total, +58 — 227 at M6 Task 8, plus
+the final review's eight and its re-review's six) and two served-build
 mutants that only running the heavy gates could produce.** Mutant A (matcher entry removed,
 rebuilt, served) confirms `/watch/nope`'s 404 loses its entire message (9,941 → 7,816 bytes) and
 degrades a *healthy* page's `Cache-Control` to Next's own fallback — closing the exact gap M5's
@@ -444,8 +459,9 @@ reach `/watch/gauge` too, not only the four entity pages — confirmed as the na
 dropping `meta_pivot_dimensions` instead, which correctly 500s under `no-store`.
 
 `make check` **461** (447 at M5 + 14 net across Tasks 1, 2 and 5 — reconciled test by test, not
-assumed, in `docs/architecture/pipeline.md` § M6), `make app-check` **670** (664 at Task 8, +6
-from the final review's fix wave), `make app-smoke` **235 checks** (227 at Task 8, 183 at M5). `make verify` unchanged in shape — `parquet: 17 artifacts
+assumed, in `docs/architecture/pipeline.md` § M6), `make app-check` **671** (664 at Task 8, +7
+from the final review's fix wave and its re-review), `make app-smoke` **241 checks** (227 at
+Task 8, 183 at M5). `make verify` unchanged in shape — `parquet: 17 artifacts
 byte-identical`, `database: 10 objects identical` — M6 changed mart *content*, not object count.
 `make goldens` leaves `sql/03_queries/goldens/` byte-identical: M6 added no pivot SQL, the
 property Tasks 3/4's Top-N builder and the `/watch` presets both rest on.

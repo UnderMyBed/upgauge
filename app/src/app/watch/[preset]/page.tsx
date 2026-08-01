@@ -266,25 +266,42 @@ function DeparturesFloorNote() {
   );
 }
 
-/** Route Birth Tracker's own scope note, and the correction the final whole-branch review
- * forced: this preset shipped through M6 claiming &ldquo;first appearance since 2015&rdquo;,
- * which watch_new_routes.sql does not select and the real warehouse contradicts.
+/** Route Birth Tracker's own scope note, and TWO corrections the final whole-branch review
+ * forced -- the second one on the fix that closed the first, which is why both are stated here
+ * rather than left to the frame.
  *
  * `p12_months_present = 0` means nothing filed in the PRIOR 12 months and something filed in
- * the trailing 12. mart_route_health carries no lookback past that window, so the query cannot
- * distinguish a first appearance from a resumption -- measured, 334 of the 688 qualifying
- * routes (48.5%) filed in some earlier month, MQ AZO-ORD as far back as 2015-01 with 93
- * distinct months on file. The counts are written out the same way SameAirportNote's and
- * DeathWatchScopeNote's are; the window is computed, since it moves every rebuild. */
+ * the trailing 12. Two things follow, and the page shipped a false claim about each:
+ *
+ *   1. It is a RE-ENTRY, not a first appearance. mart_route_health carries no lookback past
+ *      that window, so the query cannot distinguish one from the other -- 334 of the 688
+ *      qualifying rows (48.5%) filed in some earlier month, MQ AZO-ORD as far back as 2015-01
+ *      with 93 distinct months on file. (M6 shipped "first appearance since 2015".)
+ *   2. It is a CARRIER-ROUTE PAIR, not a route. The mart's grain is (op_airline_id, route), so
+ *      this filter is silent about every OTHER carrier on the same airport pair -- 521 of the
+ *      688 (75.7%), and all 25 rows this page renders, had another carrier flying that pair
+ *      inside the prior window. (M6 shipped "new service nobody flew last year", and the fix
+ *      wave for #1 carried that clause over unexamined.)
+ *
+ * "mart_route_health carries no lookback", not "this database": fct_route_month spans 2015-01
+ * onward and is exactly what both measurements above were taken from. The limitation belongs to
+ * the mart, and overstating it as a property of the dataset is the same class of error as the
+ * two it is explaining.
+ *
+ * Counts are written out the way SameAirportNote's and DeathWatchScopeNote's are; the window is
+ * computed, since it moves every rebuild. */
 function ReEntryNote({ p12From, p12To }: { p12From: string; p12To: string }) {
   return (
     <p className="foot">
-      Re-entry, not first appearance. A route qualifies by filing nothing at all in the prior 12
-      months ({p12From} to {p12To}) and something in the trailing 12. This database carries no
-      lookback beyond that window, so it cannot tell a brand-new route from a resumed one:
-      measured, 334 of the 688 qualifying routes (48.5%) had already filed in some earlier
-      month, one of them in 93 distinct months going back to 2015-01. A route that stopped and
-      resumed <em>within</em> these two windows is excluded for the mirror-image reason.
+      Re-entry, not first appearance &mdash; and a carrier&ndash;route pair, not a route. A pair
+      qualifies when this carrier filed nothing at all on this route in the prior 12 months (
+      {p12From} to {p12To}) and something in the trailing 12. mart_route_health carries no
+      lookback beyond that window, so it cannot tell a brand-new pair from a resumed one:
+      measured, 334 of the 688 qualifying pairs (48.5%) had already filed in some earlier month,
+      one of them in 93 distinct months going back to 2015-01. Nor does it mean the route was
+      unserved &mdash; 521 of the 688 (75.7%) had a <em>different</em> carrier flying the same
+      airport pair inside that prior window. A pair that stopped and resumed <em>within</em>
+      these two windows is excluded for the mirror-image reason.
     </p>
   );
 }

@@ -666,13 +666,27 @@ share `DataTable`'s rank column and nothing else. **The user-facing copy has to 
 not just the docs: `/watch`'s own index read "Four saved Explorer queries, editorially framed"
 through M6, one milestone after the correction landed in six other places.
 
-Route Birth Tracker rows must read **"re-entry, not first appearance"** — never "first ever",
-and **never "first appearance since 2015"**, which is what this line mandated through M6 and
-what the shipped page told every visitor. `p12_months_present = 0` means *nothing filed in the
-prior 12 months*, full stop; the mart has no lookback past that window. Measured: 334 of 688
-qualifying rows (48.5%), and 17 of the 25 rendered, had already filed earlier — `MQ AZO–ORD` in
-93 distinct months back to 2015-01. `docs/product/features.md` § Insight presets owns the rule
-and the rest of the evidence.
+Route Birth Tracker rows must read **"re-entry, not first appearance"** and must **name the
+carrier** — never "first ever", never "first appearance since 2015", and never "nobody flew it
+last year". All three shipped; the first two were mandated by this very line through M6.
+`p12_months_present = 0` means *this carrier filed nothing on this route in the prior 12
+months*, full stop. Two things it does **not** mean, each measured:
+
+- **Not a first appearance.** The mart has no lookback past that window. 334 of 688 qualifying
+  rows (48.5%), and 17 of the 25 rendered, had already filed earlier — `MQ AZO–ORD` in 93
+  distinct months back to 2015-01.
+- **Not an unserved route.** `mart_route_health`'s grain is **(op_airline_id, route)**, so the
+  filter is silent about every other carrier on the same airport pair. **521 of 688 (75.7%), and
+  25 of the 25 rendered**, had a different carrier flying that pair inside the prior window —
+  `AS HNL–ITO` leads the page while HA, UA and WN filed **1,787,347 seats** on it in that
+  window, 4.9× the subject's own trailing 12.
+
+**Grain is a copy problem, not just a data problem.** The second bullet was introduced by the
+fix wave that closed the first: "nobody flew last year" read as the accurate half of the old
+sentence and was carried over unexamined, so a wave correcting one false claim shipped another
+of the same class. Any sentence about a `mart_route_health` row names the carrier or it is a
+claim about a route the query never made. `docs/product/features.md` § Insight presets owns the
+rule and the rest of the evidence.
 
 **Every filter a preset applies is stated on the preset's own page**, in a `.foot` note, or the
 page cannot be reproduced from what it says. Empty Planes has two (`gauge_t12 >= 50` and

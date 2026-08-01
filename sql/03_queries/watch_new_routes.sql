@@ -1,23 +1,36 @@
--- Route Birth Tracker. RE-ENTRY, not first appearance -- and emphatically not "first appearance
--- since 2015", which is what this comment, lib/watch.ts's frame, docs/product/features.md and
--- docs/design/system.md all said through M6 and which the final whole-branch review measured as
--- false.
+-- Route Birth Tracker. RE-ENTRY, not first appearance -- and a CARRIER-ROUTE PAIR, not a route.
+-- Both halves of that sentence are corrections; the name of this preset is the one thing about
+-- it that overstates what it selects, and it is kept only because it is the product's.
 --
 -- p12_months_present = 0 is what "new" means here, and it is the whole of it: nothing filed in
--- the PRIOR 12-month window (asOf-23 .. asOf-12), something filed in the trailing one. It says
--- nothing at all about the years before that window, because mart_route_health carries no
--- lookback beyond the prior 12 months. Measured on the 2026-04 warehouse: 334 of the 688
--- qualifying routes (48.5%) filed in at least one month BEFORE the p12 window, and 17 of the 25
--- rows the page actually renders. Worst case MQ AZO-ORD -- 93 distinct months on file, first
--- filed 2015-01 -- which "first appearance since 2015" presented as brand-new service. The
--- older reasoning (features.md's "a route flown in 2014 and resumed in 2019 looks new") was
--- right about the failure mode and one rung too high about the window: a route flown in 2023
--- and resumed in 2025 looks new too, and that is 48% of these rows.
+-- the PRIOR 12-month window (asOf-23 .. asOf-12), something filed in the trailing one. TWO
+-- claims do NOT follow from that, and this file's own header asserted both through M6.
 --
--- The converse limitation is unchanged: a route that stopped and resumed WITHIN the p12/t12
--- windows has some p12 presence and is silently excluded. Neither is a bug this file's WHERE
--- clause could fix without a longer lookback than the mart computes; both are stated on the
--- page (ReEntryNote, app/src/app/watch/[preset]/page.tsx) rather than papered over.
+-- 1. NOT "first appearance since 2015". This filter says nothing about the years before the p12
+--    window, because mart_route_health carries no lookback beyond it. Measured on the 2026-04
+--    warehouse: 334 of the 688 qualifying rows (48.5%) filed in at least one month BEFORE the
+--    p12 window, and 17 of the 25 rows the page actually renders. Worst case MQ AZO-ORD -- 93
+--    distinct months on file, first filed 2015-01 -- which "first appearance since 2015"
+--    presented as brand-new service. features.md's older reasoning ("a route flown in 2014 and
+--    resumed in 2019 looks new") had the right failure mode and the wrong window: a route flown
+--    in 2023 and resumed in 2025 looks new too, and that is 48% of these rows.
+--
+-- 2. NOT "new service nobody flew last year". THE GRAIN IS (op_airline_id, route_key_low,
+--    route_key_high) -- one row per carrier per undirected route, never one row per route -- so
+--    this filter is silent about every OTHER carrier on the same airport pair. Measured: 521 of
+--    the 688 (75.7%), and 25 of the 25 rows this page renders, had a different carrier flying
+--    that pair inside the p12 window. The #1 row is AS HNL-ITO, where HA, UA and WN filed
+--    1,787,347 seats in that window -- 4.9x the subject's own trailing 12. AS DEN-SAN had EIGHT
+--    other operators and 1.88M seats; F9 JFK-LAX had four and 3.19M, 25x its own.
+--
+--    This one survived the fix wave that caught (1): "nobody flew last year" reads as the
+--    accurate half of the old sentence and was carried over unexamined. Anything written about
+--    this preset must name the carrier, or it is a claim about a route the query never made.
+--
+-- The converse limitation is unchanged: a pair that stopped and resumed WITHIN the p12/t12
+-- windows has some p12 presence and is silently excluded. None of this is a bug this file's
+-- WHERE clause could fix without a longer lookback than the mart computes; all of it is stated
+-- on the page (ReEntryNote, app/src/app/watch/[preset]/page.tsx) rather than papered over.
 --
 -- Ordered t12_seats DESC so the biggest new entrants lead, not the smallest charter filing.
 SELECT

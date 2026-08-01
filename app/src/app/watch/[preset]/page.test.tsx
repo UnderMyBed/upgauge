@@ -214,6 +214,29 @@ describe("/watch/<preset>", () => {
     expect(text).not.toContain("first ever");
   });
 
+  // Re-review of the fix wave above: that wave introduced a NEW false claim of the same class
+  // it was closing. `mart_route_health`'s grain is (op_airline_id, route) -- a carrier-route
+  // pair -- so `p12_months_present = 0` is silent about every OTHER carrier on the same airport
+  // pair. Two strings described it at ROUTE grain: the frame's "nobody flew last year" (carried
+  // over from the original sentence unexamined, because it read as its accurate half) and
+  // ReEntryNote's "A route qualifies by...". Measured: 521 of the 688 qualifying rows (75.7%),
+  // and 25 of the 25 the page renders, had a different carrier flying that pair inside the p12
+  // window -- the #1 row AS HNL-ITO while HA, UA and WN filed 1,787,347 seats on it, 4.9x the
+  // subject's own trailing 12. So the claim was false about EVERY row on the page.
+  //
+  // Both directions, as always: the carrier-grain phrasing present AND the two route-grain
+  // phrasings that actually shipped absent. `not.toContain("nobody flew")` is the sharper of
+  // the two negatives -- it is the exact string, and nothing else on this page can produce it.
+  it("states the carrier-route grain, never route grain", async () => {
+    const { container } = await renderPreset("new-routes");
+    const text = content(container);
+    expect(text).toContain("this carrier flew nothing on");
+    expect(text).toContain("this carrier filed nothing at all on this route");
+    expect(text).toContain("521 of the 688");
+    expect(text).not.toContain("nobody flew");
+    expect(text).not.toMatch(/\bA route qualifies\b/);
+  });
+
   it("states the prior-12 window it actually tests, derived from asOf rather than written out", async () => {
     // The window moves every monthly rebuild. A hardcoded "2024-05 to 2025-04" would be a
     // second false claim on the same page one rebuild later, so ReEntryNote computes it --

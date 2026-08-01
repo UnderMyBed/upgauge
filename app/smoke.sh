@@ -871,8 +871,27 @@ check_not "watch: ...and does not still make it"             "$BODY" 'Four saved
 # nav link and nothing else.
 NAVBODY=$(curl -s --max-time 15 "${BASE}/route/JFK-LAX")
 check "watch: the top bar links to it from an entity page" "$NAVBODY" 'href="/watch"'
-NAVBODY=$(curl -s --max-time 15 "${BASE}/")
-check "watch: the front door links to it in prose"         "$NAVBODY" 'href="/watch"'
+#
+# The front-door PROSE link needs its own region, and the first version of this check did not
+# have one -- re-review of the fix wave caught it as vacuous. `/` renders TopBar, TopBar emits
+# `href="/watch"`, so `check ... "$BODY" 'href="/watch"'` against the whole page stayed green
+# with the prose <Link> deleted outright: it could not fail for the reason it named, which is
+# this file's own recurring dark-guard failure.
+#
+# `between` bounds the region to <main>, which TopBar sits OUTSIDE (page.tsx renders
+# <div class="wrap"><TopBar/><main class="error-page">...). The check_not below is not decoration
+# -- it is the falsifiability proof, asserted in-band and permanently: if the bound ever stops
+# excluding the top bar (a layout change moving TopBar inside <main>, say), the positive check
+# silently goes vacuous again and only this line notices. `class="mark"` is the wordmark's own
+# class, emitted by TopBar and by nothing else.
+# The wordmark presence check on the FULL body is what stops the check_not from being vacuous
+# in its own right: "class=mark is absent from the bounded region" proves the bound works only
+# if that string is present in the page at all. Three checks, and each one is load-bearing.
+HOMEBODY=$(curl -s --max-time 15 "${BASE}/")
+HOMEMAIN=$(between "$HOMEBODY" '<main' '</main>')
+check     "watch: the wordmark IS on the front door (the check_not below needs a live needle)" "$HOMEBODY" 'class="mark"'
+check_not "watch: ...but the <main> bound excludes the top bar, so the next check is real"     "$HOMEMAIN" 'class="mark"'
+check     "watch: the front door links to it in prose, not only via the top bar"               "$HOMEMAIN" 'href="/watch"'
 
 # 14b. /watch/gauge -- Gauge Watch, "the differentiator" (docs/product/features.md), and the
 # ONE preset that renders two tables (Upgauging / Downgauging, sorted oppositely by the same
@@ -956,6 +975,15 @@ check_not "watch/new-routes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
 check     "watch/new-routes: states re-entry, not first appearance" "$BODY" 'not necessarily a first appearance'
 check     "watch/new-routes: carries the measured count"            "$BODY" '334 of the 688'
 check_not "watch/new-routes: no longer claims 'since 2015'"         "$BODY" 'since 2015'
+# The SECOND false claim on this page, found by the re-review of the wave that fixed the first:
+# mart_route_health's grain is (op_airline_id, route), so `p12_months_present = 0` says nothing
+# about the OTHER carriers on that airport pair -- 521 of 688 (75.7%) and 25 of the 25 rendered
+# had one, the #1 row (AS HNL-ITO) while HA/UA/WN filed 1,787,347 seats on it. This page has now
+# shipped a false claim twice, so every one of them gets a served-byte guard, both directions.
+check     "watch/new-routes: names the carrier, not the route (frame)" "$BODY" 'A route this carrier flew nothing on last year'
+check     "watch/new-routes: names the carrier, not the route (note)"  "$BODY" 'this carrier filed nothing at all on this route'
+check     "watch/new-routes: carries the unserved-route measurement"   "$BODY" '521 of the 688'
+check_not "watch/new-routes: never claims nobody flew it"              "$BODY" 'nobody flew'
 check_re     "watch/new-routes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/new-routes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
 

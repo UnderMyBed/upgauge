@@ -252,7 +252,22 @@ called out here rather than quietly deleted.
   right failure mode and stopped one rung too high: a route flown in **2023** and resumed in
   2025 looks new too, and that is 48% of the rows. The mirror-image limitation is unchanged — a
   route that stopped and resumed *within* the p12/t12 windows has some p12 presence and never
-  appears here at all. Both are stated on the page (`ReEntryNote`). *Cheap + fun.*
+  appears here at all.
+
+  **And the grain is the pair, not the route — so "nobody flew it last year" is false too.**
+  `mart_route_health` is one row per **(op_airline_id, undirected route)**, which is why this
+  bullet says "carrier × O&D pair". `p12_months_present = 0` is therefore silent about every
+  *other* carrier on the same airport pair. Measured: **521 of the 688 qualifying rows (75.7%),
+  and 25 of the 25 the page renders**, had a different carrier flying that pair inside the p12
+  window. The page's own #1 row, `AS HNL–ITO`, ranks first while HA, UA and WN filed
+  **1,787,347 seats** on that pair in the prior window — **4.9×** the subject's own trailing 12.
+  `AS DEN–SAN` had **eight** other operators and 1.88M seats; `F9 JFK–LAX` four and 3.19M, 25×
+  its own. This one is worth recording as a process finding, not just a data one: it was
+  **introduced by the fix wave that corrected the "since 2015" claim** — "new service nobody
+  flew last year" read as the *accurate* half of the old sentence and was carried over
+  unexamined, so a wave fixing one false claim shipped another of the same class. Any sentence
+  about a `mart_route_health` row names the carrier, or it is a claim about a route the query
+  never made. All of it is stated on the page (`ReEntryNote`). *Cheap + fun.*
 - **Route Death Watch** — risk score desc. *Follows once the score model's in.*
 - **Time-machine diff** — "PDX, Jul 2019 vs Jul 2025." Added/dropped/upgauged side by side,
   table + diff map. *Most shareable artifact in the product.*
