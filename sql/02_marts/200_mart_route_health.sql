@@ -104,6 +104,26 @@ deltas AS (
 axes AS (
     SELECT
         *,
+        -- nullif() on BOTH sides, not defensive decoration: DuckDB's ln(0) does not return
+        -- -inf the way IEEE-754 float division would -- it raises "Out of Range Error:
+        -- cannot take logarithm of zero", which would abort the ENTIRE `make build`, not
+        -- merely mis-sort one row. Without the guard, ln() would see that literal zero;
+        -- with it, ln() only ever sees NULL (ln(NULL) is NULL, not an error).
+        --
+        -- Provably UNREACHABLE today, not merely absent from the current warehouse: the
+        -- upstream `zero_seats` quarantine (normalize_t100_segment.sql) unconditionally
+        -- excludes any row with `seats = 0 AND departures_performed > 0` from every sum in
+        -- fct_route_month, for BOTH measures on that row. So any fct_route_month row (and
+        -- transitively any t12/p12 window sum here) with departures_performed > 0 is built
+        -- entirely from segment rows that each individually had seats > 0 -- there is no
+        -- code path that can produce departures_performed > 0 with seats = 0 in either
+        -- window. Confirmed by construction (a 12-month all-quarantined adversarial route
+        -- fed through the real fct_route_month.sql + this file: departures_performed and
+        -- seats both come back NULL, and the row never reaches mart_route_health at all,
+        -- excluded by the `t12_departures_performed >= 30` floor below) and empirically
+        -- (measured min(gauge_t12) = 0.958 on the real 2026-04 warehouse). Keep the guard
+        -- anyway, the same way the `p12_months_present = 0` CASE above is kept: correct
+        -- defence against a future change to the quarantine rule, which WOULD change this.
         ln(nullif(gauge_t12, 0) / nullif(gauge_p12, 0))                    AS gauge_log,
         ln(nullif(t12_departures_performed, 0)
            / nullif(p12_departures_performed, 0))                          AS freq_log,
