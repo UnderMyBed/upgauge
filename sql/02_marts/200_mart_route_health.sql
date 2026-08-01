@@ -149,8 +149,8 @@ z AS (
 -- reaches z_gauge = -17.28 unclamped. Touches 470 of the 7,267 scored rows.
 --
 -- Every clamp is a CASE for the same reason the cap above is: greatest(least(NULL,3),-3)
--- returns -3, which would score all 8,080 rows and destroy the three-reason NULL contract
--- (docs/product/features.md).
+-- returns 3 (least(NULL,3) is 3, then greatest(3,-3) is 3), not NULL, which would score all
+-- 8,080 rows and destroy the three-reason NULL contract (docs/product/features.md).
 scored AS (
     SELECT
         * EXCLUDE (gauge_log, freq_log, completion_capped, z_lf, z_gauge, z_freq, z_completion),

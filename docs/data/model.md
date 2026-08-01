@@ -496,8 +496,11 @@ correct defence against a future change to the quarantine rule, which *would* ch
 Spread (max/min of the scored components): **25.0× → 1.5×**.
 
 **The `least`/`greatest` NULL trap.** DuckDB's `least()` and `greatest()` **ignore `NULL`
-rather than propagating it** — `least(NULL, 3)` returns `3`, not `NULL`, and
-`greatest(least(NULL, 3), -3)` returns `-3`, not `NULL`. A bare `least(completion_factor,
+rather than propagating it** — `least(NULL, 3)` returns `3`, not `NULL`, and chaining that into
+`greatest(least(NULL, 3), -3)` returns `greatest(3, -3)`, i.e. **`3`**, not `NULL` (verified in
+DuckDB directly; an earlier draft of this paragraph claimed `-3`, transposing which bound wins
+— the conclusion is unaffected either way: a value is fabricated instead of `NULL`
+propagating). A bare `least(completion_factor,
 1.5)` therefore **fabricates a near-perfect completion rate of `1.5`** for every route with no
 filed schedule at all (`t12_departures_scheduled = 0`, so `completion_factor` is itself
 `NULL`) — **180 invented completion rates**. Left unguarded through to the clamp, the same
