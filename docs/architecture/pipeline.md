@@ -2046,6 +2046,105 @@ file in the same window; Task 2's own isolated contribution to that total is the
 `render.test.ts` above. `make goldens` leaves `urlstate.json` byte-identical; `pivot.json` gains
 exactly the two new cases above (11 → 13).
 
+### Task 3 — `/airport` collapses from six pivots to two
+
+The task Tasks 1-2 existed to license, and the highest-risk one in the milestone: it deletes
+working, tested arithmetic (`inclusionExclusion`/`unionSides`/`unionMix`, plus the `partial`
+flag threaded through every call site of it, `app/src/app/airport/[code]/endpoints.ts`) and
+replaces it with a different query that has to reproduce the exact numbers the old one
+committed.
+
+**The gate, run before anything else changed.**
+`pipeline/tests/test_airport_endpoints_real_data.py` (new, warehouse-coupled) renders a segment
+pivot filtered on `endpoint_airport_id` for SEA (`airport_id` 14747) over the trailing 12
+months (2025-05..2026-04) directly through `pipeline.pivot.render_pivot` — no TypeScript
+involved yet — and asserts the seat total is **53,373,806**, the figure `endpoints.ts` has
+committed since M4d. A second test proves the third term the old inclusion-exclusion needed is
+now unnecessary: the naive `origin_airport_id` total plus the naive `dest_airport_id` total is
+**53,386,452** (the exact double-counted figure `docs/data/invariants.md` records for the naive
+two-half sum), and the gap between that and the either-filter's own total is exactly **12,646**
+seats — the 18 same-airport (`origin = dest`) rows at SEA. Both tests **passed immediately**,
+not after Step 3's TypeScript rewrite: Tasks 1-2 already proved the filter itself correct, so
+this task's own risk is entirely in what `endpoints.ts` does with it, not in the filter.
+
+**The one thing SQL still can't do for this page: say which end is "the other one."**
+`endpoint_airport_id` is `filter_only` (Task 2), so it can appear in a filter but not in
+`dimensions` — grouping by it would put one segment row into both the origin's group and the
+dest's group and double-count the measure. So the single pivot groups by the two REAL columns
+instead — `(op_airline_id, origin_airport_id, dest_airport_id)` — and a small TypeScript
+function, `otherEndpoint`, reads each returned row and picks whichever column is NOT the subject
+airport (or the airport itself, when both columns are it — the same-airport case). This is the
+one piece of logic Task 3 still owns; everything else the old three-pivot assembly did (the OR,
+the same-airport de-duplication) SQL now does on its own, inside one `GROUP BY`.
+
+**A property that made the collapse safe to reason about**: neither `carrierRows` nor
+`airportTotals` (the table and the stat strip) needed to change AT ALL. Both already summed or
+`Set()`-ed over however many `EndpointRow`s they were handed, so it was never load-bearing that
+the old union pre-folded each route's two directions (and the same-airport case) into one row
+per `(carrier, endpoint)` before those functions ran. The new pivot returns MORE rows per
+`(carrier, endpoint)` pair than the old union did (both directions of a route are now separate
+rows, since the query groups by real `origin`/`dest` columns rather than a pre-folded "other
+endpoint"), and the totals come out identical either way — proven by `page.test.tsx`'s full,
+warehouse-backed render of `/airport/SEA`, which passed unmodified (163 tests across every
+entity page, same run).
+
+**Row-count consequence, re-measured rather than assumed.** The new single-pivot query is NOT
+the same query the old "per side" / "union" figures described: the old union collapsed each
+route's two directions into one row before Task 3 (via its own key function); the new pivot
+keeps them separate, because it groups by real `origin`/`dest` columns rather than a derived
+"other endpoint." Checked against the 25 busiest airports by trailing-12 segment-row count, not
+assumed from ORD alone: the traffic query (`AIRPORT_ENDPOINT_LIMIT = 5000`) produces **1,732**
+groups at ORD (was 879 origin / 855 dest / 959 union under the old mechanism) and 666 at SEA;
+5,000 clears the new worst case 2.9x. The chart's mix query is unaffected in this respect — its
+grain, `(year_month, aircraft_type)`, never carried a direction — so ORD's figure is unchanged
+at **4,118**, matching the old union exactly.
+
+**Mutants (all three from the plan, run against the real warehouse, reverted after each):**
+
+| # | Mutation | Where | Result | Reverted |
+|---|---|---|---|---|
+| 1 | Filter on `origin_airport_id` instead of `endpoint_airport_id` | `test_airport_endpoints_real_data.py`'s own query (proving the SEA gate is sensitive to the filter choice) | `test_either_endpoint_filter_reproduces_the_committed_sea_figures` red at **26,710,000** | yes |
+| 1b | Same mutation applied to the SHIPPED `airportTrafficQuery` in `endpoints.ts` | production code | 4 tests in `page.test.tsx` red, all showing 26,710,000 in place of 53,373,806/43,896,637/82.24%/26,091,482 | yes |
+| 2 | `OR` → `AND` in `pipeline/pivot.py`'s `either`-mode branch (Task 2's own code, verified here from the consumer side) | `pipeline/pivot.py` | Both SEA tests red — the AND collapses the filter to just the origin=dest intersection, reading 12,646 (the overlap alone) | yes |
+| 3 | Duplicate the same-airport contribution: replace the either-filter total with the naive `origin + dest` sum, inline in the test | `test_airport_endpoints_real_data.py` | `test_either_endpoint_filter_reproduces_the_committed_sea_figures` red at **53,386,452** | yes |
+
+Mutant 1b is not one of the plan's three but was run anyway: mutants 1-3 as briefed exercise the
+Python reference implementation and the new pipeline test, not the shipped TypeScript file
+Task 3 actually rewrote. Confirming the same wrong number (26,710,000) surfaces through
+`page.test.tsx` when `endpoints.ts`'s own query is mutated closes that gap.
+
+**Deleted from `endpoints.test.ts`: 9 tests, all exercising `inclusionExclusion`/`unionSides`/
+`unionMix`,** functions that no longer exist — `counts an arrival-only filing`, `sums the two
+directions of one route`, `counts a same-airport filing ONCE`, `refuses an overlap row it never
+saw`, `skips an overlap row a truncated side no longer carries`, `still subtracts a full overlap
+row`, `skips an overlap CELL a truncated mix side`, `still refuses an unexplained overlap cell`,
+`applies the same arithmetic to the chart's cells`. **Added: 5** — 4 for `otherEndpoint`'s
+per-row derivation (departure, arrival, same-airport, and "both directions stay separate rows")
+plus 1 pinning `airportTrafficQuery`'s filter and dimension shape. **Kept unchanged, only prose
+retitled** (no assertion or fixture touched): the 3 warehouse-backed `fetchAirportMix` tests and
+the 5 `carrierRows`/`airportTotals` aggregation tests — neither function's inputs or contract
+changed. Net: 17 → 13 tests in this file.
+
+`page.tsx`'s truncation-disclosure copy lost its "on each side" / "on at least one side"
+phrasing (there is only one side now) and its carrier-endpoint description became
+carrier-origin-destination, matching the new query's actual grouping; the rendered numbers and
+every other line of copy are untouched.
+
+`make test` 472 → **474** (the 2 new warehouse tests, both confirmed PASSED not skipped).
+`make check` clean. `make app-check`: 718 tests green at the time of this task's own final run,
+typecheck and lint clean — the repo-wide total is not this task's delta alone (concurrent M7
+tasks landed their own test files in the same window, the established caveat this section
+inherits from Task 2's own account above). `make goldens` untouched (`sql/03_queries/goldens/`
+byte-identical — this task added no pivot SQL). `make app-smoke`: **241 checks**, unchanged from
+M6 Task 8 (Task 3 is a refactor of what a page computes FROM, not what `smoke.sh` checks for),
+all green, including the served-bytes assertion `airport: counts BOTH endpoints, not just
+departures` against the literal string `53,373,806` curled from a real, built, served
+`/airport/SEA`. Entity-page byte weights ticked up a few hundred bytes across ALL FOUR entity
+pages (not only `/airport`) between the M6 baseline and this run — most plausibly the Task 1-2
+catalog growth (`endpoint_airport_id` and `route`'s new `filter_mode` column) flowing into every
+page's embedded allowlist, not this task's own change; not isolated further, flagged for the
+reviewer.
+
 ### Task 7 — the pre-projected basemap, generated reproducibly
 
 `/airport/<code>`'s network map (Task 6) draws arcs over a coastline and state-outline

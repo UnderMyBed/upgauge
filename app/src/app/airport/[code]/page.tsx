@@ -151,9 +151,9 @@ function AirportEmptyState({
 
 /** The whole render for a resolved airport, taking the row limit as an explicit input for the
  * same reason `RouteView` does: nothing in production data reaches either truncation branch
- * (measured per-side worst case 879 carrier-endpoint groups against a 5,000 limit, and 4,094
- * (month, type) cells against 10,000 -- both at ORD), so the disclosures would be untestable
- * without them. Split from the default export so a test can drive a real,
+ * (measured worst case 1,732 carrier-origin-dest groups against a 5,000 limit, and 4,118
+ * (month, type) cells against 10,000 -- both at ORD, M7 Task 3), so the disclosures would be
+ * untestable without them. Split from the default export so a test can drive a real,
  * live-database render without going near Next's routing plumbing. */
 export async function AirportView({
   airport,
@@ -168,9 +168,10 @@ export async function AirportView({
   const asOf = await dataAsOf();
   const trailing12 = trailing12From(asOf);
 
-  // CONCURRENT: six pivots in one wave (three per union -- origin, dest, and their overlap --
-  // at two grains). They share nothing, and connect() hands each its own DuckDBConnection off
-  // the single memoized instance, so the serial form would pay for all six in turn.
+  // CONCURRENT: two pivots in one wave, one per grain, as of M7 Task 3 (six through M6 -- three
+  // per grain, the inclusion-exclusion assembly this page no longer needs). They share nothing,
+  // and connect() hands each its own DuckDBConnection off the single memoized instance, so the
+  // serial form would pay for both in turn for no reason.
   //
   // The chart takes the FULL window, not the table's trailing 12: a twelve-point stacked area
   // of an airport's fleet mix says almost nothing, and the whole point is the trend. The two
@@ -235,14 +236,14 @@ export async function AirportView({
         <div className="body">
           <div>
             {hasMix ? <AircraftMixChart rows={mix.rows} title={airport.code} /> : null}
-            {/* The chart's own truncation, disclosed separately from the table's: the two are
-                separate unions over separate pivots with separate limits, and either can be
-                short while the other is whole. Saying "the totals above" here would be false --
-                the stat strip is fed by the table's union, not by this one. */}
+            {/* The chart's own truncation, disclosed separately from the table's: they are two
+                separate pivots (one per grain) with separate limits, and either can be short
+                while the other is whole. Saying "the totals above" here would be false -- the
+                stat strip is fed by the table's pivot, not by this one. */}
             {mix.truncated && (
               <p className="foot">
-                The chart hit its {mixLimit}-row limit on at least one side, so some months or
-                aircraft types are missing from it; the table and the totals above are unaffected.
+                The chart hit its {mixLimit}-row limit, so some months or aircraft types are
+                missing from it; the table and the totals above are unaffected.
               </p>
             )}
             {isEmpty ? (
@@ -252,8 +253,8 @@ export async function AirportView({
             )}
             {traffic.truncated && (
               <p className="foot">
-                Showing the top {limit} carrier–destination pairs by seats on each side; the
-                totals above cover only those rows.
+                Showing the top {limit} carrier–origin–destination groups by seats; the totals
+                above cover only those rows.
               </p>
             )}
             <p className="foot">

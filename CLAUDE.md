@@ -468,16 +468,21 @@ property Tasks 3/4's Top-N builder and the `/watch` presets both rest on.
 
 Next: **M7.** What it owes, each identified by the work above rather than guessed:
 
-1. **A first-class either-endpoint filter** in `meta_pivot_dimensions` — one pivot instead of
-   three on `/airport`, and the same shape a future `/city-market` needs. It needs composite
-   filter semantics in `render.ts` **and** `pipeline/pivot.py` in lockstep, plus a golden; that
-   is a milestone-sized change, which is why M4d assembled the OR arithmetically instead.
-2. **`/airport`'s truncation arithmetic** skips the overlap term rather than correcting it, so a
-   truncated page's totals are approximate (disclosed on the page, on the table and the chart
-   separately). No airport reaches either limit today — measured **per-side** worst cases are 879
-   (carrier, endpoint) groups against 5,000 and 4,094 (month, type) cells against 10,000, both at
-   ORD — so this is a latent semantic, not a live bug. The 959 and 4,118 this file used to quote
-   "per side" are ORD's *unions*, so the real headroom is wider than was claimed.
+1. ~~A first-class either-endpoint filter in `meta_pivot_dimensions`~~ **DONE, M7 Tasks 1-2**
+   (`endpoint_airport_id`, `filter_mode = 'either'`, compiling to an OR across
+   `origin_airport_id`/`dest_airport_id` in `render.ts` **and** `pipeline/pivot.py`, in
+   lockstep, with goldens) — **and spent, M7 Task 3**: `/airport` runs ONE pivot per grain
+   instead of three, `inclusionExclusion`/`unionSides`/`unionMix` are deleted, and the SEA
+   figures (53,373,806 seats both ways) are unmoved, gated by a warehouse-coupled test
+   (`pipeline/tests/test_airport_endpoints_real_data.py`). The same shape still owed to a
+   future `/city-market`.
+2. ~~`/airport`'s truncation arithmetic skips the overlap term~~ **MOOT, M7 Task 3** — there is
+   no overlap term to skip once the OR is one pivot; SQL's own `GROUP BY` counts a same-airport
+   row once. The single pivot's own row-count ceiling was re-measured rather than carried over
+   from the old three-pivot figures (which counted a different, pre-folded grouping): worst case
+   is now 1,732 (carrier, origin, dest) groups at ORD against the unchanged 5,000 limit, and the
+   chart's (month, type) worst case is unchanged at 4,118, since that grain never carried a
+   direction to begin with.
 3. **The residual 5xx cache gap** — a page-specific throw whose proxy resolution already
    succeeded (a catalog view the entity resolvers, `/explore`'s probe, or (M6) `/watch`'s probe
    don't touch) is still cached for up to an hour. `docs/architecture/hosting.md` § "The gap" has

@@ -247,10 +247,16 @@ it is **matched**. The M4d design spec quoted the trailing-12 excluding-quaranti
 have two spellings; it is labelled there now.
 
 At SEA the trailing-12 overlap is 18 rows carrying 12,646 seats and 172 departures, enough to
-move its seat total from 53,373,806 to 53,386,452 if the two halves are simply added.
-So `/airport` computes `origin + dest − (origin ∧ dest)`, with the third term its own pivot
-(`app/src/app/airport/[code]/endpoints.ts`); the M4d design spec's claim that a segment with
-one airport at both ends "does not exist" is true of route identity above and false here.
+move its seat total from 53,373,806 to 53,386,452 if the two halves are simply added. Through
+M6, `/airport` computed `origin + dest − (origin ∧ dest)` arithmetically, with the third term
+its own pivot, because the pivot vocabulary had no way to express `origin = X OR dest = X`
+directly. **M7 gave it a first-class `endpoint_airport_id` filter** (`filter_mode = 'either'`,
+`app/src/lib/pivot/render.ts` / `pipeline/pivot.py`, Tasks 1-2) that compiles to exactly that
+OR, so as of M7 Task 3 `/airport` runs it as ONE pivot per grain
+(`app/src/app/airport/[code]/endpoints.ts`): SQL's own `GROUP BY` counts a same-airport row
+once, the same way the old third term's subtraction did, without a separate query or an
+arithmetic identity applied to it after the fact. The M4d design spec's claim that a segment
+with one airport at both ends "does not exist" is true of route identity above and false here.
 
 **A count of an airport's distinct destinations includes the airport itself unless it is
 explicitly excluded, and the two answers are both defensible — so an unlabelled one is not

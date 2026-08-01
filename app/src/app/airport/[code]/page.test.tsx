@@ -197,10 +197,9 @@ describe("/airport/<code> with nothing in the trailing 12 months", () => {
 });
 
 describe("/airport/<code> truncation disclosure", () => {
-  // SEA's real trailing-12 query returns 374 (carrier, destination) groups departing and 293
-  // arriving, against a 5,000 limit no airport in this database reaches (measured worst case is
-  // ORD at 879 origin / 855 dest per side; 959 is ORD's union), so nothing in production data
-  // exercises this branch. `AirportView` takes the limit
+  // SEA's real trailing-12 traffic pivot returns 666 (carrier, origin, dest) groups, against a
+  // 5,000 limit no airport in this database reaches (measured worst case is ORD at 1,732, M7
+  // Task 3), so nothing in production data exercises this branch. `AirportView` takes the limit
   // as an explicit parameter for exactly that reason -- same split, same justification, as
   // RouteView's.
   async function view(limit?: number, mixLimit?: number) {
@@ -209,7 +208,7 @@ describe("/airport/<code> truncation disclosure", () => {
     return await AirportView({ airport: r.airport, limit, mixLimit });
   }
 
-  it("discloses when a side hits the row limit", async () => {
+  it("discloses when the traffic pivot hits the row limit", async () => {
     render(await view(2));
     expect(screen.getByText(/top 2 /i)).toBeDefined();
   });
@@ -220,10 +219,9 @@ describe("/airport/<code> truncation disclosure", () => {
   });
 
   it("discloses a truncated CHART separately, and does not 500 for being big", async () => {
-    // The chart is a SECOND union over three SEPARATE LIMIT-ed pivots, and it shipped without
-    // the `partial` guard its sibling has: a truncated side drops a cell the overlap query
-    // still returns, inclusionExclusion throws, and the page 500s -- with the proxy's
-    // `public, s-maxage=2592000` already on the response, so the CDN pins that 500 for a month.
+    // The chart is a SEPARATE pivot from the table's, at a different grain and a different
+    // limit, so either can be short while the other is whole -- `fetchAirportMix` sets its own
+    // `truncated` from its own pivot's row count, same shape as `fetchAirportTraffic`'s.
     // Rendering at all is half the assertion here; saying so is the other half.
     render(await view(undefined, 5));
     expect(screen.getByText(/chart .*hit its 5-row limit/i)).toBeDefined();
