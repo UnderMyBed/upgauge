@@ -1,31 +1,21 @@
+import { entitySlugFromPath } from "@/lib/entitySlug";
 import { AmbiguousCodeError, lookupAircraftByName, type AircraftRef } from "@/lib/resolve";
 
 /** The `<name>` half of an `/aircraft/<name>` pathname, and the prefix it starts after.
- *
- * Sibling of `rawPath.ts`'s `ROUTE_PREFIX`/`routeSlugFromPath`, and deliberately a second copy
- * of that four-line decode guard rather than a shared generic: M4d builds `/airport`,
- * `/carrier` and `/aircraft` in three parallel tasks, and a shared helper is three agents
- * editing one file. Hoisting `slugFromPath(prefix, pathname)` once all three have landed is the
- * right cleanup; doing it now would be a merge conflict instead of a refactor.
  *
  * Shared by `proxy.ts` (which needs the slug to decide cache-worthiness before the page runs)
  * and `not-found.tsx` (which needs it to re-derive the 404 reason, since `not-found.js` accepts
  * no props), so the two can never disagree about where the slug starts. */
 export const AIRCRAFT_PREFIX = "/aircraft/";
 
+// A one-line wrapper around lib/entitySlug.ts's entitySlugFromPath -- this file used to carry
+// its own copy of the decode guard below (a deliberate one at the time: M4d built `/airport`,
+// `/carrier` and `/aircraft` in three parallel tasks, and a shared helper would have been
+// three agents editing one file). M5 Task 6 is the collapse that comment always pointed at.
+// The wrapper (and AIRCRAFT_PREFIX above) stays, unchanged in name and behaviour, so nothing
+// importing aircraftSlugFromPath needs an edit.
 export function aircraftSlugFromPath(pathname: string): string | null {
-  if (!pathname.startsWith(AIRCRAFT_PREFIX)) return null;
-  const raw = pathname.slice(AIRCRAFT_PREFIX.length);
-  // The page receives `params.name` already percent-decoded, so decode here too or the two
-  // would disagree about a slug like `B737%2D8`. `decodeURIComponent` THROWS on a malformed
-  // escape (`%zz`) -- bug #2 on smoke.sh's list of production-only failures, found exactly once
-  // and never by a unit test -- so a malformed escape falls back to the raw text, which
-  // resolveAircraftSlug then rejects as an unknown type. Never uncaught.
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
+  return entitySlugFromPath(pathname, AIRCRAFT_PREFIX);
 }
 
 /** `short_name` -> the URL slug. THE TRANSFORM, and the reason this module exists.

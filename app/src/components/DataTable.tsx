@@ -2,6 +2,7 @@ import { formatSeats, formatLoadFactor, formatGauge, formatCount } from "@/lib/f
 import { GaugeRail } from "@/components/GaugeRail";
 import { ReasonCode, type Reason } from "@/components/ReasonCode";
 import { resolutionKey, displayValue, type Resolved } from "@/lib/resolve";
+import { entityHref } from "@/lib/entityLink";
 
 export interface ColumnSpec {
   key: string;
@@ -11,6 +12,15 @@ export interface ColumnSpec {
   /** The catalog dimension this column displays, when it is one. Present ⇒ the cell renders
    * a resolved code rather than the raw id. */
   dimKey?: string;
+  /** Per-row href for a column that isn't a single-dimension resolution -- `route`'s
+   * composite `__route` cell is the one caller today (its `column_expr` spans two columns
+   * that both resolve through `dim_airport`, so `entityHref`/`dimKey` can't express it; see
+   * `DimensionCell`'s docstring). A typed accessor, not a naming convention on
+   * `Record<string, unknown>`: there is nothing to spell wrong and no collision surface with
+   * a row's own data. Returns `null` for a row that shouldn't link (e.g. one of the two
+   * codes it composes didn't resolve) -- `IdentifierCell` renders plain text for that row,
+   * same as a column with no `href` at all. */
+  href?: (row: Record<string, unknown>) => string | null;
 }
 
 const DEPARTURE_FLOOR = 30;
@@ -40,7 +50,16 @@ function format(kind: ColumnSpec["kind"], v: unknown): string {
  * renders directly rather than hiding in a title no keyboard user can reach. The three-way
  * value selection itself (raw id / name / code) is `displayValue()` in lib/resolve.ts, shared
  * with explore/page.tsx's `routeCode` -- only the `abbr` wrapping is specific to this
- * component. */
+ * component.
+ *
+ * This is the chokepoint every table in the product renders its dimension cells through
+ * (M5, "connect the graph"): `/explore` and all four entity pages build their columns with
+ * the same `dimKey: allowlist.dims.get(c)?.joinDim ? c : undefined` expression, so wrapping
+ * the cell in an `<a>` here links every one of them at once. `entityHref` -- not a second,
+ * locally-derived URL -- decides linkability: it returns `null` for a dimension with no
+ * entity page, an unresolved id, or a resolution with no code, and the `<abbr>` nests INSIDE
+ * the `<a>` rather than being replaced by it, so the keyboard-reachable full name survives on
+ * every linked cell too. */
 function DimensionCell({ spec, row, resolved }: {
   spec: ColumnSpec;
   row: Record<string, unknown>;
@@ -49,10 +68,29 @@ function DimensionCell({ spec, row, resolved }: {
   const raw = row[spec.key];
   const hit = spec.dimKey ? resolved?.get(resolutionKey(spec.dimKey, raw)) : undefined;
   const value = displayValue(hit, raw);
-  if (hit !== undefined && hit.code !== null && hit.name) {
-    return <abbr title={hit.name}>{value}</abbr>;
-  }
-  return <>{value}</>;
+  const href = spec.dimKey ? entityHref(spec.dimKey, hit) : null;
+  const inner =
+    hit !== undefined && hit.code !== null && hit.name ? (
+      <abbr title={hit.name}>{value}</abbr>
+    ) : (
+      <>{value}</>
+    );
+  return href ? <a href={href}>{inner}</a> : inner;
+}
+
+/** A non-dimension identifier column that DOES carry a `ColumnSpec.href` accessor -- `route`'s
+ * synthetic `__route` cell is the one caller today. `route`'s `column_expr` spans two columns
+ * that both resolve through `dim_airport`, so it is never a `DimensionCell` (see
+ * `entityLink.ts`'s own docstring: "Use `routeHrefFromCodes` for it") -- the page that
+ * assembles the column is the only place that knows both halves resolved, so it supplies the
+ * per-row accessor itself rather than this component re-deriving anything. `DataTable` only
+ * renders this component for a column whose `href` is set (see the render loop below), so a
+ * plain identifier column with neither `dimKey` nor `href` -- and every numeric measure
+ * column, which never carries either -- takes the same bare `format()` path it always has. */
+function IdentifierCell({ spec, row }: { spec: ColumnSpec; row: Record<string, unknown> }) {
+  const text = format(spec.kind, row[spec.key]);
+  const href = spec.href?.(row) ?? null;
+  return href ? <a href={href}>{text}</a> : <>{text}</>;
 }
 
 function isQuarantined(row: Record<string, unknown>): boolean {
@@ -135,6 +173,8 @@ export function DataTable({
                 <td key={c.key} className={c.kind === "identifier" ? "id" : "num"}>
                   {c.dimKey ? (
                     <DimensionCell spec={c} row={row} resolved={resolved} />
+                  ) : c.href ? (
+                    <IdentifierCell spec={c} row={row} />
                   ) : (
                     format(c.kind, row[c.key])
                   )}

@@ -55,5 +55,18 @@ describe("routeSlugFromPath", () => {
     // production-only failures; an uncaught throw here would 500 the proxy, i.e. every
     // request to a route page, on a URL anyone can type.
     expect(routeSlugFromPath("/route/%zz-LAX")).toBe("%zz-LAX");
+    expect(routeSlugFromPath("/route/%E0%A4%A")).toBe("%E0%A4%A");
+  });
+
+  // M5 Task 6: routeSlugFromPath is now a one-line wrapper around lib/entitySlug.ts's
+  // entitySlugFromPath, and this pins the two behaviours the collapse had to preserve that no
+  // existing test named -- unlike airportSlugFromPath (app/airport/[code]/not-found.test.tsx),
+  // this reader never special-cased an empty slug, and it never rejected a nested path either.
+  it("returns the empty string for a bare trailing slash, not null", () => {
+    expect(routeSlugFromPath("/route/")).toBe("");
+  });
+
+  it("returns whatever follows the prefix verbatim on a nested path", () => {
+    expect(routeSlugFromPath("/route/JFK-LAX/extra")).toBe("JFK-LAX/extra");
   });
 });

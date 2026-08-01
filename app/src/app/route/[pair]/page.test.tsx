@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import RoutePage, { RouteView } from "@/app/route/[pair]/page";
+import RoutePage, { RouteView, generateMetadata } from "@/app/route/[pair]/page";
 import { decode } from "@/lib/pivot/urlstate";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
 import { resolveRoutePair } from "@/lib/routePair";
@@ -34,6 +34,24 @@ describe("/route/<pair>", () => {
     );
     expect(container.querySelector(".entity .code")?.textContent).toBe("JFK–LAX");
     expect(screen.getByText(/Kennedy/i)).toBeDefined();
+  });
+
+  // Final whole-branch review, F5: the spec required "both airport names in the title block
+  // -> /airport/<code>", and it was never carried in -- `{a.name} ↔ {b.name}` rendered as
+  // plain text. Measured consequence: no page in the product links to /airport/ or /route/ at
+  // all, so 23,465 of the sitemap's 23,689 URLs (/airport 1,045 + /route 22,420) have zero
+  // inbound internal links. This is the fix at the one place that can carry it: both airport
+  // halves of the title block link to their own /airport/<code>.
+  it("links both airport names in the title block to their own /airport/<code>", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }),
+    );
+    const ename = container.querySelector(".entity .ename");
+    expect(ename).not.toBeNull();
+    const links = [...ename!.querySelectorAll("a")];
+    const hrefs = links.map((a) => a.getAttribute("href"));
+    expect(hrefs).toContain("/airport/JFK");
+    expect(hrefs).toContain("/airport/LAX");
   });
 
   it("shows DATA AS OF", async () => {
@@ -341,5 +359,29 @@ describe("/route/<pair> aircraft-mix chart", () => {
     // if `fleetMix` is hardcoded true.
     render(await RoutePage({ params: Promise.resolve({ pair: "BNH-JFK" }) }));
     expect(screen.queryByText(/darkening stack is an upgauge/i)).toBeNull();
+  });
+});
+
+describe("/route/<pair> canonical metadata (M5, Task 2)", () => {
+  // `http://localhost:3000` is `@/lib/siteUrl`'s own default with `UPGAUGE_BASE_URL` unset --
+  // NOT a hardcoded production hostname (fix round 1, Critical 1). See
+  // `src/lib/siteUrl.test.ts` for the env-var-override case; the point under test here is
+  // that the resolved PAIR is correct, not the host.
+  it("declares the canonical URL for an already-canonical pair", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ pair: "JFK-LAX" }) });
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/route/JFK-LAX");
+  });
+
+  it("declares the CANONICAL (alphabetical) spelling for a reversed request, not the request", async () => {
+    // The bug to exclude (task-2-brief.md): emitting the requested spelling. LAX-JFK never
+    // renders this page in production (it 308s first), but the canonical tag must still name
+    // the alphabetical pair, not `/route/LAX-JFK`, an already-canonical fixture cannot fail.
+    const meta = await generateMetadata({ params: Promise.resolve({ pair: "LAX-JFK" }) });
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/route/JFK-LAX");
+  });
+
+  it("returns no canonical for a pair that cannot resolve at all", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ pair: "ZZZZ-LAX" }) });
+    expect(meta.alternates?.canonical).toBeUndefined();
   });
 });

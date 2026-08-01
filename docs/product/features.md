@@ -80,8 +80,34 @@ table" section.
    way to present an "empty plane" claim.
 6. **Generic Top-N builder.** "Top N `<dimension>` by `<measure>` in `<period>`." The
    `/watch` presets are all saved instances of this. Build the generic thing once.
-7. **The omnibox.** One field resolving `PDX` · `Portland` · `Alaska` · `AS` · `A220` ·
-   `PDX-AUS`. Sounds trivial. It is the whole UX.
+7. **The omnibox — shipped, M5.** `/search?q=...` (`app/src/lib/search.ts`,
+   `app/src/app/search/page.tsx`, `sql/03_queries/search_by_name.sql`). One field resolving
+   `PDX` · `Portland` · `Alaska` · `AS` · `A220` · `PDX-AUS`. Sounds trivial. It is the whole
+   UX. Resolution order: a route-pair pattern (`-`, an en dash, or a space, case-insensitively)
+   → an exact code in any of the three namespaces → a name substring across all three. A
+   unique match 307-redirects (not 308 -- this is a live resolution over data that can change,
+   not a second spelling of one fixed URL); no match names the query and the namespaces
+   checked, offering the Explorer; an unbounded substring hit list discloses the cap (50) and
+   the true count rather than truncating silently.
+
+   **A code can be a real match in two namespaces at once, and the omnibox must not silently
+   pick one.** Measured, fact-present, `is_latest`-scoped: exactly three codes are both an
+   airport and a carrier -- `LNY` (Lanai Airport / Western Aircraft dba Lanai Air), `NEW`
+   (Lakefront / New England Airlines Inc.), `WST` (Westerly State / Friday Harbor Seaplanes).
+   `LNY` is the sharpest of the three: the carrier is named after the airport, so a
+   silently-chosen answer would still read as plausible -- the same failure shape as the `AUS`
+   airport-id collision and `/aircraft/CE-180`'s two-BTS-codes-one-short-name collision,
+   documented in `docs/data/invariants.md` § Entity resolution. All three codes render as a
+   two-way choice instead. Airport ∩ aircraft and carrier ∩ aircraft are both 0 today, but that
+   is a property of the current dataset, not a structural guarantee, so the guard checks every
+   namespace rather than trusting the count.
+
+   A name substring ranks a result whose name STARTS WITH the query above one that merely
+   contains it, ties broken by the underlying query's own order -- no fuzzy distance, no
+   traffic-based boost, both of which are numbers nobody could justify. `Portland` matches
+   four fact-present airports, not three -- `HIO`, `PDX`, `PWM` (Maine, not Oregon), `TTD` --
+   and `Alaska` returns 8 rows (`DUT` Unalaska Airport plus 7 carriers) where the ranking is
+   what puts `AS` Alaska Airlines ahead of the `DUT` substring false positive.
 8. **Methodology surface.** The class filter, operating-carrier keying, the lag, the
    quarantine rules. Trust feature; also free SEO content. The design session may fold this
    into the UI rather than a standalone page.
@@ -109,10 +135,37 @@ canonical URL per entity, every other spelling 308s to it (`/airport/sea`, `/car
 `/aircraft/a321-lr`), and a 404 always names the offending code and says *which* of the ways it
 failed — an unknown code and a real one this domestic-only dataset carries no rows for are
 different findings, and `/route/JFK-LHR` and `/airport/LHR` both say so. **Only what resolves is
-CDN-cached**: 200s and 308s get the 30-day cache, 404s get `no-store`, because a 404 here is a
-statement about the current dataset and the dataset is rebuilt monthly
-([`../architecture/hosting.md`](../architecture/hosting.md)). The carrier 404 is the one that
-cannot yet make the distinction the others make — see the M5 note in `CLAUDE.md`.
+CDN-cached**: 200s and 308s get `HTML_CACHE` (M5 Task 7 shortened this from the project's 30-day
+value to `s-maxage=3600` for `/explore` and all four entity pages — see the citation below), 404s
+get `no-store`, because a 404 here is a statement about the current dataset and the dataset is
+rebuilt monthly ([`../architecture/hosting.md`](../architecture/hosting.md)). **The carrier 404
+makes the same split the other three do, as of M5 Task 6**: `sql/03_queries/
+lookup_carrier_code_exists.sql` mirrors the airport version, so `/carrier/ZZ` 404s "unknown
+carrier code" and `/carrier/PA` 404s "recognized by BTS ... none of which has filed", naming
+all three of `PA`'s holders (two really are Pan American, the third — Florida Coastal Airlines —
+merely shares the code) rather than picking one.
+
+**The pages cross-link (M5).** Every resolved dimension cell in every table — `/explore` and
+all four entity pages, since they share the one `DataTable` component — links to the entity
+page it resolves to: `/route/JFK-LAX` names Delta and now links to `/carrier/DL`, `/carrier/DL`
+names an aircraft type and links to `/aircraft/<slug>`, and so on. A cell links only when it
+resolved to a real code and that dimension has a page — a city market, an unresolved id, or a
+bare `year_month` never gains a fake link. `/explore`'s route cell is the one dimension that is
+not a single id (its `column_expr` spans two airport columns), so its link is built and checked
+separately, and it is the one place the milestone's sharpest trap lives: the cell displays the
+two codes in **airport-id** order but the canonical `/route/` URL is alphabetical by **code**,
+and those two orderings disagree for 154 of 22,420 pairs (`CLAUDE.md`, M4b) — reusing the
+displayed order as the link would be silently wrong for every one of the 154. That same cell is
+also the one that must *refuse* to link: 530 same-airport pairs carry real traffic but
+`/route/ORD-ORD` is a 404 by design, so a route cell whose halves match renders as text. Full
+mechanics: `docs/design/system.md` § The data table.
+
+**Two links live outside the tables**, because the tables alone left the graph half-connected —
+`/airport/` and `/route/` were 23,465 of the sitemap's 23,689 URLs with no inbound internal link
+at all, crawlable but not browsable. So `/route/<pair>`'s title block links both airport names to
+`/airport/<code>`, and the top bar's wordmark links home from every page. Both were in M5's spec
+and both were dropped when it became a plan; the whole-branch review caught them by walking the
+graph from the front door, which no per-task review could have done.
 
 > **Build the aircraft-type-mix chart before the load-factor chart.** Everyone does load
 > factor. The gauge story is what makes this yours.

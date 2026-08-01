@@ -3,28 +3,12 @@ import { headers } from "next/headers";
 import { dataAsOf } from "@/lib/db";
 import { rawPathFromHeaders } from "@/lib/rawPath";
 import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
+import { TopBar } from "@/components/TopBar";
 
 // Same reasoning as page.tsx's own export of this constant: DATA AS OF must never be frozen
 // at build time, even on the 404 path. proxy.ts sets `no-store` on this response for the same
 // reason one level out, at the CDN.
 export const dynamic = "force-dynamic";
-
-function Wordmark() {
-  return (
-    <span className="mark">
-      UP<span className="accent">GAUGE</span>
-    </span>
-  );
-}
-
-function TopBar({ asOf }: { asOf: string }) {
-  return (
-    <div className="top">
-      <Wordmark />
-      <span className="asof">DATA AS OF {asOf}</span>
-    </div>
-  );
-}
 
 /** The specific reason this slug is not a carrier, in `lib/carrier.ts`'s own words -- which
  * name the offending CODE.

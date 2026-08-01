@@ -6,7 +6,9 @@ import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { formatCount } from "@/lib/format";
 import { resolutionKey, displayValue, type Resolved } from "@/lib/resolve";
+import { routeHrefFromCodes } from "@/lib/entityLink";
 import { LegendRail } from "@/components/LegendRail";
+import { TopBar } from "@/components/TopBar";
 import type { PivotQuery } from "@/lib/pivot/types";
 import type { Allowlist } from "@/lib/pivot/allowlist";
 
@@ -57,14 +59,52 @@ function routeColumns(allowlist: Allowlist): string[] {
   return allowlist.dims.get("route")?.columnExpr.split(",").map((c) => c.trim()) ?? [];
 }
 
+/** The two resolved codes for a route row, in the order the columns hold them (airport-id
+ * order). The DISPLAY joins these with an en dash; the HREF must re-sort them alphabetically
+ * by code -- routeHrefFromCodes owns that, because the two orderings disagree for 154 of
+ * 22,420 pairs and reusing the display order is wrong for every one of them. Shared with
+ * `routeHref` below so the display string and the link read the same two `displayValue()`
+ * calls rather than two independently maintained copies. */
+function routeCodes(
+  row: Record<string, unknown>,
+  resolved: Map<string, Resolved>,
+  columns: string[],
+): string[] {
+  return columns.map((c) => displayValue(resolved.get(resolutionKey(c, row[c])), row[c]));
+}
+
 function routeCode(
   row: Record<string, unknown>,
   resolved: Map<string, Resolved>,
   columns: string[],
 ): string {
-  return columns
-    .map((c) => displayValue(resolved.get(resolutionKey(c, row[c])), row[c]))
-    .join("–");
+  return routeCodes(row, resolved, columns).join("–");
+}
+
+/** The `/route/<pair>` href for a route row, or `null` when either half didn't resolve to a
+ * real code -- a row where one half rendered a bare id (unresolved, or resolved with no code)
+ * has no URL to build, exactly `DimensionCell`'s own rule for a single dimension. Reads the
+ * two `Resolved` hits directly rather than `routeCodes`'s display strings: a bare-id fallback
+ * string is indistinguishable from a real code once stringified, so only the `Resolved` value
+ * itself can tell "unresolved" apart from "resolved".
+ *
+ * Also `null` when both halves resolve to the SAME code: `fct_route_month` really carries
+ * same-airport rows (530 distinct pairs, real filed traffic -- ORD alone 73,082 seats over the
+ * trailing 12 months, docs/data/invariants.md § Route identity), but `routePair.ts`'s
+ * `resolveRoutePair` refuses "ORD to itself is not a route between two airports" as a named
+ * 404. Without this guard the cell links straight into that 404 -- `sitemap_routes.sql`
+ * already excludes these rows (`WHERE route_key_low <> route_key_high`); this is the same
+ * exclusion at the link path. */
+function routeHref(
+  row: Record<string, unknown>,
+  resolved: Map<string, Resolved>,
+  columns: string[],
+): string | null {
+  const hits = columns.map((c) => resolved.get(resolutionKey(c, row[c])));
+  if (hits.some((h) => h === undefined || h.code === null)) return null;
+  const [a, b] = hits as Resolved[];
+  if (a.code === b.code) return null;
+  return routeHrefFromCodes(a.code as string, b.code as string);
 }
 
 // data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- this is the
@@ -106,24 +146,6 @@ function describeQuery(query: PivotQuery, allowlist: Allowlist): string {
 function widerWindowHref(query: PivotQuery): string | null {
   if (query.timeFrom <= EARLIEST_MONTH) return null;
   return `/explore?${encode({ ...query, timeFrom: EARLIEST_MONTH })}`;
-}
-
-function Wordmark() {
-  // docs/design/mockups/table.html's .mark: "UP" in --ink, "GAUGE" in --signal.
-  return (
-    <span className="mark">
-      UP<span className="accent">GAUGE</span>
-    </span>
-  );
-}
-
-function TopBar({ asOf }: { asOf: string }) {
-  return (
-    <div className="top">
-      <Wordmark />
-      <span className="asof">DATA AS OF {asOf}</span>
-    </div>
-  );
 }
 
 function Stat({ label, value, derived }: { label: string; value: string; derived?: boolean }) {
@@ -220,7 +242,19 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
 
   const columns: ColumnSpec[] = [
     ...(hasRoute
-      ? [{ key: "__route", label: allowlist.dims.get("route")?.label ?? "Route", kind: "identifier" as const }]
+      ? [
+          {
+            key: "__route",
+            label: allowlist.dims.get("route")?.label ?? "Route",
+            kind: "identifier" as const,
+            // Typed accessor, not a naming convention on row data: __route spans two
+            // columns that both resolve through dim_airport, so it's never a DimensionCell
+            // (entityHref can't express a composite id) -- this is the one place that knows
+            // both halves resolved, so it hands DataTable a per-row function instead of a
+            // magic-string row field.
+            href: (row: Record<string, unknown>) => routeHref(row, result.resolved, routeCols),
+          },
+        ]
       : []),
     ...displayColumns.map((c) => ({
       key: c,

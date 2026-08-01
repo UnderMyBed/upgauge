@@ -10,6 +10,7 @@ import {
   lookupAirportsByCode,
   lookupCarriersByCode,
   lookupAircraftByName,
+  carrierHoldersByCode,
   insertAirportRow,
   insertUniqueByCode,
   AmbiguousCodeError,
@@ -361,6 +362,46 @@ describe("lookupCarriersByCode", () => {
     const m = await lookupCarriersByCode(["VX"]);
     expect(m.get("VX")?.id).toBe(21171);
     expect(m.get("VX")?.name).not.toContain("Aces");
+  });
+});
+
+// M5 Task 6: the second reverse lookup this project's carrier page needed, so
+// resolveCarrier's 404 can split "unknown code" from "recognized, never filed" the same way
+// routePair.ts already splits its two cases via airportCodesExist. The carrier version cannot
+// be a bare Set, unlike the airport one: a carrier code can name more than one airline_id
+// (112 codes, unscoped -- lookup_carrier_by_code.sql's header), so a caller needs the FULL
+// row, not just a hit.
+describe("carrierHoldersByCode", () => {
+  it("is empty for a code dim_carrier has never heard of", async () => {
+    const m = await carrierHoldersByCode(["ZZ"]);
+    expect(m.has("ZZ")).toBe(false);
+  });
+
+  it("names every holder of a recognized-but-never-filed code, not just the first", async () => {
+    // PA: Pan American World Airways (airline_id 20384 and 20386) plus Florida Coastal
+    // Airlines (20389, an unrelated carrier that happens to share the code) -- three holders,
+    // none fact-present. Measured: 94 of the 1,543 never-filed codes have more than one
+    // holder; PA is the worst case at 3 (docs/data/invariants.md § Entity resolution).
+    const m = await carrierHoldersByCode(["PA"]);
+    const holders = m.get("PA") ?? [];
+    expect(holders.length).toBe(3);
+    expect(new Set(holders.map((h) => h.id))).toEqual(new Set([20384, 20386, 20389]));
+    expect(holders.filter((h) => h.name === "Pan American World Airways").length).toBe(2);
+    expect(holders.some((h) => h.name === "Florida Coastal Airlines")).toBe(true);
+  });
+
+  it("has no fact-presence filter at all, unlike lookupCarriersByCode", async () => {
+    // DL resolves normally through lookupCarriersByCode, so resolveCarrier never actually
+    // reaches this function for it -- but the query itself must not silently exclude
+    // fact-present rows either; this is a plain existence check over dim_carrier, deliberately
+    // WITHOUT the clause lookup_carrier_by_code.sql applies (that file's own header comment,
+    // mirrored from lookup_airport_code_exists.sql's).
+    const m = await carrierHoldersByCode(["DL"]);
+    expect(m.get("DL")?.[0]?.id).toBe(19790);
+  });
+
+  it("returns an empty map for no codes rather than emitting `IN ()`", async () => {
+    expect((await carrierHoldersByCode([])).size).toBe(0);
   });
 });
 

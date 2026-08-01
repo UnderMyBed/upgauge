@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import AirportPage, { AirportView } from "@/app/airport/[code]/page";
+import AirportPage, { AirportView, generateMetadata } from "@/app/airport/[code]/page";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 import { decode } from "@/lib/pivot/urlstate";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
@@ -249,5 +249,25 @@ describe("/airport/<code> redirect and 404", () => {
     // A DIFFERENT resolveAirportCode reason than the unknown code above, through the same
     // notFound() call -- a regression that special-cased one would still be caught here.
     expect(await catchDigest("LHR")).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
+  });
+});
+
+describe("/airport/<code> canonical metadata (M5, Task 2)", () => {
+  it("declares the canonical URL for an already-canonical code", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ code: "SEA" }) });
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/airport/SEA");
+  });
+
+  it("declares the UPPERCASED spelling for a lowercase request, not the request", async () => {
+    // The bug to exclude (task-2-brief.md): "/airport/sea must declare /airport/SEA", not
+    // the requested spelling. /airport/sea never renders this page in production (it 308s
+    // first), but the canonical tag must still name the uppercase code.
+    const meta = await generateMetadata({ params: Promise.resolve({ code: "sea" }) });
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/airport/SEA");
+  });
+
+  it("returns no canonical for a code that cannot resolve at all", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ code: "ZZZZ" }) });
+    expect(meta.alternates?.canonical).toBeUndefined();
   });
 });

@@ -101,5 +101,14 @@ describe("airportSlugFromPath", () => {
     // resolveAirportCode then rejects as an unknown code.
     expect(airportSlugFromPath("/airport/%53EA")).toBe("SEA");
     expect(airportSlugFromPath("/airport/%zz")).toBe("%zz");
+    expect(airportSlugFromPath("/airport/%E0%A4%A")).toBe("%E0%A4%A");
+  });
+
+  // M5 Task 6: airportSlugFromPath is now a thin wrapper (lib/airport.ts) around
+  // lib/entitySlug.ts's entitySlugFromPath, PLUS the empty-to-null mapping pinned above. This
+  // pins the one behaviour that mapping does NOT touch -- a nested path is still returned
+  // verbatim, exactly as the other three readers' equivalent tests assert.
+  it("returns whatever follows the prefix verbatim on a nested path", () => {
+    expect(airportSlugFromPath("/airport/SEA/extra")).toBe("SEA/extra");
   });
 });

@@ -1452,6 +1452,216 @@ the `grep -q`/`SIGPIPE` hazard the file's header describes was invisible until a
 64 KB, and every page in this milestone is now past 100 KB, so the numbers are kept where the
 next person will see them.
 
+## M5 — connecting the graph
+
+M3/M4 built four islands: the Explorer and four entity pages, each reachable only by typing a
+URL. M5's whole job is the edges between them — cross-links, an omnibox, a sitemap — plus
+closing the cache gap M4d's own review flagged and never fixed. Eight tasks; the design spec is
+`docs/superpowers/specs/2026-07-31-m5-connect-the-graph-design.md`.
+
+### Tasks 1-3 — the link map, the top bar, and cross-linking every table
+
+**Task 1** added `app/src/lib/entityLink.ts`'s `entityHref(dimKey, hit)`: a dimension key →
+entity-page-prefix map, keyed on the dimension's **own key**, never on `join_dim` — `route`,
+`origin_airport_id` and `dest_airport_id` all carry `join_dim = dim_airport`, so a
+`join_dim`-keyed map would send every route cell to `/airport/`. The map lives in TypeScript
+on purpose: `meta_pivot_dimensions` governs which dimensions exist, not which have a page, and
+folding a routing decision into a catalog view `make goldens` also reads would make the
+Explorer's data contract answerable to a frontend routing choice.
+
+**Task 2** extracted the top bar (`app/src/components/TopBar.tsx`) — wordmark, `DATA AS OF`,
+and, new, the search field: a plain `method="GET"` form posting `q` to `/search`, no client JS,
+present on every page including 404 states. It also added a `<link rel="canonical">` to all
+four entity pages and consolidated the site's one base-URL definition
+(`app/src/lib/siteUrl.ts`'s `BASE_URL`, `process.env.UPGAUGE_BASE_URL ?? "http://localhost:3000"`)
+after fix round 1 found a hardcoded `https://upgauge.shipman.dev` — a straight violation of
+CLAUDE.md's portability rule (Docker + env vars, no baked-in hostname) that would have pointed
+every canonical tag and sitemap `<loc>` at the wrong host for a fork or a staging deploy. The
+same fix round wrapped each entity page's slug resolver in React's `cache()` at the **page**
+layer, not inside the shared resolver module `proxy.ts` also imports — `cache()` only memoizes
+inside an active React Server Component render (it reads the current dispatcher; outside one it
+degrades to calling straight through, unprovable by this project's Vitest suite — see
+[hosting.md's own section on this](hosting.md#reacts-cache-needs-an-active-rsc-dispatcher--unprovable-by-unit-test)),
+so wrapping the shared module would have silently changed `proxy.ts`'s semantics for a
+concurrent task's file.
+
+**Task 3** wired the link map into `DataTable`'s `DimensionCell` — the one chokepoint all five
+table-rendering surfaces (`/explore` + four entity pages) already shared — so a resolved cell
+that has a page renders as `<a href={entityHref(...)}>`, wrapping the existing `<abbr>` rather
+than replacing it. `route`'s cell is the one exception: its `column_expr` spans two columns, so
+there is no single id to hand `entityHref`, and its href is built separately
+(`routeHrefFromCodes`, `entityLink.ts`) from the two resolved airport hits directly. **This is
+the milestone's sharpest trap**, restated from M4b: `/explore` displays a route cell in
+**airport-id** order (`route_key_low, route_key_high`) but the canonical `/route/<pair>` URL is
+**code-alphabetical**, and the two orderings disagree for 154 of 22,420 pairs. Reusing the
+displayed order as the link is silently wrong for every one of the 154 — `IFP–IAH` displays in
+that order but must link to `/route/IAH-IFP`, the reverse, and is the fixture both the unit
+tests and `app/smoke.sh` use, because a `JFK–LAX`-shaped fixture cannot fail this way (its two
+orderings agree, along with 22,266 of the other 22,419 pairs).
+
+### Task 4 — the omnibox
+
+`/search?q=...` (`app/src/lib/search.ts`, `app/src/app/search/page.tsx`,
+`sql/03_queries/search_by_name.sql`). Resolution order, each step a definitive answer or a
+fall-through:
+
+1. **A route-pair pattern** — two tokens joined by `-`, an en dash, or a space
+   (`routePairTokens`) — resolved only if both sides are real, distinct, fact-present airport
+   codes. Unambiguous by construction: airport/carrier/aircraft codes never contain the
+   separators this shape requires, so it cannot collide with a single-code namespace.
+2. **An exact code in any of the three namespaces — airport, carrier, aircraft — checked
+   CONCURRENTLY and collected, never short-circuited.** This is the fix for the bug the task
+   brief names directly: an if/else-if chain (try airport, else carrier, else aircraft) would
+   resolve a colliding code by whichever branch runs first, silently. Measured, fact-present,
+   `is_latest`-scoped: exactly three codes are both an airport and a carrier — `LNY` (Lanai
+   Airport / Western Aircraft dba Lanai Air — the sharpest of the three, since the carrier is
+   named after the airport, so a silently-chosen answer would still read as plausible), `NEW`
+   (Lakefront / New England Airlines), `WST` (Westerly State / Friday Harbor Seaplanes).
+   Airport ∩ aircraft and carrier ∩ aircraft are both 0 today, which is a property of the
+   current dataset, not a guarantee, so every namespace is checked regardless.
+3. **A name substring, ranked** (`rankByStartsWith`) — a result whose name **starts with** the
+   query ranks above one that merely contains it, ties broken by the underlying query's own
+   order. No fuzzy distance, no traffic-based boost — both are numbers nobody could justify.
+   `Portland` matches four fact-present airports, not three (`HIO`, `PDX`, `PWM` — Maine, not
+   Oregon — `TTD`); `Alaska` returns 8 rows (`DUT` Unalaska Airport plus 7 carriers), where the
+   ranking is what puts `AS` ahead of the `DUT` substring false positive.
+
+A unique match **307-redirects, never 308**: unlike every other redirect in this product
+(`/airport/sea` → `/airport/SEA`, a second spelling of one fixed URL, derived from the slug
+alone and therefore permanently valid), `q=PDX` resolving to exactly one entity is a fact about
+**this month's dataset**. A 308 is cached by the requesting browser itself, forever, independent
+of any CDN — if a future rebuild ever made a code collide, every browser that had ever visited
+under a 308 would keep redirecting to the old answer past the point it stopped being true. A
+collision (LNY, NEW, WST) renders both candidates and is explicitly **not** a redirect. An
+unbounded substring hit list discloses its cap (`SEARCH_RESULT_CAP = 50`) and the true count
+rather than truncating silently — CLAUDE.md's empty-result rule, generalized to free text.
+
+### Task 5 — sitemap, robots.txt, and the four `lastmod` queries
+
+`app/sitemap.ts` (fed by `app/src/lib/sitemap.ts` and
+`sql/03_queries/sitemap_{routes,airports,carriers,aircraft}.sql`) emits **23,689** URLs —
+22,420 routes + 1,045 airports + 114 carriers + 110 aircraft — every count
+**quarantine-inclusive**: a quarantined row is still a real filing whose page still 200s, and
+excluding it would silently drop 4 airports, 2 aircraft types and 31 route pairs that serve
+today. `lastmod` is each entity's **own last-filed month**, `max(year_month)` per entity, never
+the sitemap's build date — `/carrier/VX` (Virgin America, last filed 2018-03) is the dormant
+fixture this distinction needs, since an active entity's own last-filed month and the current
+build window coincide, so a bug that reports the build date instead would still pass a test
+anchored on an active carrier. `app/robots.ts` disallows `/search` (unbounded query space, no
+canonical content of its own) and `/api/` (a data endpoint, not a page), allows everything
+else, and points at the sitemap. The aircraft sitemap query dedupes on the URL **slug**, not the
+BTS code — `sitemap_aircraft.sql` already excludes `CE-180` (two codes, one short name); a
+second guard, `dedupeAircraftBySlug`, catches the other direction (two DIFFERENT short names
+slugging to the same value), which has no live example today but is a property of the data, not
+the transform, so it throws rather than silently picking one if a future refresh ever creates
+one.
+
+### Task 6 — the carrier 404 split, and collapsing four copies of one guard
+
+`sql/03_queries/lookup_carrier_code_exists.sql` mirrors the airport existence-only lookup
+(`lookup_airport_code_exists.sql`), so `resolveCarrier`'s 404 now makes the same split
+`/route/<pair>`'s always has: `ZZ` 404s "unknown carrier code" (absent from `dim_carrier`
+entirely); `PA` 404s "recognized by BTS ... none of which has filed a T-100 Segment row" and
+names **every** holder, not just the first — `PA` alone is three `airline_id`s (20384 and
+20386, both "Pan American World Airways", plus 20389 "Florida Coastal Airlines", an unrelated
+carrier sharing the code by coincidence), and 94 of the 1,543 never-fact-present codes are
+multi-holder the same way (worst case 3, `PA`). This is the **common** carrier 404, not the
+exotic one: 1,543 of `dim_carrier`'s 1,657 distinct codes have no fact-present holder (1,657 −
+114 fact-present; 1,776 is the table's row count, one per `airline_id`).
+
+Separately, the four `<entity>SlugFromPath` readers (`routeSlugFromPath`, `airportSlugFromPath`,
+`carrierSlugFromPath`, `aircraftSlugFromPath`) — deliberately four independent copies of the
+same `decodeURIComponent`-throws guard at M4d, since the three M4d pages were built
+concurrently and one shared file would have been three agents editing one file — collapsed into
+one-line wrappers around `app/src/lib/entitySlug.ts`'s `entitySlugFromPath(pathname, prefix)`.
+`airportSlugFromPath` is the one wrapper that is not a bare partial application: it additionally
+maps the bare-prefix empty slug to `null` rather than `""`, so an empty code segment opts a
+request out of entity resolution entirely rather than sending `""` into `resolveAirportCode` as
+a slug to reject. `AIRPORT_PREFIX` moved out of the route directory
+(`app/airport/[code]/resolveAirport.ts`) into `app/src/lib/airport.ts` alongside it, so
+`proxy.ts` and `entityLink.ts` no longer import from a route segment's own file.
+
+### Task 7 — the 5xx cache gap, narrowed but not closed
+
+M4d inherited a gap open since M3b and widened its blast radius from one page to four: the
+proxy resolves a request's cacheability and writes the header **before** the page can throw, so
+a 500 — `dataAsOf()`, `loadAllowlist()`, `runPivot()`, an OOM — went out under whatever cache
+the proxy had already committed to. Two parts, because the full fix turned out not to exist for
+this Next version.
+
+**Part A closed one concrete scenario outright.** `/explore` was the one proxy branch that ran
+no database query at all before choosing its header — every `ENTITY_ROUTES` row already ran a
+real resolution and declined the cache on its own failure, but `/explore` had nothing to catch
+because nothing was attempted. `isDataLayerHealthy()` (`proxy.ts`) gives it an equivalent probe:
+call `loadAllowlist()`, exactly what `ExploreView` calls first, before its own `decode()`/
+`runPivot()` try/catch, and default to `no-store` on any throw.
+
+**Part B spiked the complete fix — a `route.ts` for `/route/<pair>` that owns its own
+`Response` and can set `Cache-Control` per outcome, the way `/api/pivot` already does — and it
+does not build.** Next 16 rejects a `route.js` and a `page.js` at the same route segment
+outright (`Conflicting route and page at /route/[pair]`), confirmed against `next build`, not
+reasoned about. The only remaining shape — delete `page.tsx` and hand-render its tree from
+`route.ts` — was ruled out by the task's own exit condition before being coded: a Route Handler
+sits entirely outside Next's page-rendering pipeline, with no access to layouts,
+`notFound()`/`permanentRedirect()`, streaming, or the RSC flight payload the server-rendered
+chart depends on. The adopted fallback: `HTML_CACHE` (renamed from the single `CACHE` constant)
+drops from `s-maxage=2592000` to `s-maxage=3600` for `/explore` and the four `ENTITY_ROUTES`
+pages only — `/api/pivot` is untouched (its own route handler already sets `no-store` on
+errors). This narrows a 5xx's public-cache exposure from up to 30 days to up to 1 hour; **it
+does not close the gap** — a 500 minted at minute 0 is still cached for up to 59 more minutes.
+Full measurement and the mutation coverage proving the new value is load-bearing:
+[hosting.md § "The gap"](hosting.md#the-gap-a-5xx-still-gets-a-long-cached-header--m5-task-7-narrowed-it-didnt-close-it).
+
+### Task 8 — routing, cache, smoke, docs: making the new routes real
+
+The task this milestone's own Critical (M4b's cache-matcher bug) was hiding in a second time.
+`proxy.ts`'s matcher grew from six entries to **nine** — `/search`, `/sitemap.xml`,
+`/robots.txt` — each an exact-path branch rather than an `ENTITY_ROUTES` row (none has a
+dynamic segment or a per-slug resolution). `/search` gets `no-store` **unconditionally**, not
+the well-formed-vs-not split every other row makes: `q` is an unbounded, attacker-chosen string,
+so there is no proxy-side resolution that would make caching any of it safe, and a per-`q`
+shared-cache entry is a cache-fill vector on a box whose entire cost model is that caching
+bounds origin load. `/sitemap.xml` and `/robots.txt` get the project's 30-day value outright —
+both are built from the same catalog queries regardless of who's asking, carrying none of an
+entity page's per-request resolution risk.
+
+**Running the heavy gates for the first time since Task 5 shipped the sitemap found two real
+bugs, both invisible to every gate except `make app-smoke`.** `app/sitemap.ts` and
+`app/robots.ts` shipped with no `dynamic` export, so `next build` tried to **prerender**
+`/sitemap.xml` at build time — and the build tool's own documented command
+(`npm --prefix app run build`, what `make app-build`/`make app-smoke` both run) changes `cwd` to
+`app/` before invoking `next build`, not the repo root every other DB-touching route's
+`force-dynamic` export exists to make irrelevant. `make app-build` failed outright:
+`IO Error: Cannot open database ".../app/upgauge.duckdb" ... database does not exist`. Both
+files now carry `export const dynamic = "force-dynamic"`, the same export every other
+DB-touching route already had. Separately, `app/smoke.sh`'s own Cache-Control checks for
+`/explore` and all four entity pages were still asserting the **old** 30-day value after Task 7
+shortened it to `HTML_CACHE` — Task 7 touched `proxy.ts` and `proxy.test.ts` but not this file,
+so those checks had been silently wrong (a red check for a correct header) since Task 7 landed,
+caught only because this task is the one this repo's working agreement reserves a dedicated,
+memory-capped pass for. A third latent bug in the same family: the `/carrier/PA`/`/carrier/ZZ`
+404-body checks predated Task 6's split and asserted a substring ("no carrier with code '<C>'
+has filed") that neither actual post-split sentence contains — corrected to assert each case's
+real phrase and the absence of the sibling's, the same discipline `/route`'s and `/airport`'s
+404 splits already use.
+
+`sql/03_queries/sitemap_routes.sql` was rewritten to read `fct_segment_month`'s own
+`route_key_low`/`route_key_high` columns instead of recomputing `least`/`greatest(origin_airport_id,
+dest_airport_id)` — every other route-grain query already reads those columns directly; verified
+byte-identical output over all 3.36M rows before and after, so this is convention alignment, not
+a bug fix.
+
+**Task 7 Part A's fail-safe was verified end to end, not just unit-mocked, per whole-branch
+review.** `proxy.test.ts` pins `isDataLayerHealthy()` with a mocked rejection — precise, but it
+never crosses Next's own routing or a real DuckDB open. `app/smoke.sh` now reproduces
+`hosting.md`'s own original measurement method directly: copies `upgauge.duckdb` (never the
+original — nothing in this repo writes to it), drops `meta_pivot_dimensions` from the copy via
+Python's `duckdb` binding (already a pipeline dependency), points a **second**, short-lived
+`next start` at the broken copy via `UPGAUGE_DB`, and confirms `/explore` comes back `500`,
+`no-store` — never the old 30-day value, never `HTML_CACHE` either. The primary server is
+killed first: this repo's own 8GB-memory working agreement does not run two `next start`
+processes at once, so this section runs last in the file.
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command

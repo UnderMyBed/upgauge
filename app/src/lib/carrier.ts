@@ -1,4 +1,5 @@
-import { lookupCarriersByCode, type CarrierRef } from "@/lib/resolve";
+import { entitySlugFromPath } from "@/lib/entitySlug";
+import { carrierHoldersByCode, lookupCarriersByCode, type CarrierRef } from "@/lib/resolve";
 
 export type CarrierResult =
   | { kind: "ok"; carrier: CarrierRef; canonical: string; filterValue: string }
@@ -11,27 +12,17 @@ export type CarrierResult =
  * consumers: `proxy.ts`, which has to know whether a request is a real carrier before the page
  * runs so a 404 gets `no-store` rather than a month of CDN cache, and `not-found.tsx`, which
  * has no props and no route params (Next's `not-found.js` convention) and so can only learn
- * the requested code from `proxy.ts`'s `RAW_PATH_HEADER`.
- *
- * It lives HERE rather than beside its route sibling in `rawPath.ts` because M4d builds three
- * of these pages concurrently and `rawPath.ts` is one file three tasks would be editing at
- * once. The four copies (route, airport, carrier, aircraft) should collapse into one
- * `entitySlugFromPath(pathname, prefix)` once they all exist -- see this task's report. */
+ * the requested code from `proxy.ts`'s `RAW_PATH_HEADER`. */
 export const CARRIER_PREFIX = "/carrier/";
 
+// A one-line wrapper around lib/entitySlug.ts's entitySlugFromPath. This file used to carry
+// its own copy of the decode guard (deliberately, at the time -- M4d built three of these
+// pages concurrently and rawPath.ts is one file three tasks would have been editing at once).
+// M5 Task 6 is the collapse that comment always pointed at. The wrapper (and CARRIER_PREFIX
+// above) stays, unchanged in name and behaviour, so nothing importing carrierSlugFromPath
+// needs an edit.
 export function carrierSlugFromPath(pathname: string): string | null {
-  if (!pathname.startsWith(CARRIER_PREFIX)) return null;
-  const raw = pathname.slice(CARRIER_PREFIX.length);
-  // Same guard, same reason, as routeSlugFromPath: the page receives `params.code` already
-  // percent-decoded, so this must decode too or the two disagree -- and `decodeURIComponent`
-  // THROWS on a malformed escape ('%zz'), which is bug #2 on smoke.sh's list of
-  // production-only failures. A malformed escape falls back to the raw text, which
-  // resolveCarrier then rejects as a code nothing has filed under. Never uncaught.
-  try {
-    return decodeURIComponent(raw);
-  } catch {
-    return raw;
-  }
+  return entitySlugFromPath(pathname, CARRIER_PREFIX);
 }
 
 /** Parse and canonicalise a `/carrier/<code>` slug.
@@ -48,26 +39,35 @@ export function carrierSlugFromPath(pathname: string): string | null {
  *   redirect -- `/carrier/dl` is the same carrier as `/carrier/DL`, and permalinks are this
  *               product's growth mechanic (CLAUDE.md's UI constraints), so there is exactly
  *               one URL per carrier and every other spelling 308s to it.
- *   notFound -- names the code.
+ *   notFound -- names the code, and -- since M5 Task 6 -- splits WHY.
  *
- * ONE 404 reason, worded to be true of both of the ways a code can fail. 1,543 of
- * dim_carrier's 1,657 DISTINCT codes have no fact-present holder -- measured, and 1,657 is the
- * right denominator: 1,776 is the table's ROW count (one row per airline_id), and 1,657 - 114
- * fact-present carriers is exactly the 1,543. So "recognized by BTS but
- * never filed a T-100 Segment row" is the COMMON case, not the exotic one: PA (Pan American
- * World Airways, three airline_ids, zero rows) reaches this branch by exactly the same path as
- * ZZ, which is in dim_carrier not at all. `routePair.ts` splits its two cases apart because it
- * can -- `lookup_airport_code_exists.sql` already existed to tell them apart. There is no
- * carrier equivalent, and M4d's spec rules out new SQL beyond the two reverse lookups, so this
- * says the thing that is true of both rather than guessing: it talks about FILINGS, not about
- * recognition. A sentence reading "unknown carrier code 'PA'" would be false.
+ * `routePair.ts` has always split its 404 two ways -- unknown code versus a real, recognized
+ * airport this domestic-only dataset simply has no rows for -- because
+ * `lookup_airport_code_exists.sql` existed to tell them apart. This file used to say there was
+ * no carrier equivalent and settle for one sentence true of both cases; M5 Task 6 is that
+ * equivalent, `sql/03_queries/lookup_carrier_code_exists.sql`, and `carrierNotFoundReason`
+ * below is the split it enables:
  *
- * `AmbiguousCodeError` from the lookup is deliberately NOT caught. Carrier codes collide 0
- * times among fact-present airlines today (measured), so there is no fixture that could reach
- * a catch block here and any handling written for it would be untested code on the page's
- * happy path. A loud 500 is the documented contract (`resolve.ts`'s own header) and matches
- * what `/route` does with the identical error. `/aircraft` is where that error is reachable
- * on today's data, and where it must be rendered. */
+ *   unknown      -- the code is in `dim_carrier` not at all. ZZ is the measured example.
+ *   recognized   -- the code is in `dim_carrier` but every holder has zero T-100 Segment rows.
+ *                   1,543 of `dim_carrier`'s 1,657 DISTINCT codes land here (measured; 1,776 is
+ *                   the table's ROW count, one per `airline_id`, and 1,657 - 114 fact-present
+ *                   carriers is exactly the 1,543), so this is the COMMON carrier 404, not the
+ *                   exotic one. It is worded to name EVERY holder, not just the first: `PA`
+ *                   alone names three (`airline_id` 20384 and 20386, both "Pan American World
+ *                   Airways", plus 20389 "Florida Coastal Airlines", an unrelated carrier that
+ *                   happens to share the code) -- 94 of the 1,543 never-filed codes name more
+ *                   than one airline this way (measured; worst case 3, `PA`). A sentence
+ *                   naming only the first holder is the exact silent-pick failure `AUS`
+ *                   (docs/data/invariants.md § Entity resolution) already cost this project
+ *                   once, one dimension over.
+ *
+ * `AmbiguousCodeError` from `lookupCarriersByCode` is deliberately NOT caught. Carrier codes
+ * collide 0 times among fact-present airlines today (measured), so there is no fixture that
+ * could reach a catch block here and any handling written for it would be untested code on
+ * the page's happy path. A loud 500 is the documented contract (`resolve.ts`'s own header) and
+ * matches what `/route` does with the identical error. `/aircraft` is where that error is
+ * reachable on today's data, and where it must be rendered. */
 export async function resolveCarrier(slug: string): Promise<CarrierResult> {
   const wanted = slug.trim().toUpperCase();
   if (wanted.length === 0) {
@@ -77,12 +77,8 @@ export async function resolveCarrier(slug: string): Promise<CarrierResult> {
   const found = await lookupCarriersByCode([wanted]);
   const carrier = found.get(wanted);
   if (carrier === undefined) {
-    return {
-      kind: "notFound",
-      reason:
-        `no carrier with code '${wanted}' has filed a T-100 Segment row in this dataset ` +
-        "(US DOT domestic segments, 2015 onwards)",
-    };
+    const holders = (await carrierHoldersByCode([wanted])).get(wanted) ?? [];
+    return { kind: "notFound", reason: carrierNotFoundReason(wanted, holders) };
   }
 
   // The canonical spelling is the one dim_carrier stores, not `wanted` -- so the redirect
@@ -96,4 +92,23 @@ export async function resolveCarrier(slug: string): Promise<CarrierResult> {
     canonical: carrier.code,
     filterValue: String(carrier.id),
   };
+}
+
+/** The two-way split `resolveCarrier`'s own header documents. `holders` is
+ * `carrierHoldersByCode`'s result for `code` -- empty means the code is nowhere in
+ * `dim_carrier`; non-empty means it is, but zero of its holders have filed a T-100 Segment
+ * row, and every one of them is named, in the order `lookup_carrier_code_exists.sql` returned
+ * them (driver row order, not sorted -- unlike `/aircraft`'s ambiguity page, this is prose in
+ * a single `<p>`, not a list of links a reader could compare across page loads, so a stable
+ * ordering is not load-bearing here the way `aircraftSlug.ts`'s not-found sort is). */
+function carrierNotFoundReason(code: string, holders: CarrierRef[]): string {
+  if (holders.length === 0) {
+    return `unknown carrier code '${code}'`;
+  }
+  const named = holders.map((h) => `${h.name}, airline_id ${h.id}`).join("; ");
+  const countWord = holders.length === 1 ? "one airline id" : `${holders.length} airline ids`;
+  return (
+    `'${code}' is recognized by BTS under ${countWord} (${named}), none of which has filed a ` +
+    "T-100 Segment row in this dataset (US DOT domestic segments, 2015 onwards)"
+  );
 }

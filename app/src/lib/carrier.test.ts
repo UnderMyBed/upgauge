@@ -15,8 +15,10 @@ import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
 //
 // PA and ZZ are both 404s and that is the point: 1,543 of dim_carrier's 1,657 DISTINCT codes
 // have no fact-present holder (measured; 1,776 is the table's ROW count, one per airline_id),
-// so the "recognized but never filed" case is the COMMON 404 here, not the exotic one, and the
-// reason sentence has to be true of it.
+// so the "recognized but never filed" case is the COMMON 404 here, not the exotic one -- and
+// since M5 Task 6 (lookup_carrier_code_exists.sql) it gets a DIFFERENT reason from ZZ's,
+// naming every one of PA's three holders, the same split routePair.ts has always made for
+// airports.
 
 describe("resolveCarrier", () => {
   it("resolves a real code to its airline, keyed on the id", async () => {
@@ -53,28 +55,59 @@ describe("resolveCarrier", () => {
     expect((await resolveCarrier("DL")).kind).toBe("ok");
   });
 
-  it("404s a code that appears nowhere in dim_carrier, naming it", async () => {
+  it("404s a code that appears nowhere in dim_carrier, calling it unknown", async () => {
+    // M5 Task 6: ZZ and PA below now get DIFFERENT reasons -- lookup_carrier_code_exists.sql
+    // is what makes the split possible, the same way lookup_airport_code_exists.sql already
+    // does for /route. Either half of this pair alone is vacuous: a handler that always says
+    // "unknown" would still pass this test, and one that always says "recognized" would still
+    // pass the PA test below.
     const r = await resolveCarrier("ZZ");
     if (r.kind !== "notFound") throw new Error(`expected ZZ to 404, got ${r.kind}`);
-    expect(r.reason).toContain("'ZZ'");
+    expect(r.reason).toBe("unknown carrier code 'ZZ'");
+    expect(r.reason).not.toMatch(/recognized/i);
   });
 
-  it("404s a recognized code that has never filed, and says that, rather than calling it unknown", async () => {
-    // PA is a REAL carrier code -- three airlines in dim_carrier carry it -- with zero T-100
-    // Segment rows. A reason reading "unknown carrier code 'PA'" would be a false statement
-    // about the data, which is the failure this project's 404s already refuse for airports
-    // (routePair.ts splits "unknown code" from "domestic-only"). The sentence shipped here is
-    // deliberately one that is true of BOTH this case and ZZ above: it talks about FILINGS,
-    // not about recognition.
-    //
-    // Falsifiable in the direction that matters: it fails if the reason ever claims the code
-    // itself is unrecognized, which is exactly the wording a copy-paste from routePair.ts
-    // would produce.
+  it("404s a recognized code that has never filed, naming EVERY holder rather than picking one", async () => {
+    // PA is the worst measured case: THREE rows in dim_carrier, not one -- airline_id 20384
+    // and 20386, both "Pan American World Airways", and 20389 "Florida Coastal Airlines", an
+    // UNRELATED carrier that just happens to share the code. Naming only the first would be
+    // the same silent-pick failure the AUS lookup (docs/data/invariants.md § Entity
+    // resolution) already cost this project once. A single-holder code cannot catch this --
+    // this fixture is deliberately the one with the widest fan-out.
     const r = await resolveCarrier("PA");
     if (r.kind !== "notFound") throw new Error(`expected PA to 404, got ${r.kind}`);
     expect(r.reason).toContain("'PA'");
+    expect(r.reason).toMatch(/recognized/i);
+    expect(r.reason).not.toMatch(/^unknown/i);
+    // The count, stated in words.
+    expect(r.reason).toMatch(/\b3\b/);
+    // Every holder, by id AND by name -- not just the first one the driver returned.
+    expect(r.reason).toContain("20384");
+    expect(r.reason).toContain("20386");
+    expect(r.reason).toContain("20389");
+    expect((r.reason.match(/Pan American World Airways/g) ?? []).length).toBe(2);
+    expect(r.reason).toContain("Florida Coastal Airlines");
     expect(r.reason).toMatch(/filed|filing/i);
-    expect(r.reason).not.toMatch(/unknown|unrecognized|no such/i);
+  });
+
+  // Final whole-branch review, M5: `carrierNotFoundReason`'s `holders.length === 1` branch was
+  // untested, and it is the MAJORITY carrier 404 -- 1,543 never-filed codes minus PA-shaped
+  // 94 multi-holder codes leaves 1,449 that take this branch, not PA's rarer 3-holder path.
+  // CBA (airline_id 19142, "Carriba Air Inc.") is a measured single-holder, never-filed code:
+  // one row in dim_carrier, zero fct_segment_month rows for that airline_id. Pins the singular
+  // "one airline id" wording -- a mutant that always pluralizes ("1 airline ids") or that
+  // always takes PA's wording (hardcoding "3") would go undetected without this, since PA
+  // alone can never exercise the singular branch.
+  it("404s a single-holder never-filed code with singular wording, not PA's plural shape", async () => {
+    const r = await resolveCarrier("CBA");
+    if (r.kind !== "notFound") throw new Error(`expected CBA to 404, got ${r.kind}`);
+    expect(r.reason).toContain("'CBA'");
+    expect(r.reason).toMatch(/recognized/i);
+    expect(r.reason).toContain("one airline id");
+    expect(r.reason).not.toMatch(/airline ids/);
+    expect(r.reason).toContain("19142");
+    expect(r.reason).toContain("Carriba Air Inc.");
+    expect((r.reason.match(/Carriba Air Inc\./g) ?? []).length).toBe(1);
   });
 
   it("404s an empty slug without asking the database", async () => {
@@ -112,5 +145,17 @@ describe("carrierSlugFromPath", () => {
     // bug #2 on smoke.sh's list of production-only failures: decodeURIComponent THROWS on
     // '%zz'. An uncaught throw here is a 500 on a page whose entire job is to render a 404.
     expect(carrierSlugFromPath("/carrier/%zz")).toBe("%zz");
+    expect(carrierSlugFromPath("/carrier/%E0%A4%A")).toBe("%E0%A4%A");
+  });
+
+  // M5 Task 6: carrierSlugFromPath is now a one-line wrapper around lib/entitySlug.ts's
+  // entitySlugFromPath. Pinned here so the collapse cannot smuggle in a behaviour change --
+  // unlike airportSlugFromPath, this reader never special-cased an empty slug or a nested path.
+  it("returns the empty string for a bare trailing slash, not null", () => {
+    expect(carrierSlugFromPath("/carrier/")).toBe("");
+  });
+
+  it("returns whatever follows the prefix verbatim on a nested path", () => {
+    expect(carrierSlugFromPath("/carrier/DL/extra")).toBe("DL/extra");
   });
 });

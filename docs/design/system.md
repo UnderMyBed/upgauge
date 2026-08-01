@@ -108,6 +108,27 @@ Counts are integers with thousands separators.
 
 ## Components
 
+### The top bar
+
+The wordmark, the `DATA AS OF` badge, and — as of M5 — a site-wide search field, extracted
+into one shared component (`app/src/components/TopBar.tsx`) so the search box has exactly one
+home instead of drifting across every page that renders it. `UPGAUGE` in `.mark`, `UP` in
+`--ink` and `GAUGE` in `--signal`; the badge in `--signal` (first-class per `DATA AS OF`'s own
+token entry, above); the search field a plain `method="GET"` form posting `q` to `/search` —
+**no client JS, no `onChange`, no state.** Every view in this product renders and works with
+JavaScript off, and the search box is not an exception. Present on every page, including the
+four entity pages' `not-found` states and the front door — a 404 still asserts something about
+the data (that a query against it would answer nothing), so it keeps the full top bar rather
+than treating a 404 as chrome-free.
+
+**The wordmark is a link home**, and it carries `prefetch={false}` — which is load-bearing, not
+tidiness. It is the product's only `next/link` (every other internal link is a plain `<a>`; this
+one is a `Link` only because `@next/next/no-html-link-for-pages` fires on a statically-resolvable
+`href="/"`), it sits above the fold on all ten pages, and `Link`'s default prefetches on
+viewport entry. `/` is `force-dynamic` and absent from `proxy.ts`'s matcher, so it carries
+`no-store` and the CDN cannot absorb that prefetch — the default would buy one uncached origin
+request per page view on a box whose whole cost control is the caching.
+
 ### The data table
 
 Column order is fixed: **gutter · identifiers · additive measures · derived measures ·
@@ -141,6 +162,51 @@ dash — absence of a name is not absence of data. Every carrier and airport cod
 present-day code (`docs/data/invariants.md`'s "Entity resolution" section) — so the legend
 rail states this on every view rather than letting a resolved code masquerade as a
 historical fact.
+
+**Every dimension cell that resolves to a page links to it (M5).** `DataTable`'s
+`DimensionCell` is the one chokepoint all five surfaces — `/explore` and the four entity
+pages — render their columns through, since they all build `dimKey` the same way
+(`allowlist.dims.get(c)?.joinDim ? c : undefined`). Wrapping the cell there in `<a href={
+entityHref(dimKey, hit) }>` links every table in the product from one change.
+`entityHref` (`app/src/lib/entityLink.ts`) is the single source of truth for whether a cell
+links: `null` for a dimension with no entity page (both city markets, `year_month`, `quarter`,
+`year`, `origin_state`, `dest_state`, `distance_group`, `aircraft_group`), for an id that never
+resolved, and for a resolution with no code — the same three cases that already render bare.
+The `<abbr>` carrying the name nests **inside** the `<a>` rather than being replaced by it —
+it is the only place a keyboard user reaches the expansion, linked cell or not.
+
+**A fourth case, and it is not a dimension property: a `route` cell whose two halves are the
+same airport does not link.** `fct_segment_month` carries 530 such pairs with real traffic
+(ORD alone is 73,082 seats over the trailing 12), but `/route/ORD-ORD` is a 404 by design —
+`resolveRoutePair` answers *"'ORD' to itself is not a route between two airports"*, and
+`sitemap_routes.sql` excludes them for the same reason. The link path was the last place that
+did not know, and shipped a link to a guaranteed 404 until M5's final review. The guard lives
+in `/explore`'s `routeHref`, beside the alphabetical-by-code sort, because the composite route
+cell is the one cell `entityHref` does not own.
+
+**The link is styled with two channels, not one.** Tailwind's preflight resets `a { color:
+inherit; text-decoration: inherit }`, so an unstyled `<a>` in a data-table cell renders
+pixel-identical to the plain text it replaced — `.data-table td.id a` (`globals.css`) sets both
+`color: var(--signal)` **and** `text-decoration: underline`, because colour is never the sole
+channel for a distinction (Quality floor) and a link that only differs from body text by hue
+fails that for a colour-blind or grayscale reader the same way an uncoloured gauge tick would.
+
+`route`'s cell is the one exception, and it is not a `DimensionCell` at all: its `column_expr`
+spans two columns that both resolve through `dim_airport`, so there is no single id to hand
+`entityHref`. `/explore` builds its href separately (`routeHref` in `explore/page.tsx`), reading
+the two `Resolved` hits directly rather than the joined display string, and passes it as a
+**typed `ColumnSpec.href` accessor** (`(row) => string | null`) — not a sibling-field naming
+convention on `Record<string, unknown>` (rejected in review: stringly-typed, no compile-time
+guard, and wider than the one caller needs) — that `IdentifierCell`, a small generalization of
+the same component, calls per row for any non-dimension identifier column that sets one.
+**The href is the code-alphabetical pair, never the displayed (airport-id) order**: `/explore`
+renders `route_key_low, route_key_high` — airport-id order — and `routeHrefFromCodes` re-sorts
+alphabetically by code before building `/route/<pair>`, because the two orderings disagree for
+154 of 22,420 pairs (measured; `CLAUDE.md`, M4b). Reusing the displayed order would be wrong
+for every one of those 154 — IFP/IAH is one of them: airport-id order displays `IFP–IAH`, but
+the canonical `/route/` URL is `/route/IAH-IFP`, the reverse. A fixture built on an
+order-agreeing pair like JFK–LAX (22,266 of 22,420) cannot catch that class of bug — both
+orderings produce the same, coincidentally correct, href.
 
 ### The gauge rail — signature, 1 of 3
 
@@ -518,7 +584,10 @@ JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
 
 Canonical-URL handling (redirect, 404, en-dash rendering) is a routing concern, not a design
 one — full contract in
-[`../architecture/pipeline.md` § M4b](../architecture/pipeline.md#m4b--the-route-page).
+[`../architecture/pipeline.md` § M4b](../architecture/pipeline.md#m4b--the-route-page). As of
+M5, all four entity pages export a `<link rel="canonical">` at that same resolved value — never
+the requested spelling, so `/airport/sea` declares `/airport/SEA` rather than itself, exactly
+the same resolver call the redirect above already makes.
 
 ### The other three, shipped M4d — what each one changes and what it must not
 

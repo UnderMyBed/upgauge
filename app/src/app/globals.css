@@ -94,6 +94,17 @@ body { background: var(--panel); color: var(--ink); }
   font-weight: 500;
   letter-spacing: 0.01em;
 }
+/* M5 "connect the graph": a dimension cell that resolves to an entity page links to it
+   (docs/design/system.md "The data table"). Tailwind's preflight resets `a` to
+   `color: inherit; text-decoration: inherit`, so this is required, not cosmetic -- without
+   it every new link is pixel-identical to the plain-text cell it replaced. Colour is never
+   the sole channel (Quality floor): the underline is the second, so the link still reads as
+   a link in grayscale or for a colour-blind reader. */
+.data-table td.id a {
+  color: var(--signal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
 
 /* Rows below the 30-departure floor are rendered, never hidden: dashed rule, --ink-2 text.
    Sorted to the bottom and excluded from ranking, not from sight. */
@@ -166,6 +177,7 @@ body { background: var(--panel); color: var(--ink); }
 }
 .top {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 16px;
   padding: 11px 0 10px;
@@ -180,6 +192,52 @@ body { background: var(--panel); color: var(--ink); }
 }
 .mark .accent {
   color: var(--signal);
+}
+/* Site-wide search (M5, Task 2): a plain GET form between the wordmark and the DATA AS OF
+   badge, `flex: 1` so it fills the space the badge's own margin-left:auto used to claim on
+   its own. No card, no rounded corners -- same restraint as the rest of page chrome. */
+.top .search {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  /* Final whole-branch review, M8: `min-width: 0` alone let this form get squeezed to
+     near-zero on its own LINE rather than wrapping to a new one -- `.mark` and `.asof` are
+     both `white-space: nowrap` and refuse to shrink, and `.top .search button` has no
+     `min-width: 0` of its own, so the search field's compressed remainder overlapped the
+     `DATA AS OF` badge instead of moving below it. A real floor (not 0) is what makes
+     `flex-wrap: wrap` on `.top` choose to wrap this form onto its own line at narrow widths
+     instead of visually overlapping the badge -- verified against a served build at 375px. */
+  min-width: 200px;
+}
+.top .search input[type="search"] {
+  flex: 1;
+  min-width: 0;
+  max-width: 360px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--field);
+  border: 1px solid var(--rule-2);
+  padding: 5px 8px;
+}
+.top .search input[type="search"]::placeholder {
+  color: var(--ink-3);
+}
+.top .search button {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: var(--field);
+  border: 1px solid var(--rule-2);
+  padding: 5px 8px;
+  cursor: pointer;
+}
+.top .search button:hover {
+  color: var(--ink);
+  border-color: var(--ink);
 }
 .asof {
   font-family: var(--font-mono);
@@ -213,6 +271,15 @@ body { background: var(--panel); color: var(--ink); }
 .entity .ename {
   font-size: 13px;
   color: var(--ink-2);
+}
+/* Final whole-branch review, F5: the title block's two airport names now link to their own
+   /airport/<code> (docs/product/features.md's spec, never carried in until this fix). Same
+   non-colour-channel treatment as .data-table td.id a and .foot a -- underline, not colour
+   alone. */
+.entity .ename a {
+  color: var(--signal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 .window {
   font-size: 11px;
@@ -341,6 +408,49 @@ svg.plot {
   font-size: 11px;
   color: var(--ink-2);
   max-width: 660px;
+}
+/* Final whole-branch review, F2: the "Open in the Explorer" link on all four entity pages
+   lives in a .foot paragraph, and Tailwind's preflight resets `a { color: inherit;
+   text-decoration: inherit }` -- without this it is pixel-identical to the surrounding
+   --ink-2 text. Colour is never the sole channel (Quality floor): underline is the second,
+   same treatment as .data-table td.id a. */
+.foot a {
+  color: var(--signal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ---------- /search results (M5 "connect the graph") ---------- */
+/* Task 3's .data-table td.id a gap, again: .search-results / .search-group have no rule
+   anywhere, so preflight collapses h1/h2/li/a to visually identical 16px text -- headings,
+   group headings, rows and links all read the same. Headings get weight and size back;
+   links get the same colour + underline non-colour-channel treatment as everywhere else in
+   the product. */
+.search-results h1 {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 14px;
+}
+.search-group {
+  margin-bottom: 18px;
+}
+.search-group h2 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  margin-bottom: 6px;
+}
+.search-group li {
+  padding: 3px 0;
+  font-size: 13px;
+}
+.search-results a {
+  color: var(--signal);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-family: var(--font-mono);
 }
 
 /* ---------- invalid-permalink error state (docs/design/system.md "States") ---------- */

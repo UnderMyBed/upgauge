@@ -39,6 +39,17 @@ describe("LegendRail", () => {
     expect(screen.getByText(/current identity/i)).toBeDefined();
   });
 
+  // M5, Task 2, "D3": public-domain attribution for the source data. Unconditional --
+  // rendered on a rail mounted WITHOUT the fleetMix opt-in, unlike the fleet-shading group,
+  // because it is true of every view the rail appears on, not only the ones with a chart.
+  it("states the source data is public-domain US Government filings, without fleetMix", () => {
+    render(<LegendRail />);
+    expect(screen.getByText(/US DOT/i)).toBeDefined();
+    expect(screen.getByText(/BTS|Bureau of Transportation Statistics/i)).toBeDefined();
+    expect(screen.getByText(/T-100/i)).toBeDefined();
+    expect(screen.getByText(/public-domain/i)).toBeDefined();
+  });
+
   // M4c. The rail is the project's standing "how to read this", so the temptation is to put
   // every encoding in it once and be done. The rule this component already follows (its own
   // header, on the mockup's map group) is the opposite: describe the encodings THIS view uses.

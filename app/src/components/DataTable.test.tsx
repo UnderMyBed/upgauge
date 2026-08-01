@@ -1,4 +1,7 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
@@ -156,5 +159,94 @@ describe("DataTable renders resolved display values", () => {
     ]);
     render(<DataTable columns={cols} rows={[{ origin_city_market_id: 30559 }]} resolved={resolved} />);
     expect(screen.getByText("Seattle, WA")).toBeDefined();
+    // City market has no entity page (entityLink.ts's ENTITY_PREFIX carries no city-market
+    // entry), so the name must render bare, not as the label of a link to nowhere.
+    expect(document.querySelector("a")).toBeNull();
   });
+
+  // M5 "connect the graph", Step 1(a): a linkable dimension cell wraps the CODE in an <a
+  // href>, and the abbr carrying the full name nests INSIDE that anchor rather than being
+  // replaced by it -- a keyboard user reaches the name through the abbr's title regardless of
+  // whether the cell also links. One assertion covers both facts: the anchor exists at the
+  // href entityHref would compute (CARRIER_PREFIX + code) AND its content is the abbr with
+  // the expected title.
+  it("wraps a linkable cell's code in <a href>, nesting the abbr name expansion inside it", () => {
+    const { container } = render(<DataTable columns={COLS} rows={ROWS} resolved={RESOLVED} />);
+    const link = container.querySelector('a[href="/carrier/DL"]');
+    expect(link?.querySelector("abbr[title='Delta Air Lines Inc.']")?.textContent).toBe("DL");
+  });
+
+  // Step 1(b): a non-linkable cell renders exactly what it renders today -- no <a> for an
+  // unresolved id (there is no code to build a URL from, even though the dimension itself has
+  // an entity page).
+  it("does not link an unresolved id, even though op_airline_id has an entity page", () => {
+    const { container } = render(<DataTable columns={COLS} rows={ROWS} resolved={new Map()} />);
+    expect(screen.getByText("19790")).toBeDefined();
+    expect(container.querySelector("a")).toBeNull();
+  });
+});
+
+describe("DataTable: non-dimension identifier cells (e.g. explore's synthetic __route)", () => {
+  // Fix round 1, Important 2: IdentifierCell's link is a typed `ColumnSpec.href` accessor,
+  // not a naming convention on row data (`row["${key}Href"]`) -- there is nothing to spell
+  // wrong and no collision surface with a row's own fields. route's column_expr spans two
+  // columns, so it is not a single-dimension resolution and never goes through
+  // DimensionCell/entityHref at all.
+  const linkedCols: ColumnSpec[] = [
+    {
+      key: "__route",
+      label: "Route",
+      kind: "identifier",
+      href: (row) => (row.__route === "IFP–IAH" ? "/route/IAH-IFP" : null),
+    },
+  ];
+
+  it("links via the column's href accessor", () => {
+    const rows = [{ __route: "IFP–IAH" }];
+    const { container } = render(<DataTable columns={linkedCols} rows={rows} />);
+    const link = container.querySelector('a[href="/route/IAH-IFP"]');
+    expect(link?.textContent).toBe("IFP–IAH");
+  });
+
+  it("renders plain text when the accessor returns null for this row (one half didn't resolve)", () => {
+    const rows = [{ __route: "19790–SEA" }];
+    const { container } = render(<DataTable columns={linkedCols} rows={rows} />);
+    expect(screen.getByText("19790–SEA")).toBeDefined();
+    expect(container.querySelector("a")).toBeNull();
+  });
+
+  it("renders plain text, exactly as before, for a column with no href accessor at all", () => {
+    const bareCols: ColumnSpec[] = [{ key: "__route", label: "Route", kind: "identifier" }];
+    const rows = [{ __route: "PDX–SEA" }];
+    const { container } = render(<DataTable columns={bareCols} rows={rows} />);
+    expect(screen.getByText("PDX–SEA")).toBeDefined();
+    expect(container.querySelector("a")).toBeNull();
+  });
+});
+
+// Fix round 1, Important 1: Tailwind's preflight resets `a { color: inherit; text-decoration:
+// inherit }`, so a new <a> in a data-table cell is pixel-identical to plain text without an
+// explicit rule -- jsdom computes no styles (no layout engine), so nothing above this line can
+// catch that CSS rule being deleted or never written; this test cannot see the rendered
+// pixels either, only the source text. It is deliberately weak, stated here rather than
+// implied: it proves the selector and a non-colour channel are IN THE STYLESHEET, not that a
+// browser paints them as intended. That is still worth having -- it turns a silent CSS
+// deletion into a red test instead of a link only a screen reader or a diff of globals.css
+// would notice.
+it("globals.css styles a data-table link with a non-colour channel, not colour alone", () => {
+  // Relative to THIS file, not process.cwd() -- vitest.setup.ts chdirs the test process to
+  // the repo root (UPGAUGE_ROOT), not app/, so a cwd-relative path would silently resolve
+  // one directory short and this test would need to know that setup detail to pass.
+  const globalsCssPath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../app/globals.css",
+  );
+  const css = readFileSync(globalsCssPath, "utf8");
+  const rule = css.match(/\.data-table td\.id a\s*\{[^}]*\}/);
+  expect(rule).not.toBeNull();
+  const body = rule![0];
+  expect(body).toMatch(/color:\s*var\(--signal\)/);
+  // Colour is never the sole channel (docs/design/system.md, Quality floor) -- underline is
+  // the second.
+  expect(body).toMatch(/text-decoration:\s*underline/);
 });

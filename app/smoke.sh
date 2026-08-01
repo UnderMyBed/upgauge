@@ -22,6 +22,21 @@ PORT="${SMOKE_PORT:-3199}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BASE="http://127.0.0.1:${PORT}"
 CACHE_EXPECTED="public, s-maxage=2592000, stale-while-revalidate=86400"
+# M5 Task 7, Part B split proxy.ts's one 30-day CACHE constant into two: /api/pivot (its own
+# route.ts, untouched) and, as of M5 Task 8, /sitemap.xml and /robots.txt keep CACHE_EXPECTED
+# above; /explore and every ENTITY_ROUTES page (/route, /airport, /carrier, /aircraft) -- both
+# their 200s and their 308s -- get the shorter HTML_CACHE instead (docs/architecture/hosting.md
+# § "The gap": bounding a 5xx's cache exposure to an hour rather than a month, since the
+# route-handler fix that would have closed the gap outright turned out not to be reachable).
+#
+# This file's own checks did NOT move when proxy.ts's constant did -- Task 7 touched proxy.ts
+# and proxy.test.ts but not this file, so every HTML-page Cache-Control check below was
+# asserting the WRONG (stale, 30-day) value against a served build that actually returns the
+# 1-hour one, which is exactly the "green tests, broken production" shape this file exists to
+# prevent, just inverted (a RED check for a correct header, not a green one for a broken one).
+# M5 Task 8 is the fix: CACHE_EXPECTED stays the literal /api/pivot, /sitemap.xml and
+# /robots.txt use; HTML_CACHE_EXPECTED is the new one for /explore and the four entity pages.
+HTML_CACHE_EXPECTED="public, s-maxage=3600, stale-while-revalidate=86400"
 FAILED=0
 
 cap() { # run under a memory cap when systemd-run is available, plainly otherwise
@@ -92,7 +107,18 @@ check_not_re() {
   fi
 }
 
-cleanup() { [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null; pkill -f "next start app -p ${PORT}" 2>/dev/null; }
+# GAP_PORT/GAP_PID/BROKEN_DB belong to the Task 7 Part A gap check at the very end of this
+# file, which runs a SECOND, short-lived server against a deliberately broken copy of the
+# database -- declared here, not there, so cleanup() can always find them regardless of where
+# the script stops (a `check` failure never exits early -- FAILED is a flag, not a trap -- but
+# a hard error before that section runs must still not leak the temp file or process).
+cleanup() {
+  [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null
+  pkill -f "next start app -p ${PORT}" 2>/dev/null
+  [ -n "${GAP_PID:-}" ] && kill "$GAP_PID" 2>/dev/null
+  [ -n "${GAP_PORT:-}" ] && pkill -f "next start app -p ${GAP_PORT}" 2>/dev/null
+  [ -n "${BROKEN_DB:-}" ] && rm -f "$BROKEN_DB"
+}
 trap cleanup EXIT
 
 cd "$ROOT"
@@ -146,7 +172,7 @@ check "explore: DATA AS OF is present" "$BODY" 'DATA AS OF'
 
 # 5. The caching header is the cost control, so it is a test, not a hope.
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=5&g=op")
-check "explore: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+check "explore: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/api/pivot?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op")
 check "api: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/api/pivot?v=1&bogus=1")
@@ -180,13 +206,35 @@ check     "route: renders the pair"            "$BODY" 'JFK–LAX'
 check     "route: renders a carrier code"      "$BODY" '>DL<'
 check     "route: DATA AS OF is present"       "$BODY" 'DATA AS OF'
 check     "route: links to the Explorer"       "$BODY" '/explore?'
+# M5 "connect the graph": every resolved dimension cell links to its own entity page
+# (docs/design/system.md § The data table, entityLink.ts's entityHref). The exact attribute,
+# not just the code text -- 'DL' alone is already covered by the check above and would stay
+# green if the link were ever dropped and the bare code kept rendering as plain text.
+check     "route: links a carrier cell to /carrier/DL" "$BODY" 'href="/carrier/DL"'
+
+# Final whole-branch review, M11: nothing in this file asserted Task 2's two visible
+# deliverables in the SERVED bytes -- the site-wide search form TopBar renders on all ten
+# pages, and the four entity pages' self-referential <link rel="canonical">. Both are cheap to
+# drop silently: neither changes a page's status code or its other content, so every other
+# check in this file stays green if one regresses. UPGAUGE_BASE_URL is unset for this script,
+# so BASE_URL (lib/siteUrl.ts) falls back to its documented default, http://localhost:3000 --
+# NOT this script's own $BASE (a different port) -- which is why the needle below is a literal
+# localhost:3000 URL rather than ${BASE}.
+check "route: renders the site-wide search form (TopBar, M5 Task 2)" "$BODY" 'action="/search"'
+check "route: the search form is role=search"                        "$BODY" 'role="search"'
+check "route: carries a self-referential canonical link (Task 2)" "$BODY" \
+  '<link rel="canonical" href="http://localhost:3000/route/JFK-LAX"'
 
 # Critical fix, final whole-branch review: this section copied the body checks above but not
 # a header check, which is exactly why /route shipped `no-store` -- every OTHER check here
 # passes whether or not the Cache-Control header is set. See proxy.ts and CLAUDE.md's "every
 # response gets Cache-Control" rule.
+#
+# M5 Task 7 Part B shortened this from the project's 30-day value to HTML_CACHE (1 hour, see
+# proxy.ts's own doc comment) -- checked against HTML_CACHE_EXPECTED, not CACHE_EXPECTED, which
+# stays the literal /api/pivot (and, as of Task 8, /sitemap.xml/robots.txt) still use.
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/route/JFK-LAX")
-check     "route: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+check     "route: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/route/LAX-JFK")
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/route/LAX-JFK")
@@ -198,7 +246,7 @@ check     "route: redirect targets canonical"  "$LOC"  '/route/JFK-LAX'
 # silently drop -- the redirect target is derived from the two codes alone, so it is exactly
 # as stable as the 200 and must stay long-cached. Only proxy.test.ts pinned it, and that test
 # calls proxy() directly without crossing Next's header plumbing.
-check     "route: 308 keeps the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+check     "route: 308 keeps the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/route/ZZZZ-LAX")
 check     "route: unknown code is a 404"       "$CODE" '404'
@@ -211,7 +259,7 @@ check     "route: unknown code is a 404"       "$CODE" '404'
 # tests never cross Next's own header plumbing.
 for P in ZZZZ-LAX JFK-LHR LAX-LAX; do
   HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/route/${P}")
-  check_not "route: 404 (${P}) is not long-cached" "$HDRS" "s-maxage=2592000"
+  check_not "route: 404 (${P}) is not long-cached" "$HDRS" "s-maxage"
   check     "route: 404 (${P}) is no-store"        "$HDRS" "no-store"
 done
 
@@ -381,9 +429,13 @@ check     "airport: ramp tokens reach the area fills (darkest)"  "$BODY" '<path 
 # is served by no page in the app is an absence check that can never fire; this is the page that
 # proves the string exists and reaches the served bytes.
 check     "airport: the chart stacks by aircraft type" "$BODY" 'Seats by aircraft type'
+# Final whole-branch review, M11 (second of four canonical checks -- see /route's own comment
+# for why this is a literal localhost:3000 URL, not ${BASE}).
+check     "airport: carries a self-referential canonical link (Task 2)" "$BODY" \
+  '<link rel="canonical" href="http://localhost:3000/airport/SEA"'
 
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/airport/SEA")
-check     "airport: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+check     "airport: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/airport/sea")
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/sea")
@@ -394,13 +446,13 @@ check     "airport: redirect targets canonical" "$LOC"  '/airport/SEA'
 # BEFORE it looks anything up -- so it cannot be invalidated by an ingest and stays long-cached,
 # same as /route's. (`/airport/zzzz` therefore gets a cached 308 to `/airport/ZZZZ`, which then
 # 404s no-store. That is the correct split: the redirect is a fact about the string.)
-check     "airport: 308 keeps the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+check     "airport: 308 keeps the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
 for A in ZZZZ LHR; do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/airport/${A}")
   HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/${A}")
   check     "airport: ${A} is a 404"                 "$CODE" '404'
-  check_not "airport: 404 (${A}) is not long-cached" "$HDRS" "s-maxage=2592000"
+  check_not "airport: 404 (${A}) is not long-cached" "$HDRS" "s-maxage"
   check     "airport: 404 (${A}) is no-store"        "$HDRS" "no-store"
 done
 # 404 body, paired the way /route's is: each case asserts a phrase only ITS reason produces AND
@@ -435,13 +487,20 @@ check     "carrier: states codes are current identity" "$BODY" 'current identity
 # the BTS code must not. `888` appears in this page's Explorer permalink; only a CELL is checked.
 check     "carrier: renders a real aircraft short name" "$BODY" '>B737-9ER<'
 check_not "carrier: renders no bare aircraft code"      "$BODY" '>888<'
+# M5 "connect the graph": the fleet table's aircraft-type cells link out too (measured: DL
+# flies 13,504,318 trailing-12 seats on B737-8, so this href is really on the page, not a
+# fixture invented for the check).
+check     "carrier: links an aircraft cell to /aircraft/B737-8" "$BODY" 'href="/aircraft/B737-8"'
 check     "carrier: the chart SVG is in the served HTML" "$BODY" '<svg role="img"'
 check     "carrier: ramp tokens reach the area fills (lightest)" "$BODY" '<path fill="var(--g0)" d='
 check     "carrier: ramp tokens reach the area fills (darkest)"  "$BODY" '<path fill="var(--g5)" d='
 check     "carrier: the page states the chart's own window" "$BODY" 'chart: the full window · 2015-01 → 2026-04'
+# Final whole-branch review, M11 (third of four canonical checks -- see /route's own comment).
+check     "carrier: carries a self-referential canonical link (Task 2)" "$BODY" \
+  '<link rel="canonical" href="http://localhost:3000/carrier/DL"'
 
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL")
-check     "carrier: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+check     "carrier: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
 # The other branch of the window line, and the negative half of the pair. VX (Virgin America)
 # stopped filing in 2018-03; the chart is fetched over the full window and can only draw to
@@ -457,22 +516,46 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/carrier/dl")
 LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
 check     "carrier: lower-case code redirects"  "$CODE" '308'
 check     "carrier: redirect targets canonical" "$LOC"  '/carrier/DL'
-check     "carrier: 308 keeps the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+check     "carrier: 308 keeps the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
-# ZZ is in dim_carrier not at all; PA (Pan American) is in it three times and has filed zero
-# T-100 Segment rows. Both 404 by the same path, which is why the reason talks about FILINGS
-# rather than recognition -- 1,543 of dim_carrier's 1,657 DISTINCT codes land in PA's bucket
-# (1,657 - 114 fact-present; 1,776 is the table's ROW count, one per airline_id), so a
-# "unknown carrier code 'PA'" wording would be false about the majority 404 (pipeline.md § M4d).
-for C in ZZ PA; do
-  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/carrier/${C}")
-  HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/carrier/${C}")
-  BODY=$(curl -s --max-time 15 "${BASE}/carrier/${C}")
-  check     "carrier: ${C} is a 404"                 "$CODE" '404'
-  check_not "carrier: 404 (${C}) is not long-cached" "$HDRS" "s-maxage=2592000"
-  check     "carrier: 404 (${C}) is no-store"        "$HDRS" "no-store"
-  check     "carrier 404: names the offending code (${C})" "$BODY" "no carrier with code '${C}' has filed"
-done
+# ZZ is in dim_carrier not at all -- the MINORITY carrier 404 (114 of dim_carrier's 1,657
+# distinct codes are fact-present; the other 1,543 land in PA's bucket below). PA (Pan American)
+# is in dim_carrier three times over and has filed zero T-100 Segment rows.
+#
+# M5 Task 6 split resolveCarrier's 404 the way /route's and /airport's already were: "no such
+# code" versus "a real, recognized carrier this dataset has no rows for" -- two DIFFERENT
+# sentences now, not one generic phrase true of both, so each case below asserts its own phrase
+# AND the absence of the sibling case's, the same discipline § 8/10 use above. (This block used
+# to check both codes for the identical substring "no carrier with code '<C>' has filed", which
+# neither actual sentence contains -- a stale needle from before Task 6's split that happened to
+# print FAIL for the right reason rather than a silent false ok, but wrong either way.)
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/carrier/ZZ")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/carrier/ZZ")
+BODY=$(curl -s --max-time 15 "${BASE}/carrier/ZZ")
+check     "carrier: ZZ is a 404"                        "$CODE" '404'
+check_not "carrier: 404 (ZZ) is not long-cached"        "$HDRS" "s-maxage"
+check     "carrier: 404 (ZZ) is no-store"               "$HDRS" "no-store"
+check     "carrier 404: ZZ is unrecognized, not merely unfiled" "$BODY" "unknown carrier code 'ZZ'"
+check_not "carrier 404: ZZ is not reported as recognized"       "$BODY" "recognized by BTS"
+
+# PA -- the measured falsifiable pair's other half, and the COMMON carrier 404 (1,543 of 1,657
+# codes land here). All THREE holders named, not just the first: 20384 and 20386 really are Pan
+# American World Airways, and 20389 is Florida Coastal Airlines, an unrelated carrier that
+# happens to share the code -- naming only the first would be the exact AUS/CE-180 silent-pick
+# failure this split exists to refuse, one dimension over (docs/data/invariants.md § Entity
+# resolution).
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/carrier/PA")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/carrier/PA")
+BODY=$(curl -s --max-time 15 "${BASE}/carrier/PA")
+check     "carrier: PA is a 404"                             "$CODE" '404'
+check_not "carrier: 404 (PA) is not long-cached"             "$HDRS" "s-maxage"
+check     "carrier: 404 (PA) is no-store"                    "$HDRS" "no-store"
+check     "carrier 404: PA is recognized, never filed"       "$BODY" "'PA' is recognized by BTS"
+check_not "carrier 404: PA is not reported as unknown"       "$BODY" "unknown carrier code"
+check     "carrier 404: names the first Pan American holder"  "$BODY" 'Pan American World Airways, airline_id 20384'
+check     "carrier 404: names the second Pan American holder" "$BODY" 'Pan American World Airways, airline_id 20386'
+check     "carrier 404: names the unrelated same-code holder" "$BODY" 'Florida Coastal Airlines, airline_id 20389'
+
 # The lower-case slug is echoed as TYPED while the reason names the upper-cased code -- the only
 # input that tells a real echo apart from a re-read of the reason string. Task 3 found two of its
 # own tests reading the reason and calling it the slug; this is that finding, in the served bytes.
@@ -494,9 +577,12 @@ check     "aircraft: ramp tokens reach the area fills (darkest)"  "$BODY" '<path
 # for the same reason as the carrier caveats above.
 check     "aircraft: the chart stacks by carrier"        "$BODY" 'Seats by operating carrier'
 check_not "aircraft: ...not by aircraft type"            "$BODY" 'Seats by aircraft type'
+# Final whole-branch review, M11 (last of four canonical checks -- see /route's own comment).
+check     "aircraft: carries a self-referential canonical link (Task 2)" "$BODY" \
+  '<link rel="canonical" href="http://localhost:3000/aircraft/B737-8"'
 
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8")
-check     "aircraft: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+check     "aircraft: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
 # The slug transform, end to end. 16 of the 112 fact-present short names carry a `/` or a space,
 # so `/aircraft/A321/LR` is TWO path segments and can never match this route -- the design spec's
@@ -504,7 +590,7 @@ check     "aircraft: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
 BODY=$(curl -s --max-time 30 "${BASE}/aircraft/A321-LR")
 check     "aircraft: a slugged name resolves and renders unslugged" "$BODY" '>A321/LR<'
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/A321-LR")
-check     "aircraft: sets the project Cache-Control on a slugged name" "$HDRS" "$CACHE_EXPECTED"
+check     "aircraft: sets the project Cache-Control on a slugged name" "$HDRS" "$HTML_CACHE_EXPECTED"
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/aircraft/a321-lr")
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/aircraft/a321-lr")
@@ -513,13 +599,13 @@ check     "aircraft: lower-case slug redirects"  "$CODE" '308'
 # To the SLUG, never to `/aircraft/A321/LR`, which is unroutable.
 check     "aircraft: redirect targets the canonical slug" "$LOC" '/aircraft/A321-LR'
 check_not "aircraft: redirect does not target the unroutable raw name" "$LOC" '/aircraft/A321/LR'
-check     "aircraft: 308 keeps the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
+check     "aircraft: 308 keeps the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/aircraft/NOPE-1")
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/aircraft/NOPE-1")
 BODY=$(curl -s --max-time 15 "${BASE}/aircraft/NOPE-1")
 check     "aircraft: an unknown slug is a 404"      "$CODE" '404'
-check_not "aircraft: 404 is not long-cached"        "$HDRS" "s-maxage=2592000"
+check_not "aircraft: 404 is not long-cached"        "$HDRS" "s-maxage"
 check     "aircraft: 404 is no-store"               "$HDRS" "no-store"
 check     "aircraft 404: names the offending slug"  "$BODY" "unknown aircraft type 'NOPE-1'"
 # The lower-case slug is echoed as TYPED while the reason names the upper-cased form -- the same
@@ -543,7 +629,7 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/aircraft/CE
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/aircraft/CE-180")
 BODY=$(curl -s --max-time 15 "${BASE}/aircraft/CE-180")
 check     "aircraft: the ambiguous slug is a 404"            "$CODE" '404'
-check_not "aircraft: the ambiguous 404 is not long-cached"   "$HDRS" "s-maxage=2592000"
+check_not "aircraft: the ambiguous 404 is not long-cached"   "$HDRS" "s-maxage"
 check     "aircraft: the ambiguous 404 is no-store"          "$HDRS" "no-store"
 # Both airframes NAMED, each with its BTS code, sorted by code -- not a bare refusal. The needle
 # spans name and id because 'CESSNA 180' alone is a substring of 'CESSNA 180A/B', so a page that
@@ -569,6 +655,127 @@ for U in /airport/SEA /airport/ATL /airport/ORD /carrier/DL /aircraft/B737-8; do
   printf '  note %8s bytes of HTML for %s\n' "$(curl -s --max-time 30 "${BASE}${U}" | wc -c)" "$U"
 done
 
+# ---------------------------------------------------------------------------------------------
+# 13. M5 "connect the graph" -- cross-linking, the omnibox, and the crawl graph. This is the
+#     task the milestone's Critical (M4b's cache-matcher bug) was hiding in a second time: three
+#     new routes, each needing the same matcher-entry-plus-header discipline § 8-12's comment
+#     block states, plus a route (`/search`) whose correct Cache-Control is the ONE VALUE every
+#     other row in this file argues against -- `no-store`, unconditionally, never the long cache.
+
+# The route cell's href, checked separately from the code text it wraps (§ 7 above already
+# proves 'DL' renders; this proves the CELL LINKS, which is a different claim a dropped
+# entityHref call would leave silently unfalsified). Cross-link chokepoint: /route -> /carrier,
+# /carrier -> /aircraft -- one from each direction, not two checks on the same page.
+BODY=$(curl -s --max-time 15 "${BASE}/route/JFK-LAX")
+check "cross-link: /route/JFK-LAX links a carrier cell to /carrier/DL" "$BODY" 'href="/carrier/DL"'
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL")
+check "cross-link: /carrier/DL links an aircraft cell to /aircraft/B737-8" "$BODY" 'href="/aircraft/B737-8"'
+
+# The milestone's sharpest trap (docs/design/system.md § The data table): /explore's route cell
+# displays the two codes in AIRPORT-ID order but must LINK to the code-alphabetical canonical
+# /route/ URL, and the two orderings disagree for 154 of 22,420 pairs. IFP/IAH is the fixture
+# explore/page.test.tsx and DataTable.test.tsx already use for exactly this reason -- a
+# JFK-LAX-shaped fixture cannot catch this class of bug, because JFK-LAX's two orderings agree.
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=route&d=route&m=seats&t=2015-01:2016-12&f=route:10590-12266&s=-seats&n=5&g=op")
+check "explore: renders the airport-id-ordered display" "$BODY" 'IFP–IAH'
+check "explore: route cell LINKS to the code-alphabetical canonical, not the displayed order" \
+  "$BODY" 'href="/route/IAH-IFP"'
+
+# The omnibox. Correction on the brief this section implements: a UNIQUE match is a 307, not a
+# 308 -- 'q=PDX resolves uniquely' is a fact about THIS MONTH's dataset, and a 308 is cached
+# permanently by the requesting browser itself (independent of any CDN), so a code that starts
+# colliding in a future rebuild would leave a wrong PERMANENT client-side redirect behind. A 308
+# assertion here would be silently wrong forever after the first browser that ever saw it.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/search?q=PDX")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/search?q=PDX")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check     "search: a uniquely-resolving code is a 307, not a 308" "$CODE" '307'
+check     "search: redirects to the resolved entity page"         "$LOC"  '/airport/PDX'
+
+# LNY, NEW and WST are the three measured airport/carrier code collisions (docs/product/
+# features.md; airport ∩ aircraft and carrier ∩ aircraft are both 0 today). A silently-chosen
+# answer would still read as plausible here -- the carrier IS named after the airport -- which
+# is exactly why this is the sharpest of the three and the one worth a served-build check: both
+# real candidates rendered, NEITHER picked, and -- the falsifiable half -- NOT a redirect.
+BODY=$(curl -s --max-time 15 "${BASE}/search?q=LNY")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/search?q=LNY")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check     "search: a collision names the airport" "$BODY" 'Lanai Airport'
+check     "search: ...and the carrier too"        "$BODY" 'Lanai Air'
+# Final whole-branch review, F3: the two checks above are vacuous -- 'Lanai Air' is a
+# SUBSTRING of 'Lanai Airport' (dim_airport: 13034/LNY/'Lanai Airport'; dim_carrier:
+# 22137/LNY/'Western Aircraft, dba Lanai Air'), so the airport hit alone puts the bytes
+# 'Lanai Air' in the response and the carrier check can never go red on its own. These two
+# use disjoint needles -- neither a substring of the other -- so each can fail independently.
+check     "search: a collision links the airport candidate" "$BODY" 'href="/airport/LNY"'
+check     "search: ...and the carrier candidate too"        "$BODY" 'href="/carrier/LNY"'
+# Not run through check_not (built on grep -F, which cannot assert an ABSENT header cleanly
+# against an empty-string needle): a collision must render both candidates rather than picking
+# one, which -- unlike a unique match -- means no Location header at all.
+if [ -z "$LOC" ]; then
+  printf '  ok   %s\n' "search: a collision is not a redirect (no Location header)"
+else
+  printf '  FAIL %s\n       expected no Location header, got: %s\n' \
+    "search: a collision is not a redirect (no Location header)" "$LOC"
+  FAILED=1
+fi
+
+# 'Portland' -- the measured example that discriminates ranking from raw substring matching:
+# four fact-present airports, not three, and PWM is Maine, not Oregon. All four must render.
+BODY=$(curl -s --max-time 15 "${BASE}/search?q=Portland")
+for A in HIO PDX PWM TTD; do
+  check "search: 'Portland' names ${A}" "$BODY" ">${A}<"
+done
+printf '  note %6s bytes of HTML for /search?q=Portland\n' "$(printf '%s' "$BODY" | wc -c)"
+
+# /search is disallowed for crawling (unbounded free-text query space) but requests that DO
+# land on it must not be indexed either -- both halves of "don't crawl it, and if you got here
+# anyway don't index it" have to hold, or a shared link still ends up in a search index.
+BODY=$(curl -s --max-time 15 "${BASE}/search?q=PDX")
+check "search: carries noindex" "$BODY" 'name="robots" content="noindex"'
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/search?q=zzzzzzzzzz")
+check "search: is no-store" "$HDRS" "no-store"
+check_not "search: is never the project's long cache" "$HDRS" "s-maxage"
+# The positive check above cannot, by itself, tell proxy.ts's bare `no-store` apart from a
+# request that never reached proxy.ts at all -- a page missing from the matcher falls back to
+# Next's OWN default for a force-dynamic page, `private, no-cache, no-store, max-age=0,
+# must-revalidate`, which also CONTAINS the substring "no-store". Verified by mutation
+# (removing "/search" from the matcher): the check above stayed green under that mutant, which
+# is exactly the vacuous-check failure this project's own working agreement calls out --
+# `must-revalidate` is the token that is present in Next's fallback and absent from proxy.ts's
+# own value, so this is the one that actually distinguishes "proxy.ts ran" from "it didn't".
+check_not "search: is not Next's own force-dynamic fallback (proves proxy.ts ran)" "$HDRS" "must-revalidate"
+
+# The sitemap and robots.txt. Both get CLAUDE.md's project-wide value (they carry none of the
+# entity pages' per-request resolution risk -- proxy.ts's own doc comment on the branch).
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/sitemap.xml")
+BODY=$(curl -s --max-time 15 "${BASE}/sitemap.xml")
+check "sitemap: returns XML"                    "$BODY" '<?xml version="1.0"'
+check "sitemap: is well-formed as a urlset"      "$BODY" '<urlset xmlns='
+check "sitemap: sets the project Cache-Control"  "$HDRS" "$CACHE_EXPECTED"
+# VX (Virgin America) stopped filing in 2018-03 -- the dormant-entity fixture sitemap.ts's own
+# header names: an ACTIVE entity's lastmod and the current build month coincide, so a bug that
+# reports the BUILD DATE instead of the entity's own last-filed month would still pass a check
+# anchored on an active carrier. Scoped to VX's own two-line block (grep -A1, not -q -- reads to
+# completion, so it carries none of this file's header's SIGPIPE hazard) rather than the whole
+# 2.4 MB document, because an unscoped `check_not '2026-04-01'` would be satisfied by any OTHER
+# entity's lastmod and prove nothing about VX's own.
+VX_BLOCK=$(printf '%s' "$BODY" | grep -A1 'carrier/VX</loc>')
+check     "sitemap: /carrier/VX's lastmod is its own last-filed month" "$VX_BLOCK" '<lastmod>2018-03-01'
+# Final whole-branch review, M1: this used to be a hardcoded 'check_not ... 2026-04-01', which
+# is the DATA-AS-OF month, not the build date -- a genuine "stamp the build date instead of
+# VX's own last-filed month" bug emits today's date (this build ran 2026-07), not 2026-04, so
+# the hardcoded needle could never fire against the actual bug it was written to catch.
+# $(date -u +%Y-%m) tracks whenever this script actually runs, which is what the bug would
+# actually stamp.
+check_not "sitemap: ...not the current build month"                    "$VX_BLOCK" "$(date -u +%Y-%m)"
+
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/robots.txt")
+BODY=$(curl -s --max-time 15 "${BASE}/robots.txt")
+check "robots: disallows /search"               "$BODY" 'Disallow: /search'
+check "robots: points at the sitemap"           "$BODY" 'Sitemap: '
+check "robots: sets the project Cache-Control"  "$HDRS" "$CACHE_EXPECTED"
+
 # Fix wave 3, item 2: ONE DuckDBInstance for the whole server, not one per entry point.
 # Turbopack emits lib/db.ts into three separate server chunks (proxy, page SSR, route
 # handler), so its memo was three memos and this process opened upgauge.duckdb three times --
@@ -590,6 +797,81 @@ for p in $(descendants "$SERVER_PID"); do
   HANDLES=$(( HANDLES + $(ls -l "/proc/${p}/fd" 2>/dev/null | grep -c 'upgauge\.duckdb') ))
 done
 check_re "db: proxy, page and API share ONE DuckDBInstance (open handles = 1)" "$HANDLES" '^1$'
+
+# ---------------------------------------------------------------------------------------------
+# 14. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.
+#
+# proxy.test.ts pins isDataLayerHealthy() with `vi.mock`/`mockRejectedValueOnce`: a fast, precise
+# unit test, but one that never crosses Next's own routing or a real DuckDB open the way this
+# file's whole reason for existing requires. Whole-branch review handed this back explicitly:
+# the claim motivating Task 7 -- "a served build pointed at a database missing a catalog view now
+# returns /explore no-store instead of hosting.md's originally-measured 30-day-cached 500" -- was
+# asserted in that task's report and in hosting.md's own "The gap" section, but never re-proven
+# against an actual served build the way the ORIGINAL measurement (before the fix) was taken.
+#
+# Reproduces hosting.md's own method: drop `meta_pivot_dimensions` from a COPY of the database
+# (never the original -- upgauge.duckdb is never written to by anything in this repo), point a
+# SECOND, short-lived `next start` at that copy via UPGAUGE_DB, and curl /explore on it. The
+# primary server is killed first -- an 8GB box with zram-only swap does not run two `next start`
+# processes at once (this repo's own working agreement) -- so this section runs LAST and nothing
+# after it needs $SERVER_PID alive.
+echo "==> gap check: /explore against a database missing its pivot catalog (M5 Task 7 Part A)"
+kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=
+
+BROKEN_DB="$(mktemp -u "${TMPDIR:-/tmp}/upgauge-smoke-broken-XXXXXX.duckdb")"
+cp "${ROOT}/upgauge.duckdb" "$BROKEN_DB"
+# duckdb's own Python binding (already a pipeline dependency -- pyproject.toml), not the node
+# driver: this needs a plain READ_WRITE open to DROP a view, and the node driver this app uses
+# is opened READ_ONLY always (db.ts's own header: "This product never writes"), so reaching for
+# it here would mean teaching this script to open the app's own database read-write, which is
+# a much larger footgun than one Python one-liner against a throwaway copy.
+if ! mise exec -- uv run python -c "
+import duckdb
+con = duckdb.connect('${BROKEN_DB}')
+con.execute('DROP VIEW meta_pivot_dimensions')
+con.close()
+" >/tmp/upgauge-smoke-break.log 2>&1; then
+  echo "  FAIL could not break the copy's catalog -- see /tmp/upgauge-smoke-break.log"
+  FAILED=1
+else
+  GAP_PORT="${SMOKE_GAP_PORT:-3198}"
+  GAP_BASE="http://127.0.0.1:${GAP_PORT}"
+  UPGAUGE_DB="$BROKEN_DB" cap 2G mise exec -- npx next start app -p "$GAP_PORT" \
+    >/tmp/upgauge-smoke-gap.log 2>&1 &
+  GAP_PID=$!
+  # "/" reads ONLY dataAsOf() (fct_segment_month directly), never meta_pivot_dimensions, so it
+  # stays healthy on the broken copy and is a valid readiness probe -- unlike /explore itself,
+  # which is the thing under test and must not be curled until the server is confirmed up.
+  UP=0
+  for _ in $(seq 1 60); do
+    curl -sf -o /dev/null --max-time 2 "${GAP_BASE}/" && { UP=1; break; }
+    sleep 1
+  done
+  if [ "$UP" -ne 1 ]; then
+    echo "  FAIL gap server never came up"; cat /tmp/upgauge-smoke-gap.log
+    FAILED=1
+  else
+    CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${GAP_BASE}/explore?v=1")
+    HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${GAP_BASE}/explore?v=1")
+    check     "gap: /explore 5xxs against a database missing its pivot catalog" "$CODE" '500'
+    check     "gap: /explore's Part A probe declines the cache" "$HDRS" "no-store"
+    check_not "gap: /explore is never long-cached here"          "$HDRS" "s-maxage=2592000"
+    check_not "gap: /explore is never HTML_CACHE here either"    "$HDRS" "s-maxage=3600"
+    # Final whole-branch review, M2: the positive "declines the cache" check above repeats the
+    # vacuity /search's own "is no-store" check (~100 lines up) was already fixed for -- Next's
+    # OWN fallback header for a force-dynamic route that fell through proxy.ts's matcher
+    # entirely (e.g. "/explore" dropped from `config.matcher`) is
+    # `private, no-cache, no-store, max-age=0, must-revalidate`, which also contains the
+    # substring "no-store". All four checks in this block stay green under a "remove /explore
+    # from the matcher" mutant unless something here checks for the ONE token present in
+    # Next's fallback and absent from proxy.ts's own `no-store` -- `must-revalidate`, the same
+    # discriminator the /search block above already uses.
+    check_not "gap: /explore is not Next's own force-dynamic fallback (proves proxy.ts ran)" "$HDRS" "must-revalidate"
+  fi
+  kill "$GAP_PID" 2>/dev/null; wait "$GAP_PID" 2>/dev/null; GAP_PID=
+  pkill -f "next start app -p ${GAP_PORT}" 2>/dev/null
+fi
+rm -f "$BROKEN_DB"; BROKEN_DB=
 
 echo
 if [ "$FAILED" -eq 0 ]; then echo "smoke: all checks passed"; else echo "smoke: FAILURES above"; fi

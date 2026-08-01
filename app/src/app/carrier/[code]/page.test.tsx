@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import CarrierPage, { CarrierView } from "@/app/carrier/[code]/page";
+import CarrierPage, { CarrierView, generateMetadata } from "@/app/carrier/[code]/page";
 import { decode } from "@/lib/pivot/urlstate";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
 import { resolveCarrier } from "@/lib/carrier";
@@ -259,6 +259,26 @@ describe("/carrier/<code> redirect and 404", () => {
     // reaching the same notFound() -- so a future change that special-cased one of the two
     // still fails here.
     expect(await catchDigest("PA")).toBe("NEXT_HTTP_ERROR_FALLBACK;404");
+  });
+});
+
+describe("/carrier/<code> canonical metadata (M5, Task 2)", () => {
+  it("declares the canonical URL for an already-canonical code", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ code: "DL" }) });
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/carrier/DL");
+  });
+
+  it("declares dim_carrier's own spelling for a lowercase request, not the request", async () => {
+    // The bug to exclude, same shape as /airport/sea: emitting the requested spelling.
+    // /carrier/dl never renders this page in production (it 308s first), but the canonical
+    // tag must still name `dim_carrier`'s own code.
+    const meta = await generateMetadata({ params: Promise.resolve({ code: "dl" }) });
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/carrier/DL");
+  });
+
+  it("returns no canonical for a code that cannot resolve at all", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ code: "ZZ" }) });
+    expect(meta.alternates?.canonical).toBeUndefined();
   });
 });
 

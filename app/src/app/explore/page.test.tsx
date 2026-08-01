@@ -218,3 +218,57 @@ describe("route's column_expr stays in sync with the catalog", () => {
     expect(expr?.split(",").map((c) => c.trim())).toEqual(["route_key_low", "route_key_high"]);
   });
 });
+
+// M5 "connect the graph", Step 1(c): the route cell's href must be the CODE-alphabetical
+// pair, not the displayed (airport-id) order -- the milestone's sharpest trap, per the task
+// brief. IFP (airport_id 10590) / IAH (airport_id 12266) is one of the 154 of 22,420 pairs
+// (measured via the brief's own SQL, run against upgauge.duckdb) where the two orderings
+// disagree: IFP's airport_id is lower, so route_key_low/route_key_high -- and therefore the
+// DISPLAYED "IFP–IAH" -- carry it first, but "IAH" < "IFP" alphabetically, so the canonical
+// /route/ URL is /route/IAH-IFP, the REVERSE of the displayed order. This pair only flew
+// 2015-01..2016-04 (measured), hence the widened time window.
+//
+// A fixture built on JFK-LAX (12478/12892) cannot fail here: their airport-id order and code
+// order agree, as they do for 22,266 of 22,420 pairs, so a buggy implementation that builds
+// the href by splitting the DISPLAYED string would produce the identical, coincidentally
+// correct answer. The second test below pins that explicitly -- it must stay green under a
+// mutant that the first test catches, which is what proves the IFP-IAH fixture choice is
+// load-bearing rather than incidental.
+describe("/explore route cell links to the canonical, code-alphabetical /route/<pair>", () => {
+  it("builds the href from the alphabetical code order, not the displayed airport-id order", async () => {
+    const raw =
+      "v=1&k=route&d=route&m=seats&t=2015-01:2016-12&f=route:10590-12266&s=-seats&n=5&g=op";
+    const { container } = render(await ExploreView({ rawQuery: raw }));
+    expect(screen.getByText("IFP–IAH")).toBeDefined();
+    const link = container.querySelector('a[href="/route/IAH-IFP"]');
+    expect(link?.textContent).toBe("IFP–IAH");
+  });
+
+  // Not a Step-1 property by itself -- included so the claim in the block comment above
+  // ("mutant 1 stays green here") is something this suite can actually demonstrate, not just
+  // assert in a report. Confirmed by hand against the mutant described in task-3-report.md.
+  it("also links correctly on a pair whose orderings agree (JFK-LAX)", async () => {
+    const raw =
+      "v=1&k=route&d=route&m=seats&t=2025-05:2026-04&f=route:12478-12892&s=-seats&n=5&g=op";
+    const { container } = render(await ExploreView({ rawQuery: raw }));
+    const link = container.querySelector('a[href="/route/JFK-LAX"]');
+    expect(link?.textContent).toBe("JFK–LAX");
+  });
+
+  // Final whole-branch review, F1: a route-grain row where both halves are the SAME airport
+  // (route_key_low == route_key_high) is real, filed traffic -- 530 distinct pairs, 12,738
+  // fct_segment_month rows -- not a data error, but routePair.ts's resolveRoutePair() names
+  // "'ORD' to itself is not a route between two airports" and 404s it (routePair.ts:33). A
+  // routeHref that doesn't special-case a===b links straight into that 404. ORD (airport_id
+  // 13930) carries 73,082 seats over this exact trailing-12 window (measured, rank 2,381 of
+  // 10,888 route pairs), so this is not a synthetic filter -- it is a real row /explore would
+  // otherwise render as a live link today.
+  it("renders a same-airport route cell as plain text, never a link into a guaranteed 404", async () => {
+    const raw =
+      "v=1&k=route&d=route&m=seats&t=2025-05:2026-04&f=route:13930-13930&s=-seats&n=5&g=op";
+    const { container } = render(await ExploreView({ rawQuery: raw }));
+    expect(screen.getByText("ORD–ORD")).toBeDefined();
+    expect(container.querySelector('a[href="/route/ORD-ORD"]')).toBeNull();
+    expect(container.querySelector("td.id a")).toBeNull();
+  });
+});

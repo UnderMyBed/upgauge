@@ -1,10 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// Partial mock, same shape as app/api/pivot/route.test.ts and app/explore/page.test.tsx: wraps
+// the REAL loadAllowlist so every test except the ones that opt in via `mockRejectedValueOnce`
+// still exercises the real DuckDB catalog read. M5 Task 7 Part A's fail-safe test needs a way
+// to make the proxy's own /explore probe throw without a mock; this codebase's own precedent
+// for that (route.test.ts, page.test.tsx) is a partial mock, not a fake in-memory database.
+vi.mock("@/lib/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  return { ...actual, loadAllowlist: vi.fn(actual.loadAllowlist) };
+});
+
 import { NextRequest } from "next/server";
 import { proxy } from "@/proxy";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { RAW_PATH_HEADER } from "@/lib/rawPath";
+import { loadAllowlist } from "@/lib/db";
 
-const CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
+// M5 Task 7, Part B fallback: /explore and every entity page get the shorter HTML_CACHE value
+// (proxy.ts's own constant, renamed and re-documented there), not CLAUDE.md's project-wide
+// 30-day value -- see proxy.ts's HTML_CACHE doc comment and docs/architecture/hosting.md §
+// "The gap" for the measured reason a route-handler fix was not reachable.
+const CACHE = "public, s-maxage=3600, stale-while-revalidate=86400";
 
 // These tests pin what proxy.ts controls: the headers it sets and the values it copies. They
 // CANNOT pin the thing that broke twice in production -- whether Next hands this function a
@@ -37,6 +53,26 @@ describe("proxy", () => {
     const res = await proxy(new NextRequest("http://localhost/explore?v=1"));
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
+
+  // M5 Task 7, Part A. Named the bug it exists to catch: before this fix, /explore's branch
+  // ran no database query at all and set CACHE unconditionally, so a broken data layer -- the
+  // exact scenario docs/architecture/hosting.md § "The gap" measured against a served build --
+  // still produced the 30-day header on a page.tsx that was about to 500. `loadAllowlist` is
+  // mocked to reject because it is exactly what ExploreView calls first, before its own
+  // try/catch (which wraps only decode()+runPivot()) -- this is the query a missing
+  // meta_pivot_dimensions/meta_pivot_measures catalog view would break.
+  it("does not long-cache /explore when the proxy's own data-layer probe throws", async () => {
+    vi.mocked(loadAllowlist).mockRejectedValueOnce(
+      new Error("duckdb: Catalog Error: Table with name meta_pivot_dimensions does not exist"),
+    );
+    const res = await proxy(new NextRequest("http://localhost/explore?v=1"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // Not vacuous: the immediately-preceding test above (a real request against a healthy
+  // database) proves the SAME code path returns CACHE when loadAllowlist() is not made to
+  // fail, so the assertion above is actually discriminating on the probe's outcome rather than
+  // the branch never being reachable at all.
 
   it("sets the project's Cache-Control on a real /route/<pair>", async () => {
     // Critical fix, final whole-branch review: the matcher used to omit /route/<pair>
@@ -149,6 +185,62 @@ describe("proxy", () => {
     const res = await proxy(new NextRequest("http://localhost/api/pivot?v=1"));
     expect(res.headers.get("Cache-Control")).toBeNull();
   });
+
+  // M5 Task 8. `/search` is `no-store` UNCONDITIONALLY -- not the well-formed-vs-not split
+  // ENTITY_ROUTES gets, because `q` is an unbounded, attacker-chosen string and there is no
+  // proxy-side resolution that would make caching it safe. Two different queries prove it is
+  // unconditional rather than a coincidence of one input: a query that resolves (PDX, a real
+  // airport code) and one that cannot possibly resolve to anything real.
+  it.each([
+    ["a query that resolves to a real entity", "/search?q=PDX"],
+    ["a query that cannot resolve to anything", "/search?q=zzzzzzzzzz"],
+  ])("sets /search to no-store regardless of whether %s", async (_label, path) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // The sitemap and robots.txt carry none of the entity pages' per-request resolution risk, so
+  // they get CLAUDE.md's project-wide value outright -- neither app/sitemap.ts nor
+  // app/robots.ts sets its own Cache-Control, so absent this branch they would ship with none
+  // at all (Next infers no shared-cache header for a MetadataRoute export).
+  it.each([["/sitemap.xml"], ["/robots.txt"]])(
+    "sets the project's 30-day Cache-Control on %s",
+    async (path) => {
+      const res = await proxy(new NextRequest(`http://localhost${path}`));
+      expect(res.headers.get("Cache-Control")).toBe(
+        "public, s-maxage=2592000, stale-while-revalidate=86400",
+      );
+    },
+  );
+
+  // Final whole-branch review, F4. Same shape as /explore's "does not long-cache ... when the
+  // proxy's own data-layer probe throws" above -- and the same gap: the sitemap/robots branch
+  // used to set PROJECT_CACHE unconditionally, with no isDataLayerHealthy() probe, even though
+  // app/sitemap.ts runs four DuckDB queries and both parseLastmod and dedupeAircraftBySlug
+  // throw by design. A broken data layer would 500 /sitemap.xml -- the one URL the entire
+  // crawl graph is submitted through -- under a 30-DAY shared-cache header, worse than
+  // /explore's now-one-hour exposure because this branch bypassed the probe entirely.
+  it.each([["/sitemap.xml"], ["/robots.txt"]])(
+    "does not long-cache %s when the proxy's own data-layer probe throws",
+    async (path) => {
+      vi.mocked(loadAllowlist).mockRejectedValueOnce(
+        new Error("duckdb: Catalog Error: Table with name meta_pivot_dimensions does not exist"),
+      );
+      const res = await proxy(new NextRequest(`http://localhost${path}`));
+      expect(res.headers.get("Cache-Control")).toBe("no-store");
+    },
+  );
+
+  // M5 Task 8's own version of the M4d trap above: a request under a prefix that merely LOOKS
+  // like one of the three new exact-path routes must not be netted by them. `/search` is an
+  // exact match, not a prefix, so a nested path falls through untouched.
+  it.each([["/search/nope"], ["/sitemap.xml.map"], ["/robots.txt.bak"]])(
+    "sets no Cache-Control on %s, which is not one of the three exact routes",
+    async (path) => {
+      const res = await proxy(new NextRequest(`http://localhost${path}`));
+      expect(res.headers.get("Cache-Control")).toBeNull();
+    },
+  );
 });
 
 /** NextResponse.next({request:{headers}}) encodes the upstream request headers into the
