@@ -195,7 +195,14 @@ Saved Explorer queries with editorial framing. Each row links back into the Expl
 filters pre-applied. Ship whichever three are ready first; **lead with Gauge Watch.**
 
 - **Gauge Watch** — biggest upgauges/downgauges, trailing 12mo. *The differentiator.*
-- **Empty Planes** — lowest seasonally-adjusted LF (min 30 departures/mo). *The hook.*
+- **Empty Planes** — lowest trailing-12 load factor, with a `gauge_t12 >= 50` floor (min 30
+  departures/mo). *The hook.* "Seasonally-adjusted" is the wrong description for `lf_t12`: it
+  is a trailing-12-month **sum** of passengers over seats, not a seasonally-decomposed model,
+  so a full year of months is already summed together and seasonality is gone by construction
+  — there is no separate adjustment step, and no code computes one. The `gauge_t12 >= 50` floor
+  excludes very-small-aircraft operators (e.g. a 9-seat commuter) whose load factor swings
+  wildly on a handful of passengers and would otherwise dominate a "lowest LF" ranking with
+  noise rather than a genuinely underperforming route.
 - **Route Birth Tracker** — first appearance of a carrier × O&D pair **since 2015**. Label it
   that way. It is *not* "first ever" — the window starts in 2015, so a route flown in 2014 and
   resumed in 2019 looks new. Claiming "first ever" is exactly the false precision the honesty
@@ -211,16 +218,23 @@ filters pre-applied. Ship whichever three are ready first; **lead with Gauge Wat
 Per (op_airline_id, **undirected** route), trailing 12 months vs. prior 12 — `mart_route_health`,
 see [../data/model.md](../data/model.md) for the SQL-level rules:
 
-| Component | Signal | Oriented so higher = healthier |
-|---|---|---|
-| `lf_delta` | Δ load factor | as-is |
-| `capacity_delta` | Δ total seats | as-is |
-| `gauge_delta` | Δ mean seats-per-departure | as-is (a **downgauge is the warning sign**) |
-| `frequency_delta` | Δ departures performed | as-is |
-| `completion_factor` | departures_performed / departures_scheduled (trailing 12mo) | as-is |
+| Component | Signal | Scored? | Oriented so higher = healthier |
+|---|---|---|---|
+| `lf_delta` | Δ load factor | **yes**, 0.25 | as-is |
+| `ln(gauge_t12 / gauge_p12)` | log Δ mean seats-per-departure | **yes**, 0.25 | as-is (a **downgauge is the warning sign**) |
+| `ln(t12_departures_performed / p12_departures_performed)` | log Δ departures performed | **yes**, 0.25 | as-is |
+| `completion_factor` (capped at 1.5) | departures_performed / departures_scheduled (trailing 12mo) | **yes**, 0.25 | as-is |
+| `capacity_delta` | Δ total seats | **displayed only, not scored** (M6) | as-is |
 
-`health_score` = **equal 0.20-weighted** z-score composite of the five. Equal weights, not
-fitted — this is v0 and deliberately dumb; any other weighting would be an invented number.
+`health_score` = **equal 0.25-weighted** z-score composite of the four scored components
+above, each clamped to `±3` before summing, so `|health_score| ≤ 3.0` by construction. Equal
+weights, not fitted — this is v0 and deliberately dumb; any other weighting would be an
+invented number. **`capacity_delta` is excluded from the score, not merely down-weighted**: in
+log space it is *exactly* the sum of the gauge and frequency axes above (`seats = departures ×
+gauge`), so scoring it scores those two a second time — see
+[../data/model.md § The four-axis composite (M6 Task 1)](../data/model.md#the-four-axis-composite-m6-task-1)
+for the identity, the measured residual, and the before/after contribution table. It still
+appears in the UI as a component, since the components (not the score) are the insight.
 Windows are the latest 12 calendar months present (globally, not per-route) vs. the 12 before
 that. Excludes routes with **<30 departures *performed*** (not scheduled) in the trailing
 12mo.
