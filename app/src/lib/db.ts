@@ -172,6 +172,8 @@ export async function loadAllowlist(): Promise<Allowlist> {
           grain: String(r.grain),
           joinDim: r.join_dim === null ? null : String(r.join_dim),
           joinKey: r.join_key === null ? null : String(r.join_key),
+          filterOnly: Boolean(r.filter_only),
+          filterMode: (r.filter_mode as "pair" | "either" | null) ?? null,
         },
       ]),
     ),

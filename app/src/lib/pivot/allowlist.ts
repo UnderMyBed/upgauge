@@ -5,6 +5,11 @@ export interface DimensionEntry {
   grain: string;
   joinDim: string | null;
   joinKey: string | null;
+  /** Accepted in a filter, rejected as a grouping dimension. See
+   * sql/02_marts/300_meta_pivot_dimensions.sql for why exactly one row sets this. */
+  filterOnly: boolean;
+  /** null = single column `IN`; "pair" = route's least()/greatest(); "either" = OR. */
+  filterMode: "pair" | "either" | null;
 }
 
 export interface MeasureEntry {

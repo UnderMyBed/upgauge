@@ -13,6 +13,27 @@ describe("the query layer runs against the real database", () => {
     expect(a.meas.get("load_factor")?.expr).not.toContain("AVG(");
   });
 
+  // M7 Task 1: filterOnly/filterMode are read BY NAME (db.ts) while pipeline/pivot.py reads
+  // the same catalog row POSITIONALLY -- so a bug here is a TypeScript-only silent failure
+  // (an appended column reads `undefined`/coerces to a default), never a loud Python one. This
+  // must exercise the real loadAllowlist() against the built database, not a hand-typed
+  // fixture -- a fixture literal would carry whatever value was typed into it regardless of
+  // whether db.ts actually reads the column, which proves nothing about db.ts itself.
+  it("reads filterOnly and filterMode from the catalog by name, not a default", async () => {
+    const a = await loadAllowlist();
+    const endpoint = a.dims.get("endpoint_airport_id");
+    expect(endpoint?.filterOnly).toBe(true);
+    expect(endpoint?.filterMode).toBe("either");
+    expect(endpoint?.columnExpr).toBe("origin_airport_id, dest_airport_id");
+    // route stays groupable and 'pair' mode -- catches flipping route into 'either', which
+    // would silently match same-airport rows and reopen the 18,895-seat JFK-LAX inflation.
+    expect(a.dims.get("route")?.filterOnly).toBe(false);
+    expect(a.dims.get("route")?.filterMode).toBe("pair");
+    // catches a stray filterOnly=true removing a dimension from the Explorer.
+    const filterOnly = [...a.dims.values()].filter((d) => d.filterOnly).map((d) => d.key);
+    expect(filterOnly).toEqual(["endpoint_airport_id"]);
+  });
+
   it("does not memoize the allowlist across calls: each call re-reads the catalog", async () => {
     // A module-level cache here would let a stale allowlist survive a database rebuilt
     // mid-process. This can't observe the rebuild itself (that needs a second database, out

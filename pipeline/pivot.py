@@ -150,10 +150,27 @@ def load_allowlist(
     """
     dims = {
         r[0]: dict(
-            zip(("key", "label", "column_expr", "grain", "join_dim", "join_key"), r, strict=True)
+            zip(
+                (
+                    "key",
+                    "label",
+                    "column_expr",
+                    "grain",
+                    "join_dim",
+                    "join_key",
+                    "filter_only",
+                    "filter_mode",
+                ),
+                r,
+                strict=True,
+            )
         )
         for r in con.execute((QUERIES_DIR / "catalog_dimensions.sql").read_text()).fetchall()
     }
+    for entry in dims.values():
+        # DuckDB already returns a Python bool here; the explicit coercion documents the
+        # contract and keeps `is True`/`is False` assertions honest against a driver change.
+        entry["filter_only"] = bool(entry["filter_only"])
     meas = {
         r[0]: dict(zip(("key", "label", "is_additive", "expr"), r, strict=True))
         for r in con.execute((QUERIES_DIR / "catalog_measures.sql").read_text()).fetchall()
