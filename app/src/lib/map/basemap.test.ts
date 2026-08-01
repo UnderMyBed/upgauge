@@ -44,6 +44,75 @@ describe("basemapPathsFor", () => {
   });
 });
 
+describe("geometry survives simplification and projection intact", () => {
+  // Every existing assertion above matches `d="M[\d.,\s\-LZ]+"` or checks for the presence
+  // of a `data-panel` attribute -- both are satisfied by a FULLY collapsed ring
+  // (`M x,y L x,y Z`, the exact shape the closed-ring RDP bug produced before it was
+  // fixed: see build-basemap.mjs's `rdpRing`) and by a PARTIALLY collapsed one. None of
+  // them can tell a real state outline from a single repeated point. This test extracts
+  // one real feature's own `d` string and asserts a property a collapsed ring cannot have:
+  // non-zero projected area.
+  //
+  // VA is the fixture (not NC) because its two-ring island geometry means a regression
+  // that only collapses, say, the SECOND ring (not both) still has to be caught -- a test
+  // that only looked at ring count, or only at the first `M...Z`, would miss that.
+  function pathDataFor(dataName: string): string {
+    const panel = basemapPathsFor(["us"]);
+    const match = panel.match(new RegExp(`data-name="${dataName}" d="([^"]*)"`));
+    if (!match) throw new Error(`no path found for data-name="${dataName}"`);
+    return match[1];
+  }
+
+  function boundingBoxArea(subpath: string): number {
+    const coords = [...subpath.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)].map(
+      (m) => [Number(m[1]), Number(m[2])] as const,
+    );
+    const xs = coords.map((c) => c[0]);
+    const ys = coords.map((c) => c[1]);
+    return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+  }
+
+  // Split into individual closed subpaths ("M...Z" each) and check EACH ONE's own
+  // bounding box, never the combined box across all of a feature's rings. This is load-
+  // bearing, not a style choice: the closed-ring RDP bug collapses each ring to its OWN
+  // single repeated point independently, and VA's two rings collapse to two DIFFERENT
+  // points (measured: (645.5, 242.2) and (739.1, 203.9)). A bbox computed over the
+  // COMBINED coordinate set of both degenerate points is ~93.6 x 38.3px -- nonzero, and
+  // this test passed under that exact mutant on the first attempt. Only a per-subpath box
+  // is zero for a collapsed ring regardless of how many other rings in the same feature
+  // are intact.
+  function subpathsOf(d: string): string[] {
+    return d
+      .split(/(?<=Z)\s*/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  }
+
+  it("VA's committed geometry", () => {
+    // Ground truth, measured directly against the current generated artifact: VA emits
+    // TWO closed subpaths (its mainland ring plus its island geometry, e.g. Chincoteague).
+    // The mainland ring spans a ~97.7 x 54.6px bounding box (area ~5,334 px^2); the
+    // smaller island ring spans ~5.3 x 13.9px (area ~74 px^2). A ring collapsed by the
+    // closed-ring RDP bug emits exactly one distinct coordinate pair repeated, so ITS OWN
+    // bounding box area is exactly 0 -- regardless of what the other ring in the same
+    // feature does, which is why this checks every subpath independently rather than the
+    // feature's combined box (see subpathsOf's comment for why the combined box is fooled
+    // by two rings collapsing to two DIFFERENT single points).
+    const d = pathDataFor("VA");
+    const subpaths = subpathsOf(d);
+    expect(subpaths).toHaveLength(2);
+
+    // Threshold (20 px^2) sits comfortably between 0 (what any collapsed ring, full or
+    // partial, produces) and the smaller of VA's two measured ring areas (~74 px^2) --
+    // roughly a 3.7x margin under the tightest real case, leaving headroom for a future RDP
+    // epsilon retune without this test needing to move. Nobody should raise this number
+    // without re-measuring VA's own smaller ring first.
+    for (const subpath of subpaths) {
+      expect(boundingBoxArea(subpath)).toBeGreaterThan(20);
+    }
+  });
+});
+
 describe("BASEMAP_FIT_POINTS", () => {
   it("is the fixed reference set the generator fit the coastline to -- not the empty set", () => {
     expect(BASEMAP_FIT_POINTS.length).toBeGreaterThan(1000);
