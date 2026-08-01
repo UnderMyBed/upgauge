@@ -1,6 +1,16 @@
 -- Route Death Watch. health_score ascending, NULLS LAST.
 --
--- NULLS LAST is load-bearing, not stylistic. 813 of 8,080 routes have a NULL health_score for
+-- NULLS LAST is currently a NO-OP, not load-bearing: the WHERE clause below already excludes
+-- every NULL health_score before ORDER BY ever runs, so there is no NULL left in the sorted
+-- column for NULLS FIRST vs. NULLS LAST to arbitrate (verified: byte-identical output with the
+-- clause present or removed, on the real warehouse). It is retained as forward defense for a
+-- future variant of this query that relaxes the WHERE clause -- e.g. one that shows unscored
+-- routes too, sorted last, instead of dropping them -- at which point it would start doing
+-- real work again. The actual guarantee TODAY is the `health_score IS NOT NULL` filter two
+-- lines below, same as CASE guards elsewhere in this codebase that are documentation rather
+-- than the load-bearing mechanism (200_mart_route_health.sql's `p12_months_present = 0` CASE).
+--
+-- The reason this guarantee matters at all: 813 of 8,080 routes have a NULL health_score for
 -- one of three data-availability reasons (688 no prior window, 180 no filed schedule, overlap
 -- 55 -- docs/product/features.md). A NULL sorted first would present them as the most
 -- distressed routes in the system, which is exactly the misrepresentation that document's
