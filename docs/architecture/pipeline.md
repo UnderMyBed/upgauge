@@ -2234,6 +2234,58 @@ untouched — this task added no pivot SQL.
 confirms nor repositions it, since neither panel has any basemap geometry to render inside
 its rectangle yet.
 
+### Task 9 — the year parameter, its cache key, and the track
+
+`/airport/<code>` (Task 8) drew one network: the trailing 12 months, matching the carriers
+table above it. Task 9 adds `?y=<year>`, selecting one calendar year's network instead — a
+track of year links under the map, `app/src/lib/year.ts` + `app/src/app/airport/[code]/
+page.tsx`. **Links, not the animated slider `docs/design/system.md` originally specified** —
+superseded on measurement: this map is server-rendered SVG with no client charting library
+(Tasks 4-8), so animating means shipping every year's geometry at once. ORD's arcs alone are
+~64,287 bytes for ONE year (Task 8); twelve years would be roughly a megabyte, doubled again
+because this project's charts ship twice per response. One server-rendered permalink per year
+fits the project's own growth mechanic instead — `docs/design/system.md` § "The year track" has
+the full account, corrected from "the year slider."
+
+**The sharpest part of this task is the cache key, not the map.** `proxy.ts` decides
+`Cache-Control` before the page runs, keyed on the full URL, so `?y=<anything>` would mint a
+distinct shared-cache entry per value if left unvalidated — the same cache-fill shape `/search`'s
+`q` already has. `y` differs from `q` in exactly the respect that matters: its legitimate value
+set is CLOSED (the calendar years this dataset covers), which is what licenses *validating* it
+instead of `/search`'s blanket `no-store` — `lib/year.ts`'s `parseYear` rejects anything outside
+`[2015, new Date().getUTCFullYear()]` structurally, with no database read, so a well-formed year
+stays as cacheable as the airport page always was and proxy.ts's cacheability predicate becomes
+`entity resolves AND parseYear(y).kind !== "invalid"` — an AND of two allow-lists, never a
+negation, the same discipline `isCacheable` already enforces for the slug half. Full account,
+including why the upper bound is wall-clock time rather than a hardcoded `2026`:
+`docs/architecture/hosting.md` § "`y` on `/airport/:code`".
+
+**`/airport` came back OUT of `proxy.ts`'s `ENTITY_ROUTES` table** — the same reason `/watch`
+was never in it: its cacheability question (a second input, `y`, on top of the slug) no longer
+fits that table's one-resolver shape, so it is its own `if` branch, run before the loop. The
+matcher entry is unchanged; only which mechanism answers for it moved.
+
+**2026 is a partial year, and the track says so.** The data window ends 2026-04, so 2015-2025
+are complete calendar years and 2026 carries four months. `yearTrack(asOf)` derives both the
+year set and the partial flag from `dataAsOf()` rather than a hardcoded 2015-2026, so a future
+rebuild extends the track with no code change; the track's own footnote names the exact month
+(`"2026 is a partial year — filed through April 2026 only."`), the same class of disclosure
+M6's "First appearance since 2015" correction made standing policy. An out-of-range or malformed
+`y` renders a named error — `unknown year '1999' — this dataset covers 2015-2026` — never a
+silent fallback to the default view, mirroring `/explore`'s own invalid-permalink contract
+exactly.
+
+Three mutants (`lib/year.ts`, `proxy.ts`), run and reverted, `git status` clean after each:
+`parseYear`'s range check removed (reddens both the boundary tests in `year.test.ts` and
+`proxy.test.ts`'s out-of-range test), the `/airport` branch forced to unconditional `no-store`
+(reddens `proxy.test.ts`'s "still caches a valid year" — the pair's other half, so a
+`no-store`-everywhere implementation cannot pass both vacuously), and `yearTrack` marking every
+year complete (reddens `year.test.ts`'s 2026-vs-2025 test). `make app-check` 764 (was ~688 at
+Task 2's own count, moved by five concurrent M7 tasks' own tests since); `make app-smoke` +11
+checks over the airport section (Tasks 1-8 added none to this file, so this task is also the
+first `app/smoke.sh` coverage the milestone's map work has received). `make goldens` untouched —
+this task added no pivot SQL.
+
 ## Toolchain
 
 **`mise.toml` pins every runtime — Python, Node and `uv` itself.** One file, one command

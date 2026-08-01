@@ -546,11 +546,35 @@ visibly polygonizes them. A great circle cannot cross a panel boundary at all (a
 `stepsFor` is only ever consulted for an arc `greatCircle` actually draws — a cross-panel arc
 is the two projected endpoints, straight, regardless of its geographic length.
 
-### The year slider
+### The year track
 
-**The one orchestrated motion moment.** A 2015→2026 track that animates the network growing
-and contracting. Nothing else on the site animates. Honours `prefers-reduced-motion` by
-jumping between years instead of tweening.
+**Superseded on measurement, M7 Task 9 — this used to say "the one orchestrated motion moment,"
+an animated 2015→2026 track tweening the network growing and contracting. That was never built,
+and should not be:** the map that actually shipped (M7 Tasks 4-8) is server-rendered SVG,
+composed the same way the aircraft-mix chart is (`app/src/components/NetworkMap.tsx`,
+`app/src/lib/map/`) — no client charting or mapping library in the render path — so animating
+between years means shipping every year's geometry in one response rather than one page's
+worth. Measured: ORD's arcs alone are ~64,287 bytes of polyline for **one** year (M7 Task 8);
+twelve years would be roughly a megabyte, doubled again because this project's charts ship
+twice per response — body **and** RSC payload (`docs/architecture/hosting.md` § "The SVG is
+emitted twice per response").
+
+**The shipped shape is a track of plain links, one server-rendered permalink per year** —
+`/airport/<code>?y=<year>` (`app/src/lib/year.ts`, `app/src/app/airport/[code]/page.tsx`).
+This is not a downgrade so much as the same principle this product already applies everywhere
+else: "URL-encoded query state on every view; permalinks are the entire growth mechanic"
+(CLAUDE.md). A year tick is a real, shareable, cacheable URL; an animation frame is neither. It
+also honours `prefers-reduced-motion` for free — there is nothing to tween — and works with JS
+off, like every other view in this app.
+
+`y`'s value set is closed (the calendar years the dataset covers), which is exactly what lets
+`proxy.ts` validate it before the response is cacheable rather than falling back to `/search`'s
+blanket `no-store` — full reasoning in `docs/architecture/hosting.md` § "`y` on `/airport/:code`
+— a closed set, so validate it rather than blanket `no-store`". The current year's tick is
+marked partial when `dataAsOf()` falls short of December — presenting a four-month year
+identically to a twelve-month one is the same class of false claim as M6's "First appearance
+since 2015" (CLAUDE.md); the track states which months the partial year actually covers rather
+than leaving the asterisk to speak for itself.
 
 ---
 

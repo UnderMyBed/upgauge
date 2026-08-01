@@ -192,7 +192,7 @@ Tied to entities, never global. A global all-routes map is a hairball.
 
 | Map | Encoding | Why |
 |---|---|---|
-| **Airport network** `/airport/PDX` | Arcs from one node; weight = seats, style = LF | Add a **year slider** → watch the network grow/contract. The screenshot people post. |
+| **Airport network** `/airport/PDX` | Arcs from one node; weight = seats, style = LF | A **year track** (`?y=<year>`, M7 Task 9) → step through the network growing/contracting one server-rendered permalink at a time. The screenshot people post. |
 | **Carrier network** `/carrier/OO` | Full network, **filterable by aircraft type** | "Every route SkyWest flies the E175 on" is one filter and a legible map. |
 | **Aircraft type** `/aircraft/A220` | All routes flown by a type | Genuinely novel. |
 | **Diff map** | new vs. dropped vs. downgauged | Death Watch + Birth Tracker rendered *spatially*. 10× more visceral. |

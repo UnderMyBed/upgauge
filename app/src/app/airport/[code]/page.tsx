@@ -18,6 +18,7 @@ import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { NetworkMap } from "@/components/NetworkMap";
 import { AIRCRAFT_MIX_LIMIT } from "@/lib/chart/aircraftMix";
 import { fetchAirportNetwork } from "@/lib/map/airportNetwork";
+import { EARLIEST_YEAR, parseYear, yearTrack, yearWindow, type ParsedYear } from "@/lib/year";
 import { encode } from "@/lib/pivot/urlstate";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
 import type { AirportRef } from "@/lib/resolve";
@@ -157,18 +158,101 @@ function AirportEmptyState({
  * (month, type) cells against 10,000 -- both at ORD, M7 Task 3), so the disclosures would be
  * untestable without them. Split from the default export so a test can drive a real,
  * live-database render without going near Next's routing plumbing. */
+/** Every month name, so the partial-year disclosure on the track can say "through April 2026"
+ * rather than the terser "2026-04" the rest of this page uses for machine-shaped windows --
+ * the track's whole job is a plain-language reading of a boundary a visitor is picking by
+ * hand, not a permalink. Index 0 is January, matching `Number(asOf.split("-")[1])` 1-indexed. */
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** `y`'s three-way outcome rendered as a named error, exactly mirroring `/explore`'s own
+ * "invalid permalink" contract: state the offending value and the valid range, never fall
+ * back to the default view silently. The range is `EARLIEST_YEAR` (this file's own constant,
+ * matching every other page's hardcoded `EARLIEST_MONTH`) through `yearTrack(asOf)`'s own last
+ * entry -- derived from `asOf`, not a hardcoded "2026", so a future rebuild that extends the
+ * window needs no edit here. */
+function InvalidYearView({
+  airport,
+  asOf,
+  raw,
+}: {
+  airport: AirportRef;
+  asOf: string;
+  raw: string;
+}) {
+  const track = yearTrack(asOf);
+  const latestYear = track[track.length - 1]?.year ?? EARLIEST_YEAR;
+  return (
+    <div className="wrap">
+      <TopBar asOf={asOf} />
+      <main className="error-page">
+        <h1>This year can&rsquo;t be shown</h1>
+        <p role="alert">
+          {`unknown year '${raw}' — this dataset covers ${EARLIEST_YEAR}–${latestYear}`}
+        </p>
+        <p>
+          Nothing was guessed from it. Pick a year below, or go back to{" "}
+          <a href={`/airport/${airport.code}`}>the default trailing-12-month view</a>.
+        </p>
+      </main>
+    </div>
+  );
+}
+
 export async function AirportView({
   airport,
   limit = AIRPORT_ENDPOINT_LIMIT,
   mixLimit = AIRCRAFT_MIX_LIMIT,
+  year = { kind: "default" },
 }: {
   airport: AirportRef;
   limit?: number;
   mixLimit?: number;
+  year?: ParsedYear;
 }) {
-  const allowlist = await loadAllowlist();
   const asOf = await dataAsOf();
+
+  // M7 Task 9: an invalid `y` is a named error, never a silent fallback to the default view --
+  // checked and returned BEFORE the allowlist or any pivot runs, since there is nothing valid
+  // to query. `proxy.ts` has already independently decided this request is `no-store` for the
+  // identical reason (`parseYear(y).kind !== "invalid"`); this is the page-side half of that
+  // same contract, not a second definition of it -- both read `lib/year.ts`'s `parseYear`.
+  if (year.kind === "invalid") {
+    return <InvalidYearView airport={airport} asOf={asOf} raw={year.raw} />;
+  }
+
+  const allowlist = await loadAllowlist();
   const trailing12 = trailing12From(asOf);
+
+  // The year track: every calendar year this dataset covers, plus the default trailing-12
+  // link. `selectedYear` is null for the default view and the year number for `?y=<year>`
+  // (year.kind is "default" | "year" here -- "invalid" already returned above).
+  const track = yearTrack(asOf);
+  const selectedYear = year.kind === "year" ? year.year : null;
+  const selectedEntry =
+    selectedYear !== null ? track.find((t) => t.year === selectedYear) : undefined;
+  const asOfMonth = Number(asOf.split("-")[1]);
+
+  // The MAP's own window, which is NOT the table's: the default is the trailing 12 (matching
+  // the carriers table and stat strip above it, docs/design/system.md § The map), but a
+  // selected year replaces it with that bare calendar year (`yearWindow`, Jan-Dec, not clamped
+  // to `asOf` -- a query run past `asOf` simply returns no rows for those months). Stating the
+  // TABLE's window under a map drawn over a different one would be the exact fabrication
+  // CLAUDE.md's chart-window rule already forbids for the aircraft-mix chart, now extended to
+  // the map.
+  const mapWindow = selectedYear !== null ? yearWindow(selectedYear) : { from: trailing12, to: asOf };
 
   // CONCURRENT: three pivots in one wave (two through M7 Task 7 -- the map is the third, M7
   // Task 8). They share nothing, and connect() hands each its own DuckDBConnection off the
@@ -177,13 +261,13 @@ export async function AirportView({
   //
   // The chart takes the FULL window, not the table's trailing 12: a twelve-point stacked area
   // of an airport's fleet mix says almost nothing, and the whole point is the trend. The map
-  // takes the trailing 12, matching the carriers table it sits above (docs/design/system.md
-  // § The map) -- a decade of network growth is the year slider's job (M7 Task 9), not this
-  // page's default view. The three windows are why the `.window` line below names two of them.
+  // takes `mapWindow` -- the trailing 12 by default, or the selected calendar year (M7 Task 9,
+  // above). The three windows are why the `.window` line below names all three when the map
+  // has something to draw.
   const [traffic, mix, network] = await Promise.all([
     fetchAirportTraffic(airport.id, trailing12, asOf, limit),
     fetchAirportMix(airport.id, EARLIEST_MONTH, asOf, mixLimit),
-    fetchAirportNetwork(airport, trailing12, asOf),
+    fetchAirportNetwork(airport, mapWindow.from, mapWindow.to),
   ]);
 
   const rows = carrierRows(traffic.rows);
@@ -206,6 +290,23 @@ export async function AirportView({
   // text nodes, which `textContent` skips but a grep over the served bytes does not --
   // route/[pair]/page.tsx's own comment records that being found by app-smoke, not by a test.
   const chartWindow = `chart: ${drawsFullWindow ? "the full window · " : ""}${drawnFrom} → ${drawnTo}`;
+
+  const hasNetwork = network !== null;
+  // Same "one string" discipline as `chartWindow` immediately above, and the same reason: a
+  // grep over the served bytes (app/smoke.sh), not `textContent`, is what actually proves this
+  // survives to production. States which window the MAP drew, which is the table's trailing
+  // 12 only by default -- a selected year replaces it, and saying "trailing 12" under a map
+  // drawn over 2019 would be the exact fabrication the aircraft-mix chart's own window line
+  // exists to forbid, now extended to the map.
+  const mapWindowLabel =
+    selectedYear !== null
+      ? `calendar year ${selectedYear}${
+          selectedEntry?.partial
+            ? ` — partial, filed through ${MONTH_NAMES[asOfMonth - 1]} ${asOf.slice(0, 4)} only`
+            : ""
+        }`
+      : "trailing 12 months, matching the table above";
+  const mapWindowLine = `map: ${mapWindowLabel}`;
 
   const columns = buildColumns(allowlist);
   const departures = halfQuery("origin_airport_id", airport.id, trailing12, asOf);
@@ -237,13 +338,59 @@ export async function AirportView({
               · {chartWindow}
             </>
           ) : null}
+          {hasNetwork ? (
+            <>
+              {" "}
+              · {mapWindowLine}
+            </>
+          ) : null}
         </p>
         {/* The network map, above the carriers table: `network` is null exactly when the
-            airport filed nothing in the trailing 12 (fetchAirportNetwork's own contract,
+            airport filed nothing in `mapWindow` (fetchAirportNetwork's own contract,
             mirroring /route's chart -- a subject with nothing in the window gets NO map,
             never a second empty-state panel repeating what AirportEmptyState already says
-            below). */}
-        {network !== null ? <NetworkMap network={network} /> : null}
+            below). Unlike the trailing-12 default, a selected calendar year CAN legitimately
+            have nothing filed (ISN's history ends 2019-10; a later year has no rows at all),
+            so that case gets its own short note rather than a silent gap under the track. */}
+        {hasNetwork ? (
+          <NetworkMap network={network} />
+        ) : selectedYear !== null ? (
+          <p className="foot">{`No filings at ${airport.code} in ${selectedYear}.`}</p>
+        ) : null}
+        {/* M7 Task 9: the year track. Always rendered, even when the SELECTED year has no map
+            to show (above) -- the whole point is that every other year stays one click away.
+            `aria-current="page"` marks whichever view is currently showing, matching the
+            landmark-navigation pattern rather than inventing a bespoke "selected" attribute. */}
+        <nav className="year-track" aria-label="Select a year for the network map">
+          <a href={`/airport/${airport.code}`} aria-current={selectedYear === null ? "page" : undefined}>
+            Trailing 12 months
+          </a>
+          {track.map((t) => (
+            <a
+              key={t.year}
+              href={`/airport/${airport.code}?y=${t.year}`}
+              aria-current={selectedYear === t.year ? "page" : undefined}
+            >
+              {/* ONE expression, not two adjacent ones (`{t.year}{t.partial ? "*" : ""}`):
+                  React's SSR emits `<!-- -->` between adjacent expression children the same
+                  way it does between adjacent text nodes (M4c's own rule, CLAUDE.md), which
+                  would put a comment marker inside a served `>2019<`-shaped grep needle. */}
+              {`${t.year}${t.partial ? "*" : ""}`}
+            </a>
+          ))}
+        </nav>
+        {/* The partial-year disclosure this track exists to make honest: `asOf` ends mid-year
+            (2026-04 at the time this was written), so the current year's tick covers only
+            through that month. A tick presented identically to a complete year would be the
+            same class of false claim as M6's "First appearance since 2015" -- CLAUDE.md names
+            it directly. Derived from `track` (itself derived from `asOf`), never a hardcoded
+            "2026 is partial", so this stays correct across a rebuild without a code change. */}
+        {track.some((t) => t.partial) && (
+          <p className="foot">
+            {`* ${track.find((t) => t.partial)!.year} is a partial year — filed through ` +
+              `${MONTH_NAMES[asOfMonth - 1]} ${asOf.slice(0, 4)} only.`}
+          </p>
+        )}
         <div className="body">
           <div>
             {hasMix ? <AircraftMixChart rows={mix.rows} title={airport.code} /> : null}
@@ -315,8 +462,14 @@ export async function generateMetadata({
  * `AirportView`. Same split, same reason, as `RoutePage`/`RouteView`. */
 export default async function AirportPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ code: string }>;
+  // Optional so every existing call site that never passed it (page.test.tsx's `renderSEA`/
+  // `catchDigest`, both predating M7 Task 9) keeps compiling -- Next itself always supplies
+  // this at request time regardless of what this type annotation permits; the annotation is
+  // for callers, not for Next's own routing.
+  searchParams?: Promise<{ y?: string | string[] }>;
 }) {
   const { code: slug } = await params;
   const resolved = await resolveAirportCodeForRequest(slug);
@@ -331,8 +484,19 @@ export default async function AirportPage({
     notFound();
   }
 
+  // `y` follows /search's own precedent for a bare, delimiter-free query value (SearchPage's
+  // own comment): read straight off `searchParams` rather than through proxy.ts's raw-header
+  // machinery, because a bare four-digit year carries none of the Explorer permalink's `,`/`:`
+  // delimiters that decoding makes ambiguous (lib/rawQuery.ts). `proxy.ts` DOES read it off the
+  // raw header (its own doc comment explains why -- cacheability must be decided before this
+  // page runs at all, and that happens in a different file with a different raw string), but
+  // that is a distinct concern from how THIS page reads the same key for its own render.
+  const sp = searchParams ? await searchParams : {};
+  const rawY = sp.y;
+  const y = Array.isArray(rawY) ? (rawY[0] ?? null) : (rawY ?? null);
+
   // Called directly rather than as <AirportView .../>: this codebase's tests render the result
   // of `await AirportPage(...)` through react-dom's ordinary client renderer, which cannot
   // await a nested async component reached via JSX. Equivalent under Next's real RSC renderer.
-  return await AirportView({ airport: resolved.airport });
+  return await AirportView({ airport: resolved.airport, year: parseYear(y) });
 }

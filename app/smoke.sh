@@ -498,6 +498,40 @@ check_not "airport 404: LHR is not reported as unknown"             "$BODY" 'unk
 BODY=$(curl -s --max-time 15 "${BASE}/airport/ZZZZ")
 check_re  "airport 404: the SENTENCE carries the requested code" "$BODY" 'We can.{1,3}t show .{1,12}ZZZZ'
 
+# 10b. M7 Task 9: /airport/<code>?y=<year>, and the cache-header split proxy.ts's matcher
+# section warns can only be seen by a served build. asOf is 2026-04 as measured (M4d's own
+# convention of hardcoding the current measured asOf elsewhere in this file, e.g. the carrier
+# chart-window check below) -- 2015-2025 are complete calendar years and 2026 is partial.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA?y=2019")
+check     "airport?y: states the map's own calendar-year window"     "$BODY" 'map: calendar year 2019'
+check     "airport?y: the track offers every year, 2019 marked current" "$BODY" '>2019<'
+check_not "airport?y: a complete prior year is not called partial"   "$BODY" 'calendar year 2019 — partial'
+
+BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA")
+check     "airport: the default view states the current year is partial" "$BODY" \
+  '2026 is a partial year — filed through April 2026 only.'
+check     "airport: the current year's own tick carries the asterisk"     "$BODY" '>2026*<'
+
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/airport/SEA?y=2019")
+check     "airport?y=2019: a valid year still gets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# The pair this task's own mutant table exists to prove: a `no-store`-everywhere regression
+# would pass the "declines" half below vacuously, so BOTH must be checked against a served
+# build, not just the unit suite -- proxy.test.ts pins the same pair, but only a served build
+# proves proxy.ts's matcher and cacheability branch actually run together in production.
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/SEA?y=1999")
+check     "airport?y=1999: an out-of-range year is no-store"          "$HDRS" "no-store"
+check_not "airport?y=1999: ...and is never long-cached"              "$HDRS" "s-maxage"
+
+BODY=$(curl -s --max-time 15 "${BASE}/airport/SEA?y=1999")
+check     "airport?y=1999: names the offending value and the covered range" "$BODY" \
+  "unknown year '1999' — this dataset covers 2015–2026"
+check_not "airport?y=1999: does not silently fall back to the default view" "$BODY" '53,373,806'
+
+BODY=$(curl -s --max-time 15 "${BASE}/airport/SEA?y=nonsense")
+check     "airport?y=nonsense: malformed input is the same named error, not a 500" "$BODY" \
+  "unknown year 'nonsense'"
+
 # 11. /carrier/<code> -- the page has to say what it is counting.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL")
 check     "carrier: renders the code"        "$BODY" '>DL<'
