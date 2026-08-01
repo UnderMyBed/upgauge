@@ -338,6 +338,13 @@ silently wrong (a red check for a correct header) since Task 7 landed, since tha
 now also verified end to end against a served build with a genuinely broken database copy, not
 just unit-mocked.
 
+**Final whole-branch review fix wave: `/sitemap.xml` and `/robots.txt` had reopened the same
+gap at 30 days.** The branch that sets their `Cache-Control` set `PROJECT_CACHE`
+unconditionally — no `isDataLayerHealthy()` probe, unlike `/explore` immediately above it in
+the same file — even though `app/sitemap.ts` runs four DuckDB queries and two of its helpers
+throw by design on malformed input. Gated on the same probe `/explore` uses;
+`docs/architecture/hosting.md` § "The gap" has the fix and the mutant that verifies it.
+
 **582 app tests green (`make app-check`), 447 Python (`make check`); `make goldens` leaves
 `sql/03_queries/goldens/` byte-identical** — M5 touched no pivot template. `make app-smoke` is
 **174 checks** (138 at M4d). Page weight: `/route/JFK-LAX` 98,096 bytes, `/search?q=Portland`

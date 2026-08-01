@@ -254,4 +254,21 @@ describe("/explore route cell links to the canonical, code-alphabetical /route/<
     const link = container.querySelector('a[href="/route/JFK-LAX"]');
     expect(link?.textContent).toBe("JFK–LAX");
   });
+
+  // Final whole-branch review, F1: a route-grain row where both halves are the SAME airport
+  // (route_key_low == route_key_high) is real, filed traffic -- 530 distinct pairs, 12,738
+  // fct_segment_month rows -- not a data error, but routePair.ts's resolveRoutePair() names
+  // "'ORD' to itself is not a route between two airports" and 404s it (routePair.ts:33). A
+  // routeHref that doesn't special-case a===b links straight into that 404. ORD (airport_id
+  // 13930) carries 73,082 seats over this exact trailing-12 window (measured, rank 2,381 of
+  // 10,888 route pairs), so this is not a synthetic filter -- it is a real row /explore would
+  // otherwise render as a live link today.
+  it("renders a same-airport route cell as plain text, never a link into a guaranteed 404", async () => {
+    const raw =
+      "v=1&k=route&d=route&m=seats&t=2025-05:2026-04&f=route:13930-13930&s=-seats&n=5&g=op";
+    const { container } = render(await ExploreView({ rawQuery: raw }));
+    expect(screen.getByText("ORD–ORD")).toBeDefined();
+    expect(container.querySelector('a[href="/route/ORD-ORD"]')).toBeNull();
+    expect(container.querySelector("td.id a")).toBeNull();
+  });
 });

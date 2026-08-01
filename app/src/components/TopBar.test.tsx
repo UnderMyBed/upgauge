@@ -6,14 +6,22 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { TopBar } from "@/components/TopBar";
 
+const GLOBALS_CSS_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../app/globals.css",
+);
+
 const SOURCE_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), "TopBar.tsx");
 
 describe("TopBar", () => {
   it("renders the wordmark's UP/GAUGE split with the accent span", () => {
     // The exact bytes smoke.sh and every entity page's own test already depend on --
-    // see task-2-report.md's diff of the ten pre-extraction copies.
+    // see task-2-report.md's diff of the ten pre-extraction copies. Selector is `.mark`
+    // (class only), not `span.mark`: F5 (final whole-branch review) made the wordmark an
+    // `<a>` so there is a link back to the front door from any entity page -- the class and
+    // its CSS are unchanged, only the tag.
     const { container } = render(<TopBar asOf="2026-04" />);
-    const mark = container.querySelector("span.mark");
+    const mark = container.querySelector(".mark");
     expect(mark).not.toBeNull();
     expect(mark?.textContent).toBe("UPGAUGE");
     const accent = mark?.querySelector("span.accent");
@@ -46,6 +54,17 @@ describe("TopBar", () => {
     expect(input?.getAttribute("type")).not.toBe("hidden");
   });
 
+  // Final whole-branch review, F5: once a visitor is on any entity page there was no link
+  // back to the front door -- the wordmark rendered as a bare <span>. This makes it an
+  // <a href="/">, the same "connect the graph" fix as the route title-block links above.
+  it("makes the wordmark a link back to the front door", () => {
+    const { container } = render(<TopBar asOf="2026-04" />);
+    const link = container.querySelector("a.mark");
+    expect(link).not.toBeNull();
+    expect(link?.getAttribute("href")).toBe("/");
+    expect(link?.textContent).toBe("UPGAUGE");
+  });
+
   it("is a Server Component: no client directive, no onChange, no useState", () => {
     // Every other view in this product works with JS off (app/AGENTS.md). Reading the
     // source rather than the render output is deliberate -- rendering with
@@ -57,5 +76,36 @@ describe("TopBar", () => {
     // comment names both by their bare identifier while explaining why they're absent).
     expect(source).not.toMatch(/\bonChange=/);
     expect(source).not.toMatch(/\buseState\(/);
+  });
+});
+
+// Final whole-branch review, M8: at 375px `.top`'s three children (`.mark`, `.search`,
+// `.asof`) totalled more than the available width -- `.mark`/`.asof` are both
+// `white-space: nowrap` and refuse to shrink, and neither `.top` nor `.top .search button` had
+// anything that would make them wrap -- so `.wrap`'s lack of an `overflow` rule let the page
+// BODY scroll horizontally, against the stated rule that only a table scrolls in its own
+// container. Verified on a served dev build at 375px with headless Chrome (jsdom computes no
+// layout, so no unit test could see the overflow itself): `flex-wrap: wrap` alone stopped the
+// body scroll but left the search field compressed onto the same line as `.asof`, overlapping
+// it -- `.top .search`'s `min-width: 0` let it shrink further than its own children (the
+// button has no `min-width: 0`) could actually render, so the "fits" the wrap algorithm
+// computed was wrong. A non-zero floor on `.top .search` is what makes the wrap decision
+// correct: the form moves to its own line instead of overlapping. Same weak-but-honest
+// precedent as DataTable.test.tsx's stylesheet test: jsdom cannot verify layout, only that the
+// rule is written.
+describe("globals.css keeps .top from forcing the page body to scroll horizontally", () => {
+  const css = readFileSync(GLOBALS_CSS_PATH, "utf8");
+
+  it("lets .top wrap onto multiple lines instead of overflowing", () => {
+    const rule = css.match(/\.top\s*\{[^}]*\}/);
+    expect(rule).not.toBeNull();
+    expect(rule![0]).toMatch(/flex-wrap:\s*wrap/);
+  });
+
+  it("gives .top .search a real minimum width, not 0, so it wraps rather than overlapping .asof", () => {
+    const rule = css.match(/\.top \.search\s*\{[^}]*\}/);
+    expect(rule).not.toBeNull();
+    const body = rule![0];
+    expect(body).toMatch(/min-width:\s*[1-9]\d*px/);
   });
 });

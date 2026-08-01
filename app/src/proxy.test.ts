@@ -213,6 +213,24 @@ describe("proxy", () => {
     },
   );
 
+  // Final whole-branch review, F4. Same shape as /explore's "does not long-cache ... when the
+  // proxy's own data-layer probe throws" above -- and the same gap: the sitemap/robots branch
+  // used to set PROJECT_CACHE unconditionally, with no isDataLayerHealthy() probe, even though
+  // app/sitemap.ts runs four DuckDB queries and both parseLastmod and dedupeAircraftBySlug
+  // throw by design. A broken data layer would 500 /sitemap.xml -- the one URL the entire
+  // crawl graph is submitted through -- under a 30-DAY shared-cache header, worse than
+  // /explore's now-one-hour exposure because this branch bypassed the probe entirely.
+  it.each([["/sitemap.xml"], ["/robots.txt"]])(
+    "does not long-cache %s when the proxy's own data-layer probe throws",
+    async (path) => {
+      vi.mocked(loadAllowlist).mockRejectedValueOnce(
+        new Error("duckdb: Catalog Error: Table with name meta_pivot_dimensions does not exist"),
+      );
+      const res = await proxy(new NextRequest(`http://localhost${path}`));
+      expect(res.headers.get("Cache-Control")).toBe("no-store");
+    },
+  );
+
   // M5 Task 8's own version of the M4d trap above: a request under a prefix that merely LOOKS
   // like one of the three new exact-path routes must not be netted by them. `/search` is an
   // exact match, not a prefix, so a nested path falls through untouched.

@@ -133,7 +133,12 @@ function ResultsBody({
           <h2>{g.label}</h2>
           <ul>
             {g.hits.map((h) => (
-              <li key={h.href}>
+              // `h.href` alone is not a unique key: aircraftExactHits' AmbiguousCodeError
+              // path (lib/search.ts, CE-180's shape) gives two hits the SAME code and href --
+              // both BTS codes 030/031 share the short name "CE-180" -- so `name` is the only
+              // field that still tells them apart. Two candidates could in principle also
+              // share a name, so the pair is what's actually unique, not `name` alone.
+              <li key={`${h.href} ${h.name}`}>
                 <a href={h.href}>
                   <code>{h.code}</code>
                 </a>

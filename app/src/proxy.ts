@@ -122,12 +122,27 @@ export async function proxy(request: NextRequest) {
   }
   // The sitemap and robots.txt carry none of the entity pages' per-request resolution risk --
   // both are built from the same catalog queries regardless of who's asking, so CLAUDE.md's
-  // project-wide 30-day value applies outright, the same as /api/pivot's own success responses.
-  // Neither app/sitemap.ts nor app/robots.ts sets its own Cache-Control (unlike /api/pivot's
-  // route.ts), so this file has to, or they'd ship with none at all -- Next does not infer a
-  // shared-cache header for a MetadataRoute export.
+  // project-wide 30-day value applies when the data layer is healthy, the same as /api/pivot's
+  // own success responses. Neither app/sitemap.ts nor app/robots.ts sets its own Cache-Control
+  // (unlike /api/pivot's route.ts), so this file has to, or they'd ship with none at all --
+  // Next does not infer a shared-cache header for a MetadataRoute export.
+  //
+  // Final whole-branch review, F4: this branch used to set PROJECT_CACHE unconditionally, with
+  // no isDataLayerHealthy() probe -- unlike the /explore branch directly above, which the same
+  // review's earlier pass (M5 Task 7 Part A) already gated. The justification in the comment
+  // above ("both are built from the same catalog queries regardless of who's asking") is a
+  // statement about request-invariance, not about failure: app/sitemap.ts runs four DuckDB
+  // queries via lib/sitemap.ts, and both parseLastmod and dedupeAircraftBySlug throw by design.
+  // None of that was wrapped, so a broken data layer 500s /sitemap.xml -- the one URL the
+  // entire crawl graph is submitted through -- under a 30-day shared-cache header, a WORSE
+  // exposure than /explore's now-one-hour HTML_CACHE window. Same probe, same reasoning:
+  // isDataLayerHealthy() is cheap (loadAllowlist() is memoized on globalThis, lib/db.ts), and
+  // "declines to cache" costs a cache miss, not a wrong answer pinned for a month.
   if (pathname === "/sitemap.xml" || pathname === "/robots.txt") {
-    response.headers.set("Cache-Control", PROJECT_CACHE);
+    response.headers.set(
+      "Cache-Control",
+      (await isDataLayerHealthy()) ? PROJECT_CACHE : NO_STORE,
+    );
     return response;
   }
   for (const entity of ENTITY_ROUTES) {

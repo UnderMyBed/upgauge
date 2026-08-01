@@ -12,6 +12,7 @@ import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { encode } from "@/lib/pivot/urlstate";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
 import type { AirportRef } from "@/lib/resolve";
+import { AIRPORT_PREFIX } from "@/lib/airport";
 import type { Allowlist } from "@/lib/pivot/allowlist";
 import type { PivotQuery } from "@/lib/pivot/types";
 
@@ -276,7 +277,8 @@ export async function RouteView({
         <div className="entity">
           <div className="code">{title}</div>
           <div className="ename">
-            {a.name} ↔ {b.name}
+            <a href={AIRPORT_PREFIX + encodeURIComponent(a.code)}>{a.name}</a> ↔{" "}
+            <a href={AIRPORT_PREFIX + encodeURIComponent(b.code)}>{b.name}</a>
           </div>
         </div>
         <div className="stats">

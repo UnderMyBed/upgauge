@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { connect } from "@/lib/db";
-import { AIRPORT_PREFIX } from "@/app/airport/[code]/resolveAirport";
+import { AIRPORT_PREFIX } from "@/lib/airport";
 import { CARRIER_PREFIX } from "@/lib/carrier";
 import { AIRCRAFT_PREFIX, slugFor } from "@/lib/aircraftSlug";
 import { routeHrefFromCodes } from "@/lib/entityLink";

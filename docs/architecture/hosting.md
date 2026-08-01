@@ -733,14 +733,40 @@ hand-rolled document shell to claw either property back would itself have been t
 **Exit taken: the fallback.** `app/src/proxy.ts`'s `HTML_CACHE` constant is now
 `public, s-maxage=3600, stale-while-revalidate=86400` (was `s-maxage=2592000`) — applied only to
 the branches this file controls, `/explore` and the four `ENTITY_ROUTES` pages. `/api/pivot`
-sets its own header in its own route handler and is untouched, still `s-maxage=2592000`; the
-sitemap and `robots.txt` are not yet in `proxy.ts`'s matcher (M5 Task 8's job) and so are also
-untouched. Mutation-verified in `app/src/proxy.test.ts`: reverting `HTML_CACHE` to the old
+sets its own header in its own route handler and is untouched, still `s-maxage=2592000`. The
+sitemap and `robots.txt` are in `proxy.ts`'s matcher (M5 Task 8) and get `PROJECT_CACHE`
+(`s-maxage=2592000`), gated behind the same `isDataLayerHealthy()` probe as `/explore` — the
+whole-branch final review found this branch had been left unconditional (see immediately
+below), which was closed in the same fix wave that wrote this paragraph, not left as still-open.
+Mutation-verified in `app/src/proxy.test.ts`: reverting `HTML_CACHE` to the old
 30-day value turns 10 of the file's 33 tests red (every test asserting the exact `Cache-Control`
 string on a 200 or a 308) with the rest — the `no-store` assertions and the pathname/raw-query
 tests — staying green, which is the same "not vacuous" property Part A's mutant demonstrated: the
 tests that should be insensitive to the header's *value* stay insensitive, and the ones that
 should be sensitive to it are.
+
+**Fix wave, final whole-branch review (F4): `/sitemap.xml` and `/robots.txt` reopened this exact
+gap at 30 days, gated behind nothing.** The branch that sets `PROJECT_CACHE` on those two paths
+originally did so unconditionally — no `isDataLayerHealthy()` probe, unlike `/explore`
+immediately above it in the same file, despite `app/sitemap.ts` running four DuckDB queries via
+`lib/sitemap.ts` (`app/src/lib/sitemap.ts`) and both `parseLastmod` and `dedupeAircraftBySlug`
+throwing by design on malformed input. A broken data layer therefore 500ed `/sitemap.xml` — the
+one URL the entire crawl graph is submitted through — under a 30-day shared-cache header, a
+*worse* exposure than `/explore`'s one-hour `HTML_CACHE` window, not a smaller instance of it.
+Fixed by gating the branch on the same `isDataLayerHealthy()` probe `/explore` already uses;
+pinned by `app/src/proxy.test.ts`'s `it.each(["/sitemap.xml", "/robots.txt"])("does not
+long-cache %s when the proxy's own data-layer probe throws", …)`, same partial-mock shape as
+Part A's own test.
+
+**Also recorded here, not previously written down anywhere:** `/sitemap.xml` is
+`export const dynamic = "force-dynamic"` (`app/src/app/sitemap.ts`), serves roughly 2.4 MB, and
+costs ~45 ms of DuckDB per request under `Promise.all` — measured per query: routes 35.5 ms,
+airports 39.0 ms, carriers 10.2 ms, aircraft 43.6 ms (the four run concurrently, so the total is
+close to the slowest one, not the sum). The CDN cache key includes the query string, so
+`/sitemap.xml?x=N` is an unbounded family of origin hits regardless of the `Cache-Control` value
+on the canonical path — the identical reasoning that earned `/search` its unconditional
+`no-store` rather than a per-outcome header (see the table above). Nothing currently guards
+against that family; it is recorded as the same class of exposure, not yet closed.
 
 **What the fallback actually buys, honestly stated:** the exposure window for a 5xx shrinks from
 up to 30 days to up to 1 hour — origin load stays near zero because `stale-while-revalidate`

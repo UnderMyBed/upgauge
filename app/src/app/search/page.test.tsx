@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import SearchPage, { SearchView, metadata } from "@/app/search/page";
 
@@ -73,6 +76,32 @@ describe("/search -- a code in two namespaces does not redirect, and shows both 
   });
 });
 
+// Final whole-branch review, M4: aircraftExactHits' AmbiguousCodeError path (lib/search.ts)
+// gives CE-180's two hits the SAME `href` ("/aircraft/CE-180" -- code 030 CESSNA 180 and code
+// 031 CESSNA 180A/B share one short name), and ResultsBody keyed its <li> on `h.href` alone --
+// `<li key={h.href}>` -- so /search?q=CE-180 rendered two React list items under one duplicate
+// key. React logs this to console.error in development; production behaviour is silently
+// undefined on updates (a reconciliation keyed on a colliding key can drop or misapply state
+// to the wrong element). Spies on console.error rather than inspecting the DOM directly,
+// because a duplicate key does not necessarily change what is PAINTED on first mount -- it is
+// exactly the class of bug @testing-library's assertions cannot see without this.
+describe("/search -- ambiguous single-namespace code (CE-180 shape)", () => {
+  it("renders both CE-180 candidates without a duplicate-key warning", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const { container } = render(await SearchView({ q: "CE-180" }));
+      expect(container.textContent).toContain("BTS aircraft type 030");
+      expect(container.textContent).toContain("BTS aircraft type 031");
+      const keyWarning = spy.mock.calls.some((args) =>
+        args.some((a) => typeof a === "string" && a.includes("same key")),
+      );
+      expect(keyWarning).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
 describe("/search -- name substring, across states (step 1c)", () => {
   it("Portland lists all four airports, PWM included", async () => {
     const { container } = render(await SearchView({ q: "Portland" }));
@@ -131,5 +160,43 @@ describe("/search metadata (step 1f)", () => {
     // (node_modules/next/dist/docs/.../generate-metadata.md's own `robots` example) -- Task 8
     // curl-verifies the served tag; this pins the config this codebase owns.
     expect(metadata.robots).toEqual({ index: false });
+  });
+});
+
+// Final whole-branch review, F2: `.search-results` / `.search-group` have no rule anywhere in
+// globals.css. Tailwind's preflight resets `a { color: inherit; text-decoration: inherit }`
+// and `h1..h6 { font-size: inherit; font-weight: inherit }`, so every link on /search --
+// including the ones Task 3 already fixed on .data-table -- was rendering as plain 16px text
+// indistinguishable from its neighbours. `.foot a` (the "Open in the Explorer" links on all
+// four entity pages, and /search's own truncation footer) had the identical gap and predates
+// M5.
+//
+// Same precedent, same limits, as DataTable.test.tsx's ".data-table td.id a" test just above
+// this comment's sibling file: jsdom computes no styles (no layout engine), so this only
+// proves the selector and a non-colour channel are IN THE STYLESHEET, not that a browser
+// paints them as intended -- deliberately weak, stated here rather than implied. It cannot
+// catch a specificity fight with a later rule, and it cannot catch anything about paint.
+describe("globals.css styles /search's and .foot's links with a non-colour channel", () => {
+  const globalsCssPath = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../globals.css",
+  );
+  const css = readFileSync(globalsCssPath, "utf8");
+
+  it("styles a .search-results link", () => {
+    const rule = css.match(/\.search-results[^{},]*a\s*\{[^}]*\}/);
+    expect(rule).not.toBeNull();
+    const body = rule![0];
+    expect(body).toMatch(/color:\s*var\(--signal\)/);
+    // Colour is never the sole channel (docs/design/system.md, Quality floor).
+    expect(body).toMatch(/text-decoration:\s*underline/);
+  });
+
+  it("styles a .foot link (the four entity pages' 'Open in the Explorer' links too)", () => {
+    const rule = css.match(/\.foot a\s*\{[^}]*\}/);
+    expect(rule).not.toBeNull();
+    const body = rule![0];
+    expect(body).toMatch(/color:\s*var\(--signal\)/);
+    expect(body).toMatch(/text-decoration:\s*underline/);
   });
 });

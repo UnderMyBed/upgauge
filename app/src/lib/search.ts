@@ -7,7 +7,7 @@ import {
   lookupAirportsByCode,
   lookupCarriersByCode,
 } from "@/lib/resolve";
-import { AIRPORT_PREFIX } from "@/app/airport/[code]/resolveAirport";
+import { AIRPORT_PREFIX } from "@/lib/airport";
 import { CARRIER_PREFIX } from "@/lib/carrier";
 import { AIRCRAFT_PREFIX, slugFor, shortNameCandidates } from "@/lib/aircraftSlug";
 import { routeHrefFromCodes } from "@/lib/entityLink";

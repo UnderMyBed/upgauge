@@ -86,7 +86,15 @@ function routeCode(
  * has no URL to build, exactly `DimensionCell`'s own rule for a single dimension. Reads the
  * two `Resolved` hits directly rather than `routeCodes`'s display strings: a bare-id fallback
  * string is indistinguishable from a real code once stringified, so only the `Resolved` value
- * itself can tell "unresolved" apart from "resolved". */
+ * itself can tell "unresolved" apart from "resolved".
+ *
+ * Also `null` when both halves resolve to the SAME code: `fct_route_month` really carries
+ * same-airport rows (530 distinct pairs, real filed traffic -- ORD alone 73,082 seats over the
+ * trailing 12 months, docs/data/invariants.md § Route identity), but `routePair.ts`'s
+ * `resolveRoutePair` refuses "ORD to itself is not a route between two airports" as a named
+ * 404. Without this guard the cell links straight into that 404 -- `sitemap_routes.sql`
+ * already excludes these rows (`WHERE route_key_low <> route_key_high`); this is the same
+ * exclusion at the link path. */
 function routeHref(
   row: Record<string, unknown>,
   resolved: Map<string, Resolved>,
@@ -95,6 +103,7 @@ function routeHref(
   const hits = columns.map((c) => resolved.get(resolutionKey(c, row[c])));
   if (hits.some((h) => h === undefined || h.code === null)) return null;
   const [a, b] = hits as Resolved[];
+  if (a.code === b.code) return null;
   return routeHrefFromCodes(a.code as string, b.code as string);
 }
 

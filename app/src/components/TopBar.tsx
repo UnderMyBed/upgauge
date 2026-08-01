@@ -1,12 +1,24 @@
+import Link from "next/link";
+
 /** docs/design/mockups/table.html's `.mark`: "UP" in `--ink`, "GAUGE" in `--signal`. Exported
  * so a page that only wants the wordmark (none exist today, but the split matches the other
  * shared components in this directory) is not forced to render the search form and the
- * `DATA AS OF` badge to get it. */
+ * `DATA AS OF` badge to get it.
+ *
+ * Final whole-branch review, F5: a link back to the front door, not a bare `<span>` -- once a
+ * visitor lands on any entity page (which is most of the product's reachable set) there was
+ * previously no way back at all. `next/link`'s `Link`, not a plain `<a>`
+ * (`@next/next/no-html-link-for-pages` -- an internal `<a href="/">` bypasses Next's router
+ * and forces a full page reload): `Link` still renders as a real `<a href="/">` in the served
+ * HTML and works with JS off (app/AGENTS.md), the same as everywhere else in this product;
+ * only client-side transitions are extra, not required. `.mark` keeps its own CSS class
+ * regardless of tag, so `globals.css` needs no change; only its selector in the existing test
+ * moved from `span.mark` to `a.mark` (`Link` renders an `<a>` under the hood). */
 export function Wordmark() {
   return (
-    <span className="mark">
+    <Link className="mark" href="/">
       UP<span className="accent">GAUGE</span>
-    </span>
+    </Link>
   );
 }
 

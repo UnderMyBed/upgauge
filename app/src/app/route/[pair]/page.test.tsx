@@ -36,6 +36,24 @@ describe("/route/<pair>", () => {
     expect(screen.getByText(/Kennedy/i)).toBeDefined();
   });
 
+  // Final whole-branch review, F5: the spec required "both airport names in the title block
+  // -> /airport/<code>", and it was never carried in -- `{a.name} ↔ {b.name}` rendered as
+  // plain text. Measured consequence: no page in the product links to /airport/ or /route/ at
+  // all, so 23,465 of the sitemap's 23,689 URLs (/airport 1,045 + /route 22,420) have zero
+  // inbound internal links. This is the fix at the one place that can carry it: both airport
+  // halves of the title block link to their own /airport/<code>.
+  it("links both airport names in the title block to their own /airport/<code>", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }),
+    );
+    const ename = container.querySelector(".entity .ename");
+    expect(ename).not.toBeNull();
+    const links = [...ename!.querySelectorAll("a")];
+    const hrefs = links.map((a) => a.getAttribute("href"));
+    expect(hrefs).toContain("/airport/JFK");
+    expect(hrefs).toContain("/airport/LAX");
+  });
+
   it("shows DATA AS OF", async () => {
     render(await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }));
     expect(screen.getByText(/DATA AS OF/)).toBeDefined();

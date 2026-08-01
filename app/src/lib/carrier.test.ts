@@ -90,6 +90,26 @@ describe("resolveCarrier", () => {
     expect(r.reason).toMatch(/filed|filing/i);
   });
 
+  // Final whole-branch review, M5: `carrierNotFoundReason`'s `holders.length === 1` branch was
+  // untested, and it is the MAJORITY carrier 404 -- 1,543 never-filed codes minus PA-shaped
+  // 94 multi-holder codes leaves 1,449 that take this branch, not PA's rarer 3-holder path.
+  // CBA (airline_id 19142, "Carriba Air Inc.") is a measured single-holder, never-filed code:
+  // one row in dim_carrier, zero fct_segment_month rows for that airline_id. Pins the singular
+  // "one airline id" wording -- a mutant that always pluralizes ("1 airline ids") or that
+  // always takes PA's wording (hardcoding "3") would go undetected without this, since PA
+  // alone can never exercise the singular branch.
+  it("404s a single-holder never-filed code with singular wording, not PA's plural shape", async () => {
+    const r = await resolveCarrier("CBA");
+    if (r.kind !== "notFound") throw new Error(`expected CBA to 404, got ${r.kind}`);
+    expect(r.reason).toContain("'CBA'");
+    expect(r.reason).toMatch(/recognized/i);
+    expect(r.reason).toContain("one airline id");
+    expect(r.reason).not.toMatch(/airline ids/);
+    expect(r.reason).toContain("19142");
+    expect(r.reason).toContain("Carriba Air Inc.");
+    expect((r.reason.match(/Carriba Air Inc\./g) ?? []).length).toBe(1);
+  });
+
   it("404s an empty slug without asking the database", async () => {
     const r = await resolveCarrier("   ");
     expect(r.kind).toBe("notFound");

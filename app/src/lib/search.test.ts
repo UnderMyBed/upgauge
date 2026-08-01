@@ -112,6 +112,23 @@ describe("search -- a code in two namespaces does not redirect (step 1b)", () =>
     const r = await search("LNY");
     expect(r.kind).not.toBe("redirect");
   });
+
+  // Final whole-branch review, M4: CE-180 is not a cross-namespace collision (LNY/NEW/WST's
+  // shape) -- it is aircraftExactHits' own AmbiguousCodeError path, WITHIN one namespace: BTS
+  // codes 030 (CESSNA 180) and 031 (CESSNA 180A/B) share one short name, so both hits carry
+  // the identical `code` ("CE-180") and the identical `href` ("/aircraft/CE-180"). Only
+  // `name` tells them apart -- which is exactly what search/page.test.tsx's sibling test pins
+  // as the React key search/page.tsx must use instead of `href`.
+  it("CE-180: two aircraft types share one short name, both surfaced with the same href", async () => {
+    const r = await search("CE-180");
+    expect(r.kind).toBe("results");
+    if (r.kind !== "results") return;
+    const hits = flatten(r.groups);
+    expect(hits.length).toBe(2);
+    expect(hits.every((h) => h.kind === "aircraft")).toBe(true);
+    expect(hits.every((h) => h.href === "/aircraft/CE-180")).toBe(true);
+    expect(new Set(hits.map((h) => h.name)).size).toBe(2);
+  });
 });
 
 describe("search -- name substring returns every match, across states (step 1c)", () => {
