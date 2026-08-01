@@ -46,13 +46,19 @@ const ROWS_PER_TABLE = 25;
  * filed schedule, overlap 55 -- not a low-score reason, and an em-dash in a column this preset
  * sorts ascending reads as the worst row on the page.
  *
- * In production no row this function sees is ever NULL: watch_death_watch.sql (the only preset
- * that surfaces health_score as its sort key) filters `WHERE health_score IS NOT NULL` before a
- * row reaches runPreset() at all -- see task-6-brief.md's own resolution of this exact
- * ambiguity. The NULL branch stays because Gauge Watch, Empty Planes and Route Birth Tracker
- * also render this column (docs/design/system.md: "every row carries the component values, not
- * just the composite score") and rank on axes OTHER than health_score, so a route with a NULL
- * score can still appear as a ROW on those three tables. */
+ * **The NULL branch is not a defensive edge case -- it is the common case on three of the four
+ * presets**, measured against the real warehouse (current window):
+ *
+ *   - Route Birth Tracker: 688 of 688 rows (100%) -- EVERY row `p12_months_present = 0`
+ *     selects has a NULL score, by construction: there is no prior window to diff against, so
+ *     "insufficient data" is not one branch among several here, it is the entire page.
+ *   - Gauge Watch: 122 of 7,321 rows.
+ *   - Empty Planes: 92 of 4,466 rows.
+ *   - Route Death Watch is the ONE preset where this function's NULL branch is provably
+ *     unreachable in production: `watch_death_watch.sql` filters `WHERE health_score IS NOT
+ *     NULL` before a row ever reaches `runPreset()` (see task-6-brief.md's own resolution of
+ *     that page's specific ambiguity) -- it is the exception, not the pattern the other three
+ *     follow. */
 export function formatHealthScore(score: unknown): string {
   if (score === null || score === undefined) return "insufficient data";
   const n = Number(score);

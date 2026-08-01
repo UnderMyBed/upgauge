@@ -115,30 +115,72 @@ const DIRECTION_SQL: Readonly<Record<"asc" | "desc", "ASC" | "DESC">> = {
 
 const DIRECTION_TOKEN = "{{DIRECTION}}";
 
-/** Blank out `-- ...` line comments with spaces (never remove them -- that would shift every
- * index after a comment and misalign the masked text against the original), so the token
- * count and the substitution site below only ever see real predicate text.
- *
- * Found necessary by Task 6, against real data, not asserted from reading: watch_gauge.sql's
- * own header comment explains the token BY NAME ("`{{DIRECTION}}` is a token, substituted
- * in..."), which is itself a second textual occurrence of the literal string `{{DIRECTION}}` --
- * before this fix, EVERY call to runPreset() for the "gauge" preset (either direction) threw
- * "expected at most one {{DIRECTION}} token, found 2" unconditionally, because the naive count
- * below counted the comment's mention as a candidate site. Task 5's watch.test.ts never caught
- * it: it only runs Empty Planes' and Death Watch's runPreset() path, and neither of those two
- * SQL files carries the token at all (each hardcodes its own fixed ORDER BY) -- so Gauge Watch,
- * "the differentiator" per docs/product/features.md and the only preset with two directions,
- * was never actually executed by any test before Task 6's page rendered it. The guard itself
- * was right to refuse rather than silently pick a occurrence; the bug was letting comment text
- * count as one. */
-function maskLineComments(sql: string): string {
-  return sql
-    .split("\n")
-    .map((line) => {
-      const i = line.indexOf("--");
-      return i === -1 ? line : line.slice(0, i) + " ".repeat(line.length - i);
-    })
-    .join("\n");
+// Blank out everything a real SQL parser would treat as either a line comment ("--" to end of
+// line) or a block comment (star-slash delimited, non-nesting -- DuckDB's grammar doesn't nest
+// them) with same-length whitespace (newlines kept verbatim), while leaving single-quoted
+// string literals alone -- DuckDB strings are single-quoted, '' the standard escape for a
+// literal quote -- so a "--" or a block-comment opener INSIDE a string is never mistaken for
+// the start of a comment. Length-preserving throughout, so every index found against the
+// masked text is valid against the original.
+//
+// (A `//` comment block, not `/** */`, is deliberate here: the block-comment delimiter this
+// function has to describe cannot be written literally inside a `/** */` doc comment without
+// terminating it early.)
+//
+// Found necessary by Task 6, against real data, not asserted from reading: watch_gauge.sql's
+// own header comment explains the {{DIRECTION}} token BY NAME, which is itself a second
+// textual occurrence of that literal string -- before that fix, EVERY call to runPreset() for
+// the "gauge" preset (either direction) threw "expected at most one {{DIRECTION}} token, found
+// 2" unconditionally, because a first, naive version of this function only stripped "--" line
+// comments and counted the comment's mention as a candidate site. Task 5's watch.test.ts never
+// caught it: it only runs Empty Planes' and Death Watch's runPreset() path, and neither of
+// those two SQL files carries the token at all (each hardcodes its own fixed ORDER BY) -- so
+// Gauge Watch, "the differentiator" per docs/product/features.md and the only preset with two
+// directions, was never actually executed by any test before Task 6's page rendered it.
+//
+// Block comments and string-literal-embedded comment markers are a SECOND, review-flagged gap
+// in that first fix: no watch_*.sql file uses either today, so neither was a live bug, but both
+// are the identical failure shape one syntax variant away -- a future preset's comment or a
+// string literal containing "--" would silently defeat the line-only version the same way the
+// header comment did. Closed here rather than merely documented, since both are bounded,
+// well-defined transformations over this grammar (exported as `maskComments` so
+// watch.test.ts's block-comment and string-literal fixtures exercise this function directly,
+// not just the one shipped file that happens to need it today).
+export function maskComments(sql: string): string {
+  let out = "";
+  let i = 0;
+  let inString = false;
+  while (i < sql.length) {
+    const ch = sql[i];
+    const two = sql.slice(i, i + 2);
+    if (!inString && two === "--") {
+      let j = i;
+      while (j < sql.length && sql[j] !== "\n") j++;
+      out += " ".repeat(j - i);
+      i = j;
+      continue;
+    }
+    if (!inString && two === "/*") {
+      let j = i + 2;
+      while (j < sql.length && sql.slice(j, j + 2) !== "*/") j++;
+      const end = Math.min(j + 2, sql.length);
+      // Preserve newlines inside the block comment so line numbers in a later error message
+      // (there are none today, but nothing here should assume that) stay meaningful.
+      out += sql.slice(i, end).replace(/[^\n]/g, " ");
+      i = end;
+      continue;
+    }
+    if (ch === "'") {
+      // Toggles correctly through a doubled '' escape too: two consecutive quote characters
+      // flip `inString` twice with nothing (by definition) between them to mis-classify, so
+      // the net state after `''` is unchanged, exactly as it should be for an escaped quote
+      // inside an unbroken string.
+      inString = !inString;
+    }
+    out += ch;
+    i++;
+  }
+  return out;
 }
 
 /** Substitute the closed-set direction keyword for the `{{DIRECTION}}` token, the same
@@ -154,7 +196,7 @@ function maskLineComments(sql: string): string {
  * misordered result). Masking is length-preserving, so the located index is valid against
  * `statement` too. */
 function substituteDirection(statement: string, file: string, direction: "asc" | "desc"): string {
-  const masked = maskLineComments(statement);
+  const masked = maskComments(statement);
   const occurrences = masked.split(DIRECTION_TOKEN).length - 1;
   if (occurrences === 0) return statement;
   if (occurrences !== 1) {

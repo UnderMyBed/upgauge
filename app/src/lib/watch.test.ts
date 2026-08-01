@@ -1,5 +1,64 @@
 import { describe, expect, it } from "vitest";
-import { presetBySlug, PRESETS, rawRowsPermalink, routeCellHref, runPreset } from "./watch";
+import {
+  maskComments,
+  presetBySlug,
+  PRESETS,
+  rawRowsPermalink,
+  routeCellHref,
+  runPreset,
+} from "./watch";
+
+// Review finding (Task 6): the fix for the {{DIRECTION}}-in-a-comment bug below originally
+// stripped only "--" line comments. Block comments and a "--"/"/*" embedded inside a
+// single-quoted string literal are the same failure shape, one syntax variant away -- no
+// watch_*.sql file uses either today, so neither was a live bug, but both are now closed
+// (maskComments) rather than merely documented, and pinned here against synthetic fixtures
+// since no real .sql file needs to exercise them yet.
+describe("maskComments", () => {
+  it("masks a line comment, leaving real code before it untouched", () => {
+    const masked = maskComments("ORDER BY x {{DIRECTION}} -- explains {{DIRECTION}} here");
+    expect(masked.split("{{DIRECTION}}").length - 1).toBe(1);
+    expect(masked).toContain("ORDER BY x {{DIRECTION}}");
+  });
+
+  it("masks a block comment too, not just a line comment", () => {
+    // The exact shape of the bug this whole function exists to fix, just with /* */ instead of
+    // -- : a comment that mentions the token by name, ahead of the token's real use.
+    const sql = "/* {{DIRECTION}} is explained here */\nORDER BY x {{DIRECTION}}";
+    const masked = maskComments(sql);
+    expect(masked.split("{{DIRECTION}}").length - 1).toBe(1);
+    expect(masked).toContain("ORDER BY x {{DIRECTION}}");
+  });
+
+  it("masks a MULTI-LINE block comment, preserving newlines so indices stay valid", () => {
+    const sql = "/* line one\n   {{DIRECTION}} mentioned mid-comment\n   line three */\nORDER BY x {{DIRECTION}}";
+    const masked = maskComments(sql);
+    expect(masked.split("{{DIRECTION}}").length - 1).toBe(1);
+    expect(masked.split("\n").length).toBe(sql.split("\n").length);
+  });
+
+  it("does not mistake a '--' inside a single-quoted string literal for a comment", () => {
+    // Without string-awareness, a naive `indexOf("--")` finds the one INSIDE the string first
+    // and masks from there to end of line -- hiding the real token that follows on the same
+    // line, and returning `statement` UNCHANGED (occurrences === 0), which is a silent no-op,
+    // not even a thrown error.
+    const sql = "SELECT '--not a comment' AS marker, x ORDER BY x {{DIRECTION}}";
+    const masked = maskComments(sql);
+    expect(masked.split("{{DIRECTION}}").length - 1).toBe(1);
+    expect(masked).toContain("SELECT '--not a comment' AS marker");
+  });
+
+  it("does not mistake a doubled '' escape for leaving the string early", () => {
+    const sql = "SELECT 'it''s -- not a comment' AS marker, x ORDER BY x {{DIRECTION}}";
+    const masked = maskComments(sql);
+    expect(masked.split("{{DIRECTION}}").length - 1).toBe(1);
+  });
+
+  it("is length-preserving, so a located index stays valid against the original text", () => {
+    const sql = "-- header\nSELECT 1 -- trailing\nORDER BY x {{DIRECTION}}";
+    expect(maskComments(sql).length).toBe(sql.length);
+  });
+});
 
 describe("presetBySlug", () => {
   it("resolves all four slugs", () => {

@@ -92,6 +92,41 @@ describe("/watch/<preset>", () => {
     expect(content(container)).toMatch(/heuristic/i);
   });
 
+  // Review finding (Task 6): formatHealthScore()'s own unit tests below cover the NULL branch
+  // in isolation, and the brief's Step 2 test would have covered it through a synthetic
+  // Death Watch row that watch_death_watch.sql can never actually produce (its own `WHERE
+  // health_score IS NOT NULL` excludes it). Neither proves the path that actually fires in
+  // production: Route Birth Tracker's `p12_months_present = 0` filter means EVERY one of its
+  // 688 rows has a NULL health_score (measured against the real warehouse -- 688 of 688, 100%),
+  // so "insufficient data" is not an edge case on this preset, it is the entire page, reached
+  // through the REAL column-building path (buildColumns -> displayRows -> DataTable), not a
+  // direct call to the helper. A regression here -- an accidental dimKey or href on the
+  // __health_score column, or the column reading the raw `health_score` field instead of the
+  // pre-formatted `__health_score` one -- would leak `null`, an em-dash, or a bare "null" string
+  // into shipped HTML on every Birth Tracker request, and nothing else in this suite would
+  // notice.
+  it("renders 'insufficient data' end-to-end on Birth Tracker, whose rows are ALL null-scored", async () => {
+    const { container } = await renderPreset("new-routes");
+    const table = container.querySelector("table");
+    expect(table).not.toBeNull();
+
+    const headers = [...table!.querySelectorAll("thead th")].map((th) => th.textContent ?? "");
+    const scoreIndex = headers.findIndex((h) => /health score/i.test(h));
+    expect(scoreIndex).toBeGreaterThan(-1);
+
+    const rows = [...table!.querySelectorAll("tbody tr")];
+    // Not just "some rows" -- Birth Tracker's whole premise (p12_months_present = 0) means
+    // every row qualifies, so anything less than 100% would itself be a finding.
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      const cell = row.querySelectorAll("td")[scoreIndex];
+      const text = cell?.textContent ?? "";
+      expect(text).toBe("insufficient data");
+      expect(text).not.toContain("null");
+      expect(text).not.toContain("—");
+    }
+  });
+
   it("links every row to its raw rows in the Explorer", async () => {
     await renderPreset("gauge");
     const links = screen.getAllByRole("link", { name: "Explorer" });
