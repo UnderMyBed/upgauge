@@ -476,12 +476,37 @@ external file; production draws the coastline.)
 
 ### Projection
 
-**Composite Albers USA.** Conterminous conic (standard parallels 29.5/45.5, central meridian
-−96), plus **labelled insets for Alaska and Hawai'i**. This is not cosmetic: letting AK and
-HI into a single fit compresses the lower 48 into an unreadable smear — it was tried.
+**Composite Albers USA, five panels** (`app/src/lib/map/albers.ts`). Conterminous conic
+(standard parallels 29.5/45.5, central meridian −96), plus **labelled insets for Alaska,
+Hawai'i, the Pacific (`pac`), and the Caribbean (`car`)** — each panel fit independently to
+its own points, in its own screen rect. Letting AK and HI into a single fit compresses the
+lower 48 into an unreadable smear — it was tried — which is also why `pac` and `car` are their
+own panels rather than folded into `us` or `hi`.
+
+**Longitude is normalized before any panel decision.** Six fact-present airports carry a
+positive longitude — GUM, UAM, ROP, TIQ, SPN, and Alaska's own SYA (Eareckson AS, Shemya, at
++174.11, since the western Aleutians genuinely cross the antimeridian) — and the panel tests
+are all written in western-hemisphere terms, so `normalizeLon` (`lon > 0 ? lon − 360 : lon`)
+runs first at every call site, never only inside one helper. Measurements and the full
+airport list: `docs/data/invariants.md` § Airport coordinates, and the six that are east of
+the antimeridian.
+
+**`regionOf` is ordered most-specific first** (`pac`, `car`, `hi`, `ak`, then `us` as the
+fallback) — reversing that order (testing `us` first) is a real mutant, not a hypothetical:
+`us`'s test is unconditional, so it would swallow every point before the more specific panels
+ever run. Two panels exist precisely because a two-test split (conterminous / Alaska /
+Hawai'i) gets two populations wrong, not just Shemya:
+- **`pac`** holds Guam/Saipan/Tinian/Rota, American Samoa, and Midway — American Samoa sits in
+  the *southern* hemisphere and Midway at 28.2°N, so the mockup's Hawai'i test
+  (`lon < −150 && lat < 30`) caught both, stretching a "Hawai'i" panel to 42° of latitude when
+  Hawai'i itself spans 2.3°.
+- **`car`** holds Puerto Rico and the USVI, which extend the conterminous bounding box in
+  *both* directions at once (east past PQI, Maine, and south of EYW, Key West) — no single
+  rectangle holds them and the lower 48 legibly.
 
 Note for implementers: raw Albers grows northward while screen `y` grows down. The `y` term
-must be negated or the country renders upside down.
+must be negated or the country renders upside down — asserting that two projected points are
+merely *present* does not catch this; only their relative screen order does.
 
 **An arc crossing a panel boundary cannot be a great circle**, so `PDX–ANC` and `PDX–HNL` are
 drawn as straight lines into their inset, and the page says so. Every US map makes this
