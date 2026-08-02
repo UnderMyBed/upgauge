@@ -8,6 +8,7 @@ import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
 import { presetSlugFromPath, presetBySlug } from "@/lib/watch";
+import { parseYear } from "@/lib/year";
 import { loadAllowlist } from "@/lib/db";
 
 // `proxy`, not `middleware`: Next 16 deprecated and renamed the convention
@@ -36,7 +37,8 @@ export async function proxy(request: NextRequest) {
   //
   // No unit test can catch a regression here: these tests never construct a NextRequest and
   // never cross Next's URL normalization. Only a built-and-served smoke check can.
-  headers.set(RAW_QUERY_HEADER, new URL(request.url).search.replace(/^\?/, ""));
+  const rawQuery = new URL(request.url).search.replace(/^\?/, "");
+  headers.set(RAW_QUERY_HEADER, rawQuery);
   const pathname = new URL(request.url).pathname;
   // Second header, same mechanism, different reason -- see lib/rawPath.ts. `not-found.js`
   // accepts no props and gets no route params, so this is the only way a segment-level 404
@@ -171,6 +173,44 @@ export async function proxy(request: NextRequest) {
     );
     return response;
   }
+  // M7 Task 9. `/airport/:code` gained an optional `y=<year>` query param
+  // (app/airport/[code]/page.tsx) selecting one calendar year's network map instead of the
+  // page's default trailing-12 view. That is a SECOND cacheability input on top of the
+  // airport-slug resolution every other ENTITY_ROUTES row already has -- so airport is pulled
+  // out of that generic loop into its own branch here, the same reason `/watch` isn't a fifth
+  // ENTITY_ROUTES row either (its own branch above): the shape of what makes it cacheable
+  // differs from the other three entities', not merely the resolver it calls.
+  //
+  // `y`'s legitimate value set is CLOSED -- the calendar years this dataset covers -- which is
+  // exactly what makes validating it the right answer instead of `/search`'s blanket
+  // `no-store` (that branch's own doc comment, above): `q` is unbounded free text with no set
+  // of correct answers to check a candidate against, so nothing short of "never cache" closes
+  // the cache-fill vector; `y` has a real closed set, so `parseYear` (lib/year.ts) can reject
+  // anything outside it structurally, with no database read, and a well-formed year stays
+  // exactly as cacheable as the airport page always was.
+  //
+  // `y` is read from the RAW query string captured above (`rawQuery`), never from
+  // `request.nextUrl.searchParams` -- CLAUDE.md's rule for this file applies to every query
+  // key it reads, not only /explore's permalink: `request.nextUrl` re-serializes its parsed
+  // searchParams, which is exactly the Next-side normalization this file exists to route
+  // around (see the top-of-file comment on `rawQuery` itself). A bare year has no reserved
+  // characters to lose to that normalization, but the fix that keeps `/explore` alive is "read
+  // the one preserved raw string once", not "re-derive it per key when it happens to matter".
+  //
+  // Cacheability is an AND of two allow-lists, never a `!== "notFound"`/`!== "invalid"`
+  // negation (CLAUDE.md's ENTITY_ROUTES rule, restated for the second input): the airport slug
+  // must resolve to `"ok"` or `"redirect"` (`isCacheable`, unchanged), AND `parseYear` must NOT
+  // return `"invalid"` -- `"default"` (no `y`) and `"year"` (a real one) are the two cacheable
+  // outcomes, exactly mirroring `isCacheable`'s own "new outcome? decline by default" safety
+  // property for a future third `ParsedYear` kind.
+  const airportSlug = airportSlugFromPath(pathname);
+  if (airportSlug !== null) {
+    const y = new URLSearchParams(rawQuery).get("y");
+    const entityOk = await isCacheable({ resolve: resolveAirportCode }, airportSlug);
+    const yearOk = parseYear(y).kind !== "invalid";
+    response.headers.set("Cache-Control", entityOk && yearOk ? HTML_CACHE : NO_STORE);
+    return response;
+  }
   for (const entity of ENTITY_ROUTES) {
     const slug = entity.slugFromPath(pathname);
     if (slug === null) continue;
@@ -242,13 +282,20 @@ async function isDataLayerHealthy(): Promise<boolean> {
  * drop that one line for airport alone, and the four rows would stop reading as the same shape
  * they are meant to be. `lib/entitySlug.ts`'s own header records the other three readers'
  * un-opinionated default; this note exists so the next person adding a row does not "simplify"
- * this table by inlining and lose the one reader that isn't a bare wrapper. */
+ * this table by inlining and lose the one reader that isn't a bare wrapper.
+ *
+ * M7 Task 9 pulled `/airport/:code` back OUT of this table, for the identical reason `/watch`
+ * was never added to it (above): the airport branch now has a second cacheability input (the
+ * `y` query param, `lib/year.ts`) that this table's generic `isCacheable(entity, slug)` call
+ * has no slot for. Its own `if` branch runs BEFORE this loop and returns early, so `/airport`
+ * requests never reach the code below at all -- `airportSlugFromPath` and
+ * `resolveAirportCode` are still imported and still used, just from that branch instead of
+ * from a row here. */
 const ENTITY_ROUTES: ReadonlyArray<{
   slugFromPath: (pathname: string) => string | null;
   resolve: (slug: string) => Promise<{ kind: string }>;
 }> = [
   { slugFromPath: routeSlugFromPath, resolve: resolveRoutePair },
-  { slugFromPath: airportSlugFromPath, resolve: resolveAirportCode },
   { slugFromPath: carrierSlugFromPath, resolve: resolveCarrier },
   { slugFromPath: aircraftSlugFromPath, resolve: resolveAircraftSlug },
 ];
@@ -393,12 +440,18 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // `not-found.tsx` does, still follows the same "every route gets a row" discipline this list
 // exists to enforce rather than becoming the one silent exception.
 //
-// THIS LIST AND `ENTITY_ROUTES` MUST AGREE. A row here without a row there ships an entity page
-// that is long-cached on its 404s; a row there without a row here ships a page with no
-// Cache-Control at all AND turns each of its 404s into a 500 (`not-found.tsx` throws
-// `MissingRawPathError` when the pathname header is absent). Neither asymmetry is visible in a
-// build, a unit test, or a rendered page -- only `app/smoke.sh` sees them, which is why every
-// row here has a served-build header assertion and a served-build `no-store` assertion there.
+// THIS LIST AND `ENTITY_ROUTES` MUST AGREE, with the one carved-out exception each of
+// `/airport/:code` and `/watch`/`/watch/:preset` already is: those pathnames stay in THIS list
+// (the matcher) but have their own `if` branch above rather than a row in `ENTITY_ROUTES`,
+// because each has a cacheability question the generic table can't express (a live
+// `mart_route_health` read for `/watch`; the `y` query param for `/airport`, M7 Task 9). Absent
+// their own branch OR their matcher entry, the same two failure modes below still apply. A row
+// here without a row (or branch) there ships an entity page that is long-cached on its 404s; a
+// row there without a row here ships a page with no Cache-Control at all AND turns each of its
+// 404s into a 500 (`not-found.tsx` throws `MissingRawPathError` when the pathname header is
+// absent). Neither asymmetry is visible in a build, a unit test, or a rendered page -- only
+// `app/smoke.sh` sees them, which is why every row here has a served-build header assertion and
+// a served-build `no-store` assertion there.
 //
 // ELEVEN entries as of M6 Task 7 (was nine through M5 Task 8) -- `/watch` and `/watch/:preset`
 // added here. `/watch` is an exact-path entry, same reasoning as `/search`/`/sitemap.xml`/
@@ -410,6 +463,9 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // the sitemap protocol's 50,000-per-file limit, see that file's own header), not
 // `generateSitemaps()`'s multi-file convention, so there is exactly one `/sitemap.xml` route to
 // list, not a family of numbered children.
+//
+// STILL eleven at M7 Task 9 -- `/airport/:code` was already here; only its `ENTITY_ROUTES` row
+// moved into its own branch above (see that branch's doc comment, and `ENTITY_ROUTES`'s own).
 export const config = {
   matcher: [
     "/explore",

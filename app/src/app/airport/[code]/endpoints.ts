@@ -16,34 +16,50 @@ import type { Resolved } from "@/lib/resolve";
  * Measured at SEA (14747) over 2025-05..2026-04: 53,373,806 seats both ways against
  * 26,710,000 departing only, and 143 destinations against 140.
  *
- * The pivot vocabulary cannot express that OR. `meta_pivot_dimensions` offers
- * `origin_airport_id` and `dest_airport_id` as separate dimensions, filters are AND-ed
- * together, and the one composite dimension (`route`) filters on a whole route PAIR, not on a
- * single endpoint. So the OR is assembled here, as inclusion-exclusion over three ordinary
- * pivots -- origin, dest, and their overlap -- rather than by adding a catalog entry and a
- * second composite-filter semantics to render.ts AND pipeline/pivot.py in lockstep. Recorded
- * in docs/architecture/pipeline.md § M4d; a first-class endpoint filter is M5's call.
+ * THE MECHANISM, as of M7 Task 3: `endpoint_airport_id`, a first-class `meta_pivot_dimensions`
+ * entry (filter_only, filter_mode='either', M7 Tasks 1-2) that compiles to
+ * `(origin_airport_id IN (...) OR dest_airport_id IN (...))` in both render.ts and
+ * pipeline/pivot.py. This page is therefore ONE pivot per grain -- one for the table/stat strip
+ * (`fetchAirportTraffic`), one for the chart (`fetchAirportMix`) -- filtered on that dimension,
+ * with SQL doing the OR and counting a same-airport row exactly once because it is one GROUP BY
+ * row, not a set-arithmetic identity applied to two or three separate query results.
  *
- * The overlap term is not decoration. `origin = dest` rows exist: 3,187 of them over the
- * TRAILING 12 MONTHS (2025-05..2026-04) across 359 airports, 601,573 seats, QUARANTINED ROWS
- * INCLUDED -- 3,182 / 358 / 601,565 without them, and 12,738 / 530 / 1,887,424 (12,696 / 530 /
- * 1,887,193 without) over the full 2015-01..2026-04 window. The window and the quarantine
- * qualifier are both load-bearing: the four answers differ by 4x, and this file's own window is
- * the trailing 12 for the table and the FULL window for the chart. docs/data/invariants.md
- * § Route identity tabulates all four. At SEA: 18 rows carrying 12,646 seats and 172
- * departures. The M4d design spec states these "do not exist" at segment grain -- that is
- * true of route IDENTITY (docs/data/invariants.md § Route identity excludes them as non-routes)
- * and false of fct_segment_month, which is what this page queries. Without the subtraction SEA
- * reads 53,386,452 seats.
+ * THROUGH M6 the OR had to be assembled here instead, as inclusion-exclusion over three
+ * ordinary pivots -- origin, dest, and their overlap -- because `meta_pivot_dimensions` offered
+ * only `origin_airport_id` and `dest_airport_id` as separate (AND-ed) dimensions and the one
+ * composite dimension (`route`) filters on a whole route PAIR, not a single endpoint. That
+ * assembly (`inclusionExclusion`/`unionSides`/`unionMix`, plus the `partial` flag threaded
+ * through every call of it) is gone; a first-class endpoint filter was M5's deferred call,
+ * picked up here. Recorded in docs/architecture/pipeline.md § M4d and § M7.
+ *
+ * The rows a single `endpoint_airport_id` query returns still span BOTH directions of every
+ * route (an SEA->PDX row and a PDX->SEA row are different `(origin, dest)` groups) and same-
+ * airport rows still exist -- `origin = dest` rows: 3,187 of them over the TRAILING 12 MONTHS
+ * (2025-05..2026-04) across 359 airports, 601,573 seats, QUARANTINED ROWS INCLUDED -- 3,182 /
+ * 358 / 601,565 without them, and 12,738 / 530 / 1,887,424 (12,696 / 530 / 1,887,193 without)
+ * over the full 2015-01..2026-04 window. The window and the quarantine qualifier are both
+ * load-bearing: the four answers differ by 4x, and this file's own window is the trailing 12
+ * for the table and the FULL window for the chart. docs/data/invariants.md § Route identity
+ * tabulates all four. At SEA: 18 rows carrying 12,646 seats and 172 departures -- real activity
+ * that `fct_segment_month` carries (the M4d design spec's "do not exist" is true only of route
+ * IDENTITY, docs/data/invariants.md § Route identity, which excludes them as non-routes).
+ * `toEndpointRows` below folds both directions and the same-airport case down to one
+ * (carrier, other-endpoint) identity per fact row; `carrierRows`/`airportTotals` then sum over
+ * however many rows share a carrier or an endpoint id, so nothing downstream needs the two
+ * directions, or the same-airport case, kept separate or de-duplicated by hand -- the query
+ * already returned each fact row once.
  */
 
-/** One (carrier, other-endpoint) cell of the airport's traffic, direction already folded away.
+/** One (carrier, other-endpoint) cell of the airport's traffic. Rows are NOT pre-deduplicated
+ * by (carrier, endpoint) -- the pivot groups by (carrier, origin, dest), so a route flown in
+ * both directions by the same carrier is two rows here, both naming the same `endpointId`.
+ * That is fine: every consumer (`carrierRows`, `airportTotals`) sums or Set()s over however
+ * many rows share a key, so nothing downstream needs a single row per (carrier, endpoint).
  *
  * `endpointId` is the airport at the OTHER end -- the destination of a departure, the origin
  * of an arrival, and the airport itself for a same-airport filing. Keeping it (rather than
- * aggregating to the carrier in SQL) is what lets one pair of queries answer both "which
- * carriers" and "how many destinations", and is the only way the overlap rows stay
- * identifiable at all. */
+ * aggregating to the carrier in SQL) is what lets one query answer both "which carriers" and
+ * "how many destinations". */
 export interface EndpointRow {
   carrierId: unknown;
   endpointId: unknown;
@@ -51,118 +67,6 @@ export interface EndpointRow {
   passengers: number;
   departures: number;
   quarantinedRows: number;
-}
-
-const ENDPOINT_MEASURES = ["seats", "passengers", "departures", "quarantinedRows"] as const;
-const MIX_MEASURES = ["seats", "departures"] as const;
-
-/** |A ∪ B| = |A| + |B| − |A ∩ B|, applied to summed measures rather than to counts.
- *
- * Generic over the row shape because the page needs it twice at two different grains -- once
- * keyed on (carrier, endpoint) for the table and the stat strip, once on (month, aircraft
- * type) for the chart -- and two copies of an arithmetic identity is how one of them silently
- * loses its third term.
- *
- * Identity fields (everything not named in `measures`) come from the first side that carried
- * the key, so `label` on a MixRow survives untouched.
- *
- * A key in `both` that is not on BOTH other sides throws, because SQL makes that impossible:
- * a row matching `origin = X AND dest = X` matches `origin = X` and matches `dest = X`. The
- * only way to reach it is a coding error -- reading the wrong endpoint column, say -- and the
- * consequence of shrugging it off is a measure driven negative, which formats as a perfectly
- * ordinary number under a DATA AS OF badge.
- *
- * `partial` is the one legitimate exception, and it is not hypothetical: each side is a
- * `LIMIT`-ed pivot, so a truncated side can drop rows the overlap query still returns. When a
- * side has been truncated the row was counted at most once already, so there is nothing to
- * subtract, and the page is separately disclosing that its totals cover only the rows it got.
- * Without this the page would 500 for being big -- strictly worse than disclosing truncation.
- * Found by the truncation test, not by reading. */
-export function inclusionExclusion<T extends object>(
-  sides: { origin: T[]; dest: T[]; both: T[] },
-  keyOf: (row: T) => string,
-  measures: readonly (keyof T & string)[],
-  options: { partial?: boolean } = {},
-): T[] {
-  // `T extends object`, not `T extends Record<string, unknown>`: an interface without an index
-  // signature (EndpointRow, MixRow -- i.e. both real callers) does not satisfy the latter, and
-  // Vitest would never have said so, since esbuild strips types without checking them. Caught
-  // by `make app-check`. The two casts below are the price of indexing a named-property type
-  // by a key the caller chose; `measures` is `keyof T`, so they cannot name a field that does
-  // not exist.
-  const cell = (row: T, m: keyof T & string): number =>
-    Number((row as Record<string, unknown>)[m] ?? 0);
-  const acc = new Map<string, T>();
-  const seen = { origin: new Set<string>(), dest: new Set<string>() };
-  const add = (rows: T[], which: "origin" | "dest") => {
-    for (const row of rows) {
-      const key = keyOf(row);
-      seen[which].add(key);
-      const existing = acc.get(key);
-      if (existing === undefined) {
-        acc.set(key, { ...row });
-        continue;
-      }
-      for (const m of measures) {
-        (existing as Record<string, unknown>)[m] = cell(existing, m) + cell(row, m);
-      }
-    }
-  };
-  add(sides.origin, "origin");
-  add(sides.dest, "dest");
-
-  for (const row of sides.both) {
-    const key = keyOf(row);
-    if (!seen.origin.has(key) || !seen.dest.has(key)) {
-      if (options.partial) continue;
-      throw new Error(
-        `overlap row '${key}' is missing from the origin and/or destination side -- the ` +
-          "origin ∩ dest term must be a subset of both, or subtracting it drives a measure " +
-          "negative",
-      );
-    }
-    const existing = acc.get(key)!;
-    for (const m of measures) {
-      (existing as Record<string, unknown>)[m] = cell(existing, m) - cell(row, m);
-    }
-  }
-  return [...acc.values()];
-}
-
-function endpointKey(row: EndpointRow): string {
-  // NUL separator, same reasoning as lib/resolve.ts's resolutionKey: it cannot occur in
-  // either id, so no pair of distinct (carrier, endpoint) tuples can collide.
-  return `${String(row.carrierId)}\u0000${String(row.endpointId)}`;
-}
-
-export function unionSides(
-  origin: EndpointRow[],
-  dest: EndpointRow[],
-  both: EndpointRow[],
-  options: { partial?: boolean } = {},
-): EndpointRow[] {
-  return inclusionExclusion({ origin, dest, both }, endpointKey, ENDPOINT_MEASURES, options);
-}
-
-/** `options` is not optional decoration, and leaving it off here was a real bug: the mix sides
- * are LIMIT-ed pivots exactly as `unionSides`' are, so a truncated side can drop a cell the
- * overlap query still returns and `inclusionExclusion` throws. That throw becomes a 500 on a
- * response `proxy.ts` has ALREADY stamped `public, s-maxage=2592000` on, so the CDN would pin it
- * for thirty days on a page that serves fine the moment the limit is raised -- and
- * `stale-while-revalidate` cannot self-correct it, since it only applies once `s-maxage` has
- * expired. Same escape hatch, same reasoning, as the endpoint union's. */
-export function unionMix(
-  origin: MixRow[],
-  dest: MixRow[],
-  both: MixRow[],
-  options: { partial?: boolean } = {},
-): MixRow[] {
-  return inclusionExclusion(
-    { origin, dest, both },
-    (r) => `${r.month}\u0000${r.code}`,
-    MIX_MEASURES,
-    options,
-  );
 }
 
 /** A ratio of sums, or null when the denominator is zero. Never an average of the rows above,
@@ -216,7 +120,7 @@ export interface AirportTotals {
 }
 
 /** The stat strip. Same ratio-of-sums discipline as carrierRows, one level up: this is a sum
- * over the union's rows, never an average of the carrier rows the table shows.
+ * over the pivot's rows, never an average of the carrier rows the table shows.
  *
  * `destinations` excludes the airport itself. Its own same-airport filings are real activity
  * and stay in every measure, but SEA is not one of SEA's destinations. Measured over the
@@ -239,65 +143,64 @@ export function airportTotals(rows: EndpointRow[], airportId: number): AirportTo
   };
 }
 
-/** Measured ceiling, not a guess -- and the measurement is PER SIDE, which is what this limit
- * bounds. The busiest airport in the database (ORD, 13930) produces 879 distinct (operating
- * carrier, other endpoint) groups on the origin side and 855 on the dest side over a trailing 12
- * months; 959 is ORD's UNION of the two, and this comment quoted that union as a per-side figure
- * until M4d's final review. SEA produces 374 departing and 293 arriving. 5,000 therefore clears
- * the real per-side worst case 5.7x. If a future refresh ever reaches it the page says so
- * (`truncated`) rather than under-reporting, exactly as /route/<pair> does at its own limit. */
+/** Measured ceiling, not a guess. M7 Task 3 re-measured it for the single `endpoint_airport_id`
+ * pivot below, which is NOT the same query the M4d-era "per side" figure described: that
+ * comment counted (operating carrier, other endpoint) groups on two separate LIMIT-ed pivots,
+ * pre-folded to one row per route by each side's own GROUP BY; this one groups by (operating
+ * carrier, origin, dest) on ONE pivot, which keeps both directions of a route as separate rows
+ * rather than folding them together the way the old union's key did -- so this figure is larger
+ * than the old "per side"/"union" ones for the same airport, not comparable to them. Checked
+ * against the 25 busiest airports by trailing-12 segment-row count, not assumed from ORD alone:
+ * the busiest airport in the database (ORD, 13930) produces 1,732 such groups over a trailing 12
+ * months, next is DFW (11298) at 1,237; SEA produces 666. 5,000 clears the real worst case 2.9x.
+ * If a future refresh ever reaches it the page says so (`truncated`) rather than under-reporting,
+ * exactly as /route/<pair> does at its own limit. */
 export const AIRPORT_ENDPOINT_LIMIT = 5000;
 
 const CARRIER_MEASURES = ["seats", "passengers", "departures_performed"];
 
-/** The three pivots, as data. `origin` and `dest` each carry the OTHER endpoint as their
- * second dimension; `both` is the overlap -- two single-column filters AND-ed, which is
- * exactly `origin = X AND dest = X`. */
-export function endpointQueries(
+/** The one pivot. `origin_airport_id` and `dest_airport_id` are carried as dimensions (not
+ * folded into a single "other endpoint" column at the SQL layer, which the vocabulary has no
+ * expression for) so `toEndpointRows` below can recover, per row, which end is the airport
+ * itself and which is the other one -- the only thing this query still needs from TypeScript
+ * rather than SQL. The filter is what does the OR: `endpoint_airport_id` is `filter_only`, so
+ * it is accepted here and would be rejected if it appeared in `dimensions` instead (Task 2). */
+export function airportTrafficQuery(
   airportId: number,
   timeFrom: string,
   timeTo: string,
   limit: number,
-): { origin: PivotQuery; dest: PivotQuery; both: PivotQuery } {
-  const id = String(airportId);
-  const base = {
+): PivotQuery {
+  return {
     grain: "segment",
+    dimensions: ["op_airline_id", "origin_airport_id", "dest_airport_id"],
     measures: CARRIER_MEASURES,
     timeFrom,
     timeTo,
+    filters: [["endpoint_airport_id", [String(airportId)]]],
     sort: "seats",
     sortDesc: true,
     limit,
     // The operating carrier is the grain and the truth (CLAUDE.md): a Delta-branded regional
     // flown by Endeavor files as 9E, and this page reports what was operated at this airport.
     grouping: "operating",
-  } as const;
-  return {
-    origin: {
-      ...base,
-      dimensions: ["op_airline_id", "dest_airport_id"],
-      filters: [["origin_airport_id", [id]]],
-    },
-    dest: {
-      ...base,
-      dimensions: ["op_airline_id", "origin_airport_id"],
-      filters: [["dest_airport_id", [id]]],
-    },
-    both: {
-      ...base,
-      dimensions: ["op_airline_id", "dest_airport_id"],
-      filters: [
-        ["origin_airport_id", [id]],
-        ["dest_airport_id", [id]],
-      ],
-    },
   };
 }
 
-function toEndpointRows(rows: Record<string, unknown>[], endpointColumn: string): EndpointRow[] {
+/** The airport at the OTHER end of a row that is guaranteed (by the `endpoint_airport_id`
+ * filter) to have `airportId` at one end or the other -- the destination of a departure, the
+ * origin of an arrival, and `airportId` itself for a same-airport filing (both columns equal
+ * `airportId`, so either branch below returns it). This is the one piece of the old
+ * inclusion-exclusion the SQL layer cannot express on its own: `meta_pivot_dimensions` has no
+ * CASE-shaped "other endpoint" column, only the two real ones. */
+function otherEndpoint(row: Record<string, unknown>, airportId: string): unknown {
+  return String(row.origin_airport_id) === airportId ? row.dest_airport_id : row.origin_airport_id;
+}
+
+export function toEndpointRows(rows: Record<string, unknown>[], airportId: string): EndpointRow[] {
   return rows.map((r) => ({
     carrierId: r.op_airline_id,
-    endpointId: r[endpointColumn],
+    endpointId: otherEndpoint(r, airportId),
     seats: Number(r.seats ?? 0),
     passengers: Number(r.passengers ?? 0),
     departures: Number(r.departures_performed ?? 0),
@@ -307,65 +210,51 @@ function toEndpointRows(rows: Record<string, unknown>[], endpointColumn: string)
 
 export interface AirportTraffic {
   rows: EndpointRow[];
-  /** Display values for the carrier ids on these rows, merged across the two sides. */
+  /** Display values for the carrier ids on these rows. */
   resolved: Map<string, Resolved>;
-  /** A side came back at exactly `limit` rows, so the union under-reports and the page must
-   * say so. */
+  /** The pivot came back at exactly `limit` rows, so the table and stat strip under-report and
+   * the page must say so. */
   truncated: boolean;
 }
 
-/** The trailing-12 table and the stat strip, in one wave of three concurrent pivots. */
+/** The trailing-12 table and the stat strip, in one pivot -- no union. `carrierRows` and
+ * `airportTotals` both sum over every row they are handed regardless of how many rows share a
+ * carrier or an endpoint id, so a route's two directions (or a same-airport filing) needing
+ * more than one row here to preserve is a non-issue: the totals come out the same whether this
+ * query returns one folded row per (carrier, other-endpoint) or several unfolded ones. */
 export async function fetchAirportTraffic(
   airportId: number,
   timeFrom: string,
   timeTo: string,
   limit: number = AIRPORT_ENDPOINT_LIMIT,
 ): Promise<AirportTraffic> {
-  const q = endpointQueries(airportId, timeFrom, timeTo, limit);
-  // CONCURRENT: three independent queries against one memoized instance, each handed its own
-  // connection -- the same reasoning as /route/<pair>'s two-pivot Promise.all. Serially this
-  // page would pay for all three in turn for no reason.
-  const [origin, dest, both] = await Promise.all([
-    runPivot(q.origin),
-    runPivot(q.dest),
-    runPivot(q.both),
-  ]);
-  const truncated = origin.rows.length >= limit || dest.rows.length >= limit;
+  const result = await runPivot(airportTrafficQuery(airportId, timeFrom, timeTo, limit));
   return {
-    rows: unionSides(
-      toEndpointRows(origin.rows, "dest_airport_id"),
-      toEndpointRows(dest.rows, "origin_airport_id"),
-      toEndpointRows(both.rows, "dest_airport_id"),
-      // A truncated side can no longer carry every overlap row, so the subset invariant the
-      // union asserts is genuinely suspended -- see inclusionExclusion's header.
-      { partial: truncated },
-    ),
-    resolved: new Map([...origin.resolved, ...dest.resolved]),
-    truncated,
+    rows: toEndpointRows(result.rows, String(airportId)),
+    resolved: result.resolved,
+    truncated: result.rows.length >= limit,
   };
 }
 
 export interface AirportMix {
   rows: MixRow[];
-  /** A side came back at exactly `limit` cells, so the chart under-reports and the page must
+  /** The pivot came back at exactly `limit` cells, so the chart under-reports and the page must
    * say so -- the same contract, and the same word, as AirportTraffic's. */
   truncated: boolean;
 }
 
-/** The chart's full-window mix, same three-term union at (month, aircraft type) grain.
+/** The chart's full-window mix, one `endpoint_airport_id`-filtered pivot at (month, aircraft
+ * type) grain -- no union, and no per-row "other endpoint" to recover, since the chart's grain
+ * doesn't carry one.
  *
- * Measured over 2015-01..2026-04: the worst case in the database is ORD (13930) at 4,094
- * distinct (month, type) groups on the origin side and 4,089 on the dest side, 4,118 in the
- * union -- comfortably inside `AIRCRAFT_MIX_LIMIT`. ATL is 3,561 / 3,572 and SEA 2,832 / 2,801.
+ * Measured over 2015-01..2026-04, again checked against the 25 busiest airports rather than
+ * assumed: the worst case in the database is ORD (13930) at 4,118 distinct (month, type)
+ * groups, comfortably inside `AIRCRAFT_MIX_LIMIT` -- unchanged from the M4d-era union figure,
+ * because this grain never carried a direction to begin with (year_month x aircraft_type has
+ * no origin/dest column), so collapsing three pivots into one changes nothing about what gets
+ * counted here. ATL is 3,592 and SEA 2,886 (endpoints.test.ts's existing SEA assertion, unmoved).
  * endpoints.test.ts asserts ORD comes back untruncated, so a refresh that approaches the bound
- * fails a TEST rather than a page.
- *
- * IT STILL COMPUTES `truncated`, and that is the point of this function's shape. The headroom
- * above is a fact about today's data; the union's subset invariant is a fact about SQL, and it
- * is suspended the instant a side is cut short. Shipping the union without threading `partial`
- * -- which is what M4d did here, while its sibling fetchAirportTraffic threaded it -- makes a
- * crossed limit a thrown exception, i.e. a 500 the proxy has already marked publicly cacheable
- * for thirty days. A short chart that says it is short is strictly better than that. */
+ * fails a TEST rather than a page. */
 export async function fetchAirportMix(
   airportId: number,
   timeFrom: string,
@@ -373,24 +262,12 @@ export async function fetchAirportMix(
   limit: number = AIRCRAFT_MIX_LIMIT,
 ): Promise<AirportMix> {
   const id = String(airportId);
-  const [origin, dest, both] = await Promise.all([
-    fetchAircraftMix([["origin_airport_id", [id]]], timeFrom, timeTo, BY_AIRCRAFT_TYPE, limit),
-    fetchAircraftMix([["dest_airport_id", [id]]], timeFrom, timeTo, BY_AIRCRAFT_TYPE, limit),
-    fetchAircraftMix(
-      [
-        ["origin_airport_id", [id]],
-        ["dest_airport_id", [id]],
-      ],
-      timeFrom,
-      timeTo,
-      BY_AIRCRAFT_TYPE,
-      limit,
-    ),
-  ]);
-  // The OVERLAP side counts too, unlike fetchAirportTraffic's: a truncated overlap cannot
-  // corrupt the arithmetic (it only under-subtracts), but it does mean the union is no longer
-  // the whole airport, which is what this flag tells the reader.
-  const truncated =
-    origin.length >= limit || dest.length >= limit || both.length >= limit;
-  return { rows: unionMix(origin, dest, both, { partial: truncated }), truncated };
+  const rows = await fetchAircraftMix(
+    [["endpoint_airport_id", [id]]],
+    timeFrom,
+    timeTo,
+    BY_AIRCRAFT_TYPE,
+    limit,
+  );
+  return { rows, truncated: rows.length >= limit };
 }

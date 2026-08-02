@@ -9,4 +9,4 @@
 -- would silently mislabel every field while TS stayed correct, and a rename would give TS
 -- `String(undefined) === "undefined"` for column_expr -- a query-time SQL error rather than a
 -- clear one. Naming them here makes this file the contract both readers actually share.
-SELECT key, label, column_expr, grain, join_dim, join_key FROM meta_pivot_dimensions
+SELECT key, label, column_expr, grain, join_dim, join_key, filter_only, filter_mode FROM meta_pivot_dimensions

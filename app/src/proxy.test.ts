@@ -306,6 +306,54 @@ describe("proxy", () => {
       expect(res.headers.get("Cache-Control")).toBeNull();
     },
   );
+
+  // M7 Task 9. `/airport/:code?y=<year>` -- `y`'s legitimate value set is closed (the calendar
+  // years this dataset covers), which is what makes validating it the right answer instead of
+  // /search's blanket no-store (that branch's own test above). Both halves are required: a
+  // `no-store`-everywhere regression would pass "declines to cache ... out-of-range" vacuously,
+  // so "still caches ... a valid year" has to go red too for the pair to mean anything.
+  it("declines to cache an airport page with an out-of-range year", async () => {
+    const res = await proxy(new NextRequest("http://localhost/airport/SEA?y=1999"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("still caches an airport page with a valid year", async () => {
+    // The other half. Without this, `no-store` everywhere passes the test above vacuously --
+    // both halves or neither.
+    const res = await proxy(new NextRequest("http://localhost/airport/SEA?y=2019"));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it("still caches an airport page with no y at all -- the default trailing-12 view", async () => {
+    // parseYear(null) is "default", not "invalid" -- an implementation that flipped the
+    // allow-list to require an explicit "year" kind would fail every un-parameterized
+    // /airport/<code> request, which is the overwhelming majority of this page's traffic.
+    const res = await proxy(new NextRequest("http://localhost/airport/SEA"));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it("declines to cache a malformed year the same way as an out-of-range one", async () => {
+    const res = await proxy(new NextRequest("http://localhost/airport/SEA?y=nonsense"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("still declines the cache when BOTH the airport and the year are bad", async () => {
+    // Guards the `&&` in `entityOk && yearOk`: a mutant that dropped the airport half (caching
+    // on year-validity alone) would pass every test above but cache a 404.
+    const res = await proxy(new NextRequest("http://localhost/airport/ZZZZ?y=1999"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("reads y from the raw query string, not from a normalized searchParams", async () => {
+    // Same discipline as the raw-query tests at the top of this file: constructing a
+    // NextRequest here does not exercise Next's own normalization, but this pins that the
+    // value read is whatever rawQuery carries, by using a key ordering searchParams would not
+    // reorder differently -- a regression to `request.nextUrl.searchParams.get("y")` would
+    // still pass this one, so app/smoke.sh is what actually proves the raw-header path (see
+    // that file's /airport section).
+    const res = await proxy(new NextRequest("http://localhost/airport/SEA?y=2020&other=1"));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
 });
 
 /** NextResponse.next({request:{headers}}) encodes the upstream request headers into the

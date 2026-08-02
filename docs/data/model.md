@@ -52,7 +52,8 @@ mart_route_health     one row per (op_airline_id, route_key_low, route_key_high)
                       NULL (not huge-positive) deltas when the prior window is empty.
 mart_leaderboards     precomputed JSON, built at pipeline time                    [M5]
 
-meta_pivot_dimensions  key, label, column_expr, grain, join_dim, join_key
+meta_pivot_dimensions  key, label, column_expr, grain, join_dim, join_key,
+                       filter_only, filter_mode
                       -- The Explorer's dimension vocabulary. See "The Explorer's
                       -- vocabulary lives in the catalog" below.
 meta_pivot_measures    key, label, is_additive, expr
@@ -221,6 +222,48 @@ curated `column_expr` against `DESCRIBE` on the fact table(s) its `grain` claims
 directions — a `'segment'`-grain dimension must be absent from `fct_route_month`, and a
 `'both'`-grain dimension must be present on it. A renamed or dropped fact column fails that
 test loudly instead of silently dropping a dimension from the Explorer at request time.
+
+**M7 Task 1 adds two columns and a fifteenth dimension row, `endpoint_airport_id`**, without
+changing anything the two renderers emit — the vocabulary grows; SQL generation does not
+(Task 2 wires the emission). `filter_only` (`BOOLEAN`) marks a dimension as accepted in a
+FILTER and rejected as a grouping dimension; today exactly one row sets it. `filter_mode`
+(`'pair' | 'either' | NULL`) says how a filter over that dimension's `column_expr` compiles:
+`NULL` is the ordinary single-column `col IN (...)`; `'pair'` is `route`'s two columns
+(`route_key_low, route_key_high`) treated as ONE route, compiling to `least()`/`greatest()`
+equality (the 18,895-seat JFK–LAX inflation this guards against is above, "Route health is
+UNDIRECTED"); `'either'` is `endpoint_airport_id`'s two columns (`origin_airport_id,
+dest_airport_id`) treated as ALTERNATIVES, compiling to an OR — "this airport at either end."
+
+`endpoint_airport_id` is deliberately `filter_only = TRUE`: grouping by it would put one
+segment row (ORD→LAX) into both the ORD group and the LAX group, double-counting every row in
+the aggregate — structurally the same failure as T-100's `CLASS` rollup codes `K`/`V`/`Z`
+(`docs/data/invariants.md`), whose absence the pipeline asserts. It also carries real join
+metadata (`dim_airport`/`airport_id`), same as `route` — these are two SEPARATE facts about
+the row, not one, and the paragraph below used to conflate them.
+
+**Join metadata** (`join_dim`/`join_key` non-NULL) is which dimensions M4a's resolver can turn
+into a display code: exactly eight — `route`, `endpoint_airport_id`, `op_airline_id`,
+`origin_airport_id`, `dest_airport_id`, `origin_city_market_id`, `dest_city_market_id`, and
+`aircraft_type`. Every other dimension carries `join_dim = NULL, join_key = NULL` — there is
+nothing to resolve (a bare `year_month`, say, is already display-ready).
+
+**`filter_only`/`filter_mode`** is a different, narrower split, and the two columns must not be
+conflated: **TWO** dimensions carry a non-NULL `filter_mode` (`route` → `'pair'`,
+`endpoint_airport_id` → `'either'`, both described above), but only **ONE** of those two,
+`endpoint_airport_id`, sets `filter_only = TRUE`. `route` carries `filter_mode = 'pair'` and is
+still fully groupable — `/carrier`'s Top routes table groups on it directly
+(`routesSpec.dimension = "route"`, `app/src/app/carrier/[code]/page.tsx`) and
+`app/smoke.sh` curls `/explore?…d=route…` — because a `'pair'` filter only changes how a
+*filter* over `route` compiles (`least`/`greatest` equality instead of two independent `IN`
+clauses); it says nothing about whether `route` can be a GROUP BY. Every one of the other
+**fourteen** dimensions — including the other seven that DO carry join metadata
+(`op_airline_id`, `origin_airport_id`, and so on) — carries `filter_only = FALSE, filter_mode =
+NULL`, asserted by
+`pipeline/tests/test_pivot_allowlist.py::test_every_other_dimension_is_groupable`, whose own
+assertion is `filter_only == {"endpoint_airport_id"}` — a one-element set, not two. Carrying
+join metadata and being filter-only are independent: `endpoint_airport_id` happens to be both,
+`origin_airport_id` carries join metadata but is fully groupable, and a future either-mode
+dimension with no resolvable code would be filter-only without join metadata.
 
 The measure allowlist encodes the derived-measure rule (see "Measures" above) as *data*
 rather than only as a convention: `pipeline/tests/test_pivot_allowlist.py` asserts no

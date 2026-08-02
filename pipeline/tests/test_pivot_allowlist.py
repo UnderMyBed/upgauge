@@ -13,6 +13,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from pipeline import pivot
 from pipeline.marts import build_database
 from pipeline.pivot import QUERIES_DIR
 from pipeline.tests.test_marts import _warehouse
@@ -26,7 +27,7 @@ def con(tmp_path_factory):
     return duckdb.connect(str(db))
 
 
-def test_all_fourteen_dimensions_are_offered(con):
+def test_all_fifteen_dimensions_are_offered(con):
     keys = {r[0] for r in con.execute("SELECT key FROM meta_pivot_dimensions").fetchall()}
     assert keys == {
         "year_month",
@@ -36,6 +37,7 @@ def test_all_fourteen_dimensions_are_offered(con):
         "origin_airport_id",
         "dest_airport_id",
         "route",
+        "endpoint_airport_id",
         "origin_city_market_id",
         "dest_city_market_id",
         "origin_state",
@@ -162,6 +164,7 @@ RESOLVABLE_DIMENSIONS = {
     "dest_city_market_id": ("dim_city_market", "city_market_id"),
     "aircraft_type": ("dim_aircraft_type", "code"),
     "route": ("dim_airport", "airport_id"),
+    "endpoint_airport_id": ("dim_airport", "airport_id"),
 }
 
 
@@ -203,3 +206,28 @@ def test_load_allowlist_reads_its_sql_from_files_not_string_literals():
         path = QUERIES_DIR / f"{name}.sql"
         assert path.exists(), f"{name}.sql is missing"
         assert "SELECT" in path.read_text().upper()
+
+
+def test_endpoint_dimension_is_filter_only_and_either_mode(con):
+    """Catches: the endpoint dimension shipping as an ordinary groupable dimension,
+    which would double-count every row (ORD->LAX lands in both the ORD and LAX groups)."""
+    dims, _ = pivot.load_allowlist(con)
+    entry = dims["endpoint_airport_id"]
+    assert entry["filter_only"] is True
+    assert entry["filter_mode"] == "either"
+    assert entry["column_expr"] == "origin_airport_id, dest_airport_id"
+
+
+def test_route_is_pair_mode_and_not_filter_only(con):
+    """Catches: flipping route into 'either' mode, which would silently match
+    same-airport rows and re-open the 18,895-seat JFK-LAX inflation."""
+    dims, _ = pivot.load_allowlist(con)
+    assert dims["route"]["filter_mode"] == "pair"
+    assert dims["route"]["filter_only"] is False
+
+
+def test_every_other_dimension_is_groupable(con):
+    """Catches: a stray filter_only=TRUE removing a dimension from the Explorer."""
+    dims, _ = pivot.load_allowlist(con)
+    filter_only = {k for k, v in dims.items() if v["filter_only"]}
+    assert filter_only == {"endpoint_airport_id"}

@@ -1,15 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   airportTotals,
+  airportTrafficQuery,
   carrierRows,
   fetchAirportMix,
-  inclusionExclusion,
-  unionMix,
-  unionSides,
+  toEndpointRows,
   type EndpointRow,
 } from "@/app/airport/[code]/endpoints";
 import { dataAsOf } from "@/lib/db";
-import type { MixRow } from "@/lib/chart/aircraftMix";
 
 /** SEA. Resolved, never hard-coded, everywhere it matters -- pinned here only because these
  * are synthetic rows with no database behind them. */
@@ -29,170 +27,94 @@ function row(p: Partial<EndpointRow> & { carrierId: number; endpointId: number }
 
 // The bug this whole module exists to exclude: an airport is BOTH endpoints. A page built
 // from `origin_airport_id = X` alone renders every stat, every carrier and every chart band
-// plausibly, and is silently about half the airport. Each test below varies the input in the
-// one way that distinguishes the two implementations -- a row that exists only on the
-// arrival side, and a row that exists on both.
-describe("origin-OR-dest, as inclusion-exclusion", () => {
-  it("counts an arrival-only filing that an origin-only query never sees", () => {
-    // LAX -> SEA with no SEA -> LAX counterpart in the window. Under `origin = SEA` this row
-    // does not exist at all, so the union must be 15, not 10.
-    const union = unionSides(
-      [row({ carrierId: 19930, endpointId: PDX, seats: 10 })],
-      [row({ carrierId: 19930, endpointId: LAX, seats: 5 })],
-      [],
+// plausibly, and is silently about half the airport.
+//
+// Through M6 the OR was assembled in TypeScript, as inclusion-exclusion over three pivots, and
+// this file's tests exercised that arithmetic directly (a row seen only on the arrival side, a
+// row seen on both). M7 Task 3 replaced it with the first-class `endpoint_airport_id` filter
+// (M7 Tasks 1-2): the OR, and the same-airport de-duplication, now happen in SQL, on ONE pivot.
+// What TypeScript still has to do is recover, per returned row, WHICH end is the airport and
+// which is "the other one" -- `otherEndpoint`/`toEndpointRows` -- since the vocabulary has no
+// CASE-shaped "other endpoint" column. These tests are that function's replacement for the old
+// inclusion-exclusion suite: same bug class (an airport is both endpoints), tested at the new
+// locus of the logic.
+describe("the other-endpoint airport, derived per row", () => {
+  it("reads the destination as the other endpoint on a departure", () => {
+    // SEA -> PDX: origin is the subject airport, so the other endpoint is the destination.
+    const rows = toEndpointRows(
+      [{ op_airline_id: 19930, origin_airport_id: SEA, dest_airport_id: PDX, seats: 10 }],
+      String(SEA),
     );
-    expect(union.reduce((a, r) => a + r.seats, 0)).toBe(15);
-    expect(union.length).toBe(2);
+    expect(rows[0].endpointId).toBe(PDX);
+    expect(rows[0].seats).toBe(10);
   });
 
-  it("sums the two directions of one route rather than keeping the larger", () => {
-    // SEA->PDX and PDX->SEA are two different filings of the same route. Keyed on
-    // (carrier, endpoint) they collide, so an implementation that Map.set()s instead of
-    // accumulating silently drops one direction -- and still passes the test above.
-    const union = unionSides(
-      [row({ carrierId: 19930, endpointId: PDX, seats: 10 })],
-      [row({ carrierId: 19930, endpointId: PDX, seats: 7 })],
-      [],
+  it("reads the origin as the other endpoint on an arrival", () => {
+    // LAX -> SEA: dest is the subject airport, so the other endpoint is the origin -- an
+    // origin-only reading of this exact row would miss it (and this repo's whole reason for
+    // being both endpoints) entirely.
+    const rows = toEndpointRows(
+      [{ op_airline_id: 19930, origin_airport_id: LAX, dest_airport_id: SEA, seats: 5 }],
+      String(SEA),
     );
-    expect(union.length).toBe(1);
-    expect(union[0].seats).toBe(17);
+    expect(rows[0].endpointId).toBe(LAX);
   });
 
-  it("counts a same-airport filing ONCE, not twice", () => {
-    // Measured, and the reason this third query exists at all: fct_segment_month really does
-    // carry origin = dest rows -- 3,187 of them over the trailing 12 months (2025-05..2026-04)
-    // across 359 airports, 601,573 seats, quarantined rows included (3,182 / 358 / 601,565
-    // without them; invariants.md § Route identity has all four window x quarantine answers).
-    // 18 at SEA alone (12,646 seats). They satisfy `origin = SEA`
-    // AND `dest = SEA`, so origin + dest double-counts them: SEA's real 53,373,806 seats
-    // becomes 53,386,452. The design spec asserts these rows "do not exist"; they do.
-    const union = unionSides(
+  it("reads the airport itself as the other endpoint on a same-airport filing", () => {
+    // Measured: fct_segment_month really carries origin = dest rows -- 18 at SEA alone over
+    // the trailing 12 months, 12,646 seats (docs/data/invariants.md § Route identity has the
+    // full window x quarantine table). Both columns equal the subject airport, so either
+    // branch of `otherEndpoint` must return it, not throw and not return undefined.
+    const rows = toEndpointRows(
+      [{ op_airline_id: 20304, origin_airport_id: SEA, dest_airport_id: SEA, seats: 7 }],
+      String(SEA),
+    );
+    expect(rows[0].endpointId).toBe(SEA);
+  });
+
+  it("leaves both directions of a route as separate rows for the caller to sum", () => {
+    // The old union collapsed SEA->PDX and PDX->SEA into one row by summing at the union
+    // step. There is no union step now: the pivot's own GROUP BY (carrier, origin, dest) keeps
+    // them as two rows sharing one endpointId, and carrierRows/airportTotals do the summing
+    // (see the "aggregating" describe below) -- so this function must NOT try to fold them.
+    const rows = toEndpointRows(
       [
-        row({ carrierId: 19930, endpointId: PDX, seats: 10 }),
-        row({ carrierId: 20304, endpointId: SEA, seats: 7 }),
+        { op_airline_id: 19930, origin_airport_id: SEA, dest_airport_id: PDX, seats: 10 },
+        { op_airline_id: 19930, origin_airport_id: PDX, dest_airport_id: SEA, seats: 7 },
       ],
-      [row({ carrierId: 20304, endpointId: SEA, seats: 7 })],
-      [row({ carrierId: 20304, endpointId: SEA, seats: 7 })],
+      String(SEA),
     );
-    expect(union.reduce((a, r) => a + r.seats, 0)).toBe(17);
-    expect(union.find((r) => r.carrierId === 20304)?.seats).toBe(7);
-  });
-
-  it("refuses an overlap row it never saw on either side", () => {
-    // `both` is by construction a subset of origin AND of dest. If it ever isn't, the
-    // arithmetic below zero is silent: a negative seat count formats as a perfectly ordinary
-    // number under a DATA AS OF badge. Fail loudly instead.
-    expect(() =>
-      inclusionExclusion(
-        { origin: [], dest: [], both: [row({ carrierId: 20304, endpointId: SEA, seats: 7 })] },
-        (r) => `${r.carrierId}\u0000${r.endpointId}`,
-        ["seats"],
-      ),
-    ).toThrow(/overlap row/i);
-  });
-
-  it("skips an overlap row a truncated side no longer carries, rather than 500ing", () => {
-    // Each side is a LIMIT-ed pivot, so a truncated side really can drop a row the overlap
-    // query still returns -- found by the /airport truncation test, which threw here before
-    // `partial` existed. Under truncation the row was counted at most ONCE, so the answer is
-    // 7, not 0: subtracting anyway would show an empty carrier row on a page that is already
-    // disclosing that its totals are partial.
-    const union = unionSides(
-      [row({ carrierId: 20304, endpointId: SEA, seats: 7 })],
-      [],
-      [row({ carrierId: 20304, endpointId: SEA, seats: 7 })],
-      { partial: true },
-    );
-    expect(union.length).toBe(1);
-    expect(union[0].seats).toBe(7);
-  });
-
-  it("still subtracts a full overlap row when nothing was truncated", () => {
-    // `partial` must not become a blanket "skip the third term": with both sides intact the
-    // subtraction is exactly what stops the double count.
-    const union = unionSides(
-      [row({ carrierId: 20304, endpointId: SEA, seats: 7 })],
-      [row({ carrierId: 20304, endpointId: SEA, seats: 7 })],
-      [row({ carrierId: 20304, endpointId: SEA, seats: 7 })],
-      { partial: true },
-    );
-    expect(union[0].seats).toBe(7);
-  });
-
-  it("skips an overlap CELL a truncated mix side no longer carries", () => {
-    // The chart's union is the SAME arithmetic with the same LIMIT-ed sides, and it went to
-    // production without the escape hatch its sibling has. A truncated side that drops a cell
-    // the overlap query still returns reaches inclusionExclusion's throw, which becomes a 500 --
-    // and the proxy has already stamped `public, s-maxage=2592000` on that response, so the CDN
-    // pins the 500 for thirty days. Same fixture shape as the unionSides truncation test above:
-    // under truncation the cell was counted at most once, so 100 is the answer, not 0.
-    const mix = (p: Partial<MixRow> & { month: string; code: string }): MixRow => ({
-      label: p.code,
-      seats: 0,
-      departures: 0,
-      ...p,
-    });
-    const union = unionMix(
-      [mix({ month: "2025-05", code: "614", seats: 100, departures: 1 })],
-      [],
-      [mix({ month: "2025-05", code: "614", seats: 100, departures: 1 })],
-      { partial: true },
-    );
-    expect(union.length).toBe(1);
-    expect(union[0].seats).toBe(100);
-  });
-
-  it("still refuses an unexplained overlap cell when no mix side was truncated", () => {
-    // `partial` must not become a blanket "skip the third term" on the chart side either: with
-    // nothing truncated, an overlap cell absent from a side is a coding error, and a silently
-    // negative band is the failure the throw exists to prevent.
-    const mix = (p: Partial<MixRow> & { month: string; code: string }): MixRow => ({
-      label: p.code,
-      seats: 0,
-      departures: 0,
-      ...p,
-    });
-    expect(() =>
-      unionMix([], [], [mix({ month: "2025-05", code: "614", seats: 100, departures: 1 })]),
-    ).toThrow(/overlap row/i);
-  });
-
-  it("applies the same arithmetic to the chart's (month, type) cells", () => {
-    // The chart is the same union at a different grain. A mix built from origin alone draws
-    // a plausible stacked area that is half the airport, which no eye can catch.
-    const mix = (p: Partial<MixRow> & { month: string; code: string }): MixRow => ({
-      label: p.code,
-      seats: 0,
-      departures: 0,
-      ...p,
-    });
-    const union = unionMix(
-      [mix({ month: "2025-05", code: "614", seats: 100, departures: 1 })],
-      [
-        mix({ month: "2025-05", code: "614", seats: 90, departures: 1 }),
-        mix({ month: "2025-05", code: "888", seats: 50, departures: 1 }),
-      ],
-      [mix({ month: "2025-05", code: "614", seats: 10, departures: 1 })],
-    );
-    const byCode = new Map(union.map((r) => [r.code, r]));
-    expect(byCode.get("614")?.seats).toBe(180);
-    expect(byCode.get("614")?.departures).toBe(1);
-    expect(byCode.get("888")?.seats).toBe(50);
+    expect(rows.length).toBe(2);
+    expect(rows.every((r) => r.endpointId === PDX)).toBe(true);
+    expect(rows.reduce((a, r) => a + r.seats, 0)).toBe(17);
   });
 });
 
-// The chart's union is a SECOND call site of the same arithmetic, fed by three different
-// queries at a different grain, and nothing about the rendered chart can see a 35,088-seat
-// error in a 545-million-seat total. So it is checked here, against the warehouse, where the
-// exact figure is available. Measured for SEA (14747) over 2015-01..2026-04:
+describe("the traffic query", () => {
+  it("filters on endpoint_airport_id, not on a single direction", () => {
+    // The mutant this guards: swapping the filter to origin_airport_id (or dest_airport_id)
+    // reads half the airport, and every OTHER assertion in this file still passes because
+    // nothing else here touches the query shape -- only the warehouse test and page.test.tsx's
+    // full render exercise the actual number.
+    const q = airportTrafficQuery(SEA, "2025-05", "2026-04", 5000);
+    expect(q.filters).toEqual([["endpoint_airport_id", [String(SEA)]]]);
+    expect(q.dimensions).toEqual(["op_airline_id", "origin_airport_id", "dest_airport_id"]);
+  });
+});
+
+// fetchAirportMix is ONE `endpoint_airport_id`-filtered pivot as of M7 Task 3 (no union), and
+// nothing about the rendered chart can see a 35,088-seat error in a 545-million-seat total. So
+// it is checked here, against the warehouse, where the exact figure is available. Measured for
+// SEA (14747) over 2015-01..2026-04:
 //
 //   seats   origin OR dest 545,623,424   origin only 272,924,959   naive origin + dest 545,658,512
 //   cells   2,886 distinct (month, aircraft type) groups
 //
-// A live-database test rather than a fixture, for the reason lib/resolve.ts's header gives:
-// this codebase has no mocks, and the property being checked IS the relationship between three
-// real query results.
-describe("the chart's union, against the warehouse", () => {
+// These figures are unmoved from the M4d-era three-pivot union: the (month, aircraft type)
+// grain never carried a direction, so collapsing three pivots into one changes nothing about
+// what this grain counts. A live-database test rather than a fixture, for the reason
+// lib/resolve.ts's header gives: this codebase has no mocks.
+describe("the chart's mix, against the warehouse", () => {
   it("totals both endpoints, with same-airport filings counted once", async () => {
     const asOf = await dataAsOf();
     const mix = await fetchAirportMix(14747, "2015-01", asOf);
@@ -202,11 +124,10 @@ describe("the chart's union, against the warehouse", () => {
     expect(mix.truncated).toBe(false);
   });
 
-  it("survives a truncated side rather than 500ing under a 30-day cache", async () => {
-    // The real limit is 10,000 and the measured worst case is 4,094 per side (ORD, below), so
-    // this branch is unreachable from production data -- which is exactly why the limit is an
-    // argument. Without it the guard could only be checked by reading, and reading is what
-    // missed it: `fetchAirportTraffic` computed `partial` and `fetchAirportMix` did not.
+  it("survives a truncated result rather than 500ing under a 30-day cache", async () => {
+    // The real limit is 10,000 and the measured worst case is 4,118 (ORD, below), so this
+    // branch is unreachable from production data -- which is exactly why the limit is an
+    // argument.
     const asOf = await dataAsOf();
     const mix = await fetchAirportMix(14747, "2015-01", asOf, 5);
     expect(mix.truncated).toBe(true);
@@ -216,9 +137,9 @@ describe("the chart's union, against the warehouse", () => {
   it("leaves the WORST case in the database inside the row limit", async () => {
     // The headroom assertion, so a BTS refresh that approaches the bound fails a TEST rather
     // than degrading a page -- the treatment MAX_SLUG_SEPARATORS already gets. ORD (13930), not
-    // ATL: measured per-side (month, aircraft type) group counts over 2015-01..2026-04 are ORD
-    // 4,094 origin / 4,089 dest (union 4,118), against ATL's 3,561 / 3,572 and SEA's
-    // 2,832 / 2,801. `truncated` is false only if BOTH sides and the overlap came back short.
+    // ATL: measured (month, aircraft type) group count over 2015-01..2026-04 is 4,118 at ORD,
+    // against ATL's 3,592 and SEA's 2,886 -- checked against the 25 busiest airports by
+    // trailing-12 segment-row count (M7 Task 3), not assumed from ORD alone.
     const asOf = await dataAsOf();
     const mix = await fetchAirportMix(13930, "2015-01", asOf);
     expect(mix.truncated).toBe(false);
@@ -226,7 +147,7 @@ describe("the chart's union, against the warehouse", () => {
   });
 });
 
-describe("aggregating the union", () => {
+describe("aggregating the traffic rows", () => {
   // Ratios of sums, never averages of rows (CLAUDE.md's #1 rule). The fixture is chosen so
   // the two answers are far apart: per-endpoint load factors 0.90 and 0.50 average to 0.70,
   // while the honest 540/1000 is 0.54. An implementation that averaged would show 70%.

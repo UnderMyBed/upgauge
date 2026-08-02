@@ -495,6 +495,9 @@ every row below, and the status on every 308 and 404.
 | `/watch` | 200 | `HTML_CACHE` (1hr) | allow-list is unconditional (no slug to fail) — gate is the probe alone |
 | `/watch/gauge` | 200 | `HTML_CACHE` (1hr) | known preset, `isDataLayerHealthy()` probe succeeded |
 | `/watch/nope` | 404 | `no-store` | not one of the four `PRESETS` |
+| `/airport/SEA?y=2019` | 200 | long cache | fact-present airport, `y` a real calendar year (M7 Task 9) |
+| `/airport/SEA?y=1999` | 200 | `no-store` | airport resolves fine, but `y` is outside the dataset's window |
+| `/airport/SEA?y=nonsense` | 200 | `no-store` | same outcome as an out-of-range year — malformed is not a distinct case |
 
 > The three `/watch` rows above are new in M6 Task 7 and, unlike every row above them, are
 > pinned only by `proxy.test.ts` calling `proxy()` directly — they have **not yet** been
@@ -532,6 +535,87 @@ no check** (M4c's final review found exactly one of those). Five mutants, each a
 
 The last one is the proof that the absence checks are live rather than decorative; the
 fourth is the proof that they are specific.
+
+### `y` on `/airport/:code` — a closed set, so validate it rather than blanket `no-store`
+
+M7 Task 9 gave `/airport/<code>` a second query key, `y=<year>`, selecting one calendar year's
+network map instead of the page's default trailing-12-month view. That is a **second
+cacheability input** on top of the airport-slug resolution every other `ENTITY_ROUTES` row
+already has — the proxy commits to a `Cache-Control` before the page runs, exactly as it does
+for the slug, so `y` needs the identical treatment: decided in `proxy.ts`, before the response
+leaves, never left to the page to discover after the fact.
+
+**The `/search` parallel, stated explicitly, because it is the thing to reach for first and the
+wrong answer here.** `/search`'s `q` is `no-store` **unconditionally** (the section above,
+and `proxy.ts`'s own doc comment on that branch) because `q` is unbounded free text with no
+set of correct answers to check a candidate against — there is no "is this well-formed"
+question short of "never cache" that closes the cache-fill vector a crawler walking the query
+space would open. `y` looks like the same shape (attacker-chosen, arrives on a page route,
+mints a distinct shared-cache entry per value) but differs in the one respect that matters:
+**its legitimate value set is CLOSED** — the calendar years this dataset actually covers, today
+2015 through whatever year `dataAsOf()` falls in. A closed set is exactly what makes
+*validating* the right answer instead of `/search`'s blanket refusal: `lib/year.ts`'s
+`parseYear` rejects anything outside that set structurally, with **no database read at all**,
+so a well-formed year stays exactly as cacheable as the airport page always was, and only a
+malformed or out-of-range value pays the `no-store` cost `/search` pays on every request.
+
+**`parseYear` is deliberately synchronous and cannot ask `dataAsOf()` directly** — that call is
+async, and this function has to run on the request-hot proxy path before anything else does.
+Its lower bound (`EARLIEST_YEAR = 2015`) is hardcoded, matching the `EARLIEST_MONTH = "2015-01"`
+literal every entity page and `/explore` already hardcode (T-100's earliest ingested filing does
+not move the way the *latest* one does with every rebuild, so there is nothing here for a future
+ingest to silently disagree with). Its upper bound is `new Date().getUTCFullYear()` — wall-clock
+time, not a hardcoded `2026` — because BTS files after the fact, so the dataset's `data_as_of`
+can never be ahead of the real calendar; wall-clock time is therefore always at least as large as
+any year this dataset could legitimately contain, and it advances on its own every January with
+no code change. The task brief's own warning was explicit about the failure this avoids: a
+literal `2026` upper bound would start rejecting a real, in-window year the moment `dataAsOf()`
+crossed it, and nothing would fail loudly to say so.
+
+**`proxy.ts` reads `y` off the same raw query string it already captures for `/explore`
+(`RAW_QUERY_HEADER`'s source value, captured once per request), never off
+`request.nextUrl.searchParams`** — the identical rule CLAUDE.md states for the Explorer
+permalink, extended to every query key this file reads rather than only the one it was written
+for. A bare four-digit year has no reserved characters to lose to Next's query normalization the
+way a permalink filter's `,`/`:` do, but the fix that keeps `/explore` alive is "read the one
+preserved raw string once per request," not "re-derive it per key only when a key happens to
+carry delimiters." `app/airport/[code]/page.tsx` itself reads `y` off ordinary `searchParams`,
+the same way `/search` reads `q` — that page-side read is a *different* concern (rendering,
+after the proxy has already decided cacheability) and follows the precedent `SearchPage`'s own
+doc comment states: a bare, delimiter-free value has nothing `searchParams`'s decoding could
+corrupt.
+
+**Cacheability is an AND of two allow-lists, never a negation** — `isCacheable(...)` must
+return `true` (the airport slug resolves to `"ok"` or `"redirect"`, unchanged) **and**
+`parseYear(y).kind !== "invalid"` (`"default"`, no `y` at all, and `"year"`, a real one, are the
+two cacheable outcomes — the same "new outcome? decline by default" safety property
+`isCacheable`'s own allow-list already has for a future third `ParsedYear` kind). `/airport` was
+pulled back OUT of `proxy.ts`'s generic `ENTITY_ROUTES` table for this — the same reason
+`/watch` was never IN it (above): the airport branch's cacheability question no longer fits the
+table's one-resolver shape, so it is its own `if` branch, running before the loop and returning
+early. The matcher entry (`/airport/:code`) is unchanged; only which mechanism answers for it
+moved.
+
+**An invalid `y` is a named error, never a silent fallback to the default view** — the identical
+contract `/explore` already has for an invalid permalink. `/airport/SEA?y=1999` 200s (the
+airport itself is fine) with `unknown year '1999' — this dataset covers 2015–2026`, stated on
+the page and `no-store` on the response; it does not quietly render the trailing-12 default the
+way a lesser implementation might reason "well, *some* view is safer than an error." That
+reasoning is exactly the failure class CLAUDE.md's Explorer section and this file's own 404
+rows both already refuse.
+
+Mutant table (`lib/year.ts`, `proxy.ts`; task-9-brief.md Step 7 — run and reverted, `git status`
+confirmed clean after each):
+
+| # | Mutation | Test(s) reddened |
+|---|---|---|
+| 1 | `parseYear`'s range check removed (accepts any 4-digit string) | `year.test.ts`'s two boundary tests (`EARLIEST_YEAR - 1`, `"9999"`) **and** `proxy.test.ts`'s "declines to cache an airport page with an out-of-range year" |
+| 2 | `/airport` branch in `proxy.ts` set to unconditional `no-store` | `proxy.test.ts`'s "still caches an airport page with a valid year" (**and** four other cache-positive airport tests, confirming the branch is live rather than a no-op) |
+| 3 | `yearTrack` marks every year `partial: false` | `year.test.ts`'s "marks 2026 partial and 2025 complete" |
+
+Mutant 1 is the pair the brief calls out by name: a `no-store`-everywhere implementation would
+pass "declines to cache … out-of-range" *vacuously*, so mutant 2 — the other half — has to
+redden independently for either result to mean anything. It does.
 
 ### What the proxy's query actually costs
 
@@ -577,10 +661,19 @@ both in turn for no reason. Concurrent, the pair costs what its slower half cost
 saving on the page's DB work, for free.** M4d will copy whatever shape is here, so the shape
 is `Promise.all`.
 
-**`/airport/<code>` runs SIX, and that is the price of a filter the pivot cannot express.** An
-airport is both endpoints, so each of its two grains is assembled as `origin + dest −
-(origin ∧ dest)` — three pivots each (`pipeline.md` § M4d). Same method as the table above
-(in-process, warm, median of 8, default threads), on `/airport/SEA`:
+**`/airport/<code>` ran SIX pivots THROUGH M6 — that table below is historical, not current.**
+An airport is both endpoints, and until M7 the pivot could not express that filter directly, so
+each of the page's two grains was assembled as `origin + dest − (origin ∧ dest)` — three pivots
+each. M7 Tasks 1-3 added `endpoint_airport_id` (`filter_only`, `filter_mode='either'`,
+compiling to `(origin_airport_id IN (...) OR dest_airport_id IN (...))`) and collapsed both
+unions to one pivot apiece, so the page now runs **THREE** pivots per request: the carriers
+table/stat-strip pivot (`fetchAirportTraffic`), the fleet-mix chart pivot (`fetchAirportMix`),
+and the network-map pivot (`fetchAirportNetwork`, M7 Task 8) — `page.tsx:269-273`. The six-pivot
+figures below describe a query shape that no longer exists in this codebase; kept for the
+record of what the M7 fix actually removed, not as a description of the page today.
+
+Pre-M7 (Tasks 1-2 not yet landed), in-process, warm, median of 8, default threads, on
+`/airport/SEA`:
 
 | Work | Rows | Warm median |
 |---|---|---|
@@ -592,12 +685,31 @@ airport is both endpoints, so each of its two grains is assembled as `origin + d
 | all six under `Promise.all` | | **54.2 ms** |
 | all six serially | | 64.3 ms |
 
-Concurrency buys much less here than on `/route` (16%, not 33%): six full scans of
-`fct_segment_month` contend for the same buffer pool, so the wave costs more than its slowest
-member. **2.7× `/route`'s DB work per page**, standing, on the pages most likely to be linked.
-A first-class either-endpoint filter in `meta_pivot_dimensions` — one pivot instead of three —
-is the M5 fix; it needs matching composite-filter semantics in `render.ts` and
-`pipeline/pivot.py`, which is why M4d did not take it on.
+Concurrency bought much less here than on `/route` (16%, not 33%): six full scans of
+`fct_segment_month` contended for the same buffer pool, so the wave cost more than its slowest
+member. That was **2.7× `/route`'s DB work per page**, on the pages most likely to be linked —
+the exact cost the M7 either-endpoint filter exists to remove.
+
+**Current shape, re-measured after M7 Task 8** (in-process, warm, median of 8 — first two
+discarded as JIT/cache warm-up, same method as above), through the real exported functions
+(`fetchAirportTraffic`, `fetchAirportMix`, `fetchAirportNetwork`) against the built database, on
+`/airport/SEA`, trailing-12 window for the traffic and network pivots, full window for the mix
+pivot:
+
+| Work | Warm median |
+|---|---|
+| traffic pivot (carriers table + stat strip) | 21.6 ms |
+| mix pivot (fleet chart, full window) | 26.9 ms |
+| network pivot (map) | 22.4 ms |
+| all three under `Promise.all` | **40.0 ms** |
+| all three serially | 68.1 ms |
+
+Concurrency now saves **41%** (68.1 ms → 40.0 ms) — better than the six-pivot page's 16%,
+because three concurrent scans contend for the buffer pool less than six did. Three pivots at
+~22-27 ms apiece, concurrent, costs about what `/route`'s two-pivot page costs (20.2 ms,
+above) plus roughly one more query's worth of contention — a large drop from the six-pivot
+page's 54.2 ms, even though M7 Task 8 then added a third pivot (the network map) that the
+six-pivot count never had to pay for at all.
 
 A direct read-only measurement of the mix query alone, at `threads=2` rather than the default,
 puts it at 30–34 ms; a measurement of this query that omits its thread count and whether the
@@ -677,10 +789,14 @@ writable" the way `/api/pivot`'s route handler does, unless a page ALSO becomes 
 handler, which Task 7 Part B tried and could not do without discarding the page.
 
 **M4d inherited it unchanged and widened its blast radius from one page to four.** `/airport`
-is the worst of them: it runs six pivots (below), so it has the most ways to throw, and its
-proxy resolution succeeds first. M5 Task 7 is what closes as much of this as is honestly
-closeable — Part A below, plus a fallback that narrows every page's exposure window from a
-month to an hour, since the full fix (Part B) turned out not to be reachable at all.
+was the worst of them at the time: through M6 it ran six pivots (above, "`/airport/<code>` ran
+SIX pivots THROUGH M6"), so it had the most ways to throw, and its proxy resolution succeeds
+first. M7 Tasks 1-3 collapsed that to **three** pivots per request (the either-endpoint filter
+removed the inclusion-exclusion union), which narrows `/airport`'s exposure to this same gap
+without closing it — three ways to throw instead of six, not zero. M5 Task 7 is what closes as
+much of this as is honestly closeable — Part A below, plus a fallback that narrows every page's
+exposure window from a month to an hour, since the full fix (Part B) turned out not to be
+reachable at all.
 
 **M5 Task 7, Part A: `/explore`'s missing probe, closed.** Every `ENTITY_ROUTES` row already
 runs a real query (`resolve()`) before choosing a header, and already caught its own exception

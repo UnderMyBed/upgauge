@@ -470,22 +470,105 @@ mark, not only lines.
 
 ## The map
 
-deck.gl `GreatCircleLayer` over a **Natural Earth coastline GeoJSON** — no tiled basemap,
-ever. (The committed mockup substitutes the 737 filing airports as dots, so it depends on no
-external file; production draws the coastline.)
+**Not deck.gl, not MapLibre.** This section's own spec (and, through M7's first cut, this
+line) called for deck.gl's `GreatCircleLayer` over a MapLibre basemap. What shipped (M7 Tasks
+4-8) is a from-scratch, dependency-free, server-rendered SVG engine (`app/src/lib/map/
+{albers,greatCircle,arcs,networkMap,basemap}.ts`, composed by `app/src/components/
+NetworkMap.tsx`) — the same "in the served HTML, visible with JS off" property `Aircraft
+MixChart.tsx` established for M4c's chart, extended to a map: no client charting/mapping
+library ever touches the render path, so the map works with JavaScript off and needs no tile
+budget at all, not merely an untiled one. A great-circle arc over a projected coastline —
+**Natural Earth GeoJSON**, still true — no tiled basemap, ever. (The committed mockup
+substitutes the 737 filing airports as dots, so it depends on no external file; production
+draws the coastline.)
 
 ### Projection
 
-**Composite Albers USA.** Conterminous conic (standard parallels 29.5/45.5, central meridian
-−96), plus **labelled insets for Alaska and Hawai'i**. This is not cosmetic: letting AK and
-HI into a single fit compresses the lower 48 into an unreadable smear — it was tried.
+**Composite Albers USA, five panels** (`app/src/lib/map/albers.ts`). Conterminous conic
+(standard parallels 29.5/45.5, central meridian −96), plus **labelled insets for Alaska,
+Hawai'i, the Pacific (`pac`), and the Caribbean (`car`)** — each panel fit independently to
+its own points, in its own screen rect. Letting AK and HI into a single fit compresses the
+lower 48 into an unreadable smear — it was tried — which is also why `pac` and `car` are their
+own panels rather than folded into `us` or `hi`.
+
+**Longitude is normalized before any panel decision.** Six fact-present airports carry a
+positive longitude — GUM, UAM, ROP, TIQ, SPN, and Alaska's own SYA (Eareckson AS, Shemya, at
++174.11, since the western Aleutians genuinely cross the antimeridian) — and the panel tests
+are all written in western-hemisphere terms, so `normalizeLon` (`lon > 0 ? lon − 360 : lon`)
+runs first at every call site, never only inside one helper. Measurements and the full
+airport list: `docs/data/invariants.md` § Airport coordinates, and the six that are east of
+the antimeridian.
+
+**`regionOf` is ordered most-specific first** (`pac`, `car`, `hi`, `ak`, then `us` as the
+fallback) — reversing that order (testing `us` first) is a real mutant, not a hypothetical:
+`us`'s test is unconditional, so it would swallow every point before the more specific panels
+ever run. Two panels exist precisely because a two-test split (conterminous / Alaska /
+Hawai'i) gets two populations wrong, not just Shemya:
+- **`pac`** holds Guam/Saipan/Tinian/Rota, American Samoa, and Midway — American Samoa sits in
+  the *southern* hemisphere and Midway at 28.2°N, so the mockup's Hawai'i test
+  (`lon < −150 && lat < 30`) caught both, stretching a "Hawai'i" panel to 42° of latitude when
+  Hawai'i itself spans 2.3°.
+- **`car`** holds Puerto Rico and the USVI, which extend the conterminous bounding box in
+  *both* directions at once (east past PQI, Maine, and south of EYW, Key West) — no single
+  rectangle holds them and the lower 48 legibly.
 
 Note for implementers: raw Albers grows northward while screen `y` grows down. The `y` term
-must be negated or the country renders upside down.
+must be negated or the country renders upside down — asserting that two projected points are
+merely *present* does not catch this; only their relative screen order does.
 
 **An arc crossing a panel boundary cannot be a great circle**, so `PDX–ANC` and `PDX–HNL` are
-drawn as straight lines into their inset, and the page says so. Every US map makes this
-compromise; this one admits it.
+drawn as straight lines into their inset, and the page says so — in the legend rail's
+"Arc rendering" group (`LegendRail`'s `map` prop, final whole-branch review: this group did not
+exist through M7 Task 8, so this sentence was aspirational rather than true for one review
+cycle) and in the map's own `aria-label`, which names the exact count of straight-line
+destinations rather than calling every one a great-circle arc (`networkMap.ts`'s
+`describeMap`). Every US map makes this compromise; this one admits it, twice over — once for
+a sighted reader, once for a screen reader.
+
+### Basemap coastline
+
+The committed basemap (`app/geo/ne_110m_us.json` → `app/scripts/build-basemap.mjs` → `app/
+src/lib/map/basemapPaths.generated.ts`) is Natural Earth **1:110m**, which has no polygon at
+all for Guam/CNMI/American Samoa/Midway (`pac`) or Puerto Rico/the USVI (`car`) — both insets
+shipped empty through M7 Task 8. Measured against the real warehouse (trailing 12 months): 74
+of 1,045 fact-present airports reach `car`, 6 reach `pac` — `/airport/SJU` alone drew 65 arcs
+inside a labelled Caribbean frame with no landmass under it, and San Juan is a major airport,
+not an edge case.
+
+**M7 Task 7b fetched a second, finer input for `car` only** (`app/geo/ne_50m_car.json`,
+Natural Earth 1:50m Admin-0 Countries, `SOVEREIGNT == 'United States of America'` AND `NAME
+in ('Puerto Rico', 'U.S. Virgin Is.')` — 2 features). 1:110m's own Admin-0-countries file
+does carry a lone 9-point "Puerto Rico" polygon, but no separate USVI feature at any
+resolution below 1:50m; 1:50m is the first resolution with both as real, multi-island
+features (PR: main island + Vieques + Culebra; USVI: St. Thomas + St. Croix + St. John) —
+confirmed by fetching and inspecting both resolutions before choosing, not assumed.
+`build-basemap.mjs` now reads both committed files and merges their features before the
+existing sort/simplify/project pipeline runs unchanged — no second projection path, no new
+RDP variant. **`pac` is untouched**: still zero committed reference points, a deliberate
+scope decision (6 airports doesn't justify the same fetch-and-filter work `car`'s 74 did),
+and still real rather than hacked around — `project()`'s `us`-fit fallback still renders
+every `pac` arc correctly, just with no coastline under it.
+
+**An empty, labelled inset must not read as a rendering bug to a site visitor.** Now that
+`car` has real coastline, `pac` is the one panel left with a frame and nothing in it — so
+`NetworkMap.tsx` states the gap on the page itself, in a `.foot` caption, whenever a
+network's own points actually reach `pac` (derived from `basemapPathsFor(["pac"]) === ""`,
+never hardcoded, so the caption retires itself the day `pac` gains geometry without a code
+change here).
+
+**`PANEL_RECTS.car` (`albers.ts`) was widened once there was real geometry to check it
+against** — Task 4/7's own open item, carried forward twice with nothing to measure.
+Puerto Rico + the USVI's combined raw-Albers extent under `car`'s own projection parameters
+is ~3.89:1 (wide, not tall — the territories span ~3.4° of longitude against ~0.8° of
+latitude). The original rect was 100×76px (aspect 1.32:1), so `fitPanels`'s `k = min(w/dx,
+h/dy)` bound on width and left the coastline only ~26px tall inside a 76px-tall frame — not
+wrong, but a thin sliver floating in a mostly-empty labelled box. Widened to 296×76px (aspect
+~3.89:1, matching the measured geometry) so both dimensions bind together; height is
+unchanged so the bottom inset row (`ak`/`hi`/`pac`/`car`) keeps one shared baseline.
+`networkMap.ts`'s own `INSET_RECTS.car` (the frame-drawing literal, intentionally duplicated
+from `albers.ts` rather than imported) was updated to match — the two tables drifting would
+mean the drawn frame border no longer matches the rectangle the coastline was actually fit
+to.
 
 ### Arc encoding
 
@@ -499,11 +582,57 @@ compromise; this one admits it.
 Never hue. Thin arcs draw first so heavy ones sit on top. Destination nodes are 2px `--ink`
 (1.3px `--ink-3` below floor); the origin is a 4.5px `--field` disc ringed in `--signal`.
 
-### The year slider
+**A same-airport row is never an arc, on any page, standing rule.** `fct_segment_month`
+really carries rows whose origin and destination are the same airport — 359 of 1,045
+fact-present airports have at least one over the trailing 12 months; ORD alone is 53 rows,
+73,082 seats. Such a row's great circle has zero angular length, and `greatCircle`'s own
+degenerate-endpoint branch (`om < 1e-9`) would emit `steps + 1` identical points — several
+hundred bytes of polyline drawing an invisible mark directly on top of the origin disc. So
+the drawn arc set always excludes any row whose code equals the origin's (`app/src/lib/map/
+networkMap.ts`'s `renderNetworkMap`: ORD draws 267 arcs, not 268) — but the row's seats stay
+in whatever total the map states, passed in separately (`sameAirportSeats`), never derived
+from the already-filtered arc list. A map that dropped these seats from its own total as well
+as from its arcs would disagree with the stat strip directly above it on the same page. Both
+halves are required; shipping one without the other is a defect.
 
-**The one orchestrated motion moment.** A 2015→2026 track that animates the network growing
-and contracting. Nothing else on the site animates. Honours `prefers-reduced-motion` by
-jumping between years instead of tweening.
+**Step count is adaptive, not fixed** (`app/src/lib/map/greatCircle.ts`'s `stepsFor`): points
+scale with the arc's length ON SCREEN (`round(projectedLengthPx / 22)`, floor 4, cap 48), not
+with its angular distance — a 40px hop needs a handful of points and a transcontinental arc
+needs dozens. Measured on ORD's 268 arcs: a flat 48 emits 192,231 bytes of polyline; adaptive
+emits 132,178 with no visible change to the long arcs, and a flat 12 would save more but
+visibly polygonizes them. A great circle cannot cross a panel boundary at all (above), so
+`stepsFor` is only ever consulted for an arc `greatCircle` actually draws — a cross-panel arc
+is the two projected endpoints, straight, regardless of its geographic length.
+
+### The year track
+
+**Superseded on measurement, M7 Task 9 — this used to say "the one orchestrated motion moment,"
+an animated 2015→2026 track tweening the network growing and contracting. That was never built,
+and should not be:** the map that actually shipped (M7 Tasks 4-8) is server-rendered SVG,
+composed the same way the aircraft-mix chart is (`app/src/components/NetworkMap.tsx`,
+`app/src/lib/map/`) — no client charting or mapping library in the render path — so animating
+between years means shipping every year's geometry in one response rather than one page's
+worth. Measured: ORD's arcs alone are ~64,287 bytes of polyline for **one** year (M7 Task 8);
+twelve years would be roughly a megabyte, doubled again because this project's charts ship
+twice per response — body **and** RSC payload (`docs/architecture/hosting.md` § "The SVG is
+emitted twice per response").
+
+**The shipped shape is a track of plain links, one server-rendered permalink per year** —
+`/airport/<code>?y=<year>` (`app/src/lib/year.ts`, `app/src/app/airport/[code]/page.tsx`).
+This is not a downgrade so much as the same principle this product already applies everywhere
+else: "URL-encoded query state on every view; permalinks are the entire growth mechanic"
+(CLAUDE.md). A year tick is a real, shareable, cacheable URL; an animation frame is neither. It
+also honours `prefers-reduced-motion` for free — there is nothing to tween — and works with JS
+off, like every other view in this app.
+
+`y`'s value set is closed (the calendar years the dataset covers), which is exactly what lets
+`proxy.ts` validate it before the response is cacheable rather than falling back to `/search`'s
+blanket `no-store` — full reasoning in `docs/architecture/hosting.md` § "`y` on `/airport/:code`
+— a closed set, so validate it rather than blanket `no-store`". The current year's tick is
+marked partial when `dataAsOf()` falls short of December — presenting a four-month year
+identically to a twelve-month one is the same class of false claim as M6's "First appearance
+since 2015" (CLAUDE.md); the track states which months the partial year actually covers rather
+than leaving the asterisk to speak for itself.
 
 ---
 
@@ -606,10 +735,14 @@ lines, same empty state, same rail. What differs is only what the subject forces
 Three design consequences worth pinning, because each is somewhere a page could quietly stop
 being honest:
 
-- **`/airport`'s Explorer link is two links, and says so.** The pivot cannot express
-  `origin OR dest`, so the page offers `departures from SEA` and `arrivals into SEA` as
-  *halves*. Linking one silently would half-satisfy "every insight row is one click from the raw
-  rows" while pointing at a query that is not the page's.
+- **`/airport`'s Explorer link is ONE link, as of M7 Task 3.** Through M6 the pivot could not
+  express `origin OR dest` and the page offered `departures from SEA` and `arrivals into SEA`
+  as halves, saying so. `endpoint_airport_id` (filter-only, `filter_mode='either'`) now
+  compiles that OR directly, so the page filters on it and links to the identical query — that
+  link reproduces the page's own 53,373,806-seat SEA figure, not a half of it. A prior revision
+  of this bullet described the two-half shape as current after M7 shipped; it wasn't — the
+  reason to note it here is that "every insight row is one click from the raw rows" now holds
+  without qualification on this page, which it did not through M6.
 - **`/carrier`'s two caveats render whether or not there is a table.** They qualify the
   *subject*, not the rows, and 39% of carriers have no rows in the trailing 12. They also sit in
   the content column, not the rail: the rail already carries a generic version on every data
@@ -727,7 +860,9 @@ Unannounced, non-negotiable.
 
 - **Focus** is a 2px `--signal` outline at 1px offset, on every interactive element. Never
   removed.
-- **Reduced motion**: the year slider steps instead of tweening; nothing else moves.
+- **Reduced motion**: N/A for the year track as shipped — M7 Task 9 superseded the animated
+  slider the mockup shows with plain, cacheable `?y=<year>` links (see § The map), which carry
+  no motion to begin with, reduced or otherwise. Nothing on the site currently animates.
 - **Responsive**: the legend rail collapses below 920px and moves beneath the content.
   Tables scroll horizontally within their own container — the page body never does.
 - **Contrast**: every text token measured above. Non-text UI boundaries ≥ 3:1.

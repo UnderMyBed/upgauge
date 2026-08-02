@@ -1,8 +1,30 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+
+// `next/headers` throws "called outside a request scope" when invoked directly in a test
+// (verified against this exact vitest setup before writing this mock) -- the same reason
+// explore/page.tsx's default export, which also calls `headers()` unconditionally, is never
+// unit-tested directly here, only its `*View` counterpart is. AirportPage now needs `headers()`
+// on its redirect branch (fix round 1: preserving the raw query string across a
+// case-normalization redirect), and that branch IS already exercised by the pre-existing
+// "redirects a lowercase code" test below, so it has to be mocked rather than left real. The
+// factory awaits a dynamic `import()` of the real module for `RAW_QUERY_HEADER` -- a top-level
+// `import` binding referenced inside `vi.mock` would break on hoisting, since `vi.mock` calls
+// are hoisted above every import statement in the file.
+import { describe, expect, it, vi } from "vitest";
+vi.mock("next/headers", async () => {
+  const { RAW_QUERY_HEADER } = await import("@/lib/rawQuery");
+  // Default: an empty raw query, matching a bare `/airport/<code>` request with no `?` at
+  // all -- this is what keeps every PRE-EXISTING test in this file (none of which anticipated
+  // `headers()` being called at all) passing unmodified, including the lowercase-redirect test
+  // whose digest must stay exactly `/airport/SEA`, no stray `?`.
+  return { headers: vi.fn(async () => new Headers({ [RAW_QUERY_HEADER]: "" })) };
+});
+
 import { render, screen } from "@testing-library/react";
-import AirportPage, { AirportView, generateMetadata } from "@/app/airport/[code]/page";
+import { headers } from "next/headers";
+import AirportPage, { AirportView, airportRedirectTarget, generateMetadata } from "@/app/airport/[code]/page";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
+import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { decode } from "@/lib/pivot/urlstate";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
 
@@ -23,6 +45,31 @@ async function catchDigest(code: string): Promise<string> {
 function renderSEA() {
   return AirportPage({ params: Promise.resolve({ code: "SEA" }) });
 }
+
+/** `y` follows the same fold-to-first-element convention `/search`'s `q` reader uses --
+ * `undefined` renders the bare page (no `y` at all, the default trailing-12 view), a string
+ * renders `?y=<value>`. */
+function renderSEAWithYear(y: string) {
+  return AirportPage({
+    params: Promise.resolve({ code: "SEA" }),
+    searchParams: Promise.resolve({ y }),
+  });
+}
+
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
 
 // EVERY figure below is measured against upgauge.duckdb for SEA (airport_id 14747) over the
 // trailing 12 months 2025-05..2026-04, and every one of them is a figure an ORIGIN-ONLY page
@@ -142,21 +189,23 @@ describe("/airport/<code>", () => {
     expect(line).toMatch(/2025-\d\d → /);
   });
 
-  it("offers the departing and arriving halves in the Explorer, and says they are halves", async () => {
-    // The Explorer CANNOT express this page's query: its filters are AND-ed and there is no
-    // either-endpoint dimension (see endpoints.ts). So the page offers the two halves it CAN
-    // express and labels them as halves -- a single link claiming "the identical query" would
-    // be a lie about the one thing this page does differently from /route.
+  it("offers the single either-endpoint query in the Explorer, and does not claim it can't", async () => {
+    // M7 Task 3 added `endpoint_airport_id` (filter_only, filter_mode='either'), which
+    // compiles to an OR across origin and dest -- so this page now offers ONE permalink, not
+    // two halves. This is the replacement for a test that asserted a mandated PHRASE
+    // ("cannot express both endpoints in one query") rather than the fact: the phrase was
+    // exactly what M7 falsified, and a test built only on the phrase's absence could pass
+    // against a page that also dropped the link, or linked to the wrong filter, or reverted to
+    // an origin-only query -- so this asserts the fact (the link's filter) AND the absence of
+    // the false claim, independently.
     const { container } = render(await renderSEA());
     const allowlist = await loadAllowlist();
-    const read = (name: RegExp) => {
-      const href = screen.getByRole("link", { name }).getAttribute("href") ?? "";
-      expect(href.startsWith("/explore?")).toBe(true);
-      return decode(href.slice("/explore?".length), allowlist);
-    };
-    expect(read(/departures/i).filters).toEqual([["origin_airport_id", ["14747"]]]);
-    expect(read(/arrivals/i).filters).toEqual([["dest_airport_id", ["14747"]]]);
-    expect(container.textContent).toMatch(/cannot express both endpoints in one query/i);
+    const link = screen.getByRole("link", { name: /open in the explorer/i });
+    const href = link.getAttribute("href") ?? "";
+    expect(href.startsWith("/explore?")).toBe(true);
+    const decoded = decode(href.slice("/explore?".length), allowlist);
+    expect(decoded.filters).toEqual([["endpoint_airport_id", ["14747"]]]);
+    expect(container.textContent).not.toMatch(/cannot express both endpoints in one query/i);
   });
 
   it("shows the legend rail, with the fleet-shading group the chart needs", async () => {
@@ -197,10 +246,9 @@ describe("/airport/<code> with nothing in the trailing 12 months", () => {
 });
 
 describe("/airport/<code> truncation disclosure", () => {
-  // SEA's real trailing-12 query returns 374 (carrier, destination) groups departing and 293
-  // arriving, against a 5,000 limit no airport in this database reaches (measured worst case is
-  // ORD at 879 origin / 855 dest per side; 959 is ORD's union), so nothing in production data
-  // exercises this branch. `AirportView` takes the limit
+  // SEA's real trailing-12 traffic pivot returns 666 (carrier, origin, dest) groups, against a
+  // 5,000 limit no airport in this database reaches (measured worst case is ORD at 1,732, M7
+  // Task 3), so nothing in production data exercises this branch. `AirportView` takes the limit
   // as an explicit parameter for exactly that reason -- same split, same justification, as
   // RouteView's.
   async function view(limit?: number, mixLimit?: number) {
@@ -209,7 +257,7 @@ describe("/airport/<code> truncation disclosure", () => {
     return await AirportView({ airport: r.airport, limit, mixLimit });
   }
 
-  it("discloses when a side hits the row limit", async () => {
+  it("discloses when the traffic pivot hits the row limit", async () => {
     render(await view(2));
     expect(screen.getByText(/top 2 /i)).toBeDefined();
   });
@@ -220,10 +268,9 @@ describe("/airport/<code> truncation disclosure", () => {
   });
 
   it("discloses a truncated CHART separately, and does not 500 for being big", async () => {
-    // The chart is a SECOND union over three SEPARATE LIMIT-ed pivots, and it shipped without
-    // the `partial` guard its sibling has: a truncated side drops a cell the overlap query
-    // still returns, inclusionExclusion throws, and the page 500s -- with the proxy's
-    // `public, s-maxage=2592000` already on the response, so the CDN pins that 500 for a month.
+    // The chart is a SEPARATE pivot from the table's, at a different grain and a different
+    // limit, so either can be short while the other is whole -- `fetchAirportMix` sets its own
+    // `truncated` from its own pivot's row count, same shape as `fetchAirportTraffic`'s.
     // Rendering at all is half the assertion here; saying so is the other half.
     render(await view(undefined, 5));
     expect(screen.getByText(/chart .*hit its 5-row limit/i)).toBeDefined();
@@ -236,9 +283,40 @@ describe("/airport/<code> truncation disclosure", () => {
   });
 });
 
+describe("airportRedirectTarget", () => {
+  it("appends the raw query string verbatim", () => {
+    expect(airportRedirectTarget("SEA", "y=2019")).toBe("/airport/SEA?y=2019");
+  });
+
+  it("appends nothing for an empty raw query, rather than a stray '?'", () => {
+    expect(airportRedirectTarget("SEA", "")).toBe("/airport/SEA");
+  });
+});
+
 describe("/airport/<code> redirect and 404", () => {
   it("redirects a lowercase code permanently (308) to the canonical URL", async () => {
     expect(await catchDigest("sea")).toBe("NEXT_REDIRECT;replace;/airport/SEA;308;");
+  });
+
+  // Fix round 1 finding: this redirect used to build `/airport/SEA` from the slug alone,
+  // silently dropping every query key -- `/airport/sea?y=2019` 308ed to `/airport/SEA` with
+  // no `y` at all, and the destination silently rendered the trailing-12 default instead of
+  // 2019, with no error anywhere. Asserting the digest STRING (not merely that a redirect
+  // fired, which the test immediately above already does and would keep passing under the
+  // bug) is what catches this -- "a redirect happened" is true both before and after the fix.
+  it("preserves a valid year query param across the case-normalization redirect", async () => {
+    vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: "y=2019" }));
+    expect(await catchDigest("sea")).toBe("NEXT_REDIRECT;replace;/airport/SEA?y=2019;308;");
+  });
+
+  it("preserves an INVALID year across the same redirect, rather than silently dropping it", async () => {
+    // A redirect that stripped a bad `y` would be the identical silent-fallback bug in a
+    // different coat: the canonical URL must render the SAME named error the direct URL does
+    // (pinned separately in the "M7 Task 9" describe block above, for /airport/SEA?y=1999
+    // directly), not quietly default to the trailing-12 view because the redirect erased the
+    // evidence that anything was ever wrong.
+    vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: "y=1999" }));
+    expect(await catchDigest("sea")).toBe("NEXT_REDIRECT;replace;/airport/SEA?y=1999;308;");
   });
 
   it("404s an unknown code", async () => {
@@ -269,5 +347,142 @@ describe("/airport/<code> canonical metadata (M5, Task 2)", () => {
   it("returns no canonical for a code that cannot resolve at all", async () => {
     const meta = await generateMetadata({ params: Promise.resolve({ code: "ZZZZ" }) });
     expect(meta.alternates?.canonical).toBeUndefined();
+  });
+});
+
+// M7 Task 9: `/airport/<code>?y=<year>` selects a calendar year for the network map instead of
+// the default trailing-12 view, and the track of year links that lets a reader move between
+// them. Every figure below is measured against the real warehouse -- asOf is 2026-04 at the
+// time this was written, so 2026 is the partial year and 2015-2025 are complete.
+describe("/airport/<code>?y=<year> -- the year track (M7 Task 9)", () => {
+  it("renders one link per calendar year plus the default, none missing or duplicated", async () => {
+    const asOf = await dataAsOf();
+    const asOfYear = Number(asOf.slice(0, 4));
+    const { container } = render(await renderSEA());
+    const links = [...container.querySelectorAll(".year-track a")];
+    // EARLIEST_YEAR (2015) through asOf's own year, inclusive, plus the "Trailing 12 months"
+    // link -- 12 years at 2026-04 (2015..2026), so 13 links total. Derived from asOf, not
+    // hardcoded, so this does not need editing after a future rebuild.
+    expect(links.length).toBe(asOfYear - 2015 + 1 + 1);
+    expect(links[0].textContent).toBe("Trailing 12 months");
+    const yearTexts = links.slice(1).map((a) => a.textContent);
+    expect(yearTexts[0]).toBe("2015");
+    expect(new Set(yearTexts).size).toBe(yearTexts.length);
+  });
+
+  it("marks the default view current when no y is given, and no year link current", async () => {
+    const { container } = render(await renderSEA());
+    const links = [...container.querySelectorAll(".year-track a")];
+    expect(links[0].getAttribute("aria-current")).toBe("page");
+    expect(links.slice(1).every((a) => a.getAttribute("aria-current") === null)).toBe(true);
+  });
+
+  it("marks the SELECTED year current, and only that one", async () => {
+    const { container } = render(await renderSEAWithYear("2019"));
+    const links = [...container.querySelectorAll(".year-track a")];
+    const y2019 = links.find((a) => a.textContent?.startsWith("2019"));
+    expect(y2019?.getAttribute("aria-current")).toBe("page");
+    expect(links.filter((a) => a !== y2019).every((a) => a.getAttribute("aria-current") === null)).toBe(
+      true,
+    );
+  });
+
+  it("states the map's own calendar-year window, distinct from the table's trailing 12", async () => {
+    const { container } = render(await renderSEAWithYear("2019"));
+    const line = container.querySelector(".window")?.textContent ?? "";
+    expect(line).toMatch(/trailing 12 months/i);
+    expect(line).toContain("map: calendar year 2019");
+  });
+
+  it("draws the map over the selected year's own data, not the trailing 12", async () => {
+    // SEA carries 4,744 route-month rows in 2019 (measured against the real warehouse) -- a
+    // regression that kept feeding the map the trailing-12 window regardless of `y` would still
+    // render A map here, just the wrong one, so this only proves a map renders; the window-line
+    // test above is what proves it's the RIGHT one.
+    const { container } = render(await renderSEAWithYear("2019"));
+    expect(container.querySelector(".map")).not.toBeNull();
+  });
+
+  it("marks a complete prior year's own tick without a partial asterisk", async () => {
+    const { container } = render(await renderSEA());
+    const links = [...container.querySelectorAll(".year-track a")];
+    const y2015 = links.find((a) => a.textContent?.startsWith("2015"));
+    expect(y2015?.textContent).toBe("2015");
+  });
+
+  it("marks the current, partial year's own tick with an asterisk", async () => {
+    const asOf = await dataAsOf();
+    const asOfYear = Number(asOf.slice(0, 4));
+    const { container } = render(await renderSEA());
+    const links = [...container.querySelectorAll(".year-track a")];
+    const current = links.find((a) => a.textContent?.startsWith(String(asOfYear)));
+    expect(current?.textContent).toBe(`${asOfYear}*`);
+  });
+
+  it("discloses the partial year in words, naming the exact month asOf stops at", async () => {
+    // Catches: presenting a 4-month year identically to a 12-month one (CLAUDE.md's own
+    // description of this exact failure class, "First appearance since 2015"). Derived from
+    // `asOf`'s own month, not a hardcoded "April" -- this stays correct after a rebuild that
+    // advances `asOf` to a different month.
+    const asOf = await dataAsOf();
+    const asOfYear = asOf.slice(0, 4);
+    const monthName = MONTH_NAMES[Number(asOf.slice(5, 7)) - 1];
+    const { container } = render(await renderSEA());
+    const footers = [...container.querySelectorAll(".foot")].map((f) => f.textContent ?? "");
+    expect(
+      footers.some((t) => t.includes(`${asOfYear} is a partial year`) && t.includes(monthName)),
+    ).toBe(true);
+  });
+
+  it("states the partial map window when the SELECTED year is the current, partial one", async () => {
+    const asOf = await dataAsOf();
+    const asOfYear = Number(asOf.slice(0, 4));
+    const monthName = MONTH_NAMES[Number(asOf.slice(5, 7)) - 1];
+    const { container } = render(await renderSEAWithYear(String(asOfYear)));
+    const line = container.querySelector(".window")?.textContent ?? "";
+    expect(line).toContain(
+      `map: calendar year ${asOfYear} — partial, filed through ${monthName} ${asOfYear} only`,
+    );
+  });
+
+  it("does not call a complete prior year partial in the map window line", async () => {
+    const { container } = render(await renderSEAWithYear("2019"));
+    const line = container.querySelector(".window")?.textContent ?? "";
+    expect(line).not.toContain("partial");
+  });
+
+  it("renders a named error for a year outside the dataset, never a silent fallback", async () => {
+    const { container } = render(await renderSEAWithYear("1999"));
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/can.t be shown/i);
+    expect(screen.getByRole("alert").textContent).toBe(
+      "unknown year '1999' — this dataset covers 2015–2026",
+    );
+    // The default view's own content -- stats, table, track -- must not render alongside the
+    // error; a page that rendered both would be the "guessed a default anyway" failure this
+    // contract exists to forbid.
+    expect(container.querySelector(".stats")).toBeNull();
+    expect(container.querySelector(".year-track")).toBeNull();
+  });
+
+  it("renders a named error for malformed input the same way as an out-of-range year", async () => {
+    const { container } = render(await renderSEAWithYear("nonsense"));
+    expect(screen.getByRole("alert").textContent).toContain("unknown year 'nonsense'");
+    expect(container.querySelector(".stats")).toBeNull();
+  });
+
+  it("still shows DATA AS OF on the error page", async () => {
+    render(await renderSEAWithYear("1999"));
+    expect(screen.getByText(/DATA AS OF/)).toBeDefined();
+  });
+
+  it("upper bound of the named error's range is derived, not the literal string '2026'", async () => {
+    // The task brief's own example text is "this dataset covers 2015-2026" -- pinning ONLY that
+    // literal would pass even if the implementation hardcoded it, which is exactly the "future
+    // rebuild needs a code change" failure this task exists to avoid. This test instead derives
+    // the expected bound from dataAsOf() the same way the page must.
+    const asOf = await dataAsOf();
+    const asOfYear = asOf.slice(0, 4);
+    const { container } = render(await renderSEAWithYear("1999"));
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(`2015–${asOfYear}`);
   });
 });

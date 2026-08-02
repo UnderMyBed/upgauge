@@ -270,3 +270,40 @@ def test_output_column_names_match_across_grouping_modes(con):
     op_cols = [d[0] for d in con.execute(op_sql, op_params).description]
     ml_cols = [d[0] for d in con.execute(ml_sql, ml_params).description]
     assert op_cols == ml_cols
+
+
+# M7 Task 2: endpoint_airport_id also spans two columns, but unlike route -- ONE route pair,
+# least()/greatest() equality -- its two columns are ALTERNATIVES, compiled to an OR.
+# filter_only is the other half of the same catalog row: accepted in a filter, rejected as a
+# grouping dimension, since grouping by it would double-count every segment row into both its
+# origin's group and its dest's group.
+def test_either_mode_filter_compiles_to_an_or_across_both_columns(con):
+    """Catches: compiling `either` through the single-column branch (origin only), which is
+    the SILENT half of an airport query -- SEA reads 26,710,000 seats instead of 53,373,806
+    and every row still renders perfectly."""
+    sql, params = render_pivot(q(filters=(("endpoint_airport_id", ("14747",)),)), con)
+    assert "(origin_airport_id IN ($f0_0) OR dest_airport_id IN ($f0_0))" in sql
+    assert params["f0_0"] == "14747"
+
+
+def test_either_mode_filter_ors_multiple_values_inside_each_side(con):
+    sql, params = render_pivot(
+        q(filters=(("endpoint_airport_id", ("14747", "13930")),)), con
+    )
+    assert "(origin_airport_id IN ($f0_0, $f0_1) OR dest_airport_id IN ($f0_0, $f0_1))" in sql
+    assert params["f0_0"] == "14747"
+    assert params["f0_1"] == "13930"
+
+
+def test_filter_only_dimension_rejected_as_a_grouping_dimension(con):
+    """Catches: allowing endpoint_airport_id in `dimensions`, which double-counts every row."""
+    with pytest.raises(PivotError, match="cannot be grouped by; it is filter-only"):
+        render_pivot(q(dimensions=("endpoint_airport_id",)), con)
+
+
+def test_route_still_compiles_as_a_least_greatest_pair_not_an_or(con):
+    """Catches: the new `either` branch swallowing `pair` -- which would make a route filter
+    match same-airport rows again (18,895 seats on JFK-LAX)."""
+    sql, params = render_pivot(q(filters=(("route", ("12478-12892",)),)), con)
+    assert "least(route_key_low, route_key_high) = $f0_0a" in sql
+    assert " OR dest_airport_id IN " not in sql

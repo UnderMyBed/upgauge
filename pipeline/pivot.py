@@ -150,10 +150,27 @@ def load_allowlist(
     """
     dims = {
         r[0]: dict(
-            zip(("key", "label", "column_expr", "grain", "join_dim", "join_key"), r, strict=True)
+            zip(
+                (
+                    "key",
+                    "label",
+                    "column_expr",
+                    "grain",
+                    "join_dim",
+                    "join_key",
+                    "filter_only",
+                    "filter_mode",
+                ),
+                r,
+                strict=True,
+            )
         )
         for r in con.execute((QUERIES_DIR / "catalog_dimensions.sql").read_text()).fetchall()
     }
+    for entry in dims.values():
+        # DuckDB already returns a Python bool here; the explicit coercion documents the
+        # contract and keeps `is True`/`is False` assertions honest against a driver change.
+        entry["filter_only"] = bool(entry["filter_only"])
     meas = {
         r[0]: dict(zip(("key", "label", "is_additive", "expr"), r, strict=True))
         for r in con.execute((QUERIES_DIR / "catalog_measures.sql").read_text()).fetchall()
@@ -161,16 +178,23 @@ def load_allowlist(
     return dims, meas
 
 
-def _validate_dimension(key: str, dims: dict[str, dict], grain: str) -> dict:
+def _validate_dimension(
+    key: str, dims: dict[str, dict], grain: str, for_grouping: bool = False
+) -> dict:
     """Look up `key` on the dimension allowlist and check it against the requested grain.
 
     This is the ONE place a dimension key is checked, for both the dimension list and every
     filter key -- so an unvalidated string can reach neither a SELECT/GROUP BY slot nor a
-    filter's identifier slot.
+    filter's identifier slot. `for_grouping` is only True at the grouping-dimension call
+    site: a `filter_only` dimension (`endpoint_airport_id`) is accepted in a filter but
+    rejected as a grouping dimension, since grouping by it would put one segment row into
+    both its origin's group and its dest's group and double-count on summing.
     """
     entry = dims.get(key)
     if entry is None:
         raise PivotError(f"unknown dimension {key!r}")
+    if for_grouping and entry["filter_only"]:
+        raise PivotError(f"dimension {key!r} cannot be grouped by; it is filter-only")
     if entry["grain"] not in ("both", grain):
         raise PivotError(
             f"dimension {key!r} is {entry['grain']!r}-grain, not offered at {grain!r} grain "
@@ -244,7 +268,9 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
 
     dims, meas = load_allowlist(con)
 
-    dim_entries = [_validate_dimension(key, dims, q.grain) for key in q.dimensions]
+    dim_entries = [
+        _validate_dimension(key, dims, q.grain, for_grouping=True) for key in q.dimensions
+    ]
     measure_entries = [_validate_measure(key, meas) for key in q.measures]
 
     # column_expr is already the real column name(s) on the fact table (e.g. 'op_airline_id',
@@ -285,6 +311,32 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
                 params[pname] = value
                 placeholders.append(f"${pname}")
             filter_clauses.append(f"{columns[0]} IN ({', '.join(placeholders)})")
+            continue
+
+        # An `either` dimension's two columns are ALTERNATIVES, not a pair: the value list is
+        # shared by both sides, so one parameter per value serves both IN-lists. This is what
+        # lets ONE pivot express `origin = X OR dest = X` -- the OR /airport used to assemble
+        # arithmetically from three pivots (inclusion-exclusion), and which no AND-ed filter
+        # can express. Same-airport rows satisfy both sides and are counted ONCE by the OR,
+        # which is exactly what the third inclusion-exclusion term existed to achieve.
+        #
+        # Branch on filter_mode, not on column count: `route` also spans two columns but
+        # means the OPPOSITE thing (one route pair, least()/greatest() equality) -- if an
+        # `either` OR ever swallowed `route`'s filter, same-airport rows would match again
+        # and reopen the measured 18,895-seat inflation on JFK-LAX this function's `pair`
+        # branch exists to prevent.
+        if entry["filter_mode"] == "either":
+            if len(columns) != 2:
+                raise PivotError(
+                    f"dimension {key!r} is 'either'-mode but spans {len(columns)} columns"
+                )
+            placeholders = []
+            for j, value in enumerate(values):
+                pname = f"f{i}_{j}"
+                params[pname] = value
+                placeholders.append(f"${pname}")
+            list_sql = ", ".join(placeholders)
+            filter_clauses.append(f"({columns[0]} IN ({list_sql}) OR {columns[1]} IN ({list_sql}))")
             continue
 
         # A composite dimension names more than one key column -- `route` is
@@ -396,7 +448,10 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
 #: until op_airline_id's ORDER BY expression was made to match its GROUP BY expression; and
 #: (M4b Task 3) a composite-dimension filter on `route`, single- and multi-value, pinning
 #: the least()/greatest() rendering both pipeline/pivot.py and app/src/lib/pivot/render.ts
-#: must emit identically.
+#: must emit identically; and (M7 Task 2) a filter on the filter-only `endpoint_airport_id`
+#: dimension, single- and multi-value, pinning the OR rendering across both its columns --
+#: the case `route`'s two goldens above exist to prove is a DIFFERENT compilation, not the
+#: same one reused.
 _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
     (
         "single_dimension_segment",
@@ -512,6 +567,32 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
             time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
             limit=50, grouping="operating",
             filters=(("route", ("12478-12892", "10140-14747")),),
+        ),
+    ),
+    (
+        "filter_either_endpoint_airport",
+        "M7 Task 2: a filter on the filter-only `endpoint_airport_id` dimension, whose two "
+        "columns (origin_airport_id, dest_airport_id) are ALTERNATIVES rather than a pair -- "
+        "compiles to an OR across both columns, not route's least()/greatest() equality. "
+        "This is what lets ONE pivot express 'this airport at either end' instead of the "
+        "three-pivot inclusion-exclusion /airport assembles today.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
+            limit=50, grouping="operating",
+            filters=(("endpoint_airport_id", ("14747",)),),
+        ),
+    ),
+    (
+        "filter_either_endpoint_airport_multiple",
+        "Two airport ids in one either-mode filter. Both values are OR'd across BOTH sides "
+        "using the same parameter names, not one param per side -- $f0_0 and $f0_1 each "
+        "appear in both the origin_airport_id and dest_airport_id IN-lists.",
+        PivotQuery(
+            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
+            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
+            limit=50, grouping="operating",
+            filters=(("endpoint_airport_id", ("14747", "13930")),),
         ),
     ),
 ]
