@@ -99,7 +99,7 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 
 import { fitPanels, normalizeLon, project, regionOf } from "../src/lib/map/albers.ts";
@@ -338,6 +338,20 @@ ${pointsLiteral}
 // NOT when `loadReferencePointsAndFits`/`round3` are imported for a test
 // (`basemap.test.ts`), which must not have the side effect of rewriting the committed
 // generated artifact as a side effect of running the unit suite.
-if (import.meta.url === `file://${process.argv[1]}`) {
+//
+// `pathToFileURL`, NOT `file://${process.argv[1]}`. The naive form string-compares a URL
+// against a raw filesystem path, and those differ the moment the path contains anything a
+// URL must percent-encode -- a single space in the checkout path is enough. Measured:
+// argv[1] `/tmp/dir with space/guard.mjs` against import.meta.url
+// `file:///tmp/dir%20with%20space/guard.mjs` -- the naive comparison is FALSE and `main()`
+// silently never runs.
+//
+// That failure is worse than it looks, which is why this carries a comment. The script would
+// exit 0 having written NOTHING, and `make verify`'s basemap step (`make basemap` followed by
+// `git diff --exit-code --stat` on the generated artifact) would then PASS -- not because the
+// artifact reproduced, but because nothing regenerated it. The reproducibility gate would
+// degrade to vacuous without ever going red. Found by M7's final re-review; recorded on
+// CLAUDE.md's M8 list before being fixed here.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   main();
 }
