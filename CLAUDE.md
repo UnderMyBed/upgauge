@@ -655,15 +655,19 @@ in M7 Tasks 1-3, described above, and neither owes M8 anything further beyond th
 6. **Three findings M7's final re-review raised and the owner deliberately parked**, recorded
    here because the review artifacts that held them are git-ignored and would otherwise take
    the rulings with them. None blocks anything; all three are cheap.
-   - **`make basemap`'s entry guard can make `make verify`'s basemap check vacuous.**
-     `app/scripts/build-basemap.mjs` gates `main()` on ``import.meta.url === `file://${process.argv[1]}` ``,
-     string-comparing a URL against a raw path. That breaks on any checkout path needing
-     percent-encoding — a single space is enough. If it ever mis-fires, `make basemap` exits 0
-     having written **nothing**, and the `git diff --exit-code` that follows then passes
-     *because nothing was regenerated*: the reproducibility gate degrades to vacuous instead
-     of failing loudly. It fires correctly on the current checkout. Fix is one line —
-     `pathToFileURL(process.argv[1]).href`. This is the sharpest of the three: it is a gate
-     that can stop testing anything without ever going red.
+   - ~~`make basemap`'s entry guard can make `make verify`'s basemap check vacuous.~~
+     **DONE** — `app/scripts/build-basemap.mjs` now gates `main()` on
+     `pathToFileURL(process.argv[1]).href`, not on ``import.meta.url === `file://${process.argv[1]}` ``.
+     The naive form string-compared a URL against a raw path, which diverge the moment the
+     path contains anything a URL must percent-encode; **one space in the checkout path was
+     enough**. Reproduced end to end with the real generator run from
+     `…/space check/app/scripts/build-basemap.mjs`: the fixed guard wrote 102,799 bytes, the
+     old guard **exited 0 having written nothing**. That is what made it worse than an
+     ordinary bug — `make verify`'s basemap step is `make basemap` followed by
+     `git diff --exit-code` on the artifact, so the old form would have passed the gate *because
+     nothing regenerated it*, degrading a reproducibility check to vacuous without ever going
+     red. Both directions are pinned: the guard still does **not** fire on import, verified by
+     the artifact's sha256 being unchanged across a full `basemap` test run.
    - **`/carrier`'s either-endpoint caveat is pinned by a word, not a fact.**
      `app/src/app/carrier/[code]/page.test.tsx` asserts `/filter-only/i` against the copy. The
      copy is true today (verified in `render.ts`, `pipeline/pivot.py` and the catalog row), but
