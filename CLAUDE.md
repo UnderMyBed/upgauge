@@ -606,6 +606,14 @@ Every rewritten or new assertion in this wave was mutant-verified: reverted to t
 behavior, confirmed red for the named reason and nothing else, then reverted back. `git status`
 clean of every mutation before this account was written.
 
+Gates re-run after the fix wave, all green: `make check` **474** (unchanged — no Python
+touched), `make app-check` **780** (773 at Task 10, +7 from this wave — 3 in `LegendRail.
+test.tsx`, 3 in `networkMap.test.ts`, 1 in `basemap.test.ts`), `make app-smoke` **267 checks**
+(265 at Task 10, +2 — the coastline-presence pair), `make verify` unchanged in shape (`parquet:
+17 artifacts byte-identical`, `database: 10 objects identical`, basemap zero-diff against the
+committed, corrected artifact), `make goldens` byte-identical (this wave touched no pivot
+template).
+
 Next: **M8.** What it owes, each identified by the work above rather than guessed. (Two closed
 M6-carried items are retired from this list entirely rather than kept as strikethrough noise:
 the either-endpoint filter and the truncation-arithmetic question it made moot both finished
