@@ -652,6 +652,31 @@ in M7 Tasks 1-3, described above, and neither owes M8 anything further beyond th
    is a better use of the slot; M4c already made the gauge story the differentiator.
 5. **OG cards** — social-preview images per entity page, for the links `/search` and the
    sitemap now make shareable.
+6. **Three findings M7's final re-review raised and the owner deliberately parked**, recorded
+   here because the review artifacts that held them are git-ignored and would otherwise take
+   the rulings with them. None blocks anything; all three are cheap.
+   - **`make basemap`'s entry guard can make `make verify`'s basemap check vacuous.**
+     `app/scripts/build-basemap.mjs` gates `main()` on ``import.meta.url === `file://${process.argv[1]}` ``,
+     string-comparing a URL against a raw path. That breaks on any checkout path needing
+     percent-encoding — a single space is enough. If it ever mis-fires, `make basemap` exits 0
+     having written **nothing**, and the `git diff --exit-code` that follows then passes
+     *because nothing was regenerated*: the reproducibility gate degrades to vacuous instead
+     of failing loudly. It fires correctly on the current checkout. Fix is one line —
+     `pathToFileURL(process.argv[1]).href`. This is the sharpest of the three: it is a gate
+     that can stop testing anything without ever going red.
+   - **`/carrier`'s either-endpoint caveat is pinned by a word, not a fact.**
+     `app/src/app/carrier/[code]/page.test.tsx` asserts `/filter-only/i` against the copy. The
+     copy is true today (verified in `render.ts`, `pipeline/pivot.py` and the catalog row), but
+     a future change making `endpoint_airport_id` groupable would leave the page's stated
+     reason false and this test green — the same shape as the seventh test above. The fact is
+     one line away: assert `loadAllowlist()`'s `endpoint_airport_id.filterOnly`.
+   - **Four stale comments**, each contradicted by code in the same repo: `networkMap.ts`'s
+     "pac/car" fallback note (`car` has had committed geometry since Task 7b), the generator's
+     claim that `round3` is "exported so `basemap.test.ts` can round the same way" (it never
+     imports it), `smoke.sh`'s "this page's **two** Explorer permalinks" (there is one now, and
+     its filter is `endpoint_airport_id`), and `/airport`'s "`hasNetwork` mirrors `hasMix`
+     exactly" (it does not — the windows differ, which is why the page has a branch for
+     `hasMix && !hasNetwork`).
 
 ## Architecture
 
