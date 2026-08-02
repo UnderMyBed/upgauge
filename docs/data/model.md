@@ -247,12 +247,20 @@ into a display code: exactly eight — `route`, `endpoint_airport_id`, `op_airli
 `aircraft_type`. Every other dimension carries `join_dim = NULL, join_key = NULL` — there is
 nothing to resolve (a bare `year_month`, say, is already display-ready).
 
-**`filter_only`/`filter_mode`** is a different, narrower split: only TWO dimensions set
-`filter_only = TRUE` — `route` (`filter_mode = 'pair'`) and `endpoint_airport_id`
-(`filter_mode = 'either'`), both described above. Every one of the other thirteen dimensions —
-including the other seven that DO carry join metadata (`op_airline_id`, `origin_airport_id`,
-and so on) — carries `filter_only = FALSE, filter_mode = NULL`, asserted by
-`pipeline/tests/test_pivot_allowlist.py::test_every_other_dimension_is_groupable`. Carrying
+**`filter_only`/`filter_mode`** is a different, narrower split, and the two columns must not be
+conflated: **TWO** dimensions carry a non-NULL `filter_mode` (`route` → `'pair'`,
+`endpoint_airport_id` → `'either'`, both described above), but only **ONE** of those two,
+`endpoint_airport_id`, sets `filter_only = TRUE`. `route` carries `filter_mode = 'pair'` and is
+still fully groupable — `/carrier`'s Top routes table groups on it directly
+(`routesSpec.dimension = "route"`, `app/src/app/carrier/[code]/page.tsx`) and
+`app/smoke.sh` curls `/explore?…d=route…` — because a `'pair'` filter only changes how a
+*filter* over `route` compiles (`least`/`greatest` equality instead of two independent `IN`
+clauses); it says nothing about whether `route` can be a GROUP BY. Every one of the other
+**fourteen** dimensions — including the other seven that DO carry join metadata
+(`op_airline_id`, `origin_airport_id`, and so on) — carries `filter_only = FALSE, filter_mode =
+NULL`, asserted by
+`pipeline/tests/test_pivot_allowlist.py::test_every_other_dimension_is_groupable`, whose own
+assertion is `filter_only == {"endpoint_airport_id"}` — a one-element set, not two. Carrying
 join metadata and being filter-only are independent: `endpoint_airport_id` happens to be both,
 `origin_airport_id` carries join metadata but is fully groupable, and a future either-mode
 dimension with no resolvable code would be filter-only without join metadata.

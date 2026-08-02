@@ -213,10 +213,12 @@ mutation run before it counts as coverage. `/route` also runs its two pivots und
 `/aircraft/<slug>`** — on M4b's composition and M4c's chart, plus the routing tier that makes
 them real. Each one has exactly one thing it could not inherit:
 
-- **`/airport` is both endpoints, and that changes every figure on it.** The pivot cannot
-  express `origin OR dest` (separate dimensions, filters AND-ed), so the page assembles
-  `origin + dest − (origin ∧ dest)` over **three** pivots per grain, six per page (54.2 ms
-  against `/route`'s 20.2). The third term is not a formality: `fct_segment_month` really
+- **`/airport` is both endpoints, and that changes every figure on it.** At M4d (through M6) the
+  pivot could not express `origin OR dest` (separate dimensions, filters AND-ed), so the page
+  assembled `origin + dest − (origin ∧ dest)` over **three** pivots per grain, six per page
+  (54.2 ms against `/route`'s 20.2) — **M7 Tasks 1-3 built the either-endpoint filter
+  (`endpoint_airport_id`) this lacked and collapsed the six pivots to one per grain, three per
+  page**; see M7, below. The third term is not a formality: `fct_segment_month` really
   carries same-airport rows (**3,187 rows / 601,573 seats over the trailing 12 months,
   quarantined rows included** — `docs/data/invariants.md` § Route identity tabulates all four
   window × quarantine answers, which differ by 4x, so never quote one unlabelled), and dropping it

@@ -163,10 +163,11 @@ function ArcRendering() {
       </div>
       <div className="lrow">
         <em>
-          Most arcs are true great-circle paths. One that would cross into an inset panel
-          (Alaska, Hawai‘i, the Pacific or the Caribbean) is drawn as a straight line into
-          that inset instead -- a great circle is discontinuous across a panel boundary, so
-          every US network map makes this compromise; this one draws it rather than hiding it.
+          Most arcs are true great-circle paths. One that would cross a panel boundary --
+          conterminous US, Alaska, Hawai‘i, the Pacific or the Caribbean, in either direction
+          -- is drawn as a straight line instead: a great circle is discontinuous across a
+          panel boundary, so every US network map makes this compromise; this one draws it
+          rather than hiding it.
         </em>
       </div>
     </div>

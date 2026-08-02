@@ -1764,9 +1764,15 @@ has not built yet") — missed until Task 8's doc sweep.
 
 Task 4 gave the builder its first two callers, on `/carrier/<code>`: a **Top routes** table (the
 builder used directly, DL touches 1,873 distinct routes over the trailing 12 months) and a **Top
-origin airports** table, headed exactly that and never "airports served" — the pivot has no
-either-endpoint filter (backlog item 1, below), so an honest heading is the only fix available
-until that filter exists. Full account: this file's own M4d section, "M6 Task 4 gave this page
+origin airports** table, headed exactly that and never "airports served" — at M6, the pivot had
+no either-endpoint filter at all (M6 backlog item 1), so an honest heading was the only fix
+available. **M7 Tasks 1-3 built that filter (`endpoint_airport_id`), and the heading is still
+"Top origin airports" today, for a different reason**: the dimension is `filter_only`, so
+`render.ts`/`pipeline.py` both reject it as a GROUP BY (grouping by it would put one segment row
+in both its origin's group and its dest's group and double-count on summing) — it can narrow a
+query to one fixed airport (which is exactly how `/airport/<code>` uses it) but not rank many
+airports, which requires grouping BY airport. The table's own footer states this
+(`app/src/app/carrier/[code]/page.tsx`). Full account: this file's own M4d section, "M6 Task 4 gave this page
 its Top-N builder's first two callers."
 
 ### Task 5 — the four preset queries, and a bug Task 5 shipped and Task 6 found

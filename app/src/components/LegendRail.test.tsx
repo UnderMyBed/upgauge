@@ -128,9 +128,11 @@ describe("LegendRail", () => {
     // rendered, `map` or not) already contains that exact phrase for its own `n` glyph, so an
     // unscoped match would be ambiguous between the two groups.
     expect(screen.getByText(/dotted, muted -- below the 30-departure floor/i)).toBeDefined();
-    // The straight-line-into-inset fact system.md claims "the page says so" for -- it must
-    // actually be true, not merely asserted in a doc.
-    expect(screen.getByText(/straight line into that inset/i)).toBeDefined();
+    // The straight-line-across-a-panel-boundary fact system.md claims "the page says so" for
+    // -- it must actually be true, not merely asserted in a doc. Direction-agnostic wording:
+    // re-review finding 4 found the old "into an inset panel" phrasing false for every
+    // inset-origin airport (ANC, HNL, SJU, GUM), whose cross-panel arcs go the other way.
+    expect(screen.getByText(/straight line instead/i)).toBeDefined();
   });
 
   it("draws the map legend's swatches from the ink tokens, not copied hex", () => {

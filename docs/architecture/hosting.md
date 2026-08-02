@@ -789,10 +789,14 @@ writable" the way `/api/pivot`'s route handler does, unless a page ALSO becomes 
 handler, which Task 7 Part B tried and could not do without discarding the page.
 
 **M4d inherited it unchanged and widened its blast radius from one page to four.** `/airport`
-is the worst of them: it runs six pivots (below), so it has the most ways to throw, and its
-proxy resolution succeeds first. M5 Task 7 is what closes as much of this as is honestly
-closeable — Part A below, plus a fallback that narrows every page's exposure window from a
-month to an hour, since the full fix (Part B) turned out not to be reachable at all.
+was the worst of them at the time: through M6 it ran six pivots (above, "`/airport/<code>` ran
+SIX pivots THROUGH M6"), so it had the most ways to throw, and its proxy resolution succeeds
+first. M7 Tasks 1-3 collapsed that to **three** pivots per request (the either-endpoint filter
+removed the inclusion-exclusion union), which narrows `/airport`'s exposure to this same gap
+without closing it — three ways to throw instead of six, not zero. M5 Task 7 is what closes as
+much of this as is honestly closeable — Part A below, plus a fallback that narrows every page's
+exposure window from a month to an hour, since the full fix (Part B) turned out not to be
+reachable at all.
 
 **M5 Task 7, Part A: `/explore`'s missing probe, closed.** Every `ENTITY_ROUTES` row already
 runs a real query (`resolve()`) before choosing a header, and already caught its own exception

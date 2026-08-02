@@ -147,18 +147,25 @@ function sameAirportNote(seats: number): string | null {
  *
  * `crossPanelCount` is NOT cosmetic (final whole-branch review, Important #5): a great circle
  * is discontinuous across a panel boundary, so `renderNetworkMap` draws those destinations as
- * straight lines into their inset instead (system.md's own rule) -- calling ALL of them
+ * straight lines across the boundary instead (system.md's own rule) -- calling ALL of them
  * "great-circle arcs" is wrong for exactly those, and a screen-reader user gets no other
- * account of the map at all. `0` (the common case -- most airports reach no inset) keeps the
- * sentence exactly as before; only a nonzero count changes the wording, and it names the exact
- * number rather than a vague "some". */
+ * account of the map at all. `0` (the common case -- most airports have no cross-panel
+ * destination) keeps the sentence exactly as before; only a nonzero count changes the wording,
+ * and it names the exact number rather than a vague "some".
+ *
+ * Direction is NOT part of the claim (re-review finding 4): the boundary a destination crosses
+ * can run either way -- most origins are conterminous and cross INTO an inset (PDX-HNL), but an
+ * inset-origin subject (ANC, HNL, SJU, GUM) has destinations that cross OUT of its own inset
+ * into the conterminous panel instead. "Into an inset panel" was true only for the first case
+ * and false for the second, on the subject's own arcs -- the wording below names the boundary,
+ * never a panel kind, so it holds for both directions. */
 function describeMap(input: NetworkMapInput, drawn: ArcDatum[], crossPanelCount: number): string {
   const note = sameAirportNote(input.sameAirportSeats);
   const arcsDesc =
     crossPanelCount === 0
       ? `${drawn.length} destination${drawn.length === 1 ? "" : "s"} drawn as great-circle arcs, thinnest to heaviest by seats.`
       : `${drawn.length} destination${drawn.length === 1 ? "" : "s"} drawn thinnest to heaviest by seats -- ` +
-        `${drawn.length - crossPanelCount} as great-circle arcs, ${crossPanelCount} as straight lines into an inset panel (a great circle cannot cross a panel boundary).`;
+        `${drawn.length - crossPanelCount} as great-circle arcs, ${crossPanelCount} as straight lines across a panel boundary (a great circle cannot cross one).`;
   return [`Network map of ${input.origin.code}'s scheduled service, ${input.window}.`, arcsDesc, note]
     .filter((s): s is string => s !== null)
     .join(" ");
@@ -239,7 +246,7 @@ export function renderNetworkMap(input: NetworkMapInput): string {
     let path: [number, number][];
     if (crossPanel) {
       // A great circle cannot cross a panel boundary -- the projection is discontinuous
-      // there -- so this is drawn as a straight line into the inset instead (system.md).
+      // there -- so this is drawn as a straight line across the boundary instead (system.md).
       path = [originXY, destXY];
     } else {
       const steps = stepsFor(Math.hypot(destXY[0] - originXY[0], destXY[1] - originXY[1]));

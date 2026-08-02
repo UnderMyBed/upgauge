@@ -100,6 +100,21 @@ function fixtureReachingHawaii(): NetworkMapInput {
   return pdxToHnlFixture();
 }
 
+/** HNL -> ORD: the REVERSE of pdxToHnlFixture -- origin is the inset (Hawai'i), destination is
+ * conterminous. Re-review finding 4's fixture: the straight line this draws crosses OUT of
+ * HNL's own inset into the `us` panel, not "into an inset panel" the way PDX-HNL's does. A
+ * description that names a panel KIND ("into an inset") rather than the boundary itself reads
+ * true on pdxToHnlFixture and false here -- the same shape as the M5 route-cell trap CLAUDE.md
+ * warns every claim needs the fixture that disagrees, not just the one that happens to agree. */
+function hnlToOrdFixture(): NetworkMapInput {
+  return {
+    origin: originArc("HNL"),
+    arcs: [destArc("ORD")],
+    window: "2015-01 → 2026-04",
+    sameAirportSeats: 0,
+  };
+}
+
 /** Two conterminous destinations only -- fits will carry exactly one panel, `us`, so no
  * inset frame (Alaska/Hawai'i/Pacific/Caribbean) should ever appear. */
 function conterminousOnlyFixture(): NetworkMapInput {
@@ -216,11 +231,11 @@ describe("renderNetworkMap", () => {
 
   // Final whole-branch review, Important #5: the aria-label used to call EVERY destination a
   // great-circle arc unconditionally, which is wrong for a cross-panel one (drawn as a
-  // straight line into its inset -- the test above, "draws a cross-panel arc as a straight
-  // line," already proves the drawn geometry; this is the accessible TEXT saying something
-  // different from what actually got drawn). A falsifiable pair, the same shape M4c's own
-  // annotation test used: the ALL-conterminous fixture must still say "great-circle arcs"
-  // plainly, and the cross-panel fixture must NOT claim that of its one destination.
+  // straight line across the panel boundary -- the test above, "draws a cross-panel arc as a
+  // straight line," already proves the drawn geometry; this is the accessible TEXT saying
+  // something different from what actually got drawn). A falsifiable pair, the same shape
+  // M4c's own annotation test used: the ALL-conterminous fixture must still say "great-circle
+  // arcs" plainly, and the cross-panel fixture must NOT claim that of its one destination.
   it("says 'great-circle arcs' when every destination genuinely is one", () => {
     const svg = renderNetworkMap(fixture()); // ORD -> SEA, JFK: both conterminous
     const label = svg.match(/aria-label="([^"]*)"/)![1];
@@ -233,6 +248,19 @@ describe("renderNetworkMap", () => {
     const label = svg.match(/aria-label="([^"]*)"/)![1];
     expect(label).toContain("straight line");
     expect(label).not.toContain("1 destination drawn as great-circle arcs");
+  });
+
+  // Re-review finding 4: the description used to say every cross-panel arc is drawn "into an
+  // inset panel," which is true for a conterminous origin (PDX-HNL, above) but false for an
+  // INSET origin -- HNL, ANC, SJU and GUM all have destinations whose straight line crosses
+  // OUT of the origin's own inset into `us`, not into any inset at all. Catches: reintroducing
+  // direction-specific wording ("into an inset panel" / "into that inset") anywhere the
+  // description or aria-label names the crossing, rather than naming the boundary itself.
+  it("does not claim a cross-panel arc goes 'into an inset' when the ORIGIN is the inset one", () => {
+    const svg = renderNetworkMap(hnlToOrdFixture()); // HNL -> ORD: inset origin, straight line
+    const label = svg.match(/aria-label="([^"]*)"/)![1];
+    expect(label).toContain("straight line");
+    expect(label).not.toMatch(/into (an|that) inset/i);
   });
 
   it("renders the injected basemap when present and omits it when absent", () => {
