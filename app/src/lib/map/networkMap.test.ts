@@ -152,6 +152,17 @@ describe("renderNetworkMap", () => {
     expect(svg).toContain('stroke-dasharray="1 3"');
   });
 
+  // Minor finding, final whole-branch review: a solid arc (above both the load-factor and
+  // departure floors, `strokeFor`'s `dash: ""` branch) used to still emit
+  // `stroke-dasharray=""` -- browsers ignore it (identical to the attribute's absence), but
+  // it is invalid SVG and cost ~5 KB of no-op bytes on ORD's 267 polylines. The attribute
+  // should be OMITTED entirely for a solid arc, not emitted empty.
+  it("omits stroke-dasharray entirely for a solid arc, rather than emitting it empty", () => {
+    const svg = renderNetworkMap(fixture()); // ORD -> SEA, JFK: both solid, well above floor
+    expect(svg).not.toContain('stroke-dasharray=""');
+    expect(svg).not.toContain("stroke-dasharray");
+  });
+
   it("draws a cross-panel arc as a straight line, not a great circle", () => {
     // Catches: running gc() across a panel boundary. A great circle cannot cross
     // one -- the projection is discontinuous there -- so PDX-HNL must be 2 points.
@@ -201,6 +212,27 @@ describe("renderNetworkMap", () => {
     const svg = renderNetworkMap(fixture());
     expect(svg).toContain('role="img"');
     expect(svg).toMatch(/aria-label="[^"]+"/);
+  });
+
+  // Final whole-branch review, Important #5: the aria-label used to call EVERY destination a
+  // great-circle arc unconditionally, which is wrong for a cross-panel one (drawn as a
+  // straight line into its inset -- the test above, "draws a cross-panel arc as a straight
+  // line," already proves the drawn geometry; this is the accessible TEXT saying something
+  // different from what actually got drawn). A falsifiable pair, the same shape M4c's own
+  // annotation test used: the ALL-conterminous fixture must still say "great-circle arcs"
+  // plainly, and the cross-panel fixture must NOT claim that of its one destination.
+  it("says 'great-circle arcs' when every destination genuinely is one", () => {
+    const svg = renderNetworkMap(fixture()); // ORD -> SEA, JFK: both conterminous
+    const label = svg.match(/aria-label="([^"]*)"/)![1];
+    expect(label).toContain("great-circle arcs");
+    expect(label).not.toContain("straight line");
+  });
+
+  it("does NOT call a cross-panel destination a great-circle arc in the aria-label", () => {
+    const svg = renderNetworkMap(pdxToHnlFixture()); // PDX -> HNL: Hawai'i panel, straight line
+    const label = svg.match(/aria-label="([^"]*)"/)![1];
+    expect(label).toContain("straight line");
+    expect(label).not.toContain("1 destination drawn as great-circle arcs");
   });
 
   it("renders the injected basemap when present and omits it when absent", () => {

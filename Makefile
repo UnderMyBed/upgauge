@@ -42,7 +42,7 @@ build:  ## Run sql/02_marts/ in order -> upgauge.duckdb
 goldens:  ## Regenerate the Explorer contract fixtures from the reference implementation
 	$(UV) run python -m pipeline.pivot --write-goldens
 
-basemap:  ## Regenerate the pre-projected basemap (app/src/lib/map/basemapPaths.generated.ts) from the committed app/geo/ne_110m_us.json
+basemap:  ## Regenerate the pre-projected basemap (app/src/lib/map/basemapPaths.generated.ts) from the two committed inputs, app/geo/ne_110m_us.json and app/geo/ne_50m_car.json
 	$(MISE) node --no-warnings app/scripts/build-basemap.mjs
 
 dev:  ## Next.js dev server

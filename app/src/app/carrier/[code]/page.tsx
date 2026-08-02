@@ -304,11 +304,19 @@ export async function CarrierView({
   // measures[0] descending and defaults grouping to "operating" -- the same subject-is-the-
   // grain choice `query` above makes explicitly, so these inherit it without restating it.
   //
-  // originsSpec is ORIGIN ONLY, not "airports served": the pivot has no either-endpoint filter
-  // (an origin-OR-dest question -- that is M6 backlog item 1, not built), so a carrier's
-  // destination-only airports are invisible to this table. The heading below says "origin" and
-  // the page states the limitation in words -- the same failure shape as /airport's measured
-  // 26,710,000-vs-53,373,806 seats when a union term was dropped (CLAUDE.md).
+  // originsSpec is ORIGIN ONLY, not "airports served" -- and NOT because there is no
+  // either-endpoint filter. M7 Task 3 built one, `endpoint_airport_id` (filter_only,
+  // filter_mode='either'), and /airport/<code> uses it exactly this way: filter to one fixed
+  // airport, group by something else (op_airline_id there). This table's shape is the reverse
+  // -- it must GROUP BY airport to rank many of them -- and `endpoint_airport_id` is
+  // `filter_only`, so render.ts/pipeline/pivot.py both reject it as a grouping dimension
+  // (Task 2's `for_grouping` guard: grouping by it would put one segment row in both its
+  // origin's group and its dest's group and double-count on summing). So this table can only
+  // ever be origin-only OR dest-only, never either-endpoint, until a groupable version of the
+  // dimension exists -- not on any current backlog list. The heading below says "origin" and the
+  // page states the real limitation in words -- the same failure shape as /airport's measured
+  // 26,710,000-vs-53,373,806 seats when a union term was dropped (CLAUDE.md), but a different
+  // cause from the one this comment used to name.
   const routesSpec: TopNSpec = {
     grain: "route",
     dimension: "route",
@@ -450,9 +458,11 @@ export async function CarrierView({
                 />
                 <p className="foot">
                   This table counts departures from each airport as the ORIGIN only, not
-                  either-endpoint activity -- the pivot filters origin and destination
-                  separately, and there is no either-endpoint filter yet (M6 backlog). An
-                  airport {carrier.code} only ever flies INTO does not appear here.
+                  either-endpoint activity -- ranking airports means grouping BY airport, and
+                  the M7 either-endpoint dimension (endpoint_airport_id) is filter-only, so it
+                  can narrow a query to one fixed airport but cannot be the dimension a table is
+                  grouped and ranked by. An airport {carrier.code} only ever flies INTO does not
+                  appear here.
                 </p>
                 <p className="foot">
                   <a href={topNPermalink(originsSpec)}>

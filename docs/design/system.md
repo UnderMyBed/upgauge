@@ -517,8 +517,13 @@ must be negated or the country renders upside down — asserting that two projec
 merely *present* does not catch this; only their relative screen order does.
 
 **An arc crossing a panel boundary cannot be a great circle**, so `PDX–ANC` and `PDX–HNL` are
-drawn as straight lines into their inset, and the page says so. Every US map makes this
-compromise; this one admits it.
+drawn as straight lines into their inset, and the page says so — in the legend rail's
+"Arc rendering" group (`LegendRail`'s `map` prop, final whole-branch review: this group did not
+exist through M7 Task 8, so this sentence was aspirational rather than true for one review
+cycle) and in the map's own `aria-label`, which names the exact count of straight-line
+destinations rather than calling every one a great-circle arc (`networkMap.ts`'s
+`describeMap`). Every US map makes this compromise; this one admits it, twice over — once for
+a sighted reader, once for a screen reader.
 
 ### Basemap coastline
 
@@ -730,10 +735,14 @@ lines, same empty state, same rail. What differs is only what the subject forces
 Three design consequences worth pinning, because each is somewhere a page could quietly stop
 being honest:
 
-- **`/airport`'s Explorer link is two links, and says so.** The pivot cannot express
-  `origin OR dest`, so the page offers `departures from SEA` and `arrivals into SEA` as
-  *halves*. Linking one silently would half-satisfy "every insight row is one click from the raw
-  rows" while pointing at a query that is not the page's.
+- **`/airport`'s Explorer link is ONE link, as of M7 Task 3.** Through M6 the pivot could not
+  express `origin OR dest` and the page offered `departures from SEA` and `arrivals into SEA`
+  as halves, saying so. `endpoint_airport_id` (filter-only, `filter_mode='either'`) now
+  compiles that OR directly, so the page filters on it and links to the identical query — that
+  link reproduces the page's own 53,373,806-seat SEA figure, not a half of it. A prior revision
+  of this bullet described the two-half shape as current after M7 shipped; it wasn't — the
+  reason to note it here is that "every insight row is one click from the raw rows" now holds
+  without qualification on this page, which it did not through M6.
 - **`/carrier`'s two caveats render whether or not there is a table.** They qualify the
   *subject*, not the rows, and 39% of carriers have no rows in the trailing 12. They also sit in
   the content column, not the rail: the rail already carries a generic version on every data
@@ -851,7 +860,9 @@ Unannounced, non-negotiable.
 
 - **Focus** is a 2px `--signal` outline at 1px offset, on every interactive element. Never
   removed.
-- **Reduced motion**: the year slider steps instead of tweening; nothing else moves.
+- **Reduced motion**: N/A for the year track as shipped — M7 Task 9 superseded the animated
+  slider the mockup shows with plain, cacheable `?y=<year>` links (see § The map), which carry
+  no motion to begin with, reduced or otherwise. Nothing on the site currently animates.
 - **Responsive**: the legend rail collapses below 920px and moves beneath the content.
   Tables scroll horizontally within their own container — the page body never does.
 - **Contrast**: every text token measured above. Non-text UI boundaries ≥ 3:1.

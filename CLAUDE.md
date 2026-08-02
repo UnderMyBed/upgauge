@@ -510,9 +510,10 @@ carried, uncorrected, into `greatCircle.ts`'s own code comment; the real, measur
 the actual 960px-wide served page is **64,287** — a transcontinental arc projects to only
 ~700px there, so the adaptive step count never reaches its own 48-step cap at all, which the
 spec's wider assumption did not anticipate. `/carrier/DL`'s documented page weight (131,316)
-was **2× the real, measured figure (262,697)** — the M6 Task 4 Top-N tables landing in the
-same window that number was last written, never reflected afterward; every other page-weight
-figure below was re-measured, not assumed carried over. Two code comments (`networkMap.ts`,
+was **HALF the real, measured figure (262,697)** — the real figure is roughly 2× the stale
+one, not the other way around — the M6 Task 4 Top-N tables landing in the same window that
+number was last written, never reflected afterward; every other page-weight figure below was
+re-measured, not assumed carried over. Two code comments (`networkMap.ts`,
 `build-basemap.mjs`'s generated-output template) still described `car` as a subject-derived
 fallback panel after Task 7b gave it committed geometry — corrected, `make basemap` re-run,
 artifact changed only in that header comment. `app/smoke.sh` gained a nine-check network-map
@@ -539,6 +540,71 @@ milestone's own worst case, three pivots deep), `/airport/ATL` 133,959 → **300
 (measured — the ~2× drift above). Pages the map never touches moved only by M7's catalog
 growth flowing into every page's embedded allowlist: `/route/JFK-LAX` 98,459 → **98,832**,
 `/aircraft/B737-8` 105,358 → **105,799**, `/search?q=Portland` 10,715 → **10,908**.
+
+**Final whole-branch review: one Critical, seven Important, five Minor, one fix wave.** The
+Critical was M6's own failure shape recurring one milestone later — **M7 built the
+either-endpoint filter and left every claim that it doesn't exist standing, including on two
+shipped pages.** `/airport/<code>` printed 53,373,806 and then offered two Explorer half-links
+each showing 26,710,000 — its own documented "silently about half the airport" figure — under
+copy reading "the Explorer cannot express both endpoints in one query." `/carrier/<code>` said
+"there is no either-endpoint filter yet (M6 backlog)," naming a backlog item this same commit
+retires. Both are now ONE permalink (`/airport`) or a corrected reason (`/carrier`'s Top
+origin-airports table stays origin-only because ranking requires *grouping* by the endpoint
+dimension and `endpoint_airport_id` is `filter_only` — a different, still-true reason from the
+one that used to be printed). The test that pinned the old claim
+(`page.test.tsx`, `/cannot express both endpoints/i`) was the **seventh** test found unable to
+fail for the reason it claimed in this milestone alone (M7 Tasks 1, 4, 2, 6 and 7 already
+found five; Task 8 found a sixth, `basemap.test.ts`'s in-bounds-only fixture) — a mandated
+phrase, pinned by an assertion on the phrase, surviving the exact change that falsified it,
+M6's `/watch/new-routes` shape again. Replaced with an assertion on the fact (the offered permalink's own filter) and the
+absence of the false claim, independently mutant-verified. The same claim was also standing in
+`system.md`, `features.md` (×2) and `hosting.md`; all four corrected.
+
+Seven Important findings, all fixed in the same wave: `hosting.md`'s "/airport runs SIX
+pivots" table described a query shape M7 Task 3 deleted (re-measured against the real,
+current three-pivot shape: 21.6/26.9/22.4 ms individually, **40.0 ms** concurrent against 68.1
+serial, a 41% saving); `pipeline.md`'s Task 7 section stated the WRONG per-page fit rule in
+bold present tense (the union recommendation Task 8 disproved) and cited a `basemap.test.ts`
+fixture Task 8 had already found vacuous — corrected in place rather than left for a reader to
+reach the true account 60 lines later; `basemap.ts`/`build-basemap.mjs`/`Makefile` all still
+said `car` "always emits \"\"\"" or is generated from one input, when Task 7b gave it two real
+committed `<path>`s from a second input file; the legend rail had **no arc group at all** on a
+page that draws arcs encoding three independent facts (width/seats, dash/load-factor,
+dotted-muted/departure-floor) nowhere else explained — added, mirroring how M4c added
+`fleetMix`, and `system.md`'s "the page says so" claim about cross-panel straight lines and
+`networkMap.ts`'s `aria-label` (which called every arc a great-circle one, wrong for
+cross-panel arcs) were both made true rather than merely asserted; `BASEMAP_FIT_POINTS` was
+found to be a **lossy copy** — the generator fit the coastline from raw reference points but
+emitted `BASEMAP_FIT_POINTS` rounded to 3 decimals, a no-op for `ne_110m_us.json` (already
+3-decimal) but not for `ne_50m_car.json` (committed at 4), so the `car` fit baked into the
+artifact and `fitPanels(BASEMAP_FIT_POINTS)` at runtime were subtly different numbers
+(sub-pixel, ≲0.1px, not a visible defect, but an unguarded gap in the exact invariant Task 8's
+whole fix rests on) — fixed by rounding before fitting, not only before emitting, and a new
+test (`generator's own fit matches fitPanels(BASEMAP_FIT_POINTS)`) calls the generator's real,
+now-exported function rather than re-implementing it, closing the gap for good; a third stray
+"deck.gl + MapLibre" claim was found in `pipeline.md`'s own stack summary, beyond the two
+`features.md`/`system.md` had already corrected; and `smoke.sh`'s map section, which checked
+267 polylines, an inset label, the window line, the year-track href and the cache pair, never
+checked that the **coastline itself** reached the served bytes — a collapsed or empty basemap
+renders identically to the legitimately-empty `pac` panel, so two needles
+(`data-panel="us"`, `data-name="AK"`) were added and confirmed, against a real built-and-served
+`/airport/ORD`, to catch exactly that: with `basemapPathsFor` mutated to always return `""`,
+both needles vanished while every other map check (267 polylines, the ALASKA label) stayed
+green.
+
+Five Minors, all cheap, all fixed: `CLAUDE.md` itself had inverted the `/carrier/DL` page-weight
+drift (131,316 is HALF of 262,697, not "2×" of it — the exact transposition class this file
+already warns about for `greatest(least(NULL,3),-3)`); `system.md`'s Reduced-motion note still
+described an animated year slider Task 9 replaced with plain links; `features.md`'s
+`/airport/SEA` row said "still unbuilt: the route map" three columns away from its own Maps
+table saying the airport network shipped; `model.md`'s `endpoint_airport_id` paragraph
+conflated "carries join metadata" with "is filter-only" into one incoherent sentence, now two
+separate, correct ones; and `networkMap.ts` emitted `stroke-dasharray=""` on every solid arc
+(valid nowhere, ~5 KB of no-op bytes across ORD's 267 polylines) — now omitted when empty.
+
+Every rewritten or new assertion in this wave was mutant-verified: reverted to the pre-fix
+behavior, confirmed red for the named reason and nothing else, then reverted back. `git status`
+clean of every mutation before this account was written.
 
 Next: **M8.** What it owes, each identified by the work above rather than guessed. (Two closed
 M6-carried items are retired from this list entirely rather than kept as strikethrough noise:

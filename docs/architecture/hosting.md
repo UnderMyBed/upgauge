@@ -661,10 +661,19 @@ both in turn for no reason. Concurrent, the pair costs what its slower half cost
 saving on the page's DB work, for free.** M4d will copy whatever shape is here, so the shape
 is `Promise.all`.
 
-**`/airport/<code>` runs SIX, and that is the price of a filter the pivot cannot express.** An
-airport is both endpoints, so each of its two grains is assembled as `origin + dest −
-(origin ∧ dest)` — three pivots each (`pipeline.md` § M4d). Same method as the table above
-(in-process, warm, median of 8, default threads), on `/airport/SEA`:
+**`/airport/<code>` ran SIX pivots THROUGH M6 — that table below is historical, not current.**
+An airport is both endpoints, and until M7 the pivot could not express that filter directly, so
+each of the page's two grains was assembled as `origin + dest − (origin ∧ dest)` — three pivots
+each. M7 Tasks 1-3 added `endpoint_airport_id` (`filter_only`, `filter_mode='either'`,
+compiling to `(origin_airport_id IN (...) OR dest_airport_id IN (...))`) and collapsed both
+unions to one pivot apiece, so the page now runs **THREE** pivots per request: the carriers
+table/stat-strip pivot (`fetchAirportTraffic`), the fleet-mix chart pivot (`fetchAirportMix`),
+and the network-map pivot (`fetchAirportNetwork`, M7 Task 8) — `page.tsx:269-273`. The six-pivot
+figures below describe a query shape that no longer exists in this codebase; kept for the
+record of what the M7 fix actually removed, not as a description of the page today.
+
+Pre-M7 (Tasks 1-2 not yet landed), in-process, warm, median of 8, default threads, on
+`/airport/SEA`:
 
 | Work | Rows | Warm median |
 |---|---|---|
@@ -676,12 +685,31 @@ airport is both endpoints, so each of its two grains is assembled as `origin + d
 | all six under `Promise.all` | | **54.2 ms** |
 | all six serially | | 64.3 ms |
 
-Concurrency buys much less here than on `/route` (16%, not 33%): six full scans of
-`fct_segment_month` contend for the same buffer pool, so the wave costs more than its slowest
-member. **2.7× `/route`'s DB work per page**, standing, on the pages most likely to be linked.
-A first-class either-endpoint filter in `meta_pivot_dimensions` — one pivot instead of three —
-is the M5 fix; it needs matching composite-filter semantics in `render.ts` and
-`pipeline/pivot.py`, which is why M4d did not take it on.
+Concurrency bought much less here than on `/route` (16%, not 33%): six full scans of
+`fct_segment_month` contended for the same buffer pool, so the wave cost more than its slowest
+member. That was **2.7× `/route`'s DB work per page**, on the pages most likely to be linked —
+the exact cost the M7 either-endpoint filter exists to remove.
+
+**Current shape, re-measured after M7 Task 8** (in-process, warm, median of 8 — first two
+discarded as JIT/cache warm-up, same method as above), through the real exported functions
+(`fetchAirportTraffic`, `fetchAirportMix`, `fetchAirportNetwork`) against the built database, on
+`/airport/SEA`, trailing-12 window for the traffic and network pivots, full window for the mix
+pivot:
+
+| Work | Warm median |
+|---|---|
+| traffic pivot (carriers table + stat strip) | 21.6 ms |
+| mix pivot (fleet chart, full window) | 26.9 ms |
+| network pivot (map) | 22.4 ms |
+| all three under `Promise.all` | **40.0 ms** |
+| all three serially | 68.1 ms |
+
+Concurrency now saves **41%** (68.1 ms → 40.0 ms) — better than the six-pivot page's 16%,
+because three concurrent scans contend for the buffer pool less than six did. Three pivots at
+~22-27 ms apiece, concurrent, costs about what `/route`'s two-pivot page costs (20.2 ms,
+above) plus roughly one more query's worth of contention — a large drop from the six-pivot
+page's 54.2 ms, even though M7 Task 8 then added a third pivot (the network map) that the
+six-pivot count never had to pay for at all.
 
 A direct read-only measurement of the mix query alone, at `threads=2` rather than the default,
 puts it at 30–34 ms; a measurement of this query that omits its thread count and whether the

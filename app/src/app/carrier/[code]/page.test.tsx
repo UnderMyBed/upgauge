@@ -296,11 +296,14 @@ describe("/carrier/<code> canonical metadata (M5, Task 2)", () => {
 // driven through the exported `CarrierView` with a smaller limit against real rows, never a
 // mock.
 // M6 Task 4: the Top-N builder's first two callers. "Top origin airports", not "airports
-// served" -- the pivot filters origin_airport_id only, and a carrier's airports are an
-// origin-OR-dest question that needs the first-class either-endpoint filter, which is M6
-// backlog item 1 and NOT built. An "airports served" heading over an origin-only query is a
-// quiet false claim, the same shape as /airport reading 26,710,000 seats instead of
-// 53,373,806 when it dropped a union term.
+// served" -- the pivot filters origin_airport_id only. Unlike the M6-era comment this used to
+// carry: the either-endpoint filter is NOT missing -- M7 Task 3 built `endpoint_airport_id` and
+// /airport/<code> uses it. The reason THIS table stays origin-only is different and still true:
+// ranking airports means grouping BY airport, and `endpoint_airport_id` is `filter_only`
+// (M7 Task 2's `for_grouping` guard rejects it as a grouping dimension, the same way it would
+// double-count a segment row into both its origin's and its dest's group). An "airports served"
+// heading over an origin-only query is a quiet false claim, the same shape as /airport reading
+// 26,710,000 seats instead of 53,373,806 when it dropped a union term.
 describe("/carrier/<code> Top-N tables", () => {
   it("labels the airports table 'origin', because either-endpoint is not what it queries", async () => {
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
@@ -347,11 +350,17 @@ describe("/carrier/<code> Top-N tables", () => {
     expect(query.filters).toEqual([["op_airline_id", [String(DL.id)]]]);
   });
 
-  it("states what the origin table counts: departures from each airport, not either-endpoint activity", async () => {
+  it("states what the origin table counts and the REAL reason, not the retired 'no filter yet' claim", async () => {
+    // Replaces an assertion on the old (false, as of M7 Task 3) claim that there is no
+    // either-endpoint filter. The real reason is that ranking airports requires grouping BY
+    // the endpoint dimension, and `endpoint_airport_id` is filter-only -- so this asserts the
+    // accurate phrase AND the absence of the retired one, independently, the same shape as the
+    // /airport Critical fix.
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
     const text = container.textContent ?? "";
     expect(text).toMatch(/departures from each airport/i);
-    expect(text).toMatch(/origin and destination separately/i);
+    expect(text).toMatch(/filter-only/i);
+    expect(text).not.toMatch(/no either-endpoint filter yet/i);
   });
 });
 

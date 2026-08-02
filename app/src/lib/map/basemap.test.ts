@@ -10,6 +10,12 @@
 import { describe, expect, it } from "vitest";
 import { fitPanels } from "./albers";
 import { basemapPathsFor, BASEMAP_FIT_POINTS } from "./basemap";
+// The generator's OWN function, not a re-implementation of it -- see build-basemap.mjs's
+// `loadReferencePointsAndFits` doc comment for why this is exported rather than kept
+// private. Importing it does NOT regenerate the committed artifact: `main()`'s write is
+// guarded to run only when the script is executed directly (`node build-basemap.mjs`), never
+// on import.
+import { loadReferencePointsAndFits } from "../../../scripts/build-basemap.mjs";
 
 describe("basemapPathsFor", () => {
   it("emits path data for the conterminous panel", () => {
@@ -190,5 +196,29 @@ describe("BASEMAP_FIT_POINTS", () => {
     const fitsAlone = fitPanels(BASEMAP_FIT_POINTS);
     const fitsWithOutOfBoundsSubject = fitPanels([...BASEMAP_FIT_POINTS, { lat: 20, lon: -80 }]);
     expect(fitsWithOutOfBoundsSubject.get("us")).not.toEqual(fitsAlone.get("us"));
+  });
+
+  // Final whole-branch review, Important #6: `BASEMAP_FIT_POINTS` was a LOSSY copy of what
+  // the generator actually fit the coastline to. The generator emitted every reference point
+  // through `fmt2` (`toFixed(3)`) when writing `BASEMAP_FIT_POINTS`, but -- before this fix --
+  // computed the `fits` used to project the coastline itself from the RAW, unrounded points.
+  // For `ne_110m_us.json` (already committed at 3 decimals) that was a no-op; for
+  // `ne_50m_car.json` (M7 Task 7b, committed at 4 decimals) it was not, so the fit baked into
+  // every `car` coastline path was derived from a DIFFERENT set of numbers than
+  // `fitPanels(BASEMAP_FIT_POINTS)` recomputes at runtime -- sub-pixel (<=0.1px), not a visible
+  // defect, but the "bit-for-bit identical input" invariant the whole Task 8 fit fix rests on
+  // was true by accident for two panels and false, unguarded, for the third.
+  //
+  // This calls the GENERATOR'S OWN `loadReferencePointsAndFits` (not a re-implementation of
+  // its rounding/sorting/ring-walk) and asserts its `fits` are deep-equal to
+  // `fitPanels(BASEMAP_FIT_POINTS)` for every panel that has one -- the direct statement of
+  // the invariant, provable rather than assumed close.
+  it("the generator's own fit matches fitPanels(BASEMAP_FIT_POINTS), for every panel", () => {
+    const { fits: generatorFits } = loadReferencePointsAndFits();
+    const runtimeFits = fitPanels(BASEMAP_FIT_POINTS);
+    expect(generatorFits.size).toBeGreaterThan(0);
+    for (const panel of generatorFits.keys()) {
+      expect(runtimeFits.get(panel)).toEqual(generatorFits.get(panel));
+    }
   });
 });

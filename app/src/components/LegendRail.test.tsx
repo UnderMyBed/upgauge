@@ -107,4 +107,35 @@ describe("LegendRail", () => {
     expect(screen.getByText(/darkening stack is an upgauge/i)).toBeDefined();
     expect(screen.getByText(/2020-03 to 2021-06/)).toBeDefined();
   });
+
+  // Final whole-branch review, Important #5: `/airport/<code>` draws a network map (M7) whose
+  // three encodings (width <- seats, dash <- load factor, dotted/muted <- below the
+  // 30-departure floor) were explained NOWHERE on the served page -- this rail had no arc
+  // group at all, and its own header comment said outright "this page has no map." Same
+  // opt-in shape as fleetMix: omitted unless a map is actually drawn.
+  it("omits the arc-rendering group unless a map is on the page", () => {
+    render(<LegendRail />);
+    expect(screen.queryByText("Arc rendering")).toBeNull();
+    expect(screen.queryByText(/width scales with seats/i)).toBeNull();
+  });
+
+  it("explains the arc encodings when a map is on the page", () => {
+    render(<LegendRail map />);
+    expect(screen.getByText("Arc rendering")).toBeDefined();
+    expect(screen.getByText(/width scales with seats/i)).toBeDefined();
+    expect(screen.getByText(/load factor is below 70%/i)).toBeDefined();
+    // Scoped past "below the 30-departure floor" alone: the Row-marks group (always
+    // rendered, `map` or not) already contains that exact phrase for its own `n` glyph, so an
+    // unscoped match would be ambiguous between the two groups.
+    expect(screen.getByText(/dotted, muted -- below the 30-departure floor/i)).toBeDefined();
+    // The straight-line-into-inset fact system.md claims "the page says so" for -- it must
+    // actually be true, not merely asserted in a doc.
+    expect(screen.getByText(/straight line into that inset/i)).toBeDefined();
+  });
+
+  it("draws the map legend's swatches from the ink tokens, not copied hex", () => {
+    const { container } = render(<LegendRail map />);
+    expect(container.querySelector('line[stroke="var(--ink)"]')).not.toBeNull();
+    expect(container.querySelector('line[stroke="var(--ink-3)"]')).not.toBeNull();
+  });
 });

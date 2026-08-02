@@ -86,27 +86,25 @@ function Stat({ label, value, derived }: { label: string; value: string; derived
   );
 }
 
-/** One HALF of this page's query, as an Explorer permalink.
+/** THIS PAGE'S OWN QUERY, as a single Explorer permalink.
  *
- * The Explorer cannot express the other half at the same time: `meta_pivot_dimensions` has
- * `origin_airport_id` and `dest_airport_id` as separate dimensions, render.ts AND-s filters
- * together, and the one composite dimension (`route`) filters whole route pairs. So this page
- * offers two links and says they are halves. Calling either one "the identical query" would
- * be false about the exact thing that makes an airport page different from a route page --
- * see endpoints.ts's header, and docs/architecture/pipeline.md § M4d. */
-function halfQuery(
-  dimension: "origin_airport_id" | "dest_airport_id",
-  airportId: number,
-  timeFrom: string,
-  timeTo: string,
-): PivotQuery {
+ * `endpoint_airport_id` (M7 Task 3, `filter_only`, `filter_mode='either'`) compiles to
+ * `(origin_airport_id IN (...) OR dest_airport_id IN (...))`, so one filter on it reproduces
+ * exactly what the carriers table above sums -- verified against the real warehouse: this
+ * query returns 53,373,806 seats for SEA over 2025-05..2026-04, the same figure the stat strip
+ * prints, not the 26,710,000 an origin-only (or dest-only) half would show.
+ *
+ * Through M6 the Explorer had no either-endpoint dimension and this page offered two half
+ * permalinks instead, each labelled as a half -- see endpoints.ts's header for the mechanism
+ * and docs/architecture/pipeline.md § M7 for the history. */
+function endpointQuery(airportId: number, timeFrom: string, timeTo: string): PivotQuery {
   return {
     grain: "segment",
     dimensions: ["op_airline_id"],
     measures: ["seats", "passengers", "departures_performed", "load_factor", "avg_gauge"],
     timeFrom,
     timeTo,
-    filters: [[dimension, [String(airportId)]]],
+    filters: [["endpoint_airport_id", [String(airportId)]]],
     sort: "seats",
     sortDesc: true,
     limit: 50,
@@ -141,14 +139,10 @@ function AirportEmptyState({
         No filings at {airport.name} ({airport.code}) over {timeFrom} → {timeTo}.
       </p>
       <p>
-        <a href={exploreHref(halfQuery("origin_airport_id", airport.id, EARLIEST_MONTH, timeTo))}>
-          Try departures over {EARLIEST_MONTH} → {timeTo}
+        <a href={exploreHref(endpointQuery(airport.id, EARLIEST_MONTH, timeTo))}>
+          Try the same query over {EARLIEST_MONTH} → {timeTo}
         </a>
-        , the widest window this data covers — or the same for{" "}
-        <a href={exploreHref(halfQuery("dest_airport_id", airport.id, EARLIEST_MONTH, timeTo))}>
-          arrivals
-        </a>
-        .
+        , the widest window this data covers.
       </p>
     </div>
   );
@@ -311,8 +305,7 @@ export async function AirportView({
   const mapWindowLine = `map: ${mapWindowLabel}`;
 
   const columns = buildColumns(allowlist);
-  const departures = halfQuery("origin_airport_id", airport.id, trailing12, asOf);
-  const arrivals = halfQuery("dest_airport_id", airport.id, trailing12, asOf);
+  const explorerQuery = endpointQuery(airport.id, trailing12, asOf);
 
   return (
     <div className="wrap">
@@ -427,15 +420,16 @@ export async function AirportView({
               passengers, seats and performed departures — never averaged.
             </p>
             <p className="foot">
-              The Explorer cannot express both endpoints in one query, so each half is its own
-              permalink: <a href={exploreHref(departures)}>departures from {airport.code}</a> or{" "}
-              <a href={exploreHref(arrivals)}>arrivals into {airport.code}</a> — every row above
-              is one click from the raw rows that produced it.
+              <a href={exploreHref(explorerQuery)}>Open in the Explorer</a> for the identical
+              query, filtered on {airport.code} at either endpoint — every row above is one
+              click from the raw rows that produced it.
             </p>
           </div>
           {/* The rail describes the encodings THIS page uses and no others. The fleet-shading
-              group is asked for only when a chart is actually drawn. */}
-          <LegendRail fleetMix={hasMix} />
+              and map (arc rendering) groups are each asked for only when that element is
+              actually drawn -- `hasNetwork` mirrors `hasMix` exactly, since a year with no
+              filings draws no map either (see `hasNetwork`'s own definition above). */}
+          <LegendRail fleetMix={hasMix} map={hasNetwork} />
         </div>
       </main>
     </div>

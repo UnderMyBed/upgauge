@@ -4,9 +4,8 @@ import { BY_AIRCRAFT_TYPE, type MixDimension } from "@/lib/chart/aircraftMix";
  * present on every data view, carrying the methodology explanation -- the gauge rail's
  * fixed axis, the reason-code gutter's glyphs, and the operating-carrier grain -- so there
  * is no separate "how to read this" page to go stale. Content and structure mirror
- * docs/design/mockups/table.html's `<aside class="legend">`, minus its "Arc rendering
- * (maps)" group: this page has no map, and the working reference's own map-specific group
- * would describe an encoding nothing on `/explore` uses.
+ * docs/design/mockups/table.html's `<aside class="legend">` and, for the `map` group,
+ * docs/design/mockups/map-network.html's own "Arc rendering" + "Nodes" groups.
  *
  * `fleetMix` is that same rule applied to M4c's stacked-area chart: the group is opt-in
  * because `/explore` draws no chart, and a rail that explained a monochrome gauge ramp on a
@@ -18,16 +17,26 @@ import { BY_AIRCRAFT_TYPE, type MixDimension } from "@/lib/chart/aircraftMix";
  * `/aircraft/<slug>` every band is the same airframe, so "larger metal" and "the five types
  * with the most seats" would both be false sentences in a panel whose entire job is telling a
  * reader how to read the thing next to it. Defaulted, so `/explore`, `/route`, `/airport` and
- * `/carrier` are untouched. */
+ * `/carrier` are untouched.
+ *
+ * `map` is the M7 counterpart, opt-in for the same reason: `/airport/<code>` is the only page
+ * that draws the network map, and the final whole-branch review found this group entirely
+ * missing -- the map encodes three independent facts (stroke width by seats, dash by load
+ * factor, dotted/muted by the departure floor) that nothing else on the served page explains.
+ * An earlier revision of this header comment said outright "this page has no map," which was
+ * true when it was written and false as of M7 Task 8; corrected here rather than left to
+ * describe a page that no longer matches it. */
 export function LegendRail({
   fleetMix = false,
   stack = BY_AIRCRAFT_TYPE,
-}: { fleetMix?: boolean; stack?: MixDimension } = {}) {
+  map = false,
+}: { fleetMix?: boolean; stack?: MixDimension; map?: boolean } = {}) {
   return (
     <aside className="legend">
       <h4>Chart legend</h4>
 
       {fleetMix ? <FleetShading stack={stack} /> : null}
+      {map ? <ArcRendering /> : null}
 
       <div className="grp">
         <div className="gt">Gauge rail</div>
@@ -96,6 +105,71 @@ export function LegendRail({
         </div>
       </div>
     </aside>
+  );
+}
+
+/** The network map's own encodings (`app/src/lib/map/arcs.ts`'s `strokeFor`, `networkMap.ts`'s
+ * cross-panel branch), mirroring `docs/design/mockups/map-network.html`'s "Arc rendering" and
+ * "Nodes" groups. Three independent channels, stated as three rows rather than folded into
+ * one, since `strokeFor` itself treats them as independent (a floor arc's load factor is never
+ * even consulted): stroke WIDTH scales with seats: `0.7 + 2.9*sqrt(seats/max)`; a DASHED
+ * stroke (`"5 3"`) means this destination's load factor is below 70%; a DOTTED, muted stroke
+ * (`"1 3"`, `--ink-3`) overrides both of the above when the destination is below the
+ * 30-departure floor -- "barely flown" is the whole story for that arc, so it is never also
+ * scaled by seats or dashed by load factor. */
+function ArcRendering() {
+  return (
+    <div className="grp">
+      <div className="gt">Arc rendering</div>
+      <div className="lrow">
+        <span className="g" aria-hidden="true">
+          <svg width="40" height="10" viewBox="0 0 40 10">
+            <line x1="1" y1="5" x2="39" y2="5" stroke="var(--ink)" strokeWidth={3.2} />
+          </svg>
+        </span>
+        <em>width scales with seats -- heavier route, thicker arc</em>
+      </div>
+      <div className="lrow">
+        <span className="g" aria-hidden="true">
+          <svg width="40" height="10" viewBox="0 0 40 10">
+            <line
+              x1="1"
+              y1="5"
+              x2="39"
+              y2="5"
+              stroke="var(--ink)"
+              strokeWidth={1.8}
+              strokeDasharray="5 3"
+            />
+          </svg>
+        </span>
+        <em>dashed -- this destination&rsquo;s load factor is below 70%</em>
+      </div>
+      <div className="lrow">
+        <span className="g" aria-hidden="true">
+          <svg width="40" height="10" viewBox="0 0 40 10">
+            <line
+              x1="1"
+              y1="5"
+              x2="39"
+              y2="5"
+              stroke="var(--ink-3)"
+              strokeWidth={1}
+              strokeDasharray="1 3"
+            />
+          </svg>
+        </span>
+        <em>dotted, muted -- below the 30-departure floor (overrides both rows above)</em>
+      </div>
+      <div className="lrow">
+        <em>
+          Most arcs are true great-circle paths. One that would cross into an inset panel
+          (Alaska, Hawai‘i, the Pacific or the Caribbean) is drawn as a straight line into
+          that inset instead -- a great circle is discontinuous across a panel boundary, so
+          every US network map makes this compromise; this one draws it rather than hiding it.
+        </em>
+      </div>
+    </div>
   );
 }
 

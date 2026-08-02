@@ -189,21 +189,23 @@ describe("/airport/<code>", () => {
     expect(line).toMatch(/2025-\d\d → /);
   });
 
-  it("offers the departing and arriving halves in the Explorer, and says they are halves", async () => {
-    // The Explorer CANNOT express this page's query: its filters are AND-ed and there is no
-    // either-endpoint dimension (see endpoints.ts). So the page offers the two halves it CAN
-    // express and labels them as halves -- a single link claiming "the identical query" would
-    // be a lie about the one thing this page does differently from /route.
+  it("offers the single either-endpoint query in the Explorer, and does not claim it can't", async () => {
+    // M7 Task 3 added `endpoint_airport_id` (filter_only, filter_mode='either'), which
+    // compiles to an OR across origin and dest -- so this page now offers ONE permalink, not
+    // two halves. This is the replacement for a test that asserted a mandated PHRASE
+    // ("cannot express both endpoints in one query") rather than the fact: the phrase was
+    // exactly what M7 falsified, and a test built only on the phrase's absence could pass
+    // against a page that also dropped the link, or linked to the wrong filter, or reverted to
+    // an origin-only query -- so this asserts the fact (the link's filter) AND the absence of
+    // the false claim, independently.
     const { container } = render(await renderSEA());
     const allowlist = await loadAllowlist();
-    const read = (name: RegExp) => {
-      const href = screen.getByRole("link", { name }).getAttribute("href") ?? "";
-      expect(href.startsWith("/explore?")).toBe(true);
-      return decode(href.slice("/explore?".length), allowlist);
-    };
-    expect(read(/departures/i).filters).toEqual([["origin_airport_id", ["14747"]]]);
-    expect(read(/arrivals/i).filters).toEqual([["dest_airport_id", ["14747"]]]);
-    expect(container.textContent).toMatch(/cannot express both endpoints in one query/i);
+    const link = screen.getByRole("link", { name: /open in the explorer/i });
+    const href = link.getAttribute("href") ?? "";
+    expect(href.startsWith("/explore?")).toBe(true);
+    const decoded = decode(href.slice("/explore?".length), allowlist);
+    expect(decoded.filters).toEqual([["endpoint_airport_id", ["14747"]]]);
+    expect(container.textContent).not.toMatch(/cannot express both endpoints in one query/i);
   });
 
   it("shows the legend rail, with the fleet-shading group the chart needs", async () => {

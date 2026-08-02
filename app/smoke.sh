@@ -595,6 +595,25 @@ check_re  "airport map: exactly 267 polylines (same-airport arc excluded)" \
 # LOOP entirely (rather than just its frame) would still fail, since the loop draws the `<text>`
 # that carries this word and nothing else on the page does.
 check     "airport map: an inset is labelled (ALASKA)" "$BODY" 'ALASKA'
+# Final whole-branch review, Important #8: every check above this line proves the ARCS,
+# insets, window line and cache pair reach the served bytes, but NONE of them proves the
+# COASTLINE does -- the one output produced by a committed GENERATED module
+# (basemapPaths.generated.ts) rather than by code under test. A collapsed or empty basemap
+# renders a map with no landmass, which is visually IDENTICAL to the legitimately-empty `pac`
+# panel (docs/design/system.md § The map) -- so this is the map's own analogue of the
+# aircraft-mix chart's ramp-fill checks, and the one thing this section was missing.
+# `data-panel="us"` is the attribute `build-basemap.mjs` stamps on every `<path>` it emits
+# (basemapPathsFor's own docstring); ORD's network reaches `us` on every build (it IS the
+# conterminous panel), so this is the check that would catch a basemap import wired to the
+# wrong module, a `basemapPathsFor` call passed the wrong panel list, or an artifact
+# regenerated to empty strings -- none of which any check above this line would fail against.
+check     "airport map: the us panel's coastline reaches the served bytes" "$BODY" \
+  'data-panel="us"'
+# `data-name="AK"` specifically (not just `data-panel="ak"`): ORD's network reaches the ak
+# INSET (already proven by the "ALASKA" label check above), and this proves the inset frame
+# is not merely drawn EMPTY under that label -- Alaska's own coastline path is really there.
+check     "airport map: Alaska's own coastline path reaches the served bytes" "$BODY" \
+  'data-name="AK"'
 # The window this map drew, stated in words on the map itself (networkMap.ts's own `body +=
 # ... input.window ...` line) -- not just in the aria-label, mirroring the aircraft-mix chart's
 # `chartWindow` line one panel over. ORD's default view draws the trailing 12, matching the

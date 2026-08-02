@@ -27,7 +27,11 @@ upgauge/
 ```
 
 **Charts:** Observable Plot (better than Recharts for dense multi-series time series).
-**Maps:** deck.gl + MapLibre + Natural Earth GeoJSON.
+**Maps:** **not** deck.gl/MapLibre (the original spec) — a from-scratch, dependency-free,
+server-rendered SVG engine (`app/src/lib/map/`, M7 Tasks 4-8), fed by committed, pre-projected
+Natural Earth GeoJSON. Superseded on measurement: the map needed the same "in the served HTML,
+visible with JS off" property the charts already had, which a client-side library cannot give
+for free.
 
 ---
 
@@ -1230,10 +1234,16 @@ truncation: each side is a `LIMIT`-ed pivot, so a truncated side can drop rows t
 query still returns, and the union then skips the subtraction instead of driving a measure
 negative (`partial`). Found by the truncation test, not by reading.
 
-**The page says outright that the Explorer cannot express its query**, and offers the two
-halves it *can* — `origin_airport_id`, `dest_airport_id` — as separate permalinks, labelled as
-halves. A single link claiming "the identical query" would be a lie about the exact thing that
-distinguishes this page from `/route`.
+**The page said outright that the Explorer could not express its query** (through M6), and
+offered the two halves it *could* — `origin_airport_id`, `dest_airport_id` — as separate
+permalinks, labelled as halves. A single link claiming "the identical query" would have been a
+lie about the exact thing that distinguished this page from `/route`. **This entire
+inclusion-exclusion shape, and the two-permalink copy above, is M4d-through-M6 history, not
+M7's shipped behavior** — M7 Task 3 built the either-endpoint filter this section's own
+"strongest argument for M5 adding one" line below was asking for, and the page now offers ONE
+permalink reproducing its own totals exactly. See § M7 Task 3, below, for the current shape;
+final whole-branch review found the old two-permalink copy and this section's back-reference to
+it both still standing, unqualified, one milestone after the fix shipped.
 
 **Cost: 54.2 ms of DB work against `/route`'s 20.2 ms**, in-process through `runPivot` /
 `fetchAircraftMix` against the built database, SEA, warm, median of 8, at DuckDB's default
@@ -1285,14 +1295,23 @@ default) filtered on this page's own `op_airline_id`, limit 25, joining the page
 `Promise.all` rather than adding a sequential await. Routes use the builder directly — DL
 touches 1,873 distinct routes over the trailing 12 months (measured), so the table is a top-25
 view of that, not the whole set. **Airports are `origin_airport_id` only, headed "Top origin
-airports", never "airports served."** The pivot has no either-endpoint filter — that is M6
-backlog item 1, not built — so a table asking "which airports did this carrier touch" would
-need `origin OR dest`, and rendering it from an origin-only query would repeat the exact
-failure class `/airport` already paid for: dropping a union term read SEA at 26,710,000 seats
-instead of 53,373,806. For DL, origin-only counts 186 airports (measured) against 188
-either-endpoint airports — a small gap today, but the heading has to be honest about which
-question the query answers regardless of how large the gap happens to measure. The page states
-the limitation in words under the table, not just in the heading.
+airports", never "airports served."** At M6 this was because the pivot had no either-endpoint
+filter at all (M6 backlog item 1) — **M7 Task 3 built one** (`endpoint_airport_id`,
+`filter_only`, `filter_mode='either'`) and `/airport/<code>` uses it. This table stays
+origin-only for a DIFFERENT, still-standing reason: ranking airports means GROUPING by the
+endpoint dimension to produce one row per airport, and `endpoint_airport_id` is deliberately
+`filter_only` — it can narrow a query to one fixed airport (exactly what `/airport` needs) but
+is rejected as a grouping dimension, since grouping by it would put one segment row into both
+its origin's group and its dest's group and double-count on summing (the same class of
+failure T-100's `CLASS` rollup codes guard against). Rendering this table from an origin-only
+query without saying so would repeat the exact failure class `/airport` already paid for:
+dropping a union term read SEA at 26,710,000 seats instead of 53,373,806. For DL, origin-only
+counts 186 airports (measured) against 188 either-endpoint airports — a small gap today, but
+the heading has to be honest about which question the query answers regardless of how large
+the gap happens to measure. The page states the real limitation in words under the table, not
+just in the heading — corrected by the final whole-branch review from a first draft that
+(after M7 Task 3 shipped) still blamed a missing filter rather than the filter's own
+`filter_only` shape.
 
 **Two `CLAUDE.md` hard rules stop being background here and become the page's own claims,
 because the entity *is* the carrier.** Both read as bugs if left unsaid:
@@ -2345,11 +2364,35 @@ raw coordinate in the committed geography (2,366 points), i.e. the full extent o
 state's own landmass — and bakes the resulting screen coordinates directly into
 `basemapPaths.generated.ts`; `basemapPathsFor(panels)` takes no points at all; there is no
 per-call fit, so the coastline provably cannot move between pages. `BASEMAP_FIT_POINTS` is
-re-exported from `basemap.ts` precisely so **Task 6's per-page network map can call
-`fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])` and inherit the identical `us`/`ak`/
-`hi` fit** rather than computing its own from just that page's arcs — `basemap.test.ts`
-pins this with a fixture (SEA, well inside the conterminous landmass) proving the `us`
-fit is unchanged whether or not a subject's own point is unioned into the reference set.
+re-exported from `basemap.ts` so a per-page network map can align to the coastline it draws
+arcs over.
+
+**This is where an earlier revision of this section stated the wrong rule, in bold, as
+standing guidance — corrected here rather than left for a reader to hit the true account 60
+lines below in Task 8.** The wrong rule was: call `fitPanels([...BASEMAP_FIT_POINTS,
+...subjectPoints])`, unioning the subject's own arc endpoints into the fixed reference set
+before fitting. That is NOT equivalent to reusing the fit, and it is wrong for exactly the
+reason Task 8 found and fixed (below): `fitPanels` derives its scale from the min/max extent
+of whatever points it receives, the coastline's pixels in `basemapPaths.generated.ts` are
+already baked in at `fitPanels(BASEMAP_FIT_POINTS)`'s own extent, and a subject point falling
+**outside** that extent (the ordinary case — simplification pulls the coastline inward, so a
+coastal airport routinely lands seaward of it) changes the extent, which changes the scale for
+every point, arcs and the already-baked coastline alike. **The correct, standing rule: for any
+panel that has coastline (`us`/`ak`/`hi`, and `car` as of Task 7b), reuse
+`fitPanels(BASEMAP_FIT_POINTS)` VERBATIM — identical input, identical output, so the fit is
+bit-for-bit the one the artifact was projected with. Never union a subject's points into it.**
+Panels with no coastline at all (`pac`, and `car` before Task 7b) have nothing to align to, so
+they legitimately fall back to a fit derived from the subject's own points.
+
+The `basemap.test.ts` fixture this section originally cited as proof (SEA, well inside the
+conterminous landmass, checking the `us` fit is unchanged whether or not a subject point is
+unioned in) was **found vacuous by Task 8**: an in-bounds point can never move the extent
+`fitPanels` derives, by construction, so that fixture could not distinguish the correct fit
+from the wrong one it was written to catch. Task 8 replaced it with an out-of-bounds subject
+(ORD → SEA/JFK vs. ORD → SEA/JFK/MIA, MIA chosen to extend the `us` bbox without changing
+panel membership) asserting the origin marker's own screen coordinates are identical across
+both queries — which the wrong (union) implementation fails and the correct (verbatim reuse)
+implementation passes. Full account: Task 8, below.
 
 **RDP simplification runs on raw (lat, lon) rings, before projection**, at ε = 0.05°
 (~5.5 km at the equator) — small enough to keep every state recognizable at the map's

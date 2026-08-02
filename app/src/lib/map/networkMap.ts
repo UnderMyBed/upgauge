@@ -143,14 +143,23 @@ function sameAirportNote(seats: number): string | null {
 /** What the map shows, for a reader who cannot see it -- the subject, the window, how many
  * destinations are drawn, and the same-airport seats excluded from the arcs but not the
  * total. Mirrors `AircraftMixChart.tsx`'s `describe()`: written once, read by both the visible
- * key and `aria-label`, so the two cannot drift. */
-function describeMap(input: NetworkMapInput, drawn: ArcDatum[]): string {
+ * key and `aria-label`, so the two cannot drift.
+ *
+ * `crossPanelCount` is NOT cosmetic (final whole-branch review, Important #5): a great circle
+ * is discontinuous across a panel boundary, so `renderNetworkMap` draws those destinations as
+ * straight lines into their inset instead (system.md's own rule) -- calling ALL of them
+ * "great-circle arcs" is wrong for exactly those, and a screen-reader user gets no other
+ * account of the map at all. `0` (the common case -- most airports reach no inset) keeps the
+ * sentence exactly as before; only a nonzero count changes the wording, and it names the exact
+ * number rather than a vague "some". */
+function describeMap(input: NetworkMapInput, drawn: ArcDatum[], crossPanelCount: number): string {
   const note = sameAirportNote(input.sameAirportSeats);
-  return [
-    `Network map of ${input.origin.code}'s scheduled service, ${input.window}.`,
-    `${drawn.length} destination${drawn.length === 1 ? "" : "s"} drawn as great-circle arcs, thinnest to heaviest by seats.`,
-    note,
-  ]
+  const arcsDesc =
+    crossPanelCount === 0
+      ? `${drawn.length} destination${drawn.length === 1 ? "" : "s"} drawn as great-circle arcs, thinnest to heaviest by seats.`
+      : `${drawn.length} destination${drawn.length === 1 ? "" : "s"} drawn thinnest to heaviest by seats -- ` +
+        `${drawn.length - crossPanelCount} as great-circle arcs, ${crossPanelCount} as straight lines into an inset panel (a great circle cannot cross a panel boundary).`;
+  return [`Network map of ${input.origin.code}'s scheduled service, ${input.window}.`, arcsDesc, note]
     .filter((s): s is string => s !== null)
     .join(" ");
 }
@@ -194,6 +203,12 @@ export function renderNetworkMap(input: NetworkMapInput): string {
     fits.set(panel, BASEMAP_FITS.get(panel) ?? subjectFits.get(panel)!);
   }
   const originRegion = regionOf(origin.lat, normalizeLon(origin.lon));
+  // Computed once, up front, from the same predicate the arc loop below uses per-arc
+  // (`region !== originRegion`) -- so `describeMap`'s wording and what the arc loop actually
+  // draws cannot drift apart the way an independently-derived count could.
+  const crossPanelCount = drawn.filter(
+    (a) => regionOf(a.lat, normalizeLon(a.lon)) !== originRegion,
+  ).length;
 
   let body = "";
 
@@ -237,7 +252,13 @@ export function renderNetworkMap(input: NetworkMapInput): string {
 
     const pts = path.map(([x, y]) => `${fmt(x)},${fmt(y)}`).join(" ");
     const s = strokeFor(a, maxSeats);
-    body += `<polyline points="${pts}" fill="none" stroke="${s.stroke}" stroke-width="${s.width.toFixed(2)}" stroke-dasharray="${s.dash}" stroke-opacity="${s.opacity}" stroke-linecap="round"/>`;
+    // `stroke-dasharray` omitted entirely when `s.dash` is empty (the solid, above-both-floors
+    // case -- most arcs) rather than emitted as `stroke-dasharray=""`. Browsers treat the empty
+    // attribute as "no dashing," identically to its absence, so this was never a rendering bug
+    // -- but it is invalid SVG, and it cost ~5 KB of no-op attribute bytes on `/airport/ORD`'s
+    // 267 polylines (final whole-branch review, Minor finding).
+    const dashAttr = s.dash === "" ? "" : ` stroke-dasharray="${s.dash}"`;
+    body += `<polyline points="${pts}" fill="none" stroke="${s.stroke}" stroke-width="${s.width.toFixed(2)}"${dashAttr} stroke-opacity="${s.opacity}" stroke-linecap="round"/>`;
   }
 
   // Destination nodes, then labels for the top 8 by seats.
@@ -272,7 +293,7 @@ export function renderNetworkMap(input: NetworkMapInput): string {
   const noteSuffix = note === null ? "" : ` · ${note}`;
   body += `<text x="8" y="${HEIGHT - 6}" font-size="10" fill="var(--ink-2)">${esc(input.window)}${esc(noteSuffix)}</text>`;
 
-  const ariaLabel = describeMap(input, drawn);
+  const ariaLabel = describeMap(input, drawn, crossPanelCount);
 
   return (
     `<svg viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}" ` +

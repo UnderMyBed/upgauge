@@ -24,8 +24,12 @@ export { BASEMAP_FIT_POINTS };
  * Returns the `<path>` elements for exactly the requested panels, in a fixed
  * (`us`, `ak`, `hi`, `pac`, `car`) order regardless of the order `panels` is given in --
  * pure and call-independent, since every coordinate was already projected and baked into
- * `BASEMAP_PATHS` at generation time. `pac`/`car` currently always emit "" (see the
- * generator's header for why Natural Earth 1:110m has no coastline for either).
+ * `BASEMAP_PATHS` at generation time. `pac` still always emits "" -- Natural Earth has no
+ * polygon at any committed resolution for Guam/CNMI/American Samoa/Midway. `car` is NOT
+ * empty: M7 Task 7b widened the generator's input to a second, finer (1:50m) source that
+ * does carry Puerto Rico and the USVI as real multi-island features, so `BASEMAP_PATHS.car`
+ * is two real `<path>` elements (see the generator's header for both inputs and why one
+ * scale was insufficient).
  */
 const PANEL_ORDER: Panel[] = ["us", "ak", "hi", "pac", "car"];
 
