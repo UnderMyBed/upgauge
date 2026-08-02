@@ -451,9 +451,10 @@ check     "airport: DATA AS OF is present"   "$BODY" 'DATA AS OF'
 # pipeline.md § M4d. Dropping the inclusion-exclusion overlap term instead reads 53,386,452.
 check     "airport: counts BOTH endpoints, not just departures" "$BODY" '53,373,806'
 check     "airport: says so in words"        "$BODY" 'at <b>both</b> endpoints'
-# `>14747<`, not a bare `14747`: SEA's airport_id legitimately appears in this page's two
-# Explorer permalinks (`f=origin_airport_id:14747`), which is why the task-2 handoff's "must not
-# contain 14747" cannot be taken literally. The claim is that no CELL renders the raw id.
+# `>14747<`, not a bare `14747`: SEA's airport_id legitimately appears in this page's Explorer
+# permalink (`f=endpoint_airport_id:14747` -- ONE link since M7, not the two origin/dest halves
+# this comment used to describe), which is why the task-2 handoff's "must not contain 14747"
+# cannot be taken literally. The claim is that no CELL renders the raw id.
 check_not "airport: renders no bare AIRPORT_ID" "$BODY" '>14747<'
 check     "airport: the chart SVG is in the served HTML" "$BODY" '<svg role="img"'
 check     "airport: ramp tokens reach the area fills (lightest)" "$BODY" '<path fill="var(--g0)" d='

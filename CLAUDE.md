@@ -652,9 +652,11 @@ in M7 Tasks 1-3, described above, and neither owes M8 anything further beyond th
    is a better use of the slot; M4c already made the gauge story the differentiator.
 5. **OG cards** — social-preview images per entity page, for the links `/search` and the
    sitemap now make shareable.
-6. **Three findings M7's final re-review raised and the owner deliberately parked**, recorded
-   here because the review artifacts that held them are git-ignored and would otherwise take
-   the rulings with them. None blocks anything; all three are cheap.
+6. ~~**Three findings M7's final re-review raised and the owner deliberately parked.**~~
+   **ALL THREE DONE**, in two follow-up commits after the M7 merge. Kept here with their
+   evidence rather than deleted, because the review artifacts that held them are git-ignored
+   and the *reasoning* is the part worth keeping — particularly the first, which is a gate
+   that could have stopped testing anything without ever going red.
    - ~~`make basemap`'s entry guard can make `make verify`'s basemap check vacuous.~~
      **DONE** — `app/scripts/build-basemap.mjs` now gates `main()` on
      `pathToFileURL(process.argv[1]).href`, not on ``import.meta.url === `file://${process.argv[1]}` ``.
@@ -668,19 +670,24 @@ in M7 Tasks 1-3, described above, and neither owes M8 anything further beyond th
      nothing regenerated it*, degrading a reproducibility check to vacuous without ever going
      red. Both directions are pinned: the guard still does **not** fire on import, verified by
      the artifact's sha256 being unchanged across a full `basemap` test run.
-   - **`/carrier`'s either-endpoint caveat is pinned by a word, not a fact.**
-     `app/src/app/carrier/[code]/page.test.tsx` asserts `/filter-only/i` against the copy. The
-     copy is true today (verified in `render.ts`, `pipeline/pivot.py` and the catalog row), but
-     a future change making `endpoint_airport_id` groupable would leave the page's stated
-     reason false and this test green — the same shape as the seventh test above. The fact is
-     one line away: assert `loadAllowlist()`'s `endpoint_airport_id.filterOnly`.
-   - **Four stale comments**, each contradicted by code in the same repo: `networkMap.ts`'s
-     "pac/car" fallback note (`car` has had committed geometry since Task 7b), the generator's
-     claim that `round3` is "exported so `basemap.test.ts` can round the same way" (it never
-     imports it), `smoke.sh`'s "this page's **two** Explorer permalinks" (there is one now, and
-     its filter is `endpoint_airport_id`), and `/airport`'s "`hasNetwork` mirrors `hasMix`
-     exactly" (it does not — the windows differ, which is why the page has a branch for
-     `hasMix && !hasNetwork`).
+   - ~~`/carrier`'s either-endpoint caveat is pinned by a word, not a fact.~~ **DONE** —
+     `app/src/app/carrier/[code]/page.test.tsx` asserted `/filter-only/i` against the copy,
+     which is an assertion on a *phrase*: a future change making `endpoint_airport_id`
+     groupable would have left the page's stated reason false and the test green. It now also
+     reads the **live catalog** — `expect((await loadAllowlist()).dims.get("endpoint_airport_id")?.filterOnly).toBe(true)`.
+     Mutant-verified: flipping that catalog row to `FALSE` and rebuilding reddens exactly that
+     assertion and nothing else (1 failed, 50 passed).
+   - ~~Four stale comments.~~ **DONE**, all four, each checked against the code before being
+     rewritten rather than taken from the review's word: `networkMap.ts`'s fallback note now
+     says `pac` alone (Task 7b gave `car` real geometry); the generator no longer claims
+     `round3` is "exported so `basemap.test.ts` can round the same way" (it never imported it —
+     the export's real justification, that rounding happens *before* `fitPanels` so
+     `BASEMAP_FIT_POINTS` round-trips exactly, is stated instead); `smoke.sh` now says one
+     Explorer permalink filtered on `endpoint_airport_id`, not two on `origin_airport_id`; and
+     `/airport`'s rail comment no longer claims `hasNetwork` "mirrors `hasMix` exactly" —
+     `hasMix` spans `EARLIEST_MONTH..asOf` while `hasNetwork` spans `mapWindow`, so `?y=<year>`
+     with no filings that year gives `hasMix && !hasNetwork`, which is precisely why the page
+     has a branch for it.
 
 ## Architecture
 

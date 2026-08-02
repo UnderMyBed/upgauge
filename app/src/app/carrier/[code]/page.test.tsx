@@ -361,6 +361,14 @@ describe("/carrier/<code> Top-N tables", () => {
     expect(text).toMatch(/departures from each airport/i);
     expect(text).toMatch(/filter-only/i);
     expect(text).not.toMatch(/no either-endpoint filter yet/i);
+
+    // ...and the FACT the copy rests on, read from the LIVE catalog rather than from the
+    // word. The two assertions above are still assertions on a phrase: if a future change
+    // made `endpoint_airport_id` groupable, this page's stated reason would become false and
+    // both of them would stay green -- which is the failure shape M7's own review found seven
+    // times. This line is what actually couples the copy to the thing it claims.
+    const endpoint = (await loadAllowlist()).dims.get("endpoint_airport_id");
+    expect(endpoint?.filterOnly).toBe(true);
   });
 });
 

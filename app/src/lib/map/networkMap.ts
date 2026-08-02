@@ -199,7 +199,8 @@ export function renderNetworkMap(input: NetworkMapInput): string {
   // subjectFits decides WHICH panels this network reaches (unchanged from before the fix --
   // still exactly "the panels the subject's own points land in", which is what the inset-
   // frame loop below needs), and its own fit values are the FALLBACK for a panel with no
-  // committed basemap reference points (pac/car). For every other panel (us/ak/hi), the
+  // committed basemap reference points -- `pac` alone today, since M7 Task 7b gave `car` real
+  // Puerto Rico and USVI geometry from Natural Earth 1:50m. For every other panel, the
   // VALUE this map actually projects with is BASEMAP_FITS's -- the one the coastline was
   // baked against -- never a fit re-derived from this one page's own arc endpoints. See
   // BASEMAP_FITS's own comment for why the naive `fitPanels([...BASEMAP_FIT_POINTS,
