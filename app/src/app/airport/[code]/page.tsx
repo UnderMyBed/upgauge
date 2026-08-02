@@ -427,8 +427,12 @@ export async function AirportView({
           </div>
           {/* The rail describes the encodings THIS page uses and no others. The fleet-shading
               and map (arc rendering) groups are each asked for only when that element is
-              actually drawn -- `hasNetwork` mirrors `hasMix` exactly, since a year with no
-              filings draws no map either (see `hasNetwork`'s own definition above). */}
+              actually drawn. `hasNetwork` follows the same PATTERN as `hasMix` but not the
+              same VALUES, and an earlier version of this comment said "mirrors `hasMix`
+              exactly", which is false: `hasMix` is over the full window
+              (EARLIEST_MONTH..asOf) while `hasNetwork` is over `mapWindow`, so `?y=<year>`
+              with no filings in that year gives `hasMix && !hasNetwork` -- which is exactly
+              why the branch above renders the chart without the map. */}
           <LegendRail fleetMix={hasMix} map={hasNetwork} />
         </div>
       </main>

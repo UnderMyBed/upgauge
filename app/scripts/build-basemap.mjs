@@ -190,9 +190,17 @@ function fmt(n) {
   return fixed === "-0.0" ? "0.0" : fixed;
 }
 
-/** Normalizes to 3 decimals (~110m, matching `ne_110m_us.json`'s own committed precision) --
- * exported so `basemap.test.ts` can round the SAME way this file does when it independently
- * re-derives reference points from the two committed geo files. */
+/** Normalizes to 3 decimals (~110m, matching `ne_110m_us.json`'s own committed precision).
+ *
+ * Applied to `referencePoints` BEFORE `fitPanels` runs, which is the whole point: the emitted
+ * `BASEMAP_FIT_POINTS` then round-trips to the same numbers this file fit on, so a caller
+ * doing `fitPanels(BASEMAP_FIT_POINTS)` reproduces the fit the coastline was baked against
+ * exactly. Rounding only on the way OUT would make that claim false for `ne_50m_car.json`,
+ * which is committed at 4 decimals -- the lossy-copy bug M7's final review found.
+ *
+ * Exported for symmetry with `loadReferencePointsAndFits` and to keep it testable, NOT
+ * because any test currently imports it -- `basemap.test.ts` imports only
+ * `loadReferencePointsAndFits`, and an earlier version of this comment claimed otherwise. */
 export function round3(n) {
   const r = Number(n.toFixed(3));
   return r === 0 ? 0 : r; // normalize -0 to 0, same reasoning as fmt/fmt2's "-0" guards
@@ -335,9 +343,10 @@ ${pointsLiteral}
 }
 
 // Run only when executed directly (`node build-basemap.mjs`, what `make basemap` does) --
-// NOT when `loadReferencePointsAndFits`/`round3` are imported for a test
-// (`basemap.test.ts`), which must not have the side effect of rewriting the committed
-// generated artifact as a side effect of running the unit suite.
+// NOT when `loadReferencePointsAndFits` is imported by `basemap.test.ts`, which must not
+// rewrite the committed generated artifact as a side effect of running the unit suite.
+// (That direction is pinned: the artifact's sha256 is unchanged across a full basemap test
+// run.)
 //
 // `pathToFileURL`, NOT `file://${process.argv[1]}`. The naive form string-compares a URL
 // against a raw filesystem path, and those differ the moment the path contains anything a
