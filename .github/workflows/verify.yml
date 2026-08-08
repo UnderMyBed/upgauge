@@ -23,6 +23,7 @@ jobs:
                   --json tagName,createdAt \
                   --jq '[.[] | select(.tagName | startswith("warehouse-"))]
                         | sort_by(.createdAt) | reverse | .[0].tagName')
+          [ -n "$tag" ] && [ "$tag" != "null" ] || { echo "::error::no warehouse-* release found"; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup
         with:
@@ -55,9 +56,11 @@ jobs:
           make verify 2>&1 | tee /tmp/verify.log
       - name: Summarise
         if: always()
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
         run: |
           {
-            echo "## make verify on \`${{ steps.pick.outputs.tag }}\`"
+            echo "## make verify on \`$TAG\`"
             echo
             echo "First cross-machine run of a proof that has only ever been produced locally."
             echo '```'
