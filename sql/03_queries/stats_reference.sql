@@ -24,7 +24,7 @@ SELECT count(*) FROM dim_carrier;
 SELECT count(*) FROM dim_aircraft_type;
 
 -- name: city_markets
-SELECT count(DISTINCT city_market_id_renamed_by_upstream) FROM dim_city_market;
+SELECT count(DISTINCT city_market_id) FROM dim_city_market;
 
 -- name: fact_present_aircraft_codes
 SELECT count(DISTINCT aircraft_type) FROM fct_segment_month;
