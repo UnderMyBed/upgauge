@@ -23,6 +23,21 @@ bite you.
 | [design/system.md](design/system.md) | **The design system: tokens, components, chart and map encodings, states** |
 | [design/brief.md](design/brief.md) | The design problem statement — constraints, anti-goals, content inventory (answered) |
 
+## Where the work lives
+
+**Outstanding work is tracked in [GitHub Issues](https://github.com/UnderMyBed/upguage/issues),
+not in these docs.** 12 epics across four milestones — `M8 — Public launch`,
+`M9 — Post-launch surfaces`, `Engineering health`, `v1+`.
+
+**These docs describe what is TRUE about the system. The tracker describes what is PLANNED.**
+That split is not tidiness: the same backlog item used to be stated three ways in three files
+and drift independently. The either-endpoint filter was described as missing in four places for
+a full milestone after it shipped — two of them on served pages a visitor could read.
+
+Some passages here still explain *why* an unbuilt thing is worth building (the Maps table in
+[product/features.md](product/features.md) is the clearest case). That is design rationale and
+it belongs here. Only status and scheduling belong in the tracker.
+
 ## How these docs work
 
 **Docs are part of every change, not a follow-up.** A change to behavior, a data rule, or a

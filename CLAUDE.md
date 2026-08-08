@@ -643,78 +643,35 @@ test.tsx`, 3 in `networkMap.test.ts`, 1 in `basemap.test.ts`), `make app-smoke` 
 committed, corrected artifact), `make goldens` byte-identical (this wave touched no pivot
 template).
 
-Next: **M8.** What it owes, each identified by the work above rather than guessed. (Two closed
-M6-carried items are retired from this list entirely rather than kept as strikethrough noise:
-the either-endpoint filter and the truncation-arithmetic question it made moot both finished
-in M7 Tasks 1-3, described above, and neither owes M8 anything further beyond the still-open
-"same shape for a future `/city-market`" note.)
+## Outstanding work lives in GitHub Issues, not here
 
-1. **The maps: three of four still unbuilt, plus one disclosed gap on the one that shipped.**
-   Airport network is **DONE, M7** (`/airport/<code>`, Tasks 4-9) on the from-scratch SVG
-   engine described above — carrier network, aircraft type, and the diff map remain
-   (`docs/product/features.md` § Maps), and are expected to reuse that same engine rather than
-   introduce deck.gl/MapLibre after all, since nothing about the three remaining maps needs a
-   client-side mapping library the airport network didn't already need. Also still open: the
-   `pac` inset's missing coastline (Natural Earth has no polygon at this scale for Guam/CNMI/
-   American Samoa/Midway; 6 fact-present airports reach it, against `car`'s 74 which M7 Task 7b
-   already fixed) — disclosed on the page rather than fixed, a deliberate scope line rather
-   than a defect, but still a real gap a future task could close the same way Task 7b closed
-   `car`'s. The **Time-machine diff** preset ("PDX, Jul 2019 vs Jul 2025," `docs/product/
-   features.md`) is the diff-map item wearing a preset's name, not a fifth `/watch` page — a
-   two-window diff plus a diff map, so it stays out of scope until the maps themselves exist.
-2. **The residual 5xx cache gap** — a page-specific throw whose proxy resolution already
-   succeeded (a catalog view the entity resolvers, `/explore`'s probe, `/watch`'s probe (M6), or
-   the map's own coordinate lookup (M7) don't touch) is still cached for up to an hour.
-   `docs/architecture/hosting.md` § "The gap" has the full account of why the complete fix isn't
-   reachable on this Next version. Confirmed to reach three distinct causes now, not two: M6
-   Task 8 found `/watch/gauge` via a missing `mart_route_health`; M7 Task 10 found
-   `/airport/<code>`'s map via `dim_airport` missing only its `lat`/`lon` columns (not the whole
-   view) — `isDataLayerHealthy()` only ever probes `loadAllowlist()`, which has never had
-   anything to do with either table.
-3. **The interactive Explorer builder** — pick dimensions/measures/filters from a UI rather
-   than hand-editing the permalink. The permalink contract (M3a/M3b) is done; nothing renders
-   a form over it yet.
-4. **The load-factor time-series chart** and the **seasonality heatmap** — both specified,
-   neither built. Build the load-factor chart only after confirming nothing else in the backlog
-   is a better use of the slot; M4c already made the gauge story the differentiator.
-5. **OG cards** — social-preview images per entity page, for the links `/search` and the
-   sitemap now make shareable.
-6. ~~**Three findings M7's final re-review raised and the owner deliberately parked.**~~
-   **ALL THREE DONE**, in two follow-up commits after the M7 merge. Kept here with their
-   evidence rather than deleted, because the review artifacts that held them are git-ignored
-   and the *reasoning* is the part worth keeping — particularly the first, which is a gate
-   that could have stopped testing anything without ever going red.
-   - ~~`make basemap`'s entry guard can make `make verify`'s basemap check vacuous.~~
-     **DONE** — `app/scripts/build-basemap.mjs` now gates `main()` on
-     `pathToFileURL(process.argv[1]).href`, not on ``import.meta.url === `file://${process.argv[1]}` ``.
-     The naive form string-compared a URL against a raw path, which diverge the moment the
-     path contains anything a URL must percent-encode; **one space in the checkout path was
-     enough**. Reproduced end to end with the real generator run from
-     `…/space check/app/scripts/build-basemap.mjs`: the fixed guard wrote 102,799 bytes, the
-     old guard **exited 0 having written nothing**. That is what made it worse than an
-     ordinary bug — `make verify`'s basemap step is `make basemap` followed by
-     `git diff --exit-code` on the artifact, so the old form would have passed the gate *because
-     nothing regenerated it*, degrading a reproducibility check to vacuous without ever going
-     red. Both directions are pinned: the guard still does **not** fire on import, verified by
-     the artifact's sha256 being unchanged across a full `basemap` test run.
-   - ~~`/carrier`'s either-endpoint caveat is pinned by a word, not a fact.~~ **DONE** —
-     `app/src/app/carrier/[code]/page.test.tsx` asserted `/filter-only/i` against the copy,
-     which is an assertion on a *phrase*: a future change making `endpoint_airport_id`
-     groupable would have left the page's stated reason false and the test green. It now also
-     reads the **live catalog** — `expect((await loadAllowlist()).dims.get("endpoint_airport_id")?.filterOnly).toBe(true)`.
-     Mutant-verified: flipping that catalog row to `FALSE` and rebuilding reddens exactly that
-     assertion and nothing else (1 failed, 50 passed).
-   - ~~Four stale comments.~~ **DONE**, all four, each checked against the code before being
-     rewritten rather than taken from the review's word: `networkMap.ts`'s fallback note now
-     says `pac` alone (Task 7b gave `car` real geometry); the generator no longer claims
-     `round3` is "exported so `basemap.test.ts` can round the same way" (it never imported it —
-     the export's real justification, that rounding happens *before* `fitPanels` so
-     `BASEMAP_FIT_POINTS` round-trips exactly, is stated instead); `smoke.sh` now says one
-     Explorer permalink filtered on `endpoint_airport_id`, not two on `origin_airport_id`; and
-     `/airport`'s rail comment no longer claims `hasNetwork` "mirrors `hasMix` exactly" —
-     `hasMix` spans `EARLIEST_MONTH..asOf` while `hasNetwork` spans `mapWindow`, so `?y=<year>`
-     with no filings that year gives `hasMix && !hasNetwork`, which is precisely why the page
-     has a branch for it.
+**<https://github.com/UnderMyBed/upguage/issues>** — 12 epics across four milestones
+(`M8 — Public launch`, `M9 — Post-launch surfaces`, `Engineering health`, `v1+`), each epic a
+chunk that can be handed to a swarm, each child task self-contained enough for one agent.
+
+This section used to be a 72-line hand-maintained backlog. It is gone on purpose: the same item
+was routinely stated three ways in three files and drifted independently — the either-endpoint
+filter was described as missing in **four** places for a full milestone after it shipped, and
+two of those were on served pages. A doc says what is TRUE about the system; the tracker says
+what is PLANNED.
+
+**M8 is the launch milestone, and its content is the gap between "built" and "reachable":** a
+deploy artifact and the never-executed portability test (#1), the monthly ingest and the
+freshness alert this file has required as a hard rule since M1 (#2), cache correctness before a
+CDN goes in front (#3), and launch configuration (#4). Everything in M9 is a surface the product
+works without.
+
+Two findings worth keeping here rather than only in the tracker, because both are rules:
+
+- **The deploy fell off the roadmap silently.** `docs/architecture/pipeline.md`'s milestone
+  table still reads "M6 — Deploy + Cloudflare cache + edge rate limit + monthly cron +
+  freshness alert". Actual M6 shipped Gauge Watch, M7 shipped maps, and shipping was never
+  rescheduled. Seven milestones of building, none of releasing. When a milestone is repurposed,
+  say where its original content went.
+- **`make app-smoke` could certify a build it never ran** (fixed — see the `kill_port` /
+  `port_free_or_die` commit and the § above). The gate leaked a server holding its own port, so
+  the next run's checks were answered by the previous run's build. Measured: two consecutive
+  runs reported `266 ok` for a build that did not contain the change under test.
 
 ## Architecture
 
