@@ -468,6 +468,7 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // moved into its own branch above (see that branch's doc comment, and `ENTITY_ROUTES`'s own).
 export const config = {
   matcher: [
+    "/explore",
     "/api/pivot",
     "/route/:pair",
     "/airport/:code",
