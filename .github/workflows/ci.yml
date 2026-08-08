@@ -43,13 +43,6 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           warehouse-tag: ${{ needs.resolve.outputs.tag }}
-      # MUTANT B (temporary, will be reverted): the setup action's own presence check has
-      # already passed (upgauge.duckdb existed when it ran), so this simulates the soft-
-      # failure sliver that check exists to catch DOWNSTREAM of a clean setup -- not "the
-      # restore never happened" (that is caught above), but "pytest sees no catalog and
-      # skips instead of erroring". Must drive the grep below red.
-      - name: MUTANT -- drop upgauge.duckdb after setup, before make check
-        run: rm -f upgauge.duckdb
       - name: make check
         env:
           # -rs prints WHY each test skipped, so the guard below can read reasons, not just
