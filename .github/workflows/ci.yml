@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# One in-flight run per ref. A superseded push should not keep burning a 5-minute smoke.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # Resolves ONE tag for the whole run. Required for correctness, not tidiness: the warehouse
+  # is deliberately unpinned (see the spec's D3), so a publish landing mid-run would otherwise
+  # let `check` resolve tag N while `smoke` resolves N+1 -- one run reporting on two datasets.
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+    steps:
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+                  --json tagName,createdAt \
+                  --jq '[.[] | select(.tagName | startswith("warehouse-"))]
+                        | sort_by(.createdAt) | reverse | .[0].tagName')
+          [ -n "$tag" ] && [ "$tag" != "null" ] || { echo "::error::no warehouse-* release found"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "### Warehouse \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
+
+  check:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          warehouse-tag: ${{ needs.resolve.outputs.tag }}
+      - name: make check
+        run: |
+          set -euo pipefail
+          make check 2>&1 | tee /tmp/check.log
+          # With a warehouse present the suite must report ZERO skips. 46 skip without data,
+          # so a skip here means the restore silently failed -- exactly the "gate passes for
+          # the wrong reason" failure this repo cannot tolerate.
+          if grep -qE '[0-9]+ skipped' /tmp/check.log; then
+            echo "::error::tests were SKIPPED with a warehouse present -- restore is broken"
+            exit 1
+          fi

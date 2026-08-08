@@ -1,0 +1,72 @@
+name: Set up upguage
+description: Pinned runtimes, installed deps, and a restored warehouse.
+
+inputs:
+  warehouse-tag:
+    description: Release tag to restore. Passed in, never resolved here -- every job in a run must agree on one dataset.
+    required: true
+  restore-raw:
+    description: Also restore data/raw (only `make verify` needs it; it is 136 MB).
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # Versions come from mise.toml. Nothing here may hardcode a python/node/uv version.
+    - uses: jdx/mise-action@v2
+      with:
+        install: true
+        cache: true
+
+    - name: Install pipeline deps
+      shell: bash
+      run: mise exec -- uv sync --extra dev
+
+    - name: Install app deps
+      shell: bash
+      run: mise exec -- npm ci --prefix app
+
+    - name: Restore warehouse from cache
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          upgauge.duckdb
+          data/parquet
+        key: warehouse-${{ inputs.warehouse-tag }}
+
+    - name: Download warehouse asset on cache miss
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        gh release download "${{ inputs.warehouse-tag }}" \
+          --repo "$GITHUB_REPOSITORY" --pattern 'warehouse-*.tar.zst'
+        tar --zstd -xf warehouse-*.tar.zst
+        rm -f warehouse-*.tar.zst
+
+    - name: Restore raw
+      if: inputs.restore-raw == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        gh release download "${{ inputs.warehouse-tag }}" \
+          --repo "$GITHUB_REPOSITORY" --pattern 'raw-*.tar.zst'
+        tar --zstd -xf raw-*.tar.zst
+        rm -f raw-*.tar.zst
+
+    # The anti-vacuity guard. A silent download failure would otherwise leave the suite
+    # reporting a green 428 passed with 46 skips, which proves far less than it appears to.
+    - name: Assert the warehouse is actually present
+      shell: bash
+      run: |
+        set -euo pipefail
+        test -f upgauge.duckdb || { echo "::error::upgauge.duckdb missing after restore"; exit 1; }
+        n=$(find data/parquet -name '*.parquet' | wc -l)
+        echo "parquet files restored: $n"
+        [ "$n" -gt 0 ] || { echo "::error::data/parquet is empty after restore"; exit 1; }
