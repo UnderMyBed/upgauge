@@ -42,15 +42,37 @@ _SCALAR = frozenset(
 
 
 def measures_sql(path: Path = SQL_PATH) -> dict[str, str]:
-    """Split the SQL file into {measure name: statement} on its `-- name:` markers."""
+    """Split the SQL file into {measure name: statement} on its `-- name:` markers.
+
+    Two authoring mistakes are rejected rather than silently swallowed:
+
+    - A repeated `-- name:` marker. The naive version of this loop lets the second block
+      overwrite the first in `out`, so a copy-pasted template block that keeps the old name
+      loses a measure with zero signal.
+    - A `;` still present after the single trailing one is stripped. Confirmed against DuckDB:
+      `con.execute("SELECT 1; SELECT 2;").fetchall()` returns `[(2,)]` -- a stray second
+      statement executes silently and its result is reported under the first statement's name.
+      `collect()`'s `_SCALAR` guard only checks the returned SHAPE, and a second
+      `count(...)`-shaped statement passes that check, so this is the only line of defense.
+    """
     text = path.read_text()
     parts = _NAME.split(text)
     # parts[0] is the header comment; then alternating name, body.
     out: dict[str, str] = {}
     for name, body in zip(parts[1::2], parts[2::2], strict=True):
-        statement = body.strip().rstrip(";").strip()
-        if statement:
-            out[name] = statement
+        statement = body.strip()
+        if statement.endswith(";"):
+            statement = statement[:-1].strip()
+        if not statement:
+            continue
+        if ";" in statement:
+            raise ValueError(
+                f"{name}: statement body contains an embedded ';' after the trailing one was "
+                "stripped -- a measure must be exactly one statement"
+            )
+        if name in out:
+            raise ValueError(f"{name}: duplicate '-- name:' marker")
+        out[name] = statement
     return out
 
 
