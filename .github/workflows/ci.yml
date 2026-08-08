@@ -44,13 +44,24 @@ jobs:
         with:
           warehouse-tag: ${{ needs.resolve.outputs.tag }}
       - name: make check
+        env:
+          # -rs prints WHY each test skipped, so the guard below can read reasons, not just
+          # a count. Without it pytest's quiet summary line hides the "no built catalog" /
+          # "no built Parquet warehouse" text this job needs to grep for.
+          PYTEST_ADDOPTS: -rs
         run: |
           set -euo pipefail
           make check 2>&1 | tee /tmp/check.log
-          # With a warehouse present the suite must report ZERO skips. 46 skip without data,
-          # so a skip here means the restore silently failed -- exactly the "gate passes for
-          # the wrong reason" failure this repo cannot tolerate.
-          if grep -qE '[0-9]+ skipped' /tmp/check.log; then
-            echo "::error::tests were SKIPPED with a warehouse present -- restore is broken"
+          # This job restores upgauge.duckdb + data/parquet but never data/raw (restore-raw
+          # defaults to "false" -- only `make verify` pays for that 136 MB). Real-data tests
+          # gated on data/raw (test_invariants_against_real_data.py, test_city_market.py,
+          # test_reproducibility.py's byte-identical-on-a-real-extract case) skip HERE BY
+          # DESIGN, same as on a fresh clone -- their own docstrings say so. A silently broken
+          # warehouse restore looks different: it skips tests gated on `upgauge.duckdb` or
+          # `data/parquet` existing, whose skip reasons say "no built catalog" or "no built
+          # Parquet warehouse". Only THOSE reasons mean the restore failed; grepping for any
+          # skip at all would make this job permanently red by design, not just when broken.
+          if grep -qE 'no built catalog|no built Parquet warehouse' /tmp/check.log; then
+            echo "::error::tests were skipped for a MISSING WAREHOUSE reason with a warehouse present -- restore is broken"
             exit 1
           fi
