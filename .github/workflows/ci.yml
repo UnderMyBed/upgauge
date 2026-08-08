@@ -150,3 +150,24 @@ jobs:
         run: make goldens
       - name: Assert they are byte-identical
         run: git diff --exit-code -- sql/03_queries/goldens/
+
+  # The only gate that catches production-only bugs. Turbopack __dirname, decodeURIComponent
+  # throwing, process.chdir, the DuckDB platform-switch require, and query normalization were
+  # every one found by building and serving -- never by the unit suite.
+  smoke:
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          warehouse-tag: ${{ needs.resolve.outputs.tag }}
+      - run: make app-smoke
+      - name: Upload the server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-server-log
+          path: /tmp/upgauge-smoke.log
+          if-no-files-found: warn
