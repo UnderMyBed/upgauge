@@ -186,6 +186,12 @@ parameters](pipeline.md#views-cannot-take-bound-parameters--so-cwd-is-load-beari
 behave identically. Everything is Docker + Parquet + env vars. R2 is S3-compatible. **Do
 not build on provider-specific runtimes** (Workers, D1, KV). This must stay a normal app.
 
+**That artifact is published, not just described.** `warehouse.yml` publishes
+`warehouse-YYYY.MM.tar.zst` (`upgauge.duckdb` + `data/parquet/`) and `raw-YYYY.MM.tar.zst`
+(`data/raw/`, needed only by `make verify`) as GitHub Release assets with build-provenance
+attestations. CI restores the first; the container work (#15) consumes the same one, so there is
+one producer for CI, the image, and the portability test.
+
 > This constraint earned its keep: swapping the original Fly pick for Hetzner was a one-line
 > change precisely because nothing depended on the provider.
 

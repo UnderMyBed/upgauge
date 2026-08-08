@@ -23,6 +23,7 @@ bite you.
 | [design/system.md](design/system.md) | **The design system: tokens, components, chart and map encodings, states** |
 | [design/brief.md](design/brief.md) | The design problem statement — brief, constraints, anti-goals, and the direction that was rejected (answered by `system.md`) |
 | [../LICENSE](../LICENSE) | MIT, covering all code in this repository. The upstream BTS data is US federal public domain (17 U.S.C. § 105) and imposes nothing on reuse of our code |
+| [../.github/](../.github/) | CI, the warehouse publisher and its drift classifier, CodeQL, Dependabot |
 
 ## Where the work lives
 

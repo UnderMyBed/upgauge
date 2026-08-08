@@ -615,14 +615,25 @@ that smears the same diff across every future commit instead of isolating it in 
 reformat once in a commit that does nothing else and add `ruff format --check` to `check`, or
 delete `fmt` and leave formatting unenforced.
 
-**There is no CI. `make check` on a developer's machine is the only gate that exists.**
-Where this file says `pipeline/` "runs in CI", that is the intended deployment shape, not
-current state. The consequence is not theoretical: the real-data invariant layer
-(`test_invariants_against_real_data.py`) skips itself when `data/raw/` is empty, which is right
-for a fresh clone but means **those rules go dark everywhere except a machine holding the full
-2015–2026 window — today, exactly one.** A green suite from a clone without data is a materially
-weaker claim than the same number here, and nothing in the output says so. See
-[data/invariants.md](../data/invariants.md#where-these-are-enforced).
+**CI runs the gates; `make check` on a developer's machine is no longer the only one.**
+`.github/workflows/ci.yml` resolves ONE warehouse release tag per run (`resolve`), restores it,
+and runs `data-contract`, `check`, `app-check`, `smoke` and `goldens`. `make verify` is nightly
+(`verify.yml`) because it needs the 232 MB raw+parquet pair and rebuilds twice.
+
+**The warehouse is deliberately NOT pinned.** CI restores the latest `warehouse-*` release, so an
+upstream BTS change reaches CI immediately instead of waiting for someone to bump a tag. Pinning
+would make CI green by freezing reality — the same defect class as a gate that passes for the
+wrong reason. What makes that survivable is that drift is caught at the **producer**:
+`warehouse.yml` diffs each build against the previous release and classifies the delta, filing a
+`critical` issue when the dataset's *shape* moves (a renamed aircraft type, a moved dim count) —
+the 2026-08-07 failure mode, which reddened 17 assertions while moving no number.
+
+**The real-data tests are no longer dark, and the accounting is exact.** The per-PR `check` job
+restores the warehouse but not `data/raw/`, so **15 raw-dependent tests skip there by design** —
+CI greps for the skip reasons that appear only when the *restore itself* broke
+(`no built catalog`, `no built Parquet warehouse`) rather than failing on any skip. Those 15 run
+nightly in `verify.yml`, which restores raw and runs `make check` alongside `make verify`. So
+466 of 481 run per PR, all 481 run nightly, and **nothing runs only on one developer's machine.**
 
 **Node is pinned at 24.13.0** — LTS since 2025-10, and Next.js 16 needs ≥ 20.9.
 

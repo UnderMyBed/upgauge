@@ -76,8 +76,9 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 served HTML, visible with JS off** — no client-side chart or map library anywhere in the render
 path. `data/raw/` holds the full 2015–2026 window.
 
-**Built, but never released.** There is no Dockerfile, no CI, and no cron. Deploy was originally
-M6 and fell off the roadmap when M6 was repurposed. That is the whole content of M8 — see below.
+**Built, but never released.** There is no Dockerfile. CI runs every gate
+(`.github/workflows/`), and `warehouse.yml` polls BTS and publishes the dataset as a release
+asset — but nothing is deployed. That is the remaining content of M8.
 
 Current gates, measured 2026-08-07 (these are the only counts kept here; per-milestone history
 lives in git and `docs/architecture/pipeline.md`):
@@ -164,6 +165,7 @@ versions.** `make` shells through `mise exec`, so the commands below work withou
 | `make ingest` | `fetch` + `fetch-reference` + `warehouse` | ✅ |
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |
 | `make goldens` | Regenerate the Explorer contract fixtures (`sql/03_queries/goldens/`) from `pipeline/pivot.py` | ✅ |
+| `make stats` | Regenerate `pipeline/reference/stats.generated.json`. **CI diff-gates it** — a diff means the upstream dataset moved | ✅ |
 | `make dev` | Next.js dev server (needs node) | ✅ |
 | `make app-check` | Typecheck + lint + test the app (`app/`) | ✅ |
 | `make app-build` | Production build of the app | ✅ |
@@ -445,3 +447,9 @@ signature element; it does not own these.
 - **The cron must fail loudly.** A broken ingest doesn't error — the site keeps serving and
   `DATA AS OF` silently stops advancing. Alert when `max(year_month)` hasn't moved in ~45
   days.
+- **The warehouse CI restores is unpinned, and drift is caught at the producer.** A red
+  `data-contract` job means the upstream dataset no longer matches this commit's reference
+  values; every other red in that run is probably a consequence. Fix by `make stats`, then
+  re-pin dependants in the same commit. **When a renamed value was the fixture for a transform,
+  MOVE the fixture** — a replacement that no longer exercises the path passes against the very
+  bug it exists to catch.
