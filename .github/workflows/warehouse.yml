@@ -92,6 +92,32 @@ jobs:
           echo "tag=warehouse-$dotted" >> "$GITHUB_OUTPUT"
           echo "raw_name=raw-$dotted" >> "$GITHUB_OUTPUT"
 
+      - id: classify
+        if: steps.previous.outputs.tag != ''
+        run: |
+          set -euo pipefail
+          make stats
+          cur=$(cat pipeline/reference/stats.generated.json)
+          prev=$(mise exec -- uv run python -c "
+          import duckdb, json, sys
+          sys.path.insert(0, '.')
+          from pipeline.stats import collect
+          con = duckdb.connect('/tmp/previous.duckdb', read_only=True)
+          print(json.dumps(collect(con)))
+          ")
+          mise exec -- uv run python .github/scripts/classify_warehouse.py "$prev" "$cur"
+
+      - name: File a critical issue on a shape change
+        if: steps.classify.outputs.file_issue == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Upstream data shape changed (${{ steps.stamp.outputs.year_month }})" \
+            --label critical \
+            --body "${{ steps.classify.outputs.issue_body }}"
+
       - name: Stop if this month is already published
         env:
           GH_TOKEN: ${{ github.token }}
