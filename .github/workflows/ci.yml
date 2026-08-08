@@ -65,3 +65,38 @@ jobs:
             echo "::error::tests were skipped for a MISSING WAREHOUSE reason with a warehouse present -- restore is broken"
             exit 1
           fi
+
+  # Answers one question, cheaply and first: is the restored warehouse the one this commit's
+  # reference values describe? When this is red, every other red in the run is explained by
+  # it. Deliberately NOT a dependency of the gate jobs -- they must still run, so their
+  # failures can be read as consequences rather than mysteries.
+  data-contract:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          warehouse-tag: ${{ needs.resolve.outputs.tag }}
+      - name: Regenerate the reference values
+        run: make stats
+      - name: Assert they match what is committed
+        run: |
+          set -euo pipefail
+          if ! git diff --exit-code -- pipeline/reference/stats.generated.json; then
+            {
+              echo "## Data contract FAILED"
+              echo
+              echo "The upstream dataset does not match this commit's reference values."
+              echo "**Any other failing job in this run is most likely a consequence of this.**"
+              echo
+              echo "Fix: run \`make stats\`, read the diff, and re-pin whatever depended on the"
+              echo "old values in the same commit."
+              echo
+              echo '```diff'
+              git diff -- pipeline/reference/stats.generated.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "### Data contract ok — warehouse matches committed reference values" >> "$GITHUB_STEP_SUMMARY"
