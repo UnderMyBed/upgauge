@@ -499,13 +499,12 @@ every row below, and the status on every 308 and 404.
 | `/airport/SEA?y=1999` | 200 | `no-store` | airport resolves fine, but `y` is outside the dataset's window |
 | `/airport/SEA?y=nonsense` | 200 | `no-store` | same outcome as an out-of-range year — malformed is not a distinct case |
 
-> The three `/watch` rows above are new in M6 Task 7 and, unlike every row above them, are
-> pinned only by `proxy.test.ts` calling `proxy()` directly — they have **not yet** been
-> curled against a served build. That distinction matters here specifically: `proxy.test.ts`
-> cannot observe `config.matcher` at all (it never goes through Next's routing layer), so it
-> cannot tell a present `/watch/:preset` matcher entry from a missing one — the exact gap
-> `app/smoke.sh` exists to close, and M6 Task 8's job, not this one's. Until that gate runs
-> against a real build these three rows are unit-verified, not measured.
+> The three `/watch` rows were unit-only when M6 Task 7 added them; **M6 Task 8 closed that
+> gap and they are curled against a served build today.** The distinction is kept because it
+> is the general rule, not a fact about `/watch`: `proxy.test.ts` cannot observe
+> `config.matcher` at all (it never goes through Next's routing layer), so it **cannot tell a
+> present matcher entry from a missing one**. Any new row in this table is unit-verified, not
+> measured, until `app/smoke.sh` curls it against a real build.
 
 **`/search`'s 307 is a deliberate departure from every 308 in this table, and it is `search.ts`'s
 choice, not `proxy.ts`'s** — the redirect status is set by `redirect()` in

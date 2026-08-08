@@ -15,11 +15,14 @@ const nextConfig: NextConfig = {
   // inside Server Components and Route Handlers ... using Node.js specific features".
   serverExternalPackages: ["@duckdb/node-api", "@duckdb/node-bindings"],
 
-  // EXPERIMENT (see the investigation this commit records): does disabling Next's URL
-  // normalization preserve the raw query string? The permalink format uses literal `:` and
-  // `,` as structural delimiters with data occurrences percent-encoded, and normalization
-  // form-encodes the query -- turning `k:a%2Cb,c` into `k%3Aa%2Cb%2Cc`, which collapses the
-  // structural and data commas into the same bytes.
+  // LOAD-BEARING, not an experiment (it was framed as one here until 2026-08, long after it
+  // was settled). The permalink format uses literal `:` and `,` as structural delimiters with
+  // data occurrences percent-encoded. Next's URL normalization form-encodes the query --
+  // turning `k:a%2Cb,c` into `k%3Aa%2Cb%2Cc`, collapsing the structural and data commas into
+  // the same bytes. Without this option EVERY filtered query fails on BOTH `/explore` and
+  // `/api/pivot`, reserved characters or not. It is one mechanism with `src/proxy.ts`, which
+  // reads the raw query from a header -- neither works without the other, and a page can never
+  // use `searchParams` for this. See docs/architecture/hosting.md § What `proxy.ts` owns.
   skipProxyUrlNormalize: true,
 };
 

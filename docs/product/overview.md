@@ -11,11 +11,21 @@ months lagged by nature. Design *around* that constraint rather than fighting it
 Two halves, and they need each other:
 
 - **The Explorer** — a real query/pivot surface over T-100. This is the foundation.
-- **The Insights** — Gauge Watch, Route Death Watch, Empty Planes. These are *saved presets
-  over the Explorer*, not separate systems.
+- **The Insights** — Gauge Watch, Route Death Watch, Empty Planes, New Routes. Editorial
+  entry points that answer a question the Explorer can pose but not rank.
 
 Every insight row must be one click from "show me the raw rows that produced this."
 Insights that can't be drilled into feel like astrology.
+
+> **The Insights are NOT saved Explorer queries**, though this file said so until 2026-08.
+> Every `meta_pivot_measures` row is a **single-window aggregate**; every preset ranks on a
+> **delta between two windows**, which no pivot measure can express. They read
+> `mart_route_health` directly and share only `DataTable`'s rank column with the Top-N builder.
+>
+> M6 disproved the claim and corrected it in six places. It survived *here* — the file
+> `docs/README.md` tells every new reader to start with — because this wording is a
+> **paraphrase**, and the sweep grepped for the exact phrase. Check corrections by meaning,
+> not by string.
 
 **Audience:** aviation enthusiasts and industry-adjacent people. Numerate. They know what a
 load factor is. Do not dumb it down; do make it legible.

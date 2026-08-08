@@ -37,14 +37,26 @@ for free.
 
 ## Milestones
 
-| | |
-|---|---|
-| **M1** | Ingest: `DL_SelectFields` POST loop → raw → Parquet, 2015→present. **Invariant tests passing.** |
-| ~~**M2**~~ | ~~Marts built by SQL, fully reproducible from scratch via `make`.~~ ✅ See [the M2 section](#m2--the-marts-layer). |
-| **M3** | Explorer: pivot query + URL state + table. The foundation — get it right. |
-| **M4** | Entity pages: route, airport, carrier, aircraft. Charts. Design system applied. |
-| **M5** | Maps (airport + carrier + aircraft), then `/watch` presets. |
-| **M6** | Deploy + Cloudflare cache + edge rate limit + monthly cron + **freshness alert**. |
+**What was planned, and what actually shipped.** The plan drifted by roughly two milestones and
+the terminal one was lost; both columns are kept because the drift is the lesson.
+
+| | planned | actually shipped |
+|---|---|---|
+| **M1** | Ingest: `DL_SelectFields` POST loop → raw → Parquet, 2015→present, invariant tests passing | ✅ as planned |
+| **M2** | Marts built by SQL, reproducible from scratch via `make` | ✅ as planned — [§ M2](#m2--the-marts-layer) |
+| **M3** | Explorer: pivot query + URL state + table | ✅ as planned, split M3a/M3b — [§ M3](#m3--the-explorer-split-into-m3a-and-m3b) |
+| **M4** | Entity pages, charts, design system applied | ✅ as planned, split M4a–M4d |
+| **M5** | Maps (airport + carrier + aircraft), then `/watch` presets | ❌ **neither.** Shipped the link graph: cell links, `/search`, `/sitemap.xml` — [§ M5](#m5--connecting-the-graph) |
+| **M6** | **Deploy + Cloudflare cache + edge rate limit + monthly cron + freshness alert** | ❌ **none of it.** Shipped `/watch` and the health score — [§ M6](#m6--gauge-watch-and-the-top-n-builder) |
+| **M7** | *(unplanned)* | The airport network map + the either-endpoint filter — M5's map item, two milestones late — [§ M7](#m7--maps-and-the-either-endpoint-filter-they-need-first) |
+| **M8** | — | **Deploy.** See the tracker; this is M6's original content, never rescheduled after M6 was repurposed. |
+
+**Seven milestones of building, none of releasing.** Nothing was dropped deliberately — M5's
+maps slid to M7, M6's deploy simply fell off the end, and no one noticed because this table was
+never updated. **When a milestone is repurposed, say where its original content went.**
+
+Outstanding work now lives in
+[GitHub Issues](https://github.com/UnderMyBed/upguage/issues), not in this table.
 
 ### M1 phase order
 
