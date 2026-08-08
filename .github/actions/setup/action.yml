@@ -60,13 +60,6 @@ runs:
         tar --zstd -xf raw-*.tar.zst
         rm -f raw-*.tar.zst
 
-    # MUTANT A (temporary, will be reverted): simulates a partial extraction that lands
-    # dims/*.parquet but drops t100_segment -- the exact hole the coarse `find | wc -l`
-    # count used to miss. Must be caught by the step below, before make check ever runs.
-    - name: MUTANT -- drop t100_segment after restore
-      shell: bash
-      run: rm -rf data/parquet/t100_segment
-
     # The anti-vacuity guard. A silent download failure would otherwise leave the suite
     # reporting a green 428 passed with 46 skips, which proves far less than it appears to.
     #
