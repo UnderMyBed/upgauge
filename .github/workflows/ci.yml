@@ -124,3 +124,29 @@ jobs:
             exit 1
           fi
           echo "## Data contract ok — warehouse matches committed reference values" >> "$GITHUB_STEP_SUMMARY"
+
+  app-check:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          warehouse-tag: ${{ needs.resolve.outputs.tag }}
+      # 349 of these 781 fail without a built upgauge.duckdb, and 16 of 50 test files open
+      # the real database and assert real measured values. The setup action's presence
+      # assertion is what stops that becoming a confusing mass failure.
+      - run: make app-check
+
+  goldens:
+    needs: resolve
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          warehouse-tag: ${{ needs.resolve.outputs.tag }}
+      - name: Regenerate the Explorer contract fixtures
+        run: make goldens
+      - name: Assert they are byte-identical
+        run: git diff --exit-code -- sql/03_queries/goldens/
