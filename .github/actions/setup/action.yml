@@ -62,11 +62,25 @@ runs:
 
     # The anti-vacuity guard. A silent download failure would otherwise leave the suite
     # reporting a green 428 passed with 46 skips, which proves far less than it appears to.
+    #
+    # Specific, not just present: `data/parquet` has two independent subtrees --
+    # `dims/*.parquet` and `t100_segment/year=*/`. A partial extraction can land the small
+    # dims files while dropping t100_segment (or vice versa) and still satisfy a bare
+    # `find data/parquet -name '*.parquet' | wc -l` count. Check each subtree the warehouse
+    # actually needs, and name whichever one is missing.
     - name: Assert the warehouse is actually present
       shell: bash
       run: |
         set -euo pipefail
-        test -f upgauge.duckdb || { echo "::error::upgauge.duckdb missing after restore"; exit 1; }
-        n=$(find data/parquet -name '*.parquet' | wc -l)
-        echo "parquet files restored: $n"
-        [ "$n" -gt 0 ] || { echo "::error::data/parquet is empty after restore"; exit 1; }
+        missing=()
+        [ -f upgauge.duckdb ] || missing+=("upgauge.duckdb")
+        compgen -G "data/parquet/t100_segment/year=*/*.parquet" > /dev/null \
+          || missing+=("data/parquet/t100_segment/year=*/ (no year partitions)")
+        compgen -G "data/parquet/dims/*.parquet" > /dev/null \
+          || missing+=("data/parquet/dims/*.parquet (no dims)")
+        if [ "${#missing[@]}" -gt 0 ]; then
+          echo "::error::warehouse restore incomplete -- missing: ${missing[*]}"
+          exit 1
+        fi
+        echo "t100_segment year partitions: $(compgen -G 'data/parquet/t100_segment/year=*/' | wc -l)"
+        echo "dims files: $(compgen -G 'data/parquet/dims/*.parquet' | wc -l)"
