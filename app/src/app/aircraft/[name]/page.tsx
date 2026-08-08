@@ -282,7 +282,7 @@ export async function AircraftView({
 
 /** The self-referential canonical `<link>`, re-resolved from the slug rather than built from it
  * verbatim. Both the "ok" and "redirect" branches of `AircraftSlugResult` carry `canonical`
- * (aircraftSlug.ts: the uppercased slug), so `/aircraft/a321-lr` declares `/aircraft/A321-LR`
+ * (aircraftSlug.ts: the uppercased slug), so `/aircraft/a320-1-2` declares `/aircraft/A320-1-2`
  * as canonical -- the bug this excludes is building the tag from `slug` directly. `ambiguous`
  * has no single canonical form to declare (that is the entire content of its 404, see
  * `AircraftPage` below), so it falls through to the same empty return as `notFound`. */

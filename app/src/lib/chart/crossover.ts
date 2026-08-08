@@ -26,7 +26,7 @@ type Leader = { code: string; label: string; seats: number };
  *
  * **`null` is the common case, not an edge case.** Measured on the built database: only
  * 12,416 of 22,919 routes (54%) ever change their #1 type, and JFK-LAX -- the flagship
- * route -- is not one of them (the A321/LR leads every year 2015-2026, even as its share
+ * route -- is not one of them (the A321nXLR leads every year 2015-2026, even as its share
  * falls 44.8% -> 35.2%, which is a real upgauge story but not a crossover). So the caller
  * renders no annotation at all on nearly half of routes. This function must never
  * manufacture one, and must never fall back to naming the largest type: that is not an

@@ -279,22 +279,38 @@ def test_new_reverse_lookups_select_exactly_the_fact_present_entities(con):
 
 
 def test_aircraft_short_names_survive_a_url_path_segment(con):
-    """16 fact-present short names carry a `/` or a space -- `A321/LR`, `MAX 8`, `FLT/AMPH` --
+    """15 fact-present short names carry a `/` or a space -- `A320-1/2`, `MAX 8`, `FLT/AMPH` --
     so `/aircraft/<short_name>` is not expressible as a single path segment for them.
 
     This is a Task 1 finding recorded where the fix has to live, not a Task 1 fix: the slug
     scheme is the entity page's decision. What this pins is the measurement that decision
     needs -- replacing `/` and ` ` with `-` is INJECTIVE over the 111 fact-present short names
     (0 collisions), so it is a safe scheme, and this test fails the day a BTS refresh makes it
-    unsafe. See docs/data/invariants.md § Entity resolution."""
-    awkward, slug_collisions = con.execute("""
+    unsafe. See docs/data/invariants.md § Entity resolution.
+
+    The separator count is matched with an EXPLICIT `/`-or-space test, not the `[^A-Z0-9-]`
+    regex this assertion used through M7. That regex is over-broad -- it also matches a
+    lowercase letter, which is a perfectly legal path segment and has nothing to do with the
+    problem the test names. It went unnoticed while every fact-present name was uppercase, and
+    then the 20260807 refresh renamed code 699 from `A321/LR` to `A321nXLR`: the separator
+    count fell 16 -> 15 while the regex count STAYED 16, because the lowercase `n` in the new
+    name replaced the `/` in the old one. The assertion stayed green across a change that
+    falsified its own docstring -- the exact "passes for the wrong reason" shape CLAUDE.md's
+    mutant rule exists for. Lowercase is tracked separately below, because `slugFor()`
+    uppercases and so it is genuinely a different property."""
+    awkward, lowercase, slug_collisions = con.execute("""
       WITH present AS (
         SELECT DISTINCT short_name FROM dim_aircraft_type
         WHERE code IN (SELECT DISTINCT aircraft_type FROM fct_segment_month))
-      SELECT (SELECT count(*) FROM present WHERE regexp_matches(short_name, '[^A-Z0-9-]')),
+      SELECT (SELECT count(*) FROM present
+                WHERE short_name LIKE '%/%' OR short_name LIKE '% %'),
+             (SELECT count(*) FROM present WHERE regexp_matches(short_name, '[a-z]')),
              (SELECT count(*) FROM (
                 SELECT upper(replace(replace(short_name, '/', '-'), ' ', '-')) AS slug
                 FROM present GROUP BY 1 HAVING count(*) > 1))
     """).fetchone()
-    assert awkward == 16
+    assert awkward == 15
+    # A321nXLR, and only it. Legal in a path segment, so it is NOT part of the count above --
+    # but slugFor() uppercases, so the canonical URL is /aircraft/A321NXLR, not the raw name.
+    assert lowercase == 1
     assert slug_collisions == 0

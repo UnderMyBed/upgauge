@@ -716,7 +716,7 @@ are kept, because the day BTS files an A330-900neo that fold is the only thing m
 `/aircraft/330-9NEO` resolve, and its absence would be a silent 404. Case-insensitivity that
 *is* exercised lives in `runSlugLookup`'s input fold (removing it reddens three tests).
 
-**16 fact-present `short_name`s are not URL path segments**: `A321/LR`, `A320-1/2`, `B767-2/R`,
+**15 fact-present `short_name`s are not URL path segments**: `A320-1/2`, `B767-2/R`,
 `B767-3/R`, `CE-206/7`, `CL-604/5`, `CRJ-2/4`, `RJ100/ER`, `SF-340/B`, `FLT/AMPH` carry a `/`,
 and `AS350 B2`, `DO-328 J`, `MAX 8`, `MAX 8-20`, `MAX 9`, `METRO 23` carry a space. Percent-
 encoding is not an option here — `app/src/proxy.ts` exists because Next re-encodes the query
@@ -724,6 +724,36 @@ string, and `%2F` in a path is its own hazard. Replacing both characters with `-
 injective over all 111 fact-present short names** (0 collisions, measured), so it is a safe
 slug scheme; `test_aircraft_short_names_survive_a_url_path_segment` pins that so a future
 refresh that makes it unsafe fails a test rather than a route.
+
+**That list was 16 until 2026-08-07, and the name that left it is the rule worth keeping.**
+`T_AIRCRAFT_TYPES` carries **current identity with no name history** — one row per
+`AC_TYPEID`, whose `BEGIN_DATE`/`END_DATE` date the *type*, never the *name* — exactly like
+`dim_carrier`'s `carrier_code` (see the hard rule in `CLAUDE.md`). So BTS can rename a type
+under a built warehouse and nothing in the data flags it. Measured: code **699** was
+`A321/LR` on `aircraft_types_20260729` and is `A321nXLR` on `20260807`; its `LONG_NAME` moved
+from `AIRBUS INDUSTRIE A321/LR` to `AIRBUS INDUSTRIE A321neoXLR` in the same refresh. The raw
+extract carries only the new name — there is no superseded row to fall back to.
+
+Three consequences, all of them observed rather than predicted:
+
+1. **A rename is not a data movement, and the two are easy to confuse.** The rename reddened
+   17 assertions and one `app/smoke.sh` needle (`B757-2 overtakes A321/LR · 2018`). Every
+   underlying *number* was unchanged — JFK–LAX's yearly leader table re-measured
+   byte-identical, ATL–MCO still crosses over in 2018, and 699's gauge spread is still
+   B6 176.0 → F9 230.0 full-window / 172.3 → 230.0 trailing-12. Re-measure before concluding
+   the facts moved.
+2. **A fixture can lose the property it was chosen for.** `A321/LR` was *the* worked example
+   for the slug transform, and `A321nXLR` carries no separator at all — so the renamed type
+   cannot exercise the mechanism, and the assertions would have passed against the very bug
+   they exist to catch. The fixtures moved to **`A320-1/2`** (code 694), chosen on traffic and
+   on still-filing: 987 M seats over the full window, current as of 2026-04. `B767-2/R` reads
+   like a fine substitute and is a trap — 35 rows, and it stopped filing in 2020-10.
+3. **Prefer a fixture whose slug has two separators.** `A320-1/2` exercises the `3^2`
+   candidate expansion where `A321/LR` only reached `3^1`.
+
+The separator-count distribution shifted exactly as that one rename predicts: **37 names carry
+none, 64 carry one, 10 carry two** (was 36/65/10). Max is still 2, so `MAX_SLUG_SEPARATORS = 4`
+keeps its headroom.
 
 **M4d adopted it, and re-pins the measurement from the app side too.** `slugFor()` in
 `app/src/lib/aircraftSlug.ts` is that transform; `aircraftSlug.test.ts` enumerates every

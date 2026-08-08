@@ -309,7 +309,7 @@ monochrome ramp is grayscale-safe by definition.
 **Two orderings, not one.** *Which* five types get a band is by **total seats**, descending.
 *Which shade* each band gets is by **gauge**, ascending. These are different sorts of the same
 five rows and they genuinely disagree — on JFK–LAX they share only their first element (seats:
-A321/LR, B767-3/R, B767-4, B757-2, A320-1/2; gauge: A321/LR, A320-1/2, B757-2, B767-3/R,
+A321nXLR, B767-3/R, B767-4, B757-2, A320-1/2; gauge: A321nXLR, A320-1/2, B757-2, B767-3/R,
 B767-4). Collapsing them into one sort produces a chart that looks entirely plausible and
 encodes nothing, which is why it is worth stating as a design rule and not only as a code
 comment. Bands are stacked in shade order, lightest at the bottom, so the ramp reads as one
@@ -347,8 +347,8 @@ encoding rather than a decorative reuse:
 
 | type | lightest | darkest | spread |
 |---|---|---|---|
-| A321/LR | B6 176.0 | F9 230.0 | **54.0 seats (31%)** |
-| A320-1/2 | MX 129.3 | G4 181.7 | 52.4 |
+| A321nXLR | B6 176.0 | F9 230.0 | **54.0 seats (31%)** |
+| A320-1/2 | MX 129.2 | G4 181.7 | 52.5 |
 | B737-8 | AS 159.8 | XP 187.7 | 27.9 |
 
 **Over the trailing 12 months `2025-05 → 2026-04`** — the window originally measured here, and
@@ -356,7 +356,7 @@ the source of the `172.3 → 230.0` pair quoted in prose elsewhere in this repo:
 
 | type | lightest | darkest | spread |
 |---|---|---|---|
-| A321/LR | B6 172.3 | F9 230.0 | **57.7 seats (33%)** |
+| A321nXLR | B6 172.3 | F9 230.0 | **57.7 seats (33%)** |
 | A320-1/2 | AA 150.0 | F9 184.1 | 34.1 |
 | B737-8 | AS 159.5 | SY 186.0 | 26.5 |
 

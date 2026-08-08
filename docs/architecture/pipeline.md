@@ -896,7 +896,7 @@ element:
 
 | by seats (membership) | | by gauge (shade) | |
 |---|---|---|---|
-| 1. A321/LR | 17,485,274 | `--g1` A321/LR | 128.1 |
+| 1. A321nXLR | 17,485,274 | `--g1` A321nXLR | 128.1 |
 | 2. B767-3/R | 7,852,109 | `--g2` A320-1/2 | 148.4 |
 | 3. B767-4 | 3,119,079 | `--g3` B757-2 | 164.2 |
 | 4. B757-2 | 2,900,388 | `--g4` B767-3/R | 216.6 |
@@ -992,7 +992,7 @@ mislead:
   exists to describe.
 
 **`null` is the common case, not an edge case:** only **12,416 of 22,919 routes (54%)** ever
-change their #1 type, and JFK–LAX is not one of them — the A321/LR leads every year 2015–2026
+change their #1 type, and JFK–LAX is not one of them — the A321nXLR leads every year 2015–2026
 even as its share falls 44.8% → 35.2%, which is a real upgauge story but not a crossover. So
 the chart renders no annotation on nearly half of routes, and must never manufacture one or
 fall back to naming the largest type: that is not an event, it would appear on every chart, and
@@ -1105,7 +1105,7 @@ absence on JFK–LAX (no crossover — 46% of routes) is satisfied by a componen
 renders an annotation, and presence is satisfied by one that manufactures an annotation on every
 chart, which is the specific failure the spec forbids. So both run: `/route/JFK-LAX` must
 contain no `overtakes`, and `/route/ATL-MCO` must contain the derived
-`B757-2 overtakes A321/LR · 2018` — measured against the built warehouse, and pinned as the
+`B757-2 overtakes A321nXLR · 2018` — measured against the built warehouse, and pinned as the
 whole derived string rather than the bare word so a refresh that moves it fails loudly instead
 of passing on a coincidence.
 
@@ -1381,12 +1381,14 @@ should collapse into one `entitySlugFromPath(pathname, prefix)` now that they al
 Two things are different here from the other two entity pages, and both were forced by the data
 rather than chosen.
 
-**The slug is a transform of `short_name`, not `short_name`.** 16 of the 112 fact-present short
+**The slug is a transform of `short_name`, not `short_name`.** 15 of the 112 fact-present short
 names carry a `/` or a space (`docs/data/invariants.md` § Entity resolution), so
-`/aircraft/A321/LR` parses as *two* path segments and can never match a single dynamic segment —
-the design spec's own worked example was unroutable. `app/src/lib/aircraftSlug.ts`'s `slugFor()`
-replaces both characters with `-` and uppercases; `/aircraft/a321-lr` 308s to `/aircraft/A321-LR`,
-never to the unroutable raw name.
+`/aircraft/A320-1/2` parses as *two* path segments and can never match a single dynamic segment.
+`app/src/lib/aircraftSlug.ts`'s `slugFor()`
+replaces both characters with `-` and uppercases; `/aircraft/a320-1-2` 308s to `/aircraft/A320-1-2`,
+never to the unroutable raw name. It was 16 names and the worked example was `A321/LR` until BTS
+renamed that type to `A321nXLR` on 2026-08-07 — `docs/data/invariants.md` § Entity resolution has
+the rename and why the fixture had to move rather than be renamed.
 
 That transform is many-to-one, so resolving a slug means **expanding it back into every
 `short_name` it could have come from** — each `-` was a `-`, a `/`, or a space — and handing the

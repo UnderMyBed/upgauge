@@ -33,13 +33,13 @@ describe("fetchAircraftMix", () => {
     expect(new Set(rows.map((r) => r.month)).size).toBe(136);
     // The raw BTS code is useless for display -- CLAUDE.md's M4a finding, `612` is the 737-700,
     // not the A321. Falsifiable: a `label` left as the raw id reads '699' here, and a resolver
-    // pointed at dim_aircraft_type.name reads 'AIRBUS INDUSTRIE A321'.
+    // pointed at dim_aircraft_type.name reads 'AIRBUS INDUSTRIE A321neoXLR'.
     const a321 = rows.find((r) => r.code === "699");
     // The key is a zero-padded VARCHAR ('079') -- int-parsing it breaks the resolver join
     // silently (CLAUDE.md), and the failure is exactly this: the label falls back to the raw
     // id because the lookup missed. No separate `typeof code === "string"` assertion here;
     // MixRow.code is typed `string`, so TypeScript already makes that one unfalsifiable.
-    expect(a321?.label).toBe("A321/LR");
+    expect(a321?.label).toBe("A321nXLR");
   });
 
   it("is not truncated by the row limit", async () => {
@@ -57,7 +57,7 @@ describe("fetchAircraftMix", () => {
     const a321 = rows.filter((r) => r.code === "699");
     const seats = a321.reduce((a, r) => a + r.seats, 0);
     const departures = a321.reduce((a, r) => a + r.departures, 0);
-    // Measured totals for the A321/LR on JFK-LAX over the full window, which the spec's
+    // Measured totals for the A321nXLR on JFK-LAX over the full window, which the spec's
     // gauge of 128.1 is computed from. Falsifiable: dropping `departures_performed` from the
     // measures makes `departures` NaN (Number(undefined)); reading the wrong column, or
     // failing to exclude quarantined rows, moves either figure off its measured value.
@@ -272,7 +272,7 @@ describe("toBands against the real JFK-LAX mix", () => {
     const rows = await fetchAircraftMix(JFK_LAX, FULL_FROM, FULL_TO);
     const { bands, other, axis } = toBands(rows);
 
-    // Membership -- top 5 by TOTAL seats: A321/LR 17,485,274 · B767-3/R 7,852,109 ·
+    // Membership -- top 5 by TOTAL seats: A321nXLR 17,485,274 · B767-3/R 7,852,109 ·
     // B767-4 3,119,079 · B757-2 2,900,388 · A320-1/2 2,132,256. The 6th, A321NEO at
     // 1,668,757, is the nearest miss and belongs in Other.
     //
@@ -281,18 +281,18 @@ describe("toBands against the real JFK-LAX mix", () => {
     // legible -- this one red means MEMBERSHIP broke, this one green and the next red means
     // SHADE broke. One combined assertion cannot tell you which.
     expect([...bands].map((b) => b.label).sort()).toEqual(
-      ["A320-1/2", "A321/LR", "B757-2", "B767-3/R", "B767-4"].sort(),
+      ["A320-1/2", "A321nXLR", "B757-2", "B767-3/R", "B767-4"].sort(),
     );
 
-    // Shade -- the returned order, by gauge ASCENDING: A321/LR 128.1 · A320-1/2 148.4 ·
+    // Shade -- the returned order, by gauge ASCENDING: A321nXLR 128.1 · A320-1/2 148.4 ·
     // B757-2 164.2 · B767-3/R 216.6 · B767-4 239.2.
     //
     // THIS is the assertion the milestone turns on. A single sort by seats produces
-    // ["A321/LR", "B767-3/R", "B767-4", "B757-2", "A320-1/2"] -- superficially identical
-    // membership, a completely different encoding. The A321/LR is first by seats AND the
+    // ["A321nXLR", "B767-3/R", "B767-4", "B757-2", "A320-1/2"] -- superficially identical
+    // membership, a completely different encoding. The A321nXLR is first by seats AND the
     // lightest by gauge, so it alone cannot tell the two apart; positions 2-5 can.
     expect(bands.map((b) => b.label)).toEqual([
-      "A321/LR",
+      "A321nXLR",
       "A320-1/2",
       "B757-2",
       "B767-3/R",

@@ -365,17 +365,25 @@ check "chart: the rest of the page still server-renders"      "$BODY" '>DL<'
 # never renders an annotation at all, and presence alone by one that manufactures one on every
 # chart -- which is the specific failure the spec forbids ("it must never fall back to
 # labelling the largest type"). Both routes are measured against the built warehouse:
-# JFK-LAX's A321/LR leads every year 2015-2026 (no crossover, 46% of routes are like this),
-# and ATL-MCO's leader goes A321/LR -> B757-2 in 2018. If a data refresh moves ATL-MCO's
+# JFK-LAX's A321nXLR leads every year 2015-2026 (no crossover, 46% of routes are like this),
+# and ATL-MCO's leader goes A321nXLR -> B757-2 in 2018. If a data refresh moves ATL-MCO's
 # crossover this check fails loudly and is re-measured; that is the point of pinning the
 # derived string rather than the word.
+#
+# It fired for real at the 20260807 refresh -- but on the NAME, not the crossover: BTS renamed
+# type 699's SHORT_NAME from 'A321/LR' to 'A321nXLR' (T_AIRCRAFT_TYPES carries current identity
+# with no name history, exactly like dim_carrier's carrier_code). The crossover itself was
+# re-measured and had not moved at all: B757-2 still takes ATL-MCO in 2018, and JFK-LAX's
+# yearly leaders are byte-identical to the pre-refresh table in crossover.test.ts. So a
+# rename can redden this check without any underlying fact changing -- re-measure before
+# assuming a data movement.
 check_not "chart: a route with no crossover gets NO annotation (JFK-LAX)" "$BODY" 'overtakes'
 # The negative half of the gap pair below. JFK-LAX filed in all 136 months of the window
 # (measured), so it must claim no gaps AND draw each band in exactly one piece.
 check_not "chart: a route with no gaps claims none (JFK-LAX)" "$BODY" 'no filings'
 check_re  "chart: an ungapped band is ONE path (JFK-LAX)" "$(count "$BODY" '<path fill="var(--g5)" d=')" '^1$'
 BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-MCO")
-check "chart: a route with one gets the derived annotation (ATL-MCO)" "$BODY" 'B757-2 overtakes A321/LR · 2018'
+check "chart: a route with one gets the derived annotation (ATL-MCO)" "$BODY" 'B757-2 overtakes A321nXLR · 2018'
 
 # M4c final review, F1, IN THE SERVED BYTES. HNL-LAS (7.07 M seats over the window) filed
 # nothing at all for 2020-04..2020-09 -- six months INSIDE the --panel-2 band this chart
@@ -752,21 +760,25 @@ check     "aircraft: carries a self-referential canonical link (Task 2)" "$BODY"
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8")
 check     "aircraft: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
-# The slug transform, end to end. 16 of the 112 fact-present short names carry a `/` or a space,
-# so `/aircraft/A321/LR` is TWO path segments and can never match this route -- the design spec's
-# own worked example was unroutable. `A321-LR` must resolve to the name `A321/LR` and render it.
-BODY=$(curl -s --max-time 30 "${BASE}/aircraft/A321-LR")
-check     "aircraft: a slugged name resolves and renders unslugged" "$BODY" '>A321/LR<'
-HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/A321-LR")
+# The slug transform, end to end. 15 of the 112 fact-present short names carry a `/` or a space,
+# so `/aircraft/A320-1/2` is TWO path segments and can never match this route. `A320-1-2` must
+# resolve to the name `A320-1/2` and render it.
+#
+# This was A321-LR until the 20260807 refresh renamed BTS type 699 to 'A321nXLR' -- a name with
+# no separator, which cannot exercise this route at all. A320-1/2 (code 694) also carries TWO
+# slug separators where A321/LR had one, so the served-build check now covers the 3^2 expansion.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/A320-1-2")
+check     "aircraft: a slugged name resolves and renders unslugged" "$BODY" '>A320-1/2<'
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/A320-1-2")
 check     "aircraft: sets the project Cache-Control on a slugged name" "$HDRS" "$HTML_CACHE_EXPECTED"
 
-CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/aircraft/a321-lr")
-HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/aircraft/a321-lr")
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/aircraft/a320-1-2")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/aircraft/a320-1-2")
 LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
 check     "aircraft: lower-case slug redirects"  "$CODE" '308'
-# To the SLUG, never to `/aircraft/A321/LR`, which is unroutable.
-check     "aircraft: redirect targets the canonical slug" "$LOC" '/aircraft/A321-LR'
-check_not "aircraft: redirect does not target the unroutable raw name" "$LOC" '/aircraft/A321/LR'
+# To the SLUG, never to `/aircraft/A320-1/2`, which is unroutable.
+check     "aircraft: redirect targets the canonical slug" "$LOC" '/aircraft/A320-1-2'
+check_not "aircraft: redirect does not target the unroutable raw name" "$LOC" '/aircraft/A320-1/2'
 check     "aircraft: 308 keeps the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/aircraft/NOPE-1")

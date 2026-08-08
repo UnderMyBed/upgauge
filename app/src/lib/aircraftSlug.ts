@@ -21,11 +21,19 @@ export function aircraftSlugFromPath(pathname: string): string | null {
 /** `short_name` -> the URL slug. THE TRANSFORM, and the reason this module exists.
  *
  * The slug is NEVER the BTS `code`: 612 is the 737-700, not the A321, and nobody pastes
- * `/aircraft/614`. But `short_name` is not a path segment either -- 16 of the 112 fact-present
- * names carry a `/` or a space ('A321/LR', 'MAX 8', 'FLT/AMPH', 'B767-3/R'), and
- * `/aircraft/A321/LR` parses as TWO segments, so it can never match a single dynamic segment.
- * Matching `upper(short_name)` directly 404s all 16, including the design spec's own worked
- * example and a band on the JFK-LAX chart. Task 1 measured that and left the decision here.
+ * `/aircraft/614`. But `short_name` is not a path segment either -- 15 of the 112 fact-present
+ * names carry a `/` or a space ('A320-1/2', 'MAX 8', 'FLT/AMPH', 'B767-3/R'), and
+ * `/aircraft/A320-1/2` parses as TWO segments, so it can never match a single dynamic segment.
+ * Matching `upper(short_name)` directly 404s all 15, including a band on the JFK-LAX chart.
+ * Task 1 measured that and left the decision here.
+ *
+ * That count is 15 and not 16 because BTS RENAMED one out from under it: type 699 was
+ * 'A321/LR' (this module's original worked example, and the design spec's) until the
+ * 20260807 refresh made it 'A321nXLR', which carries no separator at all. The mechanism is
+ * unaffected -- 15 names still need it -- but every fixture that used A321/LR to exercise it
+ * had to move to 'A320-1/2', the highest-traffic separator-bearing type (987 M seats over the
+ * full window, vs the 71,640 of B767-2/R, which stopped filing in 2020). Pick a replacement
+ * fixture on traffic AND on still-filing, not on how well it reads.
  *
  * Both characters become `-`, and the result is uppercased. Measured over the live catalog:
  * injective across all 112 fact-present types (111 distinct slugs; the single repeat is CE-180
@@ -43,7 +51,7 @@ export function slugFor(shortName: string): string {
  *
  * The candidate set below is 3^n, so an unbounded expansion turns
  * `/aircraft/-------------------` into a request to bind 3^19 parameters. The measured maximum
- * over all 111 fact-present slugs is 2 (10 slugs have two, 65 have one, 36 have none), so 4 is
+ * over all 111 fact-present slugs is 2 (10 slugs have two, 64 have one, 37 have none), so 4 is
  * twice the real world and still finite -- 81 candidates in the worst accepted case. The
  * catalog test pins the measurement, so a BTS refresh that ships a five-separator type fails a
  * test rather than a page. */
@@ -104,8 +112,8 @@ export function resolveFromMatches(slug: string, matches: AircraftRef[]): Aircra
  * (lookup_aircraft_by_name.sql). So the page names both airframes rather than rendering
  * whichever row DuckDB returned last, which is what the `AUS` bug did.
  *
- * The canonical URL is the uppercased SLUG, so `/aircraft/a321-lr` 308s to `/aircraft/A321-LR`
- * -- never to `/aircraft/A321/LR`, which is unroutable. */
+ * The canonical URL is the uppercased SLUG, so `/aircraft/a320-1-2` 308s to `/aircraft/A320-1-2`
+ * -- never to `/aircraft/A320-1/2`, which is unroutable. */
 export async function resolveAircraftSlug(slug: string): Promise<AircraftSlugResult> {
   const trimmed = slug.trim();
   if (trimmed.length === 0) return { kind: "notFound", reason: "no aircraft type named" };

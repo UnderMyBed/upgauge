@@ -8,7 +8,7 @@ import type { PivotQuery } from "@/lib/pivot/types";
  * AIRCRAFT_TYPE VARCHAR ('079') under the default stack, an AIRLINE_ID under the carrier stack.
  * Never a number (CLAUDE.md: int-parsing '079' breaks the join silently), and never the display
  * form: it is the identity the pivot, and any drill-down permalink, is keyed on. `label` is what
- * a reader sees ('A321/LR', 'WN'), and the two must not be confused: '612' is the 737-700, not
+ * a reader sees ('A321nXLR', 'WN'), and the two must not be confused: '612' is the 737-700, not
  * the A321.
  *
  * `departures` is here for one reason: the chart's shade ordering is by gauge
@@ -74,7 +74,7 @@ export const BY_AIRCRAFT_TYPE: MixDimension = {
  *
  * THE RAMP STILL ENCODES SOMETHING, MEASURED -- and every figure below names its WINDOW,
  * because they differ and this page draws the full one. Over 2015-01..2026-04, which is what
- * /aircraft fetches: the A321/LR spans B6 176.0 -> F9 230.0 (54.0 seats, 31%, on identical
+ * /aircraft fetches: the A321nXLR spans B6 176.0 -> F9 230.0 (54.0 seats, 31%, on identical
  * metal), the A320-1/2 spans MX 129.3 -> G4 181.7, and the B737-8 spans AS 159.8 -> XP 187.7.
  * Over the trailing 12 months alone the same three read B6 172.3 -> F9 230.0 (57.7, 33%),
  * AA 150.0 -> F9 184.1, and AS 159.5 -> SY 186.0 -- the source of the 172.3/230.0 pair quoted
@@ -355,7 +355,7 @@ function bySeatsDesc(a: TypeTotal, b: TypeTotal): number {
  *   - SHADE -- which of `--g1`..`--g5` a band gets -- is by GAUGE, ascending, so the lightest
  *     band is the smallest metal and an upgauge darkens the stack.
  *
- * On JFK-LAX the A321/LR is first by seats AND the lightest by gauge, so it alone cannot tell
+ * On JFK-LAX the A321nXLR is first by seats AND the lightest by gauge, so it alone cannot tell
  * a correct implementation from a single-sort one; positions 2-5 disagree completely (seats:
  * B767-3/R, B767-4, B757-2, A320-1/2 -- gauge: A320-1/2, B757-2, B767-3/R, B767-4). A chart
  * built from one sort looks entirely plausible and encodes nothing.

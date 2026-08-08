@@ -42,13 +42,13 @@ describe("/aircraft/<slug>", () => {
   });
 
   it("renders a type whose short name is not a URL path segment", async () => {
-    // `/aircraft/A321/LR` is two path segments and unroutable, so this page is reachable ONLY
+    // `/aircraft/A320-1/2` is two path segments and unroutable, so this page is reachable ONLY
     // through the slug transform. Falsifiable end to end: remove it and this 404s, while every
     // B737-8 test above stays green -- which is exactly how the spec's own worked example got
     // through design review.
-    const { container } = render(await page("A321-LR"));
-    expect(container.querySelector(".entity .code")?.textContent).toBe("A321/LR");
-    expect(screen.getByText(/AIRBUS INDUSTRIE A321\/LR/)).toBeDefined();
+    const { container } = render(await page("A320-1-2"));
+    expect(container.querySelector(".entity .code")?.textContent).toBe("A320-1/2");
+    expect(screen.getByText(/AIRBUS INDUSTRIE A320-100\/200/)).toBeDefined();
   });
 
   it("lists the operating carriers of the type, by code", async () => {
@@ -160,8 +160,8 @@ describe("/aircraft/<slug> redirect and 404", () => {
   it("redirects a lower-case slug permanently (308) to the canonical URL", async () => {
     // Fails if the redirect branch is dropped, if `permanentRedirect` regresses to plain
     // `redirect()` (digest would end ';307;'), or if the target carries the raw short name --
-    // `/aircraft/A321/LR` is unroutable, so the canonical MUST be the slug.
-    expect(await catchDigest("a321-lr")).toBe("NEXT_REDIRECT;replace;/aircraft/A321-LR;308;");
+    // `/aircraft/A320-1/2` is unroutable, so the canonical MUST be the slug.
+    expect(await catchDigest("a320-1-2")).toBe("NEXT_REDIRECT;replace;/aircraft/A320-1-2;308;");
   });
 
   it("404s an unknown short name", async () => {
@@ -184,11 +184,11 @@ describe("/aircraft/<slug> canonical metadata (M5, Task 2)", () => {
 
   it("declares the UPPERCASED slug for a lowercase request, not the request", async () => {
     // The bug to exclude, same shape as /airport/sea: emitting the requested spelling.
-    // /aircraft/a321-lr never renders this page in production (it 308s first), but the
+    // /aircraft/a320-1-2 never renders this page in production (it 308s first), but the
     // canonical tag must still name the uppercased slug -- never the unroutable raw short
-    // name (`A321/LR`) either.
-    const meta = await generateMetadata({ params: Promise.resolve({ name: "a321-lr" }) });
-    expect(meta.alternates?.canonical).toBe("http://localhost:3000/aircraft/A321-LR");
+    // name (`A320-1/2`) either.
+    const meta = await generateMetadata({ params: Promise.resolve({ name: "a320-1-2" }) });
+    expect(meta.alternates?.canonical).toBe("http://localhost:3000/aircraft/A320-1-2");
   });
 
   it("returns no canonical for a slug that cannot resolve at all", async () => {

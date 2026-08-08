@@ -86,10 +86,10 @@ describe("sitemapEntries", () => {
     expect(carriers.some((e) => e.url === "/carrier/DL")).toBe(true);
 
     const aircraft = await sitemapEntries("aircraft");
-    // A321/LR is one of the 16 fact-present short names carrying a '/', so its slug must
-    // read A321-LR (aircraftSlug.ts's slugFor) -- an un-transformed short name would emit an
+    // A320-1/2 is one of the 15 fact-present short names carrying a '/', so its slug must
+    // read A320-1-2 (aircraftSlug.ts's slugFor) -- an un-transformed short name would emit an
     // unroutable two-segment URL.
-    expect(aircraft.some((e) => e.url === "/aircraft/A321-LR")).toBe(true);
+    expect(aircraft.some((e) => e.url === "/aircraft/A320-1-2")).toBe(true);
     // Every URL is exactly two path segments (the /aircraft/ prefix plus one slug) -- an
     // un-transformed short name containing '/' would produce a THIRD segment instead.
     expect(aircraft.every((e) => e.url.split("/").length === 3)).toBe(true);
@@ -185,9 +185,9 @@ describe("dedupeAircraftBySlug", () => {
   it("throws, naming both short names, on a slugFor collision between two different names", () => {
     expect(() =>
       dedupeAircraftBySlug([
-        { shortName: "A321-LR", lastmod: "2026-04-01" },
-        { shortName: "A321/LR", lastmod: "2025-01-01" },
+        { shortName: "A320-1-2", lastmod: "2026-04-01" },
+        { shortName: "A320-1/2", lastmod: "2025-01-01" },
       ]),
-    ).toThrow(/A321-LR/);
+    ).toThrow(/A320-1-2/);
   });
 });

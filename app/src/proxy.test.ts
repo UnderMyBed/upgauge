@@ -114,7 +114,7 @@ describe("proxy", () => {
     ["a real airport", "/airport/SEA"],
     ["a real carrier", "/carrier/DL"],
     ["a real aircraft type", "/aircraft/B737-8"],
-    ["an aircraft slug whose name carries a '/'", "/aircraft/A321-LR"],
+    ["an aircraft slug whose name carries a '/'", "/aircraft/A320-1-2"],
   ])("sets the project's Cache-Control on %s", async (_label, path) => {
     const res = await proxy(new NextRequest(`http://localhost${path}`));
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
@@ -123,7 +123,7 @@ describe("proxy", () => {
   it.each([
     ["a lower-case airport code", "/airport/sea"],
     ["a lower-case carrier code", "/carrier/dl"],
-    ["a lower-case aircraft slug", "/aircraft/a321-lr"],
+    ["a lower-case aircraft slug", "/aircraft/a320-1-2"],
   ])("caches the 308 from %s, because its target is derived from the slug alone", async (
     _label,
     path,

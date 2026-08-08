@@ -20,11 +20,15 @@ describe("slugFor", () => {
   });
 
   it("replaces the two characters that cannot appear in a single path segment", () => {
-    // `/aircraft/A321/LR` parses as TWO path segments and can never match a single dynamic
-    // segment, so a page keyed on the raw short name 404s all 16 names that carry a `/` or a
-    // space -- including the design spec's own worked example. Task 1 measured this and left
-    // the decision here.
-    expect(slugFor("A321/LR")).toBe("A321-LR");
+    // `/aircraft/A320-1/2` parses as TWO path segments and can never match a single dynamic
+    // segment, so a page keyed on the raw short name 404s all 15 names that carry a `/` or a
+    // space. Task 1 measured this and left the decision here.
+    //
+    // `slugFor` is pure string work, so these assertions passed straight through the 20260807
+    // refresh that retired 'A321/LR' (BTS renamed type 699 to 'A321nXLR'). They were rewritten
+    // anyway: a worked example naming a type that no longer exists teaches the next reader a
+    // name they will not find in the catalog.
+    expect(slugFor("B767-3/R")).toBe("B767-3-R");
     expect(slugFor("A320-1/2")).toBe("A320-1-2");
     expect(slugFor("MAX 8")).toBe("MAX-8");
     expect(slugFor("MAX 8-20")).toBe("MAX-8-20");
@@ -44,8 +48,11 @@ describe("shortNameCandidates", () => {
     // The transform is many-to-one -- it maps `/` and ` ` onto a character that already occurs
     // in names like B737-8 -- so the reverse is a SET, not a function. Each `-` in the slug
     // could have been any of the three.
-    expect(new Set(shortNameCandidates("A321-LR"))).toEqual(
-      new Set(["A321-LR", "A321/LR", "A321 LR"]),
+    // FLT/AMPH, not B767-3/R: the latter's slug is 'B767-3-R', which carries the pre-existing
+    // dash TOO and so expands to nine, not three. A one-separator example has to be a name
+    // with exactly one `/`-or-space and no `-` of its own.
+    expect(new Set(shortNameCandidates("FLT-AMPH"))).toEqual(
+      new Set(["FLT-AMPH", "FLT/AMPH", "FLT AMPH"]),
     );
     // Two separators, nine candidates -- and 'A320-1/2', the real one, is among them.
     const two = shortNameCandidates("A320-1-2");
@@ -132,18 +139,24 @@ describe("resolveAircraftSlug", () => {
 
   it("resolves a slug whose short name is not a path segment", async () => {
     // THE test the transform exists for, and the one that fails if it is removed: matching
-    // `upper(short_name)` directly can never see 'A321/LR' from a single URL segment.
-    const r = await resolveAircraftSlug("A321-LR");
+    // `upper(short_name)` directly can never see 'A320-1/2' from a single URL segment.
+    //
+    // This used A321/LR until the 20260807 refresh, when BTS renamed type 699 to 'A321nXLR'
+    // -- a name with NO separator, which cannot exercise this path at all. A320-1/2 (code 694)
+    // is the replacement: the highest-traffic separator-bearing type in the catalog, 987 M
+    // seats, still filing as of 2026-04. It also carries TWO slug separators where A321/LR had
+    // one, so it exercises the 3^2 expansion rather than the 3^1 case.
+    const r = await resolveAircraftSlug("A320-1-2");
     if (r.kind !== "ok") throw new Error(`expected ok, got ${r.kind}`);
-    expect(r.type.id).toBe("699");
-    expect(r.type.code).toBe("A321/LR");
-    // The canonical URL is the SLUG, never the short name -- '/aircraft/A321/LR' is unroutable.
-    expect(r.canonical).toBe("A321-LR");
+    expect(r.type.id).toBe("694");
+    expect(r.type.code).toBe("A320-1/2");
+    // The canonical URL is the SLUG, never the short name -- '/aircraft/A320-1/2' is unroutable.
+    expect(r.canonical).toBe("A320-1-2");
   });
 
   it("redirects a lower-case slug to its canonical form", async () => {
-    const r = await resolveAircraftSlug("a321-lr");
-    expect(r).toEqual({ kind: "redirect", canonical: "A321-LR" });
+    const r = await resolveAircraftSlug("a320-1-2");
+    expect(r).toEqual({ kind: "redirect", canonical: "A320-1-2" });
   });
 
   it("refuses to pick one airframe for a slug that names two", async () => {

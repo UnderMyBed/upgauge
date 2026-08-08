@@ -93,9 +93,19 @@ _REAL_MASTER_CORD = latest_raw(RAW_DIR, MASTER_COORDINATE)
     reason=f"no Master Coordinate download in {RAW_DIR} — run `make fetch-reference`",
 )
 def test_real_data_has_the_documented_market_count(tmp_path):
-    """6,177 distinct CITY_MARKET_IDs, measured on master_coordinate_20260729 — the number
-    the SQL header and docs/data/model.md both cite."""
+    """6,181 distinct CITY_MARKET_IDs, measured on master_coordinate_20260807 — the number
+    the SQL header and docs/data/model.md both cite.
+
+    This number tracks a LIVE upstream reference table and moves when BTS adds a market:
+    6,177 on master_coordinate_20260729 -> 6,181 on 20260807, four new foreign markets at the
+    top of BTS's sequential 371xx block (Kulusuk, Trat, Dunhuang, Kendari). That is drift, not
+    a defect -- the raw extract itself carries 6,181, so the builder is faithful. Re-measure
+    and re-pin on each refresh rather than loosening the assertion: the count going UNEXPECTEDLY
+    (rather than by a handful) is the signal worth keeping, and a `>=` would never fire.
+    Foreign markets can never join a domestic fact, so the dimension is a superset by design
+    (this file's own orphan test runs one-directional) and such additions have no product
+    effect -- verified at the 20260807 refresh: 0 fact rows referenced the four, 0 orphans."""
     path = build_city_market_dim(_REAL_MASTER_CORD, tmp_path)
     con = duckdb.connect()
     n = con.execute("SELECT count(*) FROM read_parquet(?)", [str(path)]).fetchone()[0]
-    assert n == 6_177
+    assert n == 6_181

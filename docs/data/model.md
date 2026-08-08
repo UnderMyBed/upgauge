@@ -33,13 +33,21 @@ dim_aircraft_type     code, name, short_name, manufacturer, ssd_name,
 
 dim_city_market       city_market_id, name
                       -- from T_MASTER_CORD's CITY_MARKET_ID / DISPLAY_CITY_MARKET_NAME_FULL
-                      -- 6,177 distinct city_market_ids (master_coordinate_20260729), of
+                      -- 6,181 distinct city_market_ids (master_coordinate_20260807), of
                       -- which 257 have more than one DISPLAY_CITY_MARKET_NAME_FULL across
                       -- all history -- mostly geopolitical renames ('Aachen, West Germany'
                       -- -> 'Aachen, Germany'; 'Adler/Sochi, U.S.S.R.' -> 'Adler/Sochi,
-                      -- Russia'). Restricting to AIRPORT_IS_LATEST = '1' leaves exactly ONE
-                      -- ambiguous market: 30973 (CGQ), seq 1097301 'Changchun, China' vs
-                      -- seq 1646701 'Changchun\Jilin City, China'. The max(seq_id) tiebreak
+                      -- Russia'). The COUNT tracks a live upstream table and drifts upward
+                      -- as BTS adds markets (6,177 on 20260729 -> 6,181 on 20260807, four
+                      -- new foreign entries); the 257 did not move at that refresh.
+                      -- Restricting to AIRPORT_IS_LATEST = '1' leaves exactly ONE ambiguous
+                      -- market: 30973 (CGQ), city_market_seq_id 3097301 'Changchun, China'
+                      -- vs 3097302 'Changchun\Jilin City, China'. Those are CITY_MARKET_SEQ_
+                      -- IDs, which is what the SQL partitions on -- not the AIRPORT_SEQ_IDs
+                      -- (1097301 / 1646701) an earlier revision of this line cited by
+                      -- mistake; the tiebreak picks the same row either way, so the claim
+                      -- below held, but it named a column the query never reads.
+                      -- The max(seq_id) tiebreak
                       -- is load-bearing, not cosmetic: a nondeterministic pick would drift
                       -- between builds and break the byte-identical Parquet gate.
 

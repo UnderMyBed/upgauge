@@ -54,7 +54,7 @@
 -- thing that makes /aircraft/330-9NEO resolve, and its absence would be a silent 404 rather
 -- than an error. Same situation in lookup_carrier_by_code.sql, where 0 codes are lower-case.
 --
--- 16 fact-present short names contain a `/` or a space ('A321/LR', 'MAX 8', 'FLT/AMPH'), so
+-- 15 fact-present short names contain a `/` or a space ('A320-1/2', 'MAX 8', 'FLT/AMPH'), so
 -- they are not expressible as a single URL path segment as-is. That is the entity page's
 -- decision, not this file's; the measurement it needs is in docs/data/invariants.md
 -- § Entity resolution (replacing both with `-` is injective over all 111 fact-present short

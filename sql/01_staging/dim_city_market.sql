@@ -2,8 +2,11 @@
 -- ORIGIN_CITY_MARKET_ID / DEST_CITY_MARKET_ID since M1, but nothing could name one.
 --
 -- The source is keyed by CITY_MARKET_SEQ_ID -- point-in-time, exactly like AIRPORT_SEQ_ID --
--- so a market's name changes over history. Measured on master_coordinate_20260729:
--- 6,177 distinct CITY_MARKET_IDs, of which 257 have more than one name across all history.
+-- so a market's name changes over history. Measured on master_coordinate_20260807:
+-- 6,181 distinct CITY_MARKET_IDs, of which 257 have more than one name across all history.
+-- The market COUNT tracks a live upstream table and drifts upward as BTS adds markets
+-- (6,177 on 20260729 -> 6,181 on 20260807, four new foreign entries); the 257 and the single
+-- ambiguity below were re-measured at that refresh and did not move.
 -- Almost all are geopolitical renames: 'Aachen, West Germany' -> 'Aachen, Germany',
 -- 'Adler/Sochi, U.S.S.R.' -> 'Adler/Sochi, Russia'.
 --

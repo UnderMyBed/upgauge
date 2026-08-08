@@ -488,8 +488,8 @@ every row below, and the status on every 308 and 404.
 | `/carrier/DL` | 200 | long cache | fact-present carrier |
 | `/carrier/dl` | 308 | long cache | canonical is `dim_carrier`'s own spelling |
 | `/carrier/ZZ` · `/carrier/PA` | 404 | `no-store` | not in the catalog · in it, never filed |
-| `/aircraft/B737-8` · `/aircraft/A321-LR` | 200 | long cache | fact-present type; the second exercises the slug transform |
-| `/aircraft/a321-lr` | 308 | long cache | to the **slug**, never to the unroutable `A321/LR` |
+| `/aircraft/B737-8` · `/aircraft/A320-1-2` | 200 | long cache | fact-present type; the second exercises the slug transform |
+| `/aircraft/a320-1-2` | 308 | long cache | to the **slug**, never to the unroutable `A320-1/2` |
 | `/aircraft/NOPE-1` | 404 | `no-store` | unknown type |
 | **`/aircraft/CE-180`** | **404** | **`no-store`** | **`ambiguous`, not `notFound` — the allow-list is for this row** |
 | `/watch` | 200 | `HTML_CACHE` (1hr) | allow-list is unconditional (no slug to fail) — gate is the probe alone |

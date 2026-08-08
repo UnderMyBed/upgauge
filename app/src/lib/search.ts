@@ -124,8 +124,8 @@ async function routePairHit(q: string): Promise<SearchResult | null> {
 
 /** The aircraft half of the single-code exact-match step. Reuses `slugFor`/`shortNameCandidates`
  * from aircraftSlug.ts -- the same many-to-one slug transform `/aircraft/<slug>` resolves with
- * -- rather than re-deriving it, so a search for 'A321 LR' or 'A321/LR' finds the same type
- * `/aircraft/A321-LR` does. `lookupAircraftByName` throws `AmbiguousCodeError` when the slug
+ * -- rather than re-deriving it, so a search for 'A320 1 2' or 'A320-1/2' finds the same type
+ * `/aircraft/A320-1-2` does. `lookupAircraftByName` throws `AmbiguousCodeError` when the slug
  * names two BTS codes that share one short name (CE-180's shape); that is caught and turned
  * into two hits rather than allowed to propagate, so this step behaves exactly like the
  * cross-namespace collision guard below -- both real candidates are surfaced, neither is
@@ -208,12 +208,12 @@ export function rankByStartsWith(rows: NameMatchRow[], q: string): NameMatchRow[
 
 const KIND_OF: Record<string, SearchHit["kind"]> = { airport: "airport", carrier: "carrier", aircraft: "aircraft" };
 
-/** `search_by_name.sql`'s aircraft arm returns `dim_aircraft_type.short_name` RAW -- 16 of
- * 112 fact-present short names carry a `/` or a space ('A321/LR', 'MAX 8'), so the code and
+/** `search_by_name.sql`'s aircraft arm returns `dim_aircraft_type.short_name` RAW -- 15 of
+ * 112 fact-present short names carry a `/` or a space ('A320-1/2', 'MAX 8'), so the code and
  * href built from a substring hit must go through the same `slugFor()` transform
  * `aircraftExactHits` (above) and `entityLink.ts`'s `entityHref` already apply, or the link is
- * a non-canonical, likely-broken URL (`/aircraft/A321%2FLR` instead of `/aircraft/A321-LR`) --
- * fix round 1, Critical 1. `name` is left untouched: it's prose, not a path segment. */
+ * a non-canonical, likely-broken URL (`/aircraft/A320-1%2F2` instead of `/aircraft/A320-1-2`)
+ * -- fix round 1, Critical 1. `name` is left untouched: it's prose, not a path segment. */
 function hitFromRow(r: NameMatchRow): SearchHit {
   const kind = KIND_OF[r.kind];
   const code = kind === "aircraft" ? slugFor(r.code) : r.code;

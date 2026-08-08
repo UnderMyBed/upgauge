@@ -2,7 +2,7 @@
 -- direction: the fact table already stores the join key ('612'), and what is missing is
 -- something a reader can use.
 --
--- `code` here is dim_aircraft_type.short_name ('B737-7', 'ERJ-175', 'A321/LR'), NOT the
+-- `code` here is dim_aircraft_type.short_name ('B737-7', 'ERJ-175', 'A320-1/2'), NOT the
 -- BTS code. Returning the BTS code would render '612' in the cell -- exactly the value this
 -- milestone exists to eliminate -- so the short name is what plays the role `carrier_code`
 -- plays for carriers. Measured: short_name is non-null and non-empty for all 450 rows, and

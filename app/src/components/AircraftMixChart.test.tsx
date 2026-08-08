@@ -14,7 +14,7 @@ import { BY_CARRIER, type MixDimension, type MixRow } from "@/lib/chart/aircraft
 // this milestone exists to avoid.
 //
 //   code label      seats/mo  dep/mo  gauge   seats rank   gauge rank (shade)
-//   699  A321/LR      12000     100     120       1          1  --g1
+//   699  A321nXLR      12000     100     120       1          1  --g1
 //   626  B767-3/R      9000      45     200       2          4  --g4
 //   627  B767-4        6000      25     240       3          5  --g5
 //   622  B757-2        4800      30     160       4          3  --g3
@@ -37,7 +37,7 @@ function flat(seats: number, departures: number) {
 }
 
 const MEMBERS: TypeSpec[] = [
-  { code: "699", label: "A321/LR", ...flat(12000, 100) },
+  { code: "699", label: "A321nXLR", ...flat(12000, 100) },
   { code: "626", label: "B767-3/R", ...flat(9000, 45) },
   { code: "627", label: "B767-4", ...flat(6000, 25) },
   { code: "622", label: "B757-2", ...flat(4800, 30) },
@@ -50,7 +50,7 @@ const OTHERS: TypeSpec[] = [
 ];
 
 /** Ascending gauge, i.e. the order `--g1`..`--g5` must be assigned in. */
-const SHADE_ORDER = ["A321/LR", "A320-1/2", "B757-2", "B767-3/R", "B767-4"];
+const SHADE_ORDER = ["A321nXLR", "A320-1/2", "B757-2", "B767-3/R", "B767-4"];
 const RAMP = ["--g1", "--g2", "--g3", "--g4", "--g5"];
 
 const WINDOW_FROM = "2015-01";
@@ -94,13 +94,13 @@ const FLEET = rows([...MEMBERS, ...OTHERS]);
 /** Exactly five types, so there is nothing left over to aggregate. */
 const FIVE_TYPES = rows(MEMBERS);
 
-/** The B767-4 takes the lead from the A321/LR in `year`; everything else is unchanged.
- * `findCrossover` reports `{ year, from: "A321/LR", to: "B767-4" }`. */
+/** The B767-4 takes the lead from the A321nXLR in `year`; everything else is unchanged.
+ * `findCrossover` reports `{ year, from: "A321nXLR", to: "B767-4" }`. */
 function crossoverAt(year: number): MixRow[] {
   const swap = (before: number, after: number) => (month: string) =>
     Number(month.slice(0, 4)) < year ? before : after;
   return rows([
-    { code: "699", label: "A321/LR", seats: swap(12000, 3000), departures: swap(100, 25) },
+    { code: "699", label: "A321nXLR", seats: swap(12000, 3000), departures: swap(100, 25) },
     { code: "626", label: "B767-3/R", ...flat(9000, 45) },
     { code: "627", label: "B767-4", seats: swap(6000, 15000), departures: swap(25, 62.5) },
     { code: "622", label: "B757-2", ...flat(4800, 30) },
@@ -288,10 +288,10 @@ describe("AircraftMixChart", () => {
     // derived -- the fixture's leader change is invented here, so no hardcoded string can
     // match it.
     const container = chart(crossoverAt(2019));
-    expect(textsOf(container)).toContain("B767-4 overtakes A321/LR · 2019");
+    expect(textsOf(container)).toContain("B767-4 overtakes A321nXLR · 2019");
     expect(container.querySelector('g[stroke-dasharray] line')).not.toBeNull();
     // and it reaches a screen reader, not only the ink
-    expect(svgOf(container).getAttribute("aria-label")).toContain("B767-4 overtakes A321/LR");
+    expect(svgOf(container).getAttribute("aria-label")).toContain("B767-4 overtakes A321nXLR");
   });
 
   it("draws no annotation when the #1 type never changes", () => {

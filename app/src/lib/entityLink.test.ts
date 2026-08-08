@@ -50,11 +50,11 @@ describe("entityHref", () => {
   });
 
   // (b) An aircraft href must go through slugFor(). resolve_aircraft_type.sql selects
-  // short_name AS code, and 16 of 112 fact-present short names carry a `/` or a space --
-  // AIRCRAFT_PREFIX + hit.code alone yields /aircraft/A321/LR, two path segments, unroutable.
+  // short_name AS code, and 15 of 112 fact-present short names carry a `/` or a space --
+  // AIRCRAFT_PREFIX + hit.code alone yields /aircraft/A320-1/2, two path segments, unroutable.
   it("slugifies an aircraft short name that contains a slash", () => {
-    expect(entityHref("aircraft_type", resolved("A321/LR", "Airbus A321neo LR"))).toBe(
-      "/aircraft/A321-LR",
+    expect(entityHref("aircraft_type", resolved("A320-1/2", "AIRBUS INDUSTRIE A320-100/200"))).toBe(
+      "/aircraft/A320-1-2",
     );
   });
 

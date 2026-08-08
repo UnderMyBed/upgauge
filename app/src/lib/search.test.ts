@@ -149,31 +149,37 @@ describe("search -- name substring returns every match, across states (step 1c)"
 });
 
 describe("search -- aircraft substring hits are slugified (fix round 1, Critical 1)", () => {
-  it("'A321' matches two types via search_by_name.sql and links to the SLUG, not the raw short_name", async () => {
-    // Measured against the built database: search_by_name.sql's aircraft arm returns
-    // dim_aircraft_type.short_name RAW -- 'A321/LR' (AIRBUS INDUSTRIE A321/LR) and 'A321NEO'
-    // (AIRBUS INDUSTRIE A321-200N). '/' is a real path separator, so a hit built straight from
-    // the raw short_name produces /aircraft/A321%2FLR (percent-encoded, and NOT what
-    // /aircraft/[name]/page.tsx's own canonical URL is -- that's /aircraft/A321-LR). This is
-    // the exact defect fix round 1 found: no test in the original diff reached an aircraft hit
-    // through the SUBSTRING path (only the exact-match path, via 'B737-8', which already
-    // slugified correctly) -- reached via a query as ordinary as the feature's own 'A220'
-    // headline example.
-    const r = await search("A321");
+  it("'A320' matches two types via search_by_name.sql and links to the SLUG, not the raw short_name", async () => {
+    // Measured against the built database: search_by_name.sql's aircraft arm matches on
+    // dim_aircraft_type.NAME and returns short_name RAW -- 'A320-1/2' (AIRBUS INDUSTRIE
+    // A320-100/200) and 'A320NEO' (AIRBUS INDUSTRIE A320-200N). '/' is a real path separator,
+    // so a hit built straight from the raw short_name produces /aircraft/A320-1%2F2
+    // (percent-encoded, and NOT what /aircraft/[name]/page.tsx's own canonical URL is --
+    // that's /aircraft/A320-1-2). This is the exact defect fix round 1 found: no test in the
+    // original diff reached an aircraft hit through the SUBSTRING path (only the exact-match
+    // path, via 'B737-8', which already slugified correctly) -- reached via a query as
+    // ordinary as the feature's own 'A220' headline example.
+    //
+    // The query was 'A321' until the 20260807 refresh. It still returns two types, but BTS
+    // renamed 699 to 'A321nXLR' and neither A321 short name carries a separator any more, so
+    // the pair could no longer distinguish a slugified href from a raw one -- the assertion
+    // would have passed against the very bug it exists to catch. 'A320' restores the shape
+    // exactly: two hits, one whose slug differs from its short name and one whose does not.
+    const r = await search("A320");
     expect(r.kind).toBe("results");
     if (r.kind !== "results") return;
     const hits = flatten(r.groups).filter((h) => h.kind === "aircraft");
     expect(hits).toContainEqual({
       kind: "aircraft",
-      code: "A321-LR",
-      name: "AIRBUS INDUSTRIE A321/LR",
-      href: "/aircraft/A321-LR",
+      code: "A320-1-2",
+      name: "AIRBUS INDUSTRIE A320-100/200",
+      href: "/aircraft/A320-1-2",
     });
     expect(hits).toContainEqual({
       kind: "aircraft",
-      code: "A321NEO",
-      name: "AIRBUS INDUSTRIE A321-200N",
-      href: "/aircraft/A321NEO",
+      code: "A320NEO",
+      name: "AIRBUS INDUSTRIE A320-200N",
+      href: "/aircraft/A320NEO",
     });
     // Neither hit's href ever carries a raw '/' or a percent-encoded one.
     for (const h of hits) {

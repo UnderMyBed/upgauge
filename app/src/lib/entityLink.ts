@@ -36,8 +36,8 @@ export function entityHref(dimKey: string, hit: Resolved | undefined): string | 
   const prefix = ENTITY_PREFIX.get(dimKey);
   if (prefix === undefined) return null;
   if (hit === undefined || hit.code === null) return null;
-  // aircraft_type resolves short_name AS code, and 16 of 112 fact-present short names carry a
-  // `/` or a space -- `A321/LR` is two path segments. slugFor is what makes it one.
+  // aircraft_type resolves short_name AS code, and 15 of 112 fact-present short names carry a
+  // `/` or a space -- `A320-1/2` is two path segments. slugFor is what makes it one.
   const slug = dimKey === "aircraft_type" ? slugFor(hit.code) : hit.code;
   return prefix + encodeURIComponent(slug);
 }

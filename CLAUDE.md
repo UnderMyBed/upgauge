@@ -235,15 +235,22 @@ them real. Each one has exactly one thing it could not inherit:
   aircraft types (the fleet is the subject); routes and airports wanted the Top-N builder, which
   did not exist at M4d — M6 Task 3 built it and Task 4 gave `/carrier` its Top routes and Top
   origin airports tables (below).
-- **`/aircraft`'s slug is a transform, not a key, and its chart is not the same chart.** 16 of
-  112 fact-present `short_name`s carry a `/` or a space, so `/aircraft/A321/LR` is two path
+- **`/aircraft`'s slug is a transform, not a key, and its chart is not the same chart.** 15 of
+  112 fact-present `short_name`s carry a `/` or a space, so `/aircraft/A320-1/2` is two path
   segments and can never be a page — `/` and space become `-`, and resolving inverts that by
   expanding the slug into every name it could have come from (capped at 4 separators; measured
   max is 2). The chart stacks by **operating carrier**, because a type stack on a type page is
-  one band, and the ramp then encodes configuration rather than fleet (A321/LR, trailing 12:
+  one band, and the ramp then encodes configuration rather than fleet (A321nXLR, trailing 12:
   B6 172.3 → F9 230.0; full window, which is what the chart draws: 176.0 → 230.0
   seats/departure across carriers). `/aircraft/CE-180` names two airframes that both really flew
-  and is a 404 that names and links both rather than picking one.
+  and is a 404 that names and links both rather than picking one. **It was 16 names and the
+  worked example was `A321/LR` until the 2026-08-07 refresh, when BTS renamed type 699 to
+  `A321nXLR` — a name with no separator at all.** `T_AIRCRAFT_TYPES` carries current identity
+  with no name history, exactly like `dim_carrier`'s `carrier_code`, so a rename lands silently
+  in a rebuild. It reddened 17 assertions and one smoke needle while moving **no** underlying
+  number, and it retired the fixture that proved the slug mechanism — the fixtures moved to
+  `A320-1/2` (987 M seats, still filing, and two slug separators rather than one).
+  `docs/data/invariants.md` § Entity resolution owns the rule.
 
 **M4b's Critical was a routing bug, and M4d is where it had to not recur.** `proxy.ts` now
 carries a table (`ENTITY_ROUTES`) of slug-reader + resolver, one row per entity page, alongside

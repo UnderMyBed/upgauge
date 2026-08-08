@@ -114,17 +114,17 @@ describe("findCrossover", () => {
   });
 
   it("names the types by display label, not by the catalog code", () => {
-    // The annotation is read by a human ("A321/LR overtakes B757-2"). Falsifiable: an
+    // The annotation is read by a human ("A321nXLR overtakes B757-2"). Falsifiable: an
     // implementation returning the grouping key reports { from: "622", to: "699" }. `code`
     // is useless for display -- 612 is the 737-700, not the A321 (an M4a finding).
     const rows = [
       { month: "2016-06", code: "622", label: "B757-2", seats: 100, departures: 1 },
-      { month: "2017-06", code: "699", label: "A321/LR", seats: 100, departures: 1 },
+      { month: "2017-06", code: "699", label: "A321nXLR", seats: 100, departures: 1 },
     ];
     expect(findCrossover(rows)).toEqual({
       year: "2017",
       from: "B757-2",
-      to: "A321/LR",
+      to: "A321nXLR",
     });
   });
 
@@ -145,7 +145,7 @@ describe("findCrossover", () => {
   });
 
   it("returns null for JFK-LAX, which has no crossover in the window", () => {
-    // Measured against the built upgauge.duckdb: the A321/LR is the #1 type by seats in
+    // Measured against the built upgauge.duckdb: the A321nXLR is the #1 type by seats in
     // every year 2015-2026 on JFK-LAX, so the flagship route this project demos carries NO
     // annotation. Only 12,416 of 22,919 routes (54%) ever change their #1 type, so null is
     // the common case.
@@ -157,18 +157,18 @@ describe("findCrossover", () => {
     // constant-input test: an implementation watching anything but the #1 fires here.
     const jfkLax: MixRow[] = (
       [
-        ["2015", "699", "A321/LR", 1695791, "622", "B757-2", 948650],
-        ["2016", "699", "A321/LR", 1843738, "694", "A320-1/2", 618911],
-        ["2017", "699", "A321/LR", 1901501, "694", "A320-1/2", 610850],
-        ["2018", "699", "A321/LR", 1977105, "624", "B767-4", 471088],
-        ["2019", "699", "A321/LR", 2005276, "626", "B767-3/R", 546898],
-        ["2020", "699", "A321/LR", 886189, "626", "B767-3/R", 691298],
-        ["2021", "699", "A321/LR", 922535, "624", "B767-4", 621812],
-        ["2022", "699", "A321/LR", 1581153, "626", "B767-3/R", 907163],
-        ["2023", "699", "A321/LR", 1669213, "626", "B767-3/R", 1000292],
-        ["2024", "699", "A321/LR", 1383179, "626", "B767-3/R", 1097623],
-        ["2025", "699", "A321/LR", 1234724, "626", "B767-3/R", 816064],
-        ["2026", "699", "A321/LR", 384870, "626", "B767-3/R", 249287],
+        ["2015", "699", "A321nXLR", 1695791, "622", "B757-2", 948650],
+        ["2016", "699", "A321nXLR", 1843738, "694", "A320-1/2", 618911],
+        ["2017", "699", "A321nXLR", 1901501, "694", "A320-1/2", 610850],
+        ["2018", "699", "A321nXLR", 1977105, "624", "B767-4", 471088],
+        ["2019", "699", "A321nXLR", 2005276, "626", "B767-3/R", 546898],
+        ["2020", "699", "A321nXLR", 886189, "626", "B767-3/R", 691298],
+        ["2021", "699", "A321nXLR", 922535, "624", "B767-4", 621812],
+        ["2022", "699", "A321nXLR", 1581153, "626", "B767-3/R", 907163],
+        ["2023", "699", "A321nXLR", 1669213, "626", "B767-3/R", 1000292],
+        ["2024", "699", "A321nXLR", 1383179, "626", "B767-3/R", 1097623],
+        ["2025", "699", "A321nXLR", 1234724, "626", "B767-3/R", 816064],
+        ["2026", "699", "A321nXLR", 384870, "626", "B767-3/R", 249287],
       ] as const
     ).flatMap(([year, topCode, topLabel, topSeats, nextCode, nextLabel, nextSeats]) => [
       { month: `${year}-06`, code: topCode, label: topLabel, seats: topSeats, departures: 1 },
