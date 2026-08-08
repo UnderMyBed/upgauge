@@ -24,6 +24,21 @@ revisit, and end up stating the same rule three ways.
 prices go inline next to the constraint they support. A rule without its evidence gets
 re-litigated or "simplified" by someone who doesn't know why it exists.
 
+### What a milestone closeout may add to THIS file
+
+**A rule. Never narrative, never measurements.** A rule is something whose absence would let a
+bug recur — the test is *"would removing this let someone re-introduce a defect we already paid
+for?"*, not *"is this interesting?"*. Narrative belongs in the commit message. Measurements
+belong in generated output, because hand-written ones rot (every closeout from M4c on found one
+that had).
+
+This file is loaded into context every session, so its size is a cost paid on every request. It
+reached 909 lines before anyone measured it: **596 of them (66.7%) were milestone narrative
+already duplicated in `docs/architecture/pipeline.md`**, and closeouts were adding ~110 lines
+each while nothing was ever removed. `make check` enforces a line budget as a backstop
+(`CLAUDE_MD_BUDGET`, Makefile). Raising it is allowed and deliberate — say why in the commit.
+The budget is not the rule; it only catches the rule being ignored.
+
 ### Use the superpowers skills
 
 Invoke the applicable skill before starting a unit of work, and say which one:

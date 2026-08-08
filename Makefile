@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install ingest build goldens basemap dev app-check app-build app-smoke test lint fmt check clean
+.PHONY: help install ingest build goldens basemap dev app-check app-build app-smoke test lint fmt check check-docs clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -74,7 +74,37 @@ lint:  ## Lint (ruff)
 fmt:  ## Format (ruff)
 	$(UV) run ruff format .
 
-check: lint test  ## Lint + test. Run this before every commit.
+# CLAUDE.md is loaded into context every session, so its size is a running cost paid on every
+# request -- not a tidiness preference. It reached 909 lines before anyone measured it, of which
+# 596 (66.7%) were milestone narrative duplicated in docs/architecture/pipeline.md. Milestone
+# closeouts were adding ~110 lines each (M5 +120, M6 +111, M7 +113) and nothing was ever removed.
+#
+# The budget is a BACKSTOP for the rule in CLAUDE.md § Working agreements, not the rule itself:
+# a closeout may add a RULE, never narrative or measurements. A budget alone would just pressure
+# someone into deleting a load-bearing rule to stay under the number.
+#
+# Raising it is allowed and is a deliberate act -- change the number here and say why in the
+# commit message. What is not allowed is the number drifting upward unremarked.
+#
+# 475 is derived, not round: the file is 443 after the M7-era compaction, and a rule costs
+# 8-15 lines, so this is headroom for about three more before a prune is forced. A budget of
+# 450 was tried first and left 7 lines -- it would have failed on the very next rule, which
+# makes the gate noise instead of signal. Set it close enough to bite, far enough to mean
+# something when it does.
+CLAUDE_MD_BUDGET ?= 475
+
+check-docs:  ## Enforce the CLAUDE.md line budget (see CLAUDE.md § Working agreements)
+	@n=$$(wc -l < CLAUDE.md); \
+	if [ "$$n" -gt "$(CLAUDE_MD_BUDGET)" ]; then \
+	  echo "  FAIL CLAUDE.md is $$n lines, budget $(CLAUDE_MD_BUDGET)."; \
+	  echo "       A closeout may add a RULE, not narrative or measurements."; \
+	  echo "       Narrative -> the commit message. Measurements -> generated output."; \
+	  echo "       Remove something, or raise CLAUDE_MD_BUDGET in the Makefile and say why."; \
+	  exit 1; \
+	fi; \
+	echo "  CLAUDE.md is $$n lines (budget $(CLAUDE_MD_BUDGET)) ... ok"
+
+check: lint check-docs test  ## Lint + test. Run this before every commit.
 
 clean:  ## Remove build artifacts and caches (NOT data/raw — that's the audit trail)
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ *.egg-info
