@@ -22,7 +22,7 @@ bite you.
 | [architecture/pipeline.md](architecture/pipeline.md) | Repo layout, the milestone record, the ingest/query layer, **the M2 marts layer and the load-bearing CWD constraint** |
 | [design/system.md](design/system.md) | **The design system: tokens, components, chart and map encodings, states** |
 | [design/brief.md](design/brief.md) | The design problem statement — brief, constraints, anti-goals, and the direction that was rejected (answered by `system.md`) |
-| [../LICENSE](../LICENSE) | MIT. The upstream BTS data is public domain (17 U.S.C. § 105), so it constrains reuse of this code not at all — the licence covers the pipeline and marts only |
+| [../LICENSE](../LICENSE) | MIT, covering all code in this repository. The upstream BTS data is US federal public domain (17 U.S.C. § 105) and imposes nothing on reuse of our code |
 
 ## Where the work lives
 
