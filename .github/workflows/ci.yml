@@ -171,3 +171,18 @@ jobs:
           name: smoke-server-log
           path: /tmp/upgauge-smoke.log
           if-no-files-found: warn
+
+  # PRs only -- the action compares a PR's dependency changes against the base ref and has
+  # nothing to compare on a push to main.
+  dependency-review:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+          comment-summary-in-pr: on-failure
