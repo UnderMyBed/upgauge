@@ -90,36 +90,33 @@ excluded, trailing 12 (2025-05 → 2026-04) and all-time (2015-01 → 2026-04):
 | carriers | 70 | 114 |
 | aircraft types | 74 | 110 |
 
-**These `all-time` numbers are quarantine-EXCLUDED, and that makes them the wrong universe for
-the sitemap** — do not quote them as "how many entity pages exist." A quarantined row
-(`load_factor > 1.0`, CLAUDE.md) is still a real filing and its page still 200s, so excluding
-it silently undercounts. `docs/product/scope.md` § D2 has the number that actually answers
-"how many entity pages get indexed" — `/sitemap.xml`, **quarantine-INCLUDED**: 1,045
-airports, 114 carriers, 110 aircraft, 22,420 routes (23,689 total at M5; **23,694** as of M6
-Task 7, +5 for `/watch` and its four presets, which are not entity pages and are not part of
-this table's own breakdown). Airports and carriers here
-happen to be close to those figures (1,041 vs. 1,045; 114 both ways — no fact-present carrier's
-entire row history is quarantined), but **aircraft types' `110` here is a different count
-entirely and its match to the sitemap's `110` is coincidence, not agreement**: this row counts
-distinct BTS `aircraft_type` CODES with quarantine excluded (112 codes all-time, 110 once
-quarantine-only codes drop out), while the sitemap counts distinct URL-routable SLUGS with
-quarantine included (112 fact-present codes → 111 distinct short names → 110 once the one
-ambiguous short name, `CE-180`, is excluded — `sql/03_queries/sitemap_aircraft.sql`). Neither
-this table nor a future prerender build should key its build list on this row's counts without
-re-deriving them the way the sitemap does; they were computed independently and drift the
-moment either changes.
+**These `all-time` numbers are quarantine-EXCLUDED, which makes them the wrong universe for the
+sitemap** — do not quote them as "how many entity pages exist." A quarantined row
+(`load_factor > 1.0`, CLAUDE.md) is still a real filing and its page still 200s, so excluding it
+silently undercounts. `docs/product/scope.md` § D2 has the number that answers "how many entity
+pages get indexed" — `/sitemap.xml`, **quarantine-INCLUDED**: 1,045 airports, 114 carriers, 110
+aircraft, 22,420 routes, **23,694** total (which includes `/watch` and its four presets — not
+entity pages, and not part of this table's breakdown).
+
+Airports and carriers happen to land close to those figures (1,041 vs. 1,045; 114 both ways — no
+fact-present carrier's entire row history is quarantined). **Aircraft types' `110` here is a
+different count entirely, and its match to the sitemap's `110` is coincidence, not agreement:**
+this row counts distinct BTS `aircraft_type` CODES, quarantine excluded (112 all-time, 110 once
+quarantine-only codes drop out); the sitemap counts distinct URL-routable SLUGS, quarantine
+included (112 fact-present codes → 111 short names → 110 once the ambiguous `CE-180` is
+excluded, `sql/03_queries/sitemap_aircraft.sql`). **Never key a build list on this table's
+counts — re-derive them the way the sitemap does.** They are computed independently and drift
+the moment either side changes.
 
 The three page types together are ~1,265 all-time URLs, three orders of magnitude below the
-20,000-file cap above and nowhere near a build-time problem. The route pages are the set that
-is not finite in the same sense — **22,420** undirected pairs, excluding same-airport rows
-(`scope.md` § D2 / `sitemap_routes.sql`, quarantine-inclusive, the sitemap's own count) — which
-is why the split is entity pages static, routes served. (This section previously quoted
-**22,950**, which is a real, separately-measured count but the wrong universe for THIS
-question: it is the same-airport-INCLUSIVE figure `pipeline.md` § M4c's chart-gap statistics
-use — 22,950 − 530 same-airport pairs = 22,420, `docs/data/invariants.md` § Route identity's own
-arithmetic. A same-airport "route" has no `/route/<pair>` page at all — `routePair.ts` 404s it as
-"not a route between two airports" — so it does not belong in a count of pages this split is
-about.)
+20,000-file cap above and nowhere near a build-time problem. Route pages are the set that is not
+finite in the same sense — **22,420** undirected pairs — which is why the split is entity pages
+static, routes served.
+
+**22,420 and 22,950 are both real and answer different questions.** 22,950 is
+same-airport-INCLUSIVE; 22,420 excludes the 530 same-airport pairs (`docs/data/invariants.md`
+§ Route identity). A same-airport "route" has no `/route/<pair>` page at all — `routePair.ts`
+404s it as "not a route between two airports" — so only 22,420 belongs in a count of pages.
 
 **Count airports at both endpoints, or the number is wrong by a third.** Origin-only gives 741
 / 993, and that is not a rounding difference: it is the same silent halving `pipeline.md` § M4d
@@ -142,15 +139,15 @@ appear as destinations.
 
 ## The actual cost control is caching, not the tier
 
-Data changes monthly. Every successful JSON response (`/api/pivot`) and, once M5 Task 8 wires
-them into `proxy.ts`'s matcher, the sitemap and `robots.txt`, get:
+Data changes monthly. Every successful JSON response (`/api/pivot`), plus `/sitemap.xml` and
+`/robots.txt`, get:
 
 ```
 Cache-Control: public, s-maxage=2592000, stale-while-revalidate=86400
 ```
 
-**HTML page routes — `/explore`, the four entity pages, and (M6 Task 7) `/watch` plus its four
-`/watch/:preset` pages — get a shorter one instead, as of M5 Task 7:**
+**HTML page routes — `/explore`, the four entity pages, and `/watch` plus its four
+`/watch/:preset` pages — get a shorter one instead:**
 
 ```
 Cache-Control: public, s-maxage=3600, stale-while-revalidate=86400
@@ -176,8 +173,8 @@ With Cloudflare's free tier in front, near-zero repeat traffic touches the box r
 ## Portability test
 
 **The deployable artifact is `upgauge.duckdb` *plus* `data/parquet/` (96 MB, measured
-`du -sh data/parquet` over the full 2015–2026 window after M3a Task 1's rebuild — was 26 MB
-on the 2015–2017 window measured at M2), not the `.duckdb` file alone.** As built, the catalog is views over
+`du -sh data/parquet` over the full 2015–2026 window; it grows with the window), not the
+`.duckdb` file alone.** As built, the catalog is views over
 *relative* Parquet paths — it carries almost no data itself — so it behaves identically
 under `docker run` only if `data/parquet/` is co-located with it and `WORKDIR` is the
 directory containing `data/`. Get that wrong and the container still starts and the file
@@ -736,10 +733,11 @@ airport codes from 36 to 0, and `AUS` resolves to an airport closed since 1999 w
 
 ### One `DuckDBInstance` per process — and it takes `globalThis` to get there
 
-This section used to say the proxy's query runs "against an already-memoized
-`DuckDBInstance`". **It did not.** Turbopack emits `lib/db.ts` into a separate server chunk
-per entry graph, and each chunk carries its own copy of the module's state, so a
-module-level `let instance` was **three** memos. Measured against `next build` output:
+**A module-level memo in `lib/db.ts` is three memos, not one** — so the proxy's query does not
+run against an already-memoized `DuckDBInstance` unless the memo is on `globalThis`. Turbopack
+emits the module into a separate server chunk per entry graph, and each chunk carries its own
+copy of the module's state, so a module-level `let instance` was **three** memos. Measured
+against `next build` output:
 `access_mode` — a string that occurs only in `getInstance()` — appears in three emitted
 chunks (proxy, page SSR, route handler), and open fds on `upgauge.duckdb` in the single
 `next-server` process climbed **1 → 2 → 3** as `/`, `/route/JFK-LAX` and `/api/pivot` were
@@ -922,9 +920,10 @@ no-store"` red (three total), everything else green. A third mutant — removing
 `/watch/:preset` from `config.matcher` — left all 50 `proxy.test.ts` tests green: the suite
 calls `proxy()` directly and never crosses Next's routing layer, so it cannot see the matcher
 at all, the identical blind spot § "What omitting one actually costs" measures for the
-`ENTITY_ROUTES` pages. That mutant is only reachable from a served build — M6 Task 8's job.
+`ENTITY_ROUTES` pages. **That mutant is only reachable from a served build**, never from the
+unit suite.
 
-**Also recorded here, not previously written down anywhere:** `/sitemap.xml` is
+`/sitemap.xml` is
 `export const dynamic = "force-dynamic"` (`app/src/app/sitemap.ts`), serves roughly 2.4 MB, and
 costs ~45 ms of DuckDB per request under `Promise.all` — measured per query: routes 35.5 ms,
 airports 39.0 ms, carriers 10.2 ms, aircraft 43.6 ms (the four run concurrently, so the total is

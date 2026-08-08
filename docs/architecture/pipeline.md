@@ -6,7 +6,6 @@
 upgauge/
 ├── docs/                       see docs/README.md
 ├── Makefile                    make ingest / make build / make dev
-├── Dockerfile
 ├── pipeline/                   Python 3.12 + uv. Runs in CI only.
 │   ├── btscodec.py             the two TranStats ROT13 variants (data/sources.md)
 │   ├── fetch.py                DL_SelectFields POST loop + cache → data/raw/
@@ -22,7 +21,7 @@ upgauge/
 │   ├── src/proxy.ts            hands both entry points the RAW query string (load-bearing)
 │   └── src/app/
 │       ├── api/pivot/          route handler → @duckdb/node-api → sql/03_queries/
-│       └── explore/            the Explorer. route/airport/carrier/aircraft/watch are M4/M5
+│       └── explore/            the Explorer. route/airport/carrier/aircraft/watch alongside
 └── data/                       gitignored
 ```
 
@@ -43,10 +42,9 @@ maps are owned by [`../product/features.md`](../product/features.md) and
 data rules by [`../data/invariants.md`](../data/invariants.md) and
 [`../data/model.md`](../data/model.md).
 
-The per-task narrative that used to live here — roughly 2,200 lines of it — was removed once it
-was verified redundant against those docs, the code comments and the tests. It is in git history
-and in the commit messages, which are the right home for "what happened on this branch."
-Milestone sections below record what a milestone WAS and point at the doc that owns each rule.
+**Per-task narrative does not belong here.** Git history and commit messages are the home for
+"what happened on this branch." Milestone sections below record what a milestone WAS and point
+at the doc that owns each rule.
 
 **What was planned, and what actually shipped.** The plan drifted by roughly two milestones and
 the terminal one was lost; both columns are kept because the drift is the lesson.
@@ -69,28 +67,17 @@ never updated. **When a milestone is repurposed, say where its original content 
 Outstanding work now lives in
 [GitHub Issues](https://github.com/UnderMyBed/upguage/issues), not in this table.
 
-### M1 phase order
+### M1 — ingest
 
-Phase 0 is complete — see [../data/sources.md](../data/sources.md) for what it established.
+Endpoint spike, scaffold, `fetch.py`, invariant tests, `normalize.py`, the five dims, and the
+reproducibility gate. Two sequencing rules came out of it and still bind:
 
-| Phase | Work | Done when |
-|---|---|---|
-| ~~0~~ | ~~Spike the endpoint~~ | ✅ Endpoint driven, data validated, spec corrected |
-| ~~1~~ | ~~Scaffold + toolchain~~ | ✅ `make check` green — uv/3.12, pytest, ruff, `btscodec` |
-| ~~2~~ | ~~`fetch.py` — per-year POST loop, viewstate, cache, retries~~ | ✅ `make fetch`; verified live against BTS (see below) |
-| ~~3~~ | ~~Invariant tests, written red~~ | ✅ 156 tests; rules in `invariants.py` + `mainline_map.py`, validated against a real extract |
-| ~~4~~ | ~~`normalize.py` — raw → Parquet, quarantine flags, `download_date`~~ | ✅ `make ingest`; 2015 → 282,036 rows, 8.6 MB Parquet |
-| ~~5~~ | ~~Lookups → dims; `map_mainline_group` materialized~~ | ✅ 5 dims build; **zero orphans** joining 282,036 fact rows |
-| ~~6~~ | ~~Reproducibility gate~~ | ✅ `make verify` — 7 artifacts byte-identical across two builds (the count **at M1**; M2 added `dim_city_market`, so it printed 8 by M2, and **17** today on the full 2015–2026 window — see [the M2 gate](#the-m2-gate) below) |
-
-**Order rationale:** the spike came first because the acquisition path was the one part of
-the spec proven *not* as documented. Tests come after the fetcher but before normalize,
-because several invariants had to be resolved empirically — writing them from assumption is
-how you get a green suite that's confidently wrong.
-
-`btscodec` landed in phase 1 rather than 2 because it was already proven by the spike, and
-leaving it in a scratch directory risked losing reverse-engineering work that took real
-effort to recover. It also gives phase 1 something genuine to verify against.
+- **Prove the acquisition path before building on it.** The spike ran first because the
+  endpoint was the one part of the spec that turned out *not* to be as documented — see
+  [../data/sources.md](../data/sources.md).
+- **Resolve invariants against a real extract before writing them as tests.** Tests landed
+  after the fetcher and before normalize for exactly that reason: writing an invariant from
+  assumption is how you get a green suite that is confidently wrong.
 
 ### Fetcher design notes
 
@@ -151,13 +138,11 @@ Two things make it hold:
 covering everything derived-free, and the mart materializes because trailing-12 windowing over
 the full window is the one genuinely expensive thing in the layer.
 
-Scope is `fct_route_month`, `dim_city_market`, and `mart_route_health`.
-~~`mart_leaderboards` is deferred to M5~~ **Superseded by M6.** There is no separate
-`mart_leaderboards` table: `/watch`'s four presets (`sql/03_queries/watch_*.sql`) read
-`mart_route_health` directly, add no pivot SQL of their own (no pivot measure expresses a
-delta), and share nothing across them except `DataTable`'s rank column — the same correction
-`docs/product/features.md` and `docs/design/system.md` already carried; this was the third,
-missed copy of the same stale claim (M6 Task 8's doc sweep). See § M6 below.
+Scope is `fct_route_month`, `dim_city_market`, and `mart_route_health`. **There is no
+leaderboards mart**, and nothing should reintroduce one: `/watch`'s four presets
+(`sql/03_queries/watch_*.sql`) read `mart_route_health` directly, add no pivot SQL of their own
+— no pivot measure expresses a delta between two windows — and share nothing across them
+except `DataTable`'s rank column.
 
 ### The runner
 
@@ -221,22 +206,22 @@ invisible until deploy.
 
 **Confirmed empirically, not just by assertion.** With `upgauge.duckdb` built from the repo
 root (views referencing `data/parquet/...`), opening that same file from `/tmp` — a foreign
-CWD, the way the M6 container would if `WORKDIR` were wrong — and querying `fct_segment_month`
+CWD, the way a container would if `WORKDIR` were wrong — and querying `fct_segment_month`
 raises `duckdb.IOException`: `IO Error: No files found that match the pattern
-"data/parquet/t100_segment/**/*.parquet"`. The database opens fine; only the read fails. That
-is the exact failure shape to expect if M6's Dockerfile ever ships without `WORKDIR /app`.
+"data/parquet/t100_segment/**/*.parquet"`. The database opens fine; only the read fails. **That
+is the exact failure shape to expect if the Dockerfile ever ships without `WORKDIR /app`**, and
+it is the negative case the portability test has to reproduce deliberately.
 
 ### The M2 gate
 
 ✅ **Built.** `make verify` runs three checks in sequence and fails if any fails:
 
-1. **Parquet reproducibility** (M1, unchanged): `build_all` twice into throwaway temp
+1. **Parquet reproducibility:** `build_all` twice into throwaway temp
    dirs from identical raw inputs, sha256 every artifact. **17 artifacts on the full
-   2015–2026 window** — 12 fact-year partitions + 5 dims. (8 artifacts — 3 fact-year
-   partitions + 5 dims — was the count on the 2015–2017 window measured at M2; M3a Task 1
-   rebuilt on every year `make fetch` had landed and re-ran the gate. The dims count is
-   fixed; only the fact-year partition count grows with the window.)
-2. **Parquet freshness** (M2 fix wave 1, new): the two throwaway builds above only prove
+   2015–2026 window** — 12 fact-year partitions + 5 dims. The dims count is fixed; **the
+   fact-year partition count grows with `data/raw/`'s window**, so this number moves when a
+   year is fetched and is not a constant to assert against.
+2. **Parquet freshness:** the two throwaway builds above only prove
    they agree *with each other* — neither is `--out-dir`, the Parquet that `make build`
    and the database gate below actually read. So `_digest_tree` on one of the throwaway
    builds is compared against `_digest_tree(--out-dir)`, and any difference is named. This
@@ -245,18 +230,18 @@ is the exact failure shape to expect if M6's Dockerfile ever ships without `WORK
    because it counts objects, not files, so without this check that staleness is
    invisible to `make verify` and only shows up later as `DATA AS OF` silently failing to
    advance.
-3. **Database** (M2): `pipeline.marts.verify_database` builds `upgauge.duckdb` twice
+3. **Database:** `pipeline.marts.verify_database` builds `upgauge.duckdb` twice
    from the same Parquet and, for every catalog object, exports it through a
    `COPY (SELECT * FROM <object>) TO ... (FORMAT PARQUET)` on a connection with
-   `SET threads TO 1` — the same writer setting M1 already proved byte-stable — then
-   sha256s that export. **10 objects today** (8 at M2, before M3a Task 2 added the pivot
-   catalog): the 6 views over Parquet (`fct_segment_month`, `dim_airport`,
-   `dim_city_market`, `dim_carrier`, `dim_aircraft_type`, `map_mainline_group`), the two
-   derived views/tables (`fct_route_month`, `mart_route_health`), and the two Explorer
-   allowlist views M3a Task 2 added (`meta_pivot_dimensions`, `meta_pivot_measures`).
+   `SET threads TO 1` — the same writer setting that makes the Parquet writer byte-stable —
+   then sha256s that export. **10 objects:** the 6 views over Parquet (`fct_segment_month`,
+   `dim_airport`, `dim_city_market`, `dim_carrier`, `dim_aircraft_type`,
+   `map_mainline_group`), the two derived views/tables (`fct_route_month`,
+   `mart_route_health`), and the two Explorer allowlist views (`meta_pivot_dimensions`,
+   `meta_pivot_measures`). **This count tracks `sql/02_marts/`, not the data window.**
 
-Both counts are measured, not asserted from the file layout — if `sql/02_marts/` ever grows
-or shrinks, the counts printed by `make verify` are what to trust over this paragraph.
+Both counts are measured, not asserted from the file layout — **the counts `make verify`
+prints are what to trust over this paragraph.**
 
 **The `.duckdb` file itself is never hashed.** Measured before this gate was written (see
 [../data/invariants.md](../data/invariants.md)): three identical builds of the same content
@@ -270,21 +255,7 @@ sanctioned exception to "all Parquet writes go through `_writer_connection()`", 
 that `SET` is ever dropped the gate starts reporting false failures rather than silently
 passing.
 
-Real run, 2015–2017 warehouse (M2):
-
-```
-$ make warehouse && make verify
-parquet: 8 artifacts byte-identical across two builds
-parquet: comparing data/parquet (on disk) against a fresh build from data/raw
-parquet: data/parquet matches a fresh build from data/raw (8 artifacts)
-database: 8 objects identical across two builds
-```
-
-**Re-run in M3a Task 1, full 2015–2026 warehouse**, after `make fetch` landed all 12 years —
-at that point in the branch, before Task 2 added the pivot catalog, this genuinely printed 8
-objects. **Re-verified again for this fix wave** (real, verbatim output — the previous
-revision of this doc had drifted to a stale, no-longer-true transcript rather than a run
-someone actually re-checked):
+Real run, full 2015–2026 warehouse:
 
 ```
 $ make warehouse && make verify
@@ -294,33 +265,23 @@ parquet: data/parquet matches a fresh build from data/raw (17 artifacts)
 database: 10 objects identical across two builds
 ```
 
-Artifact count moved 8 → 17 (more fact-year partitions, one per calendar year fetched) and
-held there since — it depends on `data/raw/`'s window, not on `sql/02_marts/`. Object count
-moved 8 → 10 later in the branch, when Task 2 added `meta_pivot_dimensions` and
-`meta_pivot_measures` to `sql/02_marts/` — it depends on `sql/02_marts/`, not on how much
-data each object's Parquet source spans, so it did not move again when the artifact count
-grew from 8 to 17.
-
 **M2 complete.** `make build` produces `upgauge.duckdb` from `sql/02_marts/`, and
 `make verify` proves both the Parquet artifacts and every database object byte-identical
 across two from-scratch builds.
 
 ## M3 — the Explorer, split into M3a and M3b
 
-M3 is split, because its two halves have different blockers.
+M3 split into three parts with different blockers: **M3a**, the pivot query contract (templates,
+the allowlist, the URL codec, golden fixtures); the **design session**
+([../design/brief.md](../design/brief.md), answered by
+[../design/system.md](../design/system.md) with mockups in
+[../design/mockups/](../design/mockups/)); and **M3b**, the Next.js app.
 
-| | Scope | Blocked on |
-|---|---|---|
-| ~~**M3a**~~ | ~~The pivot query contract: templates, the allowlist, the URL codec, golden fixtures~~ ✅ Complete. |
-| ~~**design session**~~ | ~~[../design/brief.md](../design/brief.md) — tokens, the data table, the chart, the signature element~~ ✅ Complete — the answer is [../design/system.md](../design/system.md), mockups in [../design/mockups/](../design/mockups/). |
-| ~~**M3b**~~ | ~~The Next.js app: route handlers, the table, URL wiring~~ ✅ Complete. |
-
-**Why the split.** `docs/design/brief.md` makes the data table deliverable #1 and says "most of
-the product is this table in different clothes. Get it right and everything else follows." M3
-builds that table, so the visual system gets decided at M3 whether or not it is planned for.
-Building it against invented styling and retrofitting real tokens later is the expensive kind
-of rework, and the brief's constraints — mono tabular numerals, density over whitespace, the
-`DATA AS OF` badge — are structural, not cosmetic.
+**Why the design session sits in the middle.** The data table is the product
+([../design/brief.md](../design/brief.md)), so building it means deciding the visual system
+whether or not that is planned for. Building against invented styling and retrofitting real
+tokens later is the expensive kind of rework, and the brief's constraints — mono tabular
+numerals, density over whitespace, the `DATA AS OF` badge — are structural, not cosmetic.
 
 ### `pipeline/` is CI-only, which dictates M3a's shape
 
@@ -361,8 +322,8 @@ readability.
 
 ### Every guard gets its breaking change observed
 
-Across M2's eight tasks, **the single most common review finding was a test that passed for a
-reason other than the one it named.** Concretely, and all recorded in the M2 commit messages:
+**The single most common review finding in this project is a test that passed for a reason
+other than the one it named.** Six real instances, all from the marts layer:
 
 - `test_distance_is_not_summed` stayed green when `max(distance)` was swapped to `sum(distance)`
   — no fixture route-month had two aircraft types.
@@ -375,12 +336,10 @@ reason other than the one it named.** Concretely, and all recorded in the M2 com
 - All 12 real-data invariant tests had never executed since M1 — the module looked for an
   undated filename the append-only scheme makes impossible.
 
-Every one was found by mutating production code and watching what stayed green. None was
-visible from reading the diff.
-
-So in M3a this is a required step, not an aspiration: for each guard, make the change it exists
-to catch, observe the failure, revert, and record the output. A guard never observed failing is
-not a guard.
+Every one was found by mutating production code and watching what stayed green. **None was
+visible from reading the diff.** So this is a required step, not an aspiration: for each guard,
+make the change it exists to catch, observe the failure, revert, and record the output. A guard
+never observed failing is not a guard.
 
 ## M4a — entity resolution
 
@@ -458,13 +417,8 @@ obvious. `substituteIds` throws loudly if the count isn't exactly 1, which is wh
 resolver file's header comment above describes the placeholder in prose instead of writing
 it out.
 
-M4a is built: 424 Python tests green (`make check`), the app suite green
-(`make app-check`), `make app-build` produces a working production build, and
-`make goldens` reproduces all 17 goldens byte-identical — proof the M3a contract never
-moved. See `CLAUDE.md`'s Status section for the current test counts and what M4d+ still owe
-(`/airport`, `/carrier`, `/aircraft`, the remaining charts — load-factor lines and the
-seasonality heatmap — the maps, `/watch`) — `/route` is the M4b section immediately below,
-and its aircraft-type-mix chart shipped in M4c.
+Resolution shipped without moving the M3a contract: `make goldens` reproduces all 17 goldens
+byte-identical, which is the proof that matters here.
 
 ## M4b — the route page
 
@@ -584,11 +538,9 @@ carries 16 distinct operating carriers over a trailing 12 months, 99th percentil
 page checks whether the result hit the limit and discloses truncation rather than silently
 under-reporting a route's totals if a future refresh ever exceeds it.
 
-M4b is built: composite filtering identical in both languages (goldens unmoved), the reverse
-lookup fixed to 0 collisions among in-window airports, `/route/<pair>` rendering the title
-block, stat strip, carriers table, Explorer link and legend rail, and `make app-smoke`
-curling a real served page for the redirect and 404 status codes — see `CLAUDE.md`'s Status
-section for current test counts.
+Composite filtering is identical in both languages (goldens unmoved), the reverse lookup
+resolves to 0 collisions among in-window airports, and `make app-smoke` curls a real served
+page for the redirect and both 404 shapes.
 
 ## M4c — the aircraft-type-mix chart
 
@@ -650,47 +602,37 @@ commands work in a shell that has never run `mise activate` — a fresh clone, a
 editor's task runner. Set `MISE=` to bypass it where the tools are already on `PATH`, which
 is what the Docker image will do.
 
-> **Migrated from `.python-version` + a planned `.nvmrc` on 2026-07-30.** Two pinning
-> mechanisms for two runtimes was already one too many before Node arrived. The interpreter
-> changed with it — from uv's own CPython 3.12.12 build to mise's — so `make verify` was
-> re-run on the new one before the migration was committed. See the reproducibility section
-> above for the result.
+> **One pinning mechanism, not two.** `mise.toml` replaced `.python-version` and made a
+> `.nvmrc` unnecessary — two mechanisms for two runtimes is one too many. Changing the
+> interpreter invalidates the reproducibility proof, so a runtime bump re-runs `make verify` in
+> the same commit.
 
 **`check` excludes `fmt`, and the tree is not format-clean.** It runs `ruff check` and
-`pytest`, never `ruff format`. Measured at the end of M3a: `ruff format --check .` reports
-**8 of 47 files would be reformatted**. So the first person to run `make fmt` gets a large
-diff across files their change never touched, mixed into whatever they were actually doing.
-Two clean ways out, neither taken yet: reformat once in a commit that does nothing else and
-add `ruff format --check` to `check` so the gate holds from then on, or decide formatting
-stays unenforced and delete `fmt`. The bad middle is reformatting only the files a change
-already touches — that smears the same diff across every future commit instead of isolating
-it in one.
+`pytest`, never `ruff format` — `ruff format --check .` reports 9 of 54 files would be
+reformatted, so the first person to run `make fmt` gets a large diff across files their change
+never touched. **The bad way out is reformatting only the files a change already touches** —
+that smears the same diff across every future commit instead of isolating it in one. Either
+reformat once in a commit that does nothing else and add `ruff format --check` to `check`, or
+delete `fmt` and leave formatting unenforced.
 
 **There is no CI. `make check` on a developer's machine is the only gate that exists.**
-Several docs (including this one, above) say "runs in CI" about `pipeline/` — that is the
-intended deployment shape, not current state. The consequence is not theoretical: the
-real-data invariant layer (`test_invariants_against_real_data.py`) skips itself when
-`data/raw/` is empty, which is right for a fresh clone but means those rules go dark
-everywhere except a machine holding the full 2015–2026 window — today, exactly one. A green
-`420 passed` from a clone without data is a materially weaker claim than the same number
-here, and nothing in the output says so. Standing up CI is M6-shaped; see
+Where this file says `pipeline/` "runs in CI", that is the intended deployment shape, not
+current state. The consequence is not theoretical: the real-data invariant layer
+(`test_invariants_against_real_data.py`) skips itself when `data/raw/` is empty, which is right
+for a fresh clone but means **those rules go dark everywhere except a machine holding the full
+2015–2026 window — today, exactly one.** A green suite from a clone without data is a materially
+weaker claim than the same number here, and nothing in the output says so. See
 [data/invariants.md](../data/invariants.md#where-these-are-enforced).
 
-**Node is pinned at 24.13.0 in `mise.toml`** — LTS since 2025-10, and the Next.js scaffolded
-in M3b Task 2 is v16, which needs ≥ 20.9. This supersedes the earlier plan to add a
-`.nvmrc`: a second pinning mechanism alongside `.python-version` was the thing worth
-avoiding, and mise removes both.
+**Node is pinned at 24.13.0** — LTS since 2025-10, and Next.js 16 needs ≥ 20.9.
 
 **`make app-check` (typecheck + `vitest run`) is the app's gate, the way `make check` is
-`pipeline/`'s.** M3b Task 2 scaffolded `app/` — Next.js 16 (App Router, TS, Tailwind v4,
-ESLint), `@duckdb/node-api` for the route handlers, Vitest for tests — via `create-next-app`
-under the pinned Node, with `NPM ?= $(MISE) npm --prefix app` following the same `mise exec`
-indirection as `UV`. No application code yet: `make app-check` at scaffold time typechecks
-clean and Vitest correctly reports "no test files found" — a real failure until the first
-test lands (M3b Task 4), not a broken gate.
+`pipeline/`'s.** `app/` is Next.js 16 (App Router, TS, Tailwind v4, ESLint) with
+`@duckdb/node-api` for the route handlers and Vitest for tests, scaffolded under the pinned
+Node, with `NPM ?= $(MISE) npm --prefix app` following the same `mise exec` indirection as `UV`.
 
-Docker is not needed until M6. When it arrives, the image installs the same pinned versions
-and sets `MISE=` so `make` calls the tools directly rather than shelling through mise.
+The Docker image installs the same pinned versions and sets `MISE=` so `make` calls the tools
+directly rather than shelling through mise.
 
 > 🔔 **The cron must fail loudly.** If the monthly ingest breaks, nothing errors — the site
 > keeps serving happily and `DATA AS OF` just quietly stops advancing. For a product whose

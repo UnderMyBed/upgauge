@@ -306,7 +306,7 @@ weights, not fitted — this is v0 and deliberately dumb; any other weighting wo
 invented number. **`capacity_delta` is excluded from the score, not merely down-weighted**: in
 log space it is *exactly* the sum of the gauge and frequency axes above (`seats = departures ×
 gauge`), so scoring it scores those two a second time — see
-[../data/model.md § The four-axis composite (M6 Task 1)](../data/model.md#the-four-axis-composite-m6-task-1)
+[../data/model.md § The four-axis composite](../data/model.md#the-four-axis-composite)
 for the identity, the measured residual, and the before/after contribution table. It still
 appears in the UI as a component, since the components (not the score) are the insight.
 Windows are the latest 12 calendar months present (globally, not per-route) vs. the 12 before
@@ -315,29 +315,26 @@ that. Excludes routes with **<30 departures *performed*** (not scheduled) in the
 
 **A route with no prior-12mo data gets `NULL` deltas and a `NULL` score, never an enormous
 "improvement."** It still appears as a row — that row is the Route Birth Tracker's input.
-Measured on the real 2015–2017 warehouse (M2): 767 of 7,336 routes are new in exactly this
-sense (`p12_months_present = 0`). **Re-measured over the full 2015–2026 window** (M3a Task 1,
-`t12 = 2025-05..2026-04`, `p12 = 2024-05..2025-04`): 688 of 8,080 routes.
+Measured over the full 2015–2026 window: 688 of 8,080 routes are new in exactly this sense
+(`p12_months_present = 0`).
 
 **Show the components in the UI, not just the score.** The components are the insight; the
 score is a sort key. Label it plainly as a heuristic. Do not over-engineer this.
 
 ### `health_score` is `NULL` for three reasons — a route unrankable for lack of a filed schedule must not render as unhealthy
 
-Measured on the real 2015–2017 warehouse (M2), **1,348 of 7,336 routes** had `health_score IS
-NULL`, for three distinct reasons, with no overlap between them (a coincidence of that
-window, not structural — see below). **Re-measured over the full 2015–2026 window** (M3a
-Task 1, `t12 = 2025-05..2026-04`, `p12 = 2024-05..2025-04`): **813 of 8,080 routes**, and the
-three reasons now overlap by 55 routes. Full SQL-level accounting and evidence for both
-windows: [../data/model.md § Window rule, floor, and the NULL-prior-window trap](../data/model.md#window-rule-floor-and-the-null-prior-window-trap).
+Measured over the full 2015–2026 window (`t12 = 2025-05..2026-04`, `p12 = 2024-05..2025-04`):
+**813 of 8,080 routes** have `health_score IS NULL`, for three distinct reasons — which
+**overlap by 55 routes, so never sum them.** Full SQL-level accounting:
+[../data/model.md § Window rule, floor, and the NULL-prior-window trap](../data/model.md#window-rule-floor-and-the-null-prior-window-trap).
 
-1. **No prior window — 767 (2015–2017) / 688 (2015–2026), the larger group today.** A
+1. **No prior window — 688, the largest group.** A
    genuinely new route (`p12_months_present = 0`). Correctly has no deltas to show.
-2. **Zero-measure prior window — 1 (2015–2017) / 0 (2015–2026).** The prior window is
+2. **Zero-measure prior window — 0 today.** The prior window is
    technically "present" but filed zero seats and zero departures, so the ratio is undefined
    the same way division by zero is. Empty in the current window — a property of which 24
    months happen to be the trailing window right now, not a structural absence of the case.
-3. **Zero scheduled departures — 580 (2015–2017) / 180 (2015–2026).** `completion_factor` is
+3. **Zero scheduled departures — 180.** `completion_factor` is
    undefined when `t12_departures_scheduled = 0`, which BTS allows for on-demand/
    charter-style operators that file real performed flights against no filed schedule at
    all. Unlike the other two, this route usually has known `lf_delta`, `gauge_delta`,

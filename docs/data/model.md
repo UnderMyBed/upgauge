@@ -38,18 +38,15 @@ dim_city_market       city_market_id, name
                       -- all history -- mostly geopolitical renames ('Aachen, West Germany'
                       -- -> 'Aachen, Germany'; 'Adler/Sochi, U.S.S.R.' -> 'Adler/Sochi,
                       -- Russia'). The COUNT tracks a live upstream table and drifts upward
-                      -- as BTS adds markets (6,177 on 20260729 -> 6,181 on 20260807, four
-                      -- new foreign entries); the 257 did not move at that refresh.
+                      -- as BTS adds markets, so re-measure it rather than trusting this
+                      -- number; a move of more than a handful is the signal worth noticing.
                       -- Restricting to AIRPORT_IS_LATEST = '1' leaves exactly ONE ambiguous
                       -- market: 30973 (CGQ), city_market_seq_id 3097301 'Changchun, China'
-                      -- vs 3097302 'Changchun\Jilin City, China'. Those are CITY_MARKET_SEQ_
-                      -- IDs, which is what the SQL partitions on -- not the AIRPORT_SEQ_IDs
-                      -- (1097301 / 1646701) an earlier revision of this line cited by
-                      -- mistake; the tiebreak picks the same row either way, so the claim
-                      -- below held, but it named a column the query never reads.
-                      -- The max(seq_id) tiebreak
-                      -- is load-bearing, not cosmetic: a nondeterministic pick would drift
-                      -- between builds and break the byte-identical Parquet gate.
+                      -- vs 3097302 'Changchun\Jilin City, China'. These are CITY_MARKET_SEQ_
+                      -- IDs -- the column the SQL partitions on, not AIRPORT_SEQ_ID.
+                      -- The max(seq_id) tiebreak is load-bearing, not cosmetic: a
+                      -- nondeterministic pick would drift between builds and break the
+                      -- byte-identical Parquet gate.
 
 map_mainline_group    airline_id, parent_airline_id, effective_from, effective_to
                       -- DATE-RANGED. Wholly-owned subsidiaries ONLY.
@@ -58,7 +55,8 @@ mart_route_health     one row per (op_airline_id, route_key_low, route_key_high)
                       UNDIRECTED, and the only materialized TABLE in the database.
                       Global trailing-12 / prior-12 windows, <30 performed-departures floor,
                       NULL (not huge-positive) deltas when the prior window is empty.
-mart_leaderboards     precomputed JSON, built at pipeline time                    [M5]
+                      There is no leaderboards mart: /watch's presets read this table
+                      directly (../architecture/pipeline.md).
 
 meta_pivot_dimensions  key, label, column_expr, grain, join_dim, join_key,
                        filter_only, filter_mode
@@ -101,10 +99,9 @@ letter code. See [carrier-model.md](carrier-model.md) and [invariants.md](invari
 
 T-100 already ships `CARRIER_GROUP` and `CARRIER_GROUP_NEW` — BTS's own revenue-based
 reporting classification, which drives filing requirements. Confirmed populated in live
-data, **measured on the full-year 2024 raw extract** (`t100d_segment_us_2024_20260729.zip`;
-an earlier revision of this doc quoted counts from the 2024-01 phase-0 single-month sample,
-which is a different, much smaller window — always state the window a distribution was
-measured over, per the rule Task 1 exists to enforce):
+data, **measured on the full-year 2024 raw extract** (`t100d_segment_us_2024_20260729.zip`
+— always state the window a distribution was measured over; a single month is a different
+and much smaller universe):
 
 ```
 CARRIER_GROUP      {'3': 326570, '1': 64160, '2': 47141}
@@ -196,13 +193,6 @@ SUM(passengers * distance)                                    -- rpm
 > single-route slice — the divergence is purely a function of how many distinct routes fall
 > inside the group. A guard never watched fail proves nothing; this one was.
 >
-> **Correction (M3a Task 7):** an earlier pass of this measurement reported the annual naive
-> figure as `5,055,984,838,795` — computed by dropping `FILTER (WHERE NOT is_quarantined)`
-> from the mutation before summing, so it wasn't reproducible from this recipe. The
-> difference, `12,289,140`, is exactly the 61 quarantined 2019 rows' `2,412` total seats ×
-> `5,095` mi (the single `MAX(distance)` for the full year). The rounded **5.72x** headline is
-> unchanged; only the underlying unfiltered figure was wrong.
->
 > **Consequence for route-grain ASM.** The canonical form directly above, `SUM(seats *
 > distance)` at **segment** grain, is unaffected by the route-month distance variance — it
 > multiplies per row before summing and never touches the route-grain `distance` attribute.
@@ -247,7 +237,7 @@ segment row (ORD→LAX) into both the ORD group and the LAX group, double-counti
 the aggregate — structurally the same failure as T-100's `CLASS` rollup codes `K`/`V`/`Z`
 (`docs/data/invariants.md`), whose absence the pipeline asserts. It also carries real join
 metadata (`dim_airport`/`airport_id`), same as `route` — these are two SEPARATE facts about
-the row, not one, and the paragraph below used to conflate them.
+the row, not one.
 
 **Join metadata** (`join_dim`/`join_key` non-NULL) is which dimensions M4a's resolver can turn
 into a display code: exactly eight — `route`, `endpoint_airport_id`, `op_airline_id`,
@@ -280,10 +270,9 @@ row (`SUM(seats * distance)`) rather than summing then multiplying
 (`SUM(seats) * distance`).
 
 **Consequence accepted knowingly: `make verify`'s database-object gate now covers a product
-decision, not only data.** Before this task `make verify` reported 8 database objects;
-after, 10 — the two new views join the byte-identical-across-two-builds proof alongside the
-facts and dims. That is the price of the vocabulary being impossible to drift: it participates
-in the same reproducibility gate as everything else the server serves.
+decision, not only data.** The two allowlist views join the byte-identical-across-two-builds
+proof alongside the facts and dims. That is the price of the vocabulary being impossible to
+drift: it participates in the same reproducibility gate as everything else the server serves.
 
 ### Every pivot response carries the quarantine count
 
@@ -375,11 +364,9 @@ themselves, is the thing to revisit if `sql/03_queries/` grows a query that trip
 Windows are **global, not per-route**: `t12_start_month..t12_end_month` is the latest 12
 calendar months present anywhere in `fct_route_month`; `p12_start_month..p12_end_month` is
 the 12 immediately before that. `'YYYY-MM'` strings compare correctly with `BETWEEN`, so no
-per-row date parsing is needed. Measured on the 2015–2017 warehouse (M2): `2017-01..2017-12`
-vs. `2016-01..2016-12`. **Re-measured over the full 2015–2026 window** (M3a Task 1, after
-`make fetch` + `make warehouse` landed all 12 years — 2026 is a partial year, so the trailing
-window lands mid-2026 rather than at a year boundary): `t12 = 2025-05..2026-04`,
-`p12 = 2024-05..2025-04`.
+per-row date parsing is needed. Measured over the full 2015–2026 window:
+`t12 = 2025-05..2026-04`, `p12 = 2024-05..2025-04` — 2026 is a partial year, so the trailing
+window lands mid-2026 rather than on a year boundary.
 
 The `<30 departures` floor applies to `t12_departures_performed` — **performed, not
 scheduled** — same reasoning as the fact-table quarantine rules: a route with a big schedule
@@ -395,9 +382,8 @@ much narrower and mostly incidental condition.
 A new route is not a route that improved infinitely. Enforced by `CASE WHEN
 p12_months_present = 0 THEN NULL ELSE ... END` on every `p12_*`-derived ratio and every
 `*_delta` column. This `CASE` is a documentation aid, not the load-bearing guard — deleting
-all four is a provable no-op (identical byte-for-byte 7,336-row mart, measured on the
-2015–2017 warehouse at M2; not re-run against the full 2015–2026 window in M3a Task 1,
-which now has 8,080 rows), because a
+all four is a provable no-op (identical byte-for-byte mart — proved on the 2015–2017
+warehouse and never re-proved on the full window, so it is a bounded claim), because a
 `SUM(...) FILTER (WHERE <no rows match>)` already returns `NULL`, not `0`, in DuckDB, and
 `nullif` on each denominator propagates that `NULL` through. The real guard is the
 `nullif`s: deleting *those* is what a test catches. Keep the `CASE` anyway — it is correct
@@ -405,70 +391,33 @@ defence against a future `coalesce` on the p12 sums, just not what "enforces" th
 today. The row itself still exists (it is the Route Birth Tracker's input); only its
 deltas are unknown.
 
-Measured on the 2015–2017 warehouse (M2): of 7,336 surviving routes, **767** have no
+Measured over the full 2015–2026 window: of **8,080** surviving routes, **688** have no
 prior-window data (`p12_months_present = 0`, `new_routes`) and are correctly `NULL`-delta
-rows. The other **6,569** have `p12_months_present >= 1` (i.e. at least one month present —
-only 203 of them have *exactly* one), but one of those 6,569 —
-`op_airline_id=20378`, route `12266-12951` — filed `p12_seats = 0` and
-`p12_departures_performed = 0`, so `lf_p12` / `gauge_p12` are `NULL` via the `nullif` on
-their denominators even though the prior window is technically "present." So `lf_delta IS
-NULL` for **768** routes, not 767 — the extra one is a zero-measure prior window, not a
-missing one, and the two must not be conflated: **767 + 1 = 768**, and only the 767 are
-`new_routes` in the Route Birth Tracker sense.
+rows; the other **7,392** have `p12_months_present >= 1`.
 
-**Re-measured over the full 2015–2026 window** (M3a Task 1): of **8,080** surviving routes,
-**688** have no prior-window data (`p12_months_present = 0`, `new_routes`), and **7,392**
-have `p12_months_present >= 1`. The zero-measure-prior-window case (`op_airline_id=20378`
-above) is specific to the 2016→2017 windows measured at M2; over the current global
-trailing window (`t12 = 2025-05..2026-04`, `p12 = 2024-05..2025-04`) **zero** routes have a
-"present but all-zero" prior window, so that third category is empty today — a property of
-which 24 months happen to be the trailing window right now, not a structural guarantee. The
-768-vs-767 accounting shape from M2 does not carry forward unchanged; see the corrected
-three-reason breakdown below.
+**"No prior window" and "zero-measure prior window" are two different things and must not be
+conflated.** A route can carry `p12_months_present >= 1` and still have filed `p12_seats = 0`
+and `p12_departures_performed = 0`, which makes `lf_p12`/`gauge_p12` `NULL` through the
+`nullif` on their denominators even though the window is technically "present" — only the
+first category is `new_routes` in the Route Birth Tracker sense. **No route is in that second
+category today**, which is a property of which 24 months are the current trailing window, not
+a structural absence of the case: a mart consumer that assumes the categories partition
+cleanly will break when one reappears.
 
-> **Superseded by M6 Task 1 — kept for the history, not the current formula.** The three
-> paragraphs immediately below (equal-0.20-weighted five-component composite, the M2 and M3a
-> `health_score` ranges) describe the v0 scoring shape that shipped through M5. **M6 replaced
-> it with the four-axis, `±3`-clamped composite documented in the subsection right after this
-> block** (`### The four-axis composite (M6 Task 1)`), which is what `sql/02_marts/200_mart_route_health.sql`
-> actually computes today. The old text is left in place because the *reasoning* that got
-> abandoned (raw, unbounded ratios; five components; no clamp) is exactly what a future editor
-> needs to see rejected, not just told about.
+> **The formula below replaced an earlier one, and what is worth keeping is why.** v0 scored
+> an equal-0.20-weighted composite of five raw components — `lf_delta`, `gauge_delta`,
+> `capacity_delta`, `frequency_delta`, `completion_factor` — with no clamp. Three properties
+> got it rejected and must not be reintroduced: **raw unbounded ratios, five components (two
+> of which measure the same movement), and no clamp.** The measurements that convict each are
+> in the subsection immediately below.
 
-`health_score` was an **equal-0.20-weighted** z-score composite of `lf_delta`, `gauge_delta`,
-`capacity_delta`, `frequency_delta`, and `completion_factor`, all oriented so **higher is
-healthier** — including `gauge_delta`, computed as `gauge_t12 - gauge_p12` (the same as-is
-shape as `lf_delta`, **no negation**): a positive `gauge_delta` already means the mean
-seats-per-departure went up, i.e. an upgauge, which is the healthy direction, so the raw sign
-is correct as computed and nothing needs flipping. Equal weights, not a fitted or eyeballed
-weighting, because [../product/features.md](../product/features.md) says this is v0 and
-*deliberately dumb* — any other weighting would be a number invented in this task with no
-basis.
+**Every axis is signed so higher is healthier, and gauge is NOT negated.** A positive gauge
+movement means mean seats-per-departure went up — an upgauge — which is the healthy direction,
+so the raw sign is already correct; negating it inverts Death Watch. Equal weights are
+deliberate rather than fitted: [../product/features.md](../product/features.md) makes v0
+scoring *deliberately dumb*, and any other weighting would be a number invented with no basis.
 
-Measured on the 2015–2017 warehouse (M2): `health_score` ranges from **-2.686 to 17.329** —
-single/double-digit z-composites, not `1e17`-scale blowups, confirming no near-zero
-`stddev_samp` slipped past its `nullif`. The +17.329 max is real, not an artifact: traced to
-`op_airline_id=20452`, route `11298-12953`, where `p12_departures_performed = 1` (the route was
-essentially dormant the prior year) and `t12_departures_performed = 3414` (fully active this
-year). A dormant-to-active jump like that sends `capacity_delta` and `frequency_delta` into the
-thousands — dividing by a p12 base of 1 — and the equal-weighted sum lets those two components
-dominate the score. That is a real, expected consequence of "deliberately dumb, do not
-over-engineer" v0 scoring, not a bug: a leaderboard's top row being a near-dead route waking up
-is exactly the kind of finding the product should surface, but the UI must show the raw
-`p12_departures_performed` alongside the score so a viewer isn't misled into reading "+17.3" as
-"this route tripled its traffic" when the real story is "this route had almost no prior-year
-baseline to compare against."
-
-**Re-measured over the full 2015–2026 window** (M3a Task 1): `health_score` ranges from
-**-1.865 to 19.067** — still single/double-digit, same shape as M2, no blowup. The new max
-traces to the **same carrier**, `op_airline_id=20452`, now on route `10397-12953` (a
-different specific route than M2's `11298-12953` — more routes now compete for the extremes
-over a nine-year-wider window, so a different one wins) with `p12_departures_performed =
-1.0` and `t12_departures_performed = 2387.0` — the identical dormant-to-active pattern,
-confirming this is a recurring, structural consequence of the scoring shape rather than a
-one-off artifact of the 2015–2017 subset.
-
-### The four-axis composite (M6 Task 1)
+### The four-axis composite
 
 **The five-component composite above was never actually five equal 0.20 weights.** Measured
 mean `|z|` contribution per component, on the real 2015–2026 warehouse: `lf_delta` 0.575,
@@ -548,10 +497,9 @@ Spread (max/min of the scored components): **25.0× → 1.5×**.
 
 **The `least`/`greatest` NULL trap.** DuckDB's `least()` and `greatest()` **ignore `NULL`
 rather than propagating it** — `least(NULL, 3)` returns `3`, not `NULL`, and chaining that into
-`greatest(least(NULL, 3), -3)` returns `greatest(3, -3)`, i.e. **`3`**, not `NULL` (verified in
-DuckDB directly; an earlier draft of this paragraph claimed `-3`, transposing which bound wins
-— the conclusion is unaffected either way: a value is fabricated instead of `NULL`
-propagating). A bare `least(completion_factor,
+`greatest(least(NULL, 3), -3)` returns `greatest(3, -3)`, i.e. **`3`**, not `NULL` — verified in
+DuckDB directly, and **resolve it inside-out or you will transpose which bound wins**; either
+way a value is fabricated instead of `NULL` propagating. A bare `least(completion_factor,
 1.5)` therefore **fabricates a near-perfect completion rate of `1.5`** for every route with no
 filed schedule at all (`t12_departures_scheduled = 0`, so `completion_factor` is itself
 `NULL`) — **180 invented completion rates**. Left unguarded through to the clamp, the same
@@ -574,46 +522,31 @@ name. Observed maximum `|health_score|`: **2.31246**, comfortably inside the 3.0
 bound. Unclamped, the worst single axis (`VD` `CPX–VQS`) reaches `z_gauge = -17.28` on this
 warehouse — the reason a per-axis clamp exists at all, not just an overall cap on the sum.
 
-> ⚠️ **`health_score` is `NULL` for three distinct reasons, not one — 1,348 of 7,336 routes
-> total, measured on the 2015–2017 warehouse (M2).** The product-facing writeup (what the UI
-> must do about each) lives in
+> ⚠️ **`health_score` is `NULL` for three distinct reasons, not one — 813 of 8,080 routes,
+> measured over the full 2015–2026 window** (`t12 = 2025-05..2026-04`,
+> `p12 = 2024-05..2025-04`). The product-facing writeup (what the UI must do about each) lives
+> in
 > [../product/features.md § Route Health score](../product/features.md#route-health-score-v0--deliberately-dumb);
 > this is the SQL-level accounting behind it.
 >
-> | Reason | Count (2015–2017) | Why |
+> | Reason | Count | Why |
 > |---|---|---|
-> | No prior window | 767 | `p12_months_present = 0` — a genuinely new route. |
-> | Zero-measure prior window | 1 | `p12_months_present = 1` but `p12_seats = 0` and `p12_departures_performed = 0` (`op_airline_id=20378`, route `12266-12951`) — `nullif` makes `lf_p12`/`gauge_p12` NULL despite the window being "present." |
-> | Zero scheduled departures | 580 | `t12_departures_scheduled = 0` despite real `t12_departures_performed` (all on-demand/charter-style operators) — `completion_factor = t12_departures_performed / nullif(t12_departures_scheduled, 0)` is computed from `t12_*` sums alone and has nothing to do with `p12_months_present`. |
+> | No prior window | 688 | `p12_months_present = 0` — a genuinely new route. |
+> | Zero-measure prior window | 0 | `p12_months_present >= 1` but `p12_seats = 0` and `p12_departures_performed = 0` — `nullif` makes `lf_p12`/`gauge_p12` NULL despite the window being "present." Empty today, not structurally impossible. |
+> | Zero scheduled departures | 180 | `t12_departures_scheduled = 0` despite real `t12_departures_performed` (on-demand/charter-style operators) — `completion_factor = t12_departures_performed / nullif(t12_departures_scheduled, 0)` is computed from `t12_*` sums alone and has nothing to do with `p12_months_present`. |
+> | *(overlap: no-prior-window AND zero-scheduled)* | **-55** | 55 routes are in both categories at once. |
 >
-> `767 + 1 + 580 = 1,348` on 2015–2017, with **no overlap** between the three reasons — a
-> coincidence of that particular window, not a structural guarantee, corrected below.
+> **The reasons OVERLAP — never sum them.** `688 + 0 + 180 - 55 = 813`; a query adding the
+> three counts without subtracting the overlap overcounts by 55. Non-overlap is a property of
+> whichever window is current, never a guarantee.
 >
-> **Re-measured over the full 2015–2026 window** (M3a Task 1, `t12 = 2025-05..2026-04`,
-> `p12 = 2024-05..2025-04`): **813 of 8,080** routes have `health_score IS NULL`.
->
-> | Reason | Count (2015–2026) | Why |
-> |---|---|---|
-> | No prior window | 688 | `p12_months_present = 0`. |
-> | Zero-measure prior window | 0 | No route currently has a "present but all-zero" prior window — a property of which 24 months are the current global trailing window, not a structural absence of the case. |
-> | Zero scheduled departures | 180 | `t12_departures_scheduled = 0` despite real `t12_departures_performed`. |
-> | *(overlap: no-prior-window AND zero-scheduled)* | **-55** | 55 routes are in **both** the "no prior window" and "zero scheduled" categories at once — the 2015–2017 measurement's assumption of no overlap does not hold over the full window. |
->
-> `688 + 0 + 180 - 55 = 813`, the real `health_score IS NULL` count over 2015–2026. The
-> zero-overlap arithmetic quoted for 2015–2017 above was correct for that window but is not a
-> general property — a query summing the three reason counts without subtracting the overlap
-> would overcount by 55 today. A test that infers
-> "`health_score` is null exactly when `lf_delta` is null" asserts a narrower invariant than
-> the real one ("null exactly when *any* of the five components is null") — true on the M2
-> test fixture (too small to have a `p12`-populated, `t12_departures_scheduled = 0` route at
-> all), false against the full 2015–2017 warehouse.
->
-> **Fixed in Task 6:**
+> A test asserting "`health_score` is null exactly when `lf_delta` is null" states a **narrower
+> invariant than the real one** — null exactly when *any* component is null — and passes
+> against a fixture too small to hold a `p12`-populated, `t12_departures_scheduled = 0` route.
 > `test_health_score_is_null_exactly_when_a_component_is_unknown`
 > ([`pipeline/tests/test_route_health.py`](../../pipeline/tests/test_route_health.py)) checks
-> parity against all five components, not `lf_delta` alone. **A known, permanent limitation of
-> that fix, otherwise recorded only in a gitignored report:** the corrected guard discriminates
-> only against the real 2015–2017 warehouse. It cannot discriminate against the single-year CI
+> parity against every component for that reason. **It discriminates only against the real
+> warehouse**, never against the single-year CI
 > fixture, because a one-year fixture structurally cannot populate a `p12` (prior-12-month)
 > window at all — every row's prior window is empty, so every row's `health_score` is already
 > `NULL` for the `p12_months_present = 0` reason, and the fixture never reaches a row where the
@@ -639,11 +572,11 @@ warehouse — the reason a per-axis clamp exists at all, not just an overall cap
 > All six were verified against the real warehouse instead, and the mart's behaviour is
 > correct — but a regression in any of them would ship green.
 >
-> **The fix is a second fixture year**, and it is the highest-leverage test investment
-> outstanding in this project. Fixture warehouse setup measures 0.16 s, so the cost is
-> negligible; adding real BTS rows for a second year to
-> `pipeline/tests/fixtures/t100d_segment_sample_2015.zip` (or a sibling 2016 fixture) would
-> populate a `p12` window and light up the entire delta and score surface at once. Take real
+> **Closing this needs a second fixture year, not tighter assertions** — a one-year fixture
+> structurally cannot populate a `p12` window, so no assertion written against it can reach the
+> surface. Fixture warehouse setup measures 0.16 s, so cost is not the obstacle: real BTS rows
+> for a second year in `pipeline/tests/fixtures/t100d_segment_sample_2015.zip` (or a sibling
+> 2016 fixture) would light up the entire delta and score surface at once. Take real
 > rows from `data/raw/`, never fabricated ones — see the CGQ precedent in
 > [`sql/01_staging/dim_city_market.sql`](../../sql/01_staging/dim_city_market.sql) and the
 > two-aircraft-type rows added for `test_distance_is_not_summed`.
@@ -654,15 +587,10 @@ warehouse — the reason a per-axis clamp exists at all, not just an overall cap
 meaningless. Whether `fct_route_month` may carry it as a route *attribute* depends on whether
 it is constant per (origin, dest) within a month.
 
-**Measured in M2, over the 2015–2017 subset** (274,824 non-quarantined `(year_month,
-origin_airport_id, dest_airport_id)` route-months): zero varied, max spread 0.0. That
-measurement licensed `max(distance)` as an attribute — but it was a property of the 3-year
-subset available at the time, not a proven property of the data, and M3a re-measured before
-building the Explorer's pivot contract on it.
-
-**Re-measured in M3a Task 1, over the full 2015–2026 window** (1,082,147 non-quarantined
-`(year_month, origin_airport_id, dest_airport_id)` route-months, after `make fetch` landed
-all 12 years):
+**Measured over the full 2015–2026 window** (1,082,147 non-quarantined `(year_month,
+origin_airport_id, dest_airport_id)` route-months). A narrower 2015–2017 measurement had
+reported zero variance, which is why this is stated over the full window: **a subset's zero is
+not the data's zero.**
 
 ```
 route_months     1,082,147
@@ -692,21 +620,19 @@ route-months disagreeing by at most 8 miles, entirely in 2022–2023, does not j
 inventing a number no carrier filed (e.g. a seats-weighted mean) to correct an 8-mile
 discrepancy on three ten-thousandths of the data; that is exactly the over-engineering "never
 average what doesn't exist" forbids elsewhere in this doc. `max(distance)` selects a
-genuinely filed value. **`fct_route_month.distance` is therefore documented as a
-representative filed value, not a true invariant** — this corrects the earlier "constant"
-framing rather than softening it; the 2015–2017 zero was a property of that subset, not of
-the data.
+genuinely filed value. **`fct_route_month.distance` is therefore a representative filed value,
+not a true invariant** — do not restate it as "constant".
 
 Guarded by `pipeline/tests/test_route_month.py::test_distance_is_not_summed`, which asserts
 `count(DISTINCT distance) = 1` per route-month, not only `distance <= max(segment distance)`
 — the latter is satisfied by construction (`max()` always equals the max) and so cannot
 catch a route-month where distance genuinely disagrees across rows, the same gap the
-city-market-id test next to it was written to avoid. That test runs on M2's small committed
+city-market-id test next to it was written to avoid. That test runs on the small committed
 CI fixture, which cannot see the WWT/2022–2023 case at all (same single-year-fixture
-limitation documented elsewhere in this doc), so it stays green regardless of this finding.
+limitation documented above), so it stays green regardless of this finding.
 The guard that actually exercises real data is
-`pipeline/tests/test_invariants_against_real_data.py::test_distance_variance_stays_within_bound`
-(added in M3a Task 1): it asserts both bounds observed above — under 0.01% of route-months
+`pipeline/tests/test_invariants_against_real_data.py::test_distance_variance_stays_within_bound`:
+it asserts both bounds observed above — under 0.01% of route-months
 vary, and under 20 miles of spread — so a future widening beyond the 2022–2023/WWT pattern
 documented here fails the build instead of silently drifting further.
 
@@ -715,8 +641,7 @@ documented here fails the build instead of silently drifting further.
 Same shape of question as `distance`, different answer path: these are carried through
 `fct_route_month` via `any_value()` rather than a `GROUP BY` column, which is safe only if
 they don't vary within the route-month grain. **Measured 0 of 1,861,880 non-quarantined
-route-months varying, over the full 2015–2026 window** (re-measured in M3a Task 1 alongside
-the `distance` re-measurement above; this one did **not** find variance, unlike `distance`)
-— see the "City market ids are constant within the route-month grain" section of
+route-months varying, over the full 2015–2026 window** — unlike `distance` above, this one
+found no variance — see the "City market ids are constant within the route-month grain" section of
 [invariants.md](invariants.md#city-market-ids-are-constant-within-the-route-month-grain) for
 the full measurement and the test that guards it.

@@ -15,9 +15,9 @@ not inferred.
 
 ## ⚠️ PREZIP is a dead end for T-100
 
-An earlier draft made `https://transtats.bts.gov/PREZIP/` the primary source. The directory
-is live and browsable, but **every T-100 file in it is dated 2015-09-02** — abandoned
-one-off job outputs, never refreshed:
+`https://transtats.bts.gov/PREZIP/` looks like the obvious primary source and is not — which is
+the trap, because the directory is live and browsable. **Every T-100 file in it is dated
+2015-09-02** — abandoned one-off job outputs, never refreshed:
 
 ```
 896820853_T_T100_SEGMENT_US_CARRIER_ONLY.zip    9/2/2015 12:14 PM

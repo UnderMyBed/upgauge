@@ -19,8 +19,8 @@ alongside two letter codes. Measured against the full 2,886-row Carrier Decode:
 | `CARRIER` | 1,825 | **135** | the raw IATA code — genuinely reused |
 | `UNIQUE_CARRIER` | 1,776 | **0** | BTS disambiguates with suffixes (`2T (1)`, 119 of them) |
 
-> ⚠️ **Correction.** An earlier version of this section said `UNIQUE_CARRIER` is the reused
-> field. It is the opposite — it is the *disambiguated* one. `CARRIER` is what collides.
+> ⚠️ **The direction is easy to invert, so state it explicitly:** `UNIQUE_CARRIER` is the
+> *disambiguated* field. `CARRIER` is the one that collides.
 
 So `UNIQUE_CARRIER` is safe as an identifier but poor for display (the suffix is ugly, and
 can shift if BTS re-disambiguates), while `CARRIER` is fine for display but unusable as a key.
@@ -147,7 +147,7 @@ contributes nothing to any aggregate. Flagging it reported a **2.03% quarantine 
 against a true rate of 0.001% — a 1,400× overstatement** of a number the UI presents as a
 trust signal. The rule is worthless if it fires on ordinary data.
 
-## Rows with no carrier identity — a defensive rule
+## Rows with no carrier identity
 
 **158 rows in 2015 have every carrier field blank** — `UNIQUE_CARRIER`, `AIRLINE_ID`,
 `UNIQUE_CARRIER_NAME`, `UNIQUE_CARRIER_ENTITY`, `REGION`, `CARRIER_NAME`,
@@ -155,27 +155,17 @@ trust signal. The rule is worthless if it fires on ordinary data.
 with passengers aboard). They cannot be keyed on the operating carrier, which is the grain
 of the entire product.
 
-> ⚠️ **Correction.** An earlier version of this section said these rows are quarantined.
-> They are not, on the data v0 ingests: **all 158 are `CLASS = 'L'` (non-scheduled charter),
-> zero are in scheduled passenger service.** The service filter removes them before
-> quarantine applies. That also means the quarantine rate stated here was ~10x too high.
+**Those 158 are not quarantined.** All are `CLASS = 'L'` (non-scheduled charter) and none is in
+scheduled passenger service, so the service filter removes them before quarantine applies.
 
-The `missing_carrier` rule therefore exists as **defense, not routine handling** — if BTS
-ever emits a carrier-less *scheduled* row, it gets quarantined rather than silently
-aggregated under a null carrier. Two tests hold the line: one asserts no carrier-less rows
-reach the ingested subset today (so we notice if that changes), and one constructs such a
-row and proves it would be caught.
+> ⚠️ **`missing_carrier` is NOT purely defensive — it fires 51 times over 2015–2026:** 27 rows
+> in 2018, 24 in 2022, 0 in every other year (per-year table under "Quarantine is a feature"
+> below). Those 51 are quarantined and excluded from aggregates, exactly as designed. Do not
+> describe this rule as one that never fires.
 
-> ⚠️ **Correction (M3a Task 1).** The paragraph above was true of 2015, the only year
-> ingested when it was written, but is not true of the full window. **Re-measured over
-> 2015–2026: `missing_carrier` fires 51 times** — 27 rows in 2018, 24 in 2022, 0 in every
-> other year (see the per-year table under "Quarantine is a feature" below). So it is not
-> purely defensive after all — it has caught real carrier-less rows reaching the ingested
-> subset, twice, outside 2015. The rule still behaves correctly (those 51 rows are
-> quarantined and excluded from aggregates, exactly as designed); what changes is the claim
-> that it never fires. The two tests referenced above are unaffected — they assert against
-> the 2015 extract specifically, which genuinely still has zero — but "no carrier-less rows
-> reach the ingested subset today" must not be read as a claim about the full window.
+Two tests hold the line: one asserts no carrier-less rows reach the 2015 extract, and one
+constructs such a row and proves it would be caught. **The first is scoped to 2015 — which
+genuinely still has zero — so never read it as a claim about the full window.**
 
 `missing_carrier` outranks every other reason — an unattributable row is unattributable
 regardless of what else is wrong with it.
@@ -328,18 +318,8 @@ already fixes), city market ids are copied per filed row from `raw.ORIGIN_CITY_M
 `raw.DEST_CITY_MARKET_ID` — a data assumption, not a structural guarantee, since an airport
 genuinely can be reassigned between city markets over time.
 
-**Measured in M2**, over the `data/parquet/t100_segment/` warehouse as it stood then (years
-2015–2017, 494,451 non-quarantined `(year_month, op_airline_id, origin_airport_id,
-dest_airport_id)` route-months):
-
-```
-route_months                      494,451
-groups w/ >1 origin_city_market_id      0
-groups w/ >1 dest_city_market_id        0
-```
-
-**Re-measured in M3a Task 1, over the full 2015–2026 window** (1,861,880 non-quarantined
-route-months, after `make fetch` landed all 12 years):
+**Measured over the full 2015–2026 window** (1,861,880 non-quarantined
+`(year_month, op_airline_id, origin_airport_id, dest_airport_id)` route-months):
 
 ```
 route_months                    1,861,880
@@ -347,10 +327,10 @@ groups w/ >1 origin_city_market_id      0
 groups w/ >1 dest_city_market_id        0
 ```
 
-Zero groups vary in either direction, in both measurements. Unlike the sibling `distance`
-measurement (see [model.md](model.md#distance-is-not-additive)), which DID find non-zero
-variance once the full window was measured, this one held. `any_value()` is kept, backed by
-a test
+Zero groups vary in either direction. **The sibling `distance` measurement did NOT hold up the
+same way** — it found real variance once measured over the full window
+([model.md](model.md#distance-is-not-additive)) — so treat this one as a measured fact about the
+current window, not a structural guarantee. `any_value()` is kept, backed by a test
 (`pipeline/tests/test_route_month.py::test_city_market_ids_are_constant_within_the_route_month_grain`)
 that asserts the constancy on every build rather than assuming it silently — a future
 violation (e.g. a genuine mid-month market reassignment) surfaces as a failing test instead
@@ -361,16 +341,14 @@ of an arbitrarily-picked value with no signal.
 BTS accepts amended filings and silently overwrites. Stamp every ingest with a
 `download_date` and **keep every download**.
 
-> ⚠️ **Correction.** An earlier version said to retain prior *Parquet partitions*. Parquet is
-> a derived artifact — the thing that must be retained is the **raw download**, because that
-> is what cannot be regenerated. `data/raw/` is therefore **append-only**: filenames carry the
-> download date (`t100d_segment_us_2015_20260729.zip`), so a re-fetch adds a file rather than
-> destroying the one that produced already-published numbers. Parquet is rebuilt from the
-> latest raw and freely discardable.
+> ⚠️ **What must be retained is the RAW download, not the Parquet partition.** Parquet is a
+> derived artifact and is freely rebuilt; the raw zip cannot be regenerated. `data/raw/` is
+> therefore **append-only**: filenames carry the download date
+> (`t100d_segment_us_2015_20260729.zip`), so a re-fetch adds a file rather than destroying the
+> one that produced already-published numbers.
 >
-> This was a real hole, not a wording nit: `--force` previously overwrote `data/raw/` in
-> place, which contradicted "never mutate `data/raw`" and left the resolution rule with
-> nothing to resolve between.
+> This is not a wording nit — a `--force` that overwrites `data/raw/` in place leaves the
+> resolution rule below with nothing to resolve between.
 
 **Resolution rule: latest `download_date` wins per `(year_month, grain key)`; prior
 partitions are audit-only and never feed a mart.** Without this the marts are
@@ -392,7 +370,7 @@ artifact by sha256. It is the M1 exit criterion.
 > that the encoder stays deterministic no matter the threading. The regression test uses a
 > real extract and repeats the comparison four times, because one comparison passes by luck.
 
-> **The `.duckdb` catalog file itself is also not byte-stable — measured in M2.** A 200,000-row
+> **The `.duckdb` catalog file itself is also not byte-stable.** A 200,000-row
 > `CREATE TABLE ... AS SELECT` with `threads = 1`, built three times in a row (`a.duckdb`,
 > `b.duckdb`, `c.duckdb`) from identical logic, produced three different sha256 digests every
 > time:
@@ -416,15 +394,15 @@ artifact by sha256. It is the M1 exit criterion.
 > against the built catalog, the same way the Parquet gate compares row content rather than
 > raw bytes.
 >
-> **Built.** `pipeline.marts.verify_database` (`make verify`'s second gate) is why this
-> instability does not matter: it never touches the `.duckdb` file's bytes. It builds the
-> database twice and, for each of the 8 catalog objects, exports it through
+> `pipeline.marts.verify_database` (`make verify`'s third gate) is why this instability does not
+> matter: it never touches the `.duckdb` file's bytes. It builds the database twice and, for
+> every catalog object, exports it through
 > `COPY (SELECT * FROM <object>) TO ... (FORMAT PARQUET)` on a connection pinned to
 > `SET threads TO 1` — the same setting that makes the Parquet writer above byte-stable —
-> then sha256s that export and compares across the two builds. Real run on the 2015–2017
-> warehouse: `database: 8 objects identical across two builds`. The catalog file's own
+> then sha256s that export and compares across the two builds. The catalog file's own
 > non-determinism is real and permanent, but it is invisible to the gate because the gate
-> never looks at the catalog file's bytes, only at what querying each object produces.
+> never looks at the catalog file's bytes, only at what querying each object produces. The
+> object count lives in [../architecture/pipeline.md](../architecture/pipeline.md) § The M2 gate.
 
 ## Column count assertion
 
@@ -447,14 +425,10 @@ Reasons, in precedence order:
 | `zero_seats` | passenger config, departures performed, no seats |
 | `load_factor_gt_1` | `passengers > seats` |
 
-Volumes were originally measured on the **ingested** 2015 subset only — 282,036
-scheduled-passenger rows out of 367,360 raw, 16 quarantined (`zero_seats` 4,
-`load_factor_gt_1` 12, `missing_carrier` 0) = **0.006%**. That was the only year ingested at
-M1.
-
-> ⚠️ **Correction — the 0.006% figure was 2015's rate quoted as though it characterised the
-> whole window.** Re-measured in M3a Task 1 over the full **2015–2026** window
-> (`fct_segment_month`, `upgauge.duckdb`, all 12 fetched years), per year:
+> ⚠️ **A single year's quarantine rate must never stand in for the window's.** Quote the
+> per-year table or the full-window total, never one year's number — the rate spans a ~20×
+> range. Measured over the full **2015–2026** window (`fct_segment_month`, `upgauge.duckdb`),
+> per year:
 >
 > | Year | Rows | Quarantined | Rate |
 > |---|---:|---:|---:|
@@ -472,27 +446,18 @@ M1.
 > | 2026 | 118,650 | 52 | 0.0438% (partial year — BTS lags a few months, see [pipeline.md](../architecture/pipeline.md)) |
 > | **Total** | **3,359,481** | **1,301** | **0.0387%** |
 >
-> The rate ranges from **0.0057% (2015) to 0.1140% (2020)** — a ~20× spread across years.
-> **2020 alone exceeds the 0.1% ceiling** that
+> The rate ranges from **0.0057% (2015) to 0.1140% (2020)**. **2020 alone exceeds the 0.1%
+> ceiling** that
 > `pipeline/tests/test_invariants_against_real_data.py::test_quarantine_stays_rare_on_real_data`
-> enforces. That test currently reads only the 2015 extract
-> (`latest_raw(RAW_DIR, T100D_SEGMENT_US, 2015)`), so it does not exercise 2020 and stays
-> green regardless of this finding — a real scoping gap in the test, left as-is here per this
-> task's docs-only mandate; widening the real-data suite to the full window is a follow-up,
-> not a doc fix. **2020's elevated rate is COVID, not a data defect**: mass route suspension
-> and collapsed load factors produce more `zero_seats` and `load_factor_gt_1` filings — the
-> reason mix below shows exactly that shift.
+> enforces — and that test reads **only the 2015 extract**
+> (`latest_raw(RAW_DIR, T100D_SEGMENT_US, 2015)`), so it never exercises 2020 and stays green
+> regardless. **That is a live scoping gap in the test, not a resolved one.**
 >
-> Reason mix over the full window: `zero_seats` 1,060, `load_factor_gt_1` 190,
-> `missing_carrier` 51.
->
-> **`missing_carrier` is no longer 0 outside 2015** — see the correction inline in "Rows with
-> no carrier identity — a defensive rule" above, where this rule is owned. 51 rows reach the
-> quarantine stage over the full window: 27 in 2018, 24 in 2022, 0 elsewhere.
->
-> **A single year's rate must never again stand in for the window's** — that is the whole
-> reason this correction exists. Quote the per-year table, or the full-window total, not one
-> year's number.
+> **2020's elevated rate is COVID, not a data defect**: mass route suspension and collapsed load
+> factors produce more `zero_seats` and `load_factor_gt_1` filings, and the reason mix shows
+> exactly that shift — `zero_seats` 1,060, `load_factor_gt_1` 190, `missing_carrier` 51 over the
+> full window. On `missing_carrier`'s 51, see "Rows with no carrier identity" above, which owns
+> that rule.
 
 ---
 

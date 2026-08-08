@@ -25,10 +25,10 @@ single-parent exclusivity is guaranteed by ownership.
 
 ## ⚠️ The mapping is DATE-RANGED, not static
 
-An earlier draft assumed ownership held for the entire window, so a flat `carrier → parent`
-map would do. **It does not.** Alaska acquired Virgin America in 2016 and Hawaiian in 2024,
-both *inside* the window. A static map is wrong before the acquisition; omitting them is
-wrong after it.
+**A flat `carrier → parent` map does not work here**, however obvious it looks: ownership does
+not hold for the whole window. Alaska acquired Virgin America in 2016 and Hawaiian in 2024, both
+*inside* the window. A static map is wrong before each acquisition; omitting them is wrong
+after it.
 
 The map is keyed `(airline_id, effective_from, effective_to) → parent`, and the ingest
 joins on it by month.

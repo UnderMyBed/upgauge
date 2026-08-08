@@ -19,9 +19,9 @@ bite you.
 | [data/invariants.md](data/invariants.md) | The rules that gate the pipeline, each with its evidence |
 | [data/carrier-model.md](data/carrier-model.md) | Operating-carrier grain, the date-ranged mainline map |
 | [architecture/hosting.md](architecture/hosting.md) | Deployment shape, cost, the hosting survey, portability test |
-| [architecture/pipeline.md](architecture/pipeline.md) | Repo layout, the milestone record, M1 phase order, the ingest/query layer, **the M2 marts layer and the load-bearing CWD constraint** |
+| [architecture/pipeline.md](architecture/pipeline.md) | Repo layout, the milestone record, the ingest/query layer, **the M2 marts layer and the load-bearing CWD constraint** |
 | [design/system.md](design/system.md) | **The design system: tokens, components, chart and map encodings, states** |
-| [design/brief.md](design/brief.md) | The design problem statement — constraints, anti-goals, content inventory (answered) |
+| [design/brief.md](design/brief.md) | The design problem statement — brief, constraints, anti-goals, and the direction that was rejected (answered by `system.md`) |
 
 ## Where the work lives
 
@@ -51,3 +51,24 @@ fragment the truth, go stale silently, and end up stating the same rule three di
 **Evidence stays attached to the rule it justifies.** Measured counts, distributions, and
 prices live inline next to the constraint they support. A rule without its evidence gets
 re-litigated, or "simplified" by someone who doesn't know why it exists.
+
+**Evidence for a SUPERSEDED state does not.** These are different things, and conflating them is
+how a doc ends up narrating the history of its own numbers:
+
+| Keep | Cut |
+|---|---|
+| the measurement that justifies the current rule | the same measurement taken over an older window, when the current one is in the same paragraph |
+| a rejected design plus what killed it | the rejected design's own measurements |
+| a limitation that is still true | a plan to fix it, or a claim about its priority (tracker) |
+| the trap a past mistake reveals | the fact that a past revision of this file made it |
+
+**Write the rule, not the correction.** "An earlier version said X; it is really Y" costs a
+reader two passes and dates instantly — `> ⚠️ **Y, and the direction is easy to invert**` is the
+same knowledge as a rule. If a mistake's only lesson is "check this by meaning, not by string",
+that lesson is already a rule in `CLAUDE.md` § Workflow; do not re-record it per site.
+
+This is not licence to strip evidence. **A measurement whose rule is still live stays, in
+full** — that is what stops the rule being re-litigated. The 2026-08 pass removed 17 dual
+measurements and 17 self-corrections, every one a case where a superseded figure sat beside the
+current one, doubling the number of figures that had to stay true (see the tracker's "Stop
+measured numbers drifting").

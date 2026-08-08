@@ -612,9 +612,10 @@ is the two projected endpoints, straight, regardless of its geographic length.
 
 ### The year track
 
-**Superseded on measurement, M7 Task 9 — this used to say "the one orchestrated motion moment,"
-an animated 2015→2026 track tweening the network growing and contracting. That was never built,
-and should not be:** the map that actually shipped (M7 Tasks 4-8) is server-rendered SVG,
+**Do not build an animated 2015→2026 track** tweening the network growing and contracting,
+however naturally it reads as "the one orchestrated motion moment" — this doc specified exactly
+that until it was measured, and **the measurement kills it:** the map that shipped is
+server-rendered SVG,
 composed the same way the aircraft-mix chart is (`app/src/components/NetworkMap.tsx`,
 `app/src/lib/map/`) — no client charting or mapping library in the render path — so animating
 between years means shipping every year's geometry in one response rather than one page's
@@ -803,11 +804,12 @@ single-window aggregate and no pivot measure expresses a delta, while these pres
 (Δ load factor, log Δ gauge) against prior-12, which only `mart_route_health` computes. The two
 share `DataTable`'s rank column and nothing else. **The user-facing copy has to say this too**,
 not just the docs: `/watch`'s own index read "Four saved Explorer queries, editorially framed"
-through M6, one milestone after the correction landed in six other places.
+for a full milestone *after* the correction had landed in six other places.
 
 Route Birth Tracker rows must read **"re-entry, not first appearance"** and must **name the
 carrier** — never "first ever", never "first appearance since 2015", and never "nobody flew it
-last year". All three shipped; the first two were mandated by this very line through M6.
+last year". All three shipped wrong, and the first two were mandated by this very line while the
+page still said otherwise — a rule in a doc does not enforce itself.
 `p12_months_present = 0` means *this carrier filed nothing on this route in the prior 12
 months*, full stop. Two things it does **not** mean, each measured:
 

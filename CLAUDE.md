@@ -24,6 +24,12 @@ revisit, and end up stating the same rule three ways.
 prices go inline next to the constraint they support. A rule without its evidence gets
 re-litigated or "simplified" by someone who doesn't know why it exists.
 
+**Evidence for a SUPERSEDED state is not that, and does not stay.** Write the rule, not the
+correction: a doc that keeps the old measurement beside the new one, or narrates what a past
+revision of itself got wrong, doubles the figures that must stay true and reads as a story told
+to ourselves. `docs/README.md` § How these docs work has the keep/cut test — apply it before
+adding a "Correction" or a second measurement of anything.
+
 ### What a milestone closeout may add to THIS file
 
 **A rule. Never narrative, never measurements.** A rule is something whose absence would let a
@@ -97,11 +103,10 @@ restating it (tracker: "Stop measured numbers drifting").
 (`M8 — Public launch`, `M9 — Post-launch surfaces`, `Engineering health`, `v1+`), each epic a
 chunk that can be handed to a swarm, each child task self-contained enough for one agent.
 
-This section used to be a 72-line hand-maintained backlog. It is gone on purpose: the same item
-was routinely stated three ways in three files and drifted independently — the either-endpoint
-filter was described as missing in **four** places for a full milestone after it shipped, and
-two of those were on served pages. A doc says what is TRUE about the system; the tracker says
-what is PLANNED.
+**Never grow a backlog here again.** A hand-maintained one states the same item three ways in
+three files and drifts independently: the either-endpoint filter was described as missing in
+**four** places for a full milestone after it shipped, two of them on served pages. A doc says
+what is TRUE about the system; the tracker says what is PLANNED.
 
 **M8 is the launch milestone, and its content is the gap between "built" and "reachable":** a
 deploy artifact and the never-executed portability test (#1), the monthly ingest and the
@@ -431,13 +436,12 @@ signature element; it does not own these.
   Full detail: `docs/architecture/hosting.md`.
 - Build the **aircraft-type-mix chart before the load-factor chart**. Everyone does load
   factor; the gauge story is the differentiator.
-- **The `/watch` presets are NOT saved instances of a generic Top-N builder** — this exact
-  sentence used to be here, in `docs/product/features.md`, and in `docs/design/system.md`, and
-  was wrong in all three (M6 Task 3). Every `meta_pivot_measures` row is a single-window
-  aggregate; every preset ranks on a delta between two windows, which no pivot measure
-  expresses. The presets read `mart_route_health` directly and share only `DataTable`'s rank
-  column with the Top-N builder (`app/src/lib/topn.ts`), which exists and is built (M6 Task 3,
-  first used by `/carrier`'s Top routes / Top origin airports tables, M6 Task 4).
+- **The `/watch` presets are NOT saved instances of a generic Top-N builder**, and the opposite
+  claim was stated in three files at once before anyone checked it. Every `meta_pivot_measures`
+  row is a single-window aggregate; every preset ranks on a delta between two windows, which no
+  pivot measure expresses. The presets read `mart_route_health` directly and share only
+  `DataTable`'s rank column with the Top-N builder (`app/src/lib/topn.ts`), which is built and
+  first used by `/carrier`'s Top routes / Top origin airports tables.
 - **The cron must fail loudly.** A broken ingest doesn't error — the site keeps serving and
   `DATA AS OF` silently stops advancing. Alert when `max(year_month)` hasn't moved in ~45
   days.
