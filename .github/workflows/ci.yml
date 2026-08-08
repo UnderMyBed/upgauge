@@ -78,12 +78,36 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           warehouse-tag: ${{ needs.resolve.outputs.tag }}
-      - name: Regenerate the reference values
-        run: make stats
-      - name: Assert they match what is committed
+      # `make stats` and the diff check are ONE step on purpose. GitHub skips subsequent steps
+      # once a step fails, so if these were split (as they originally were) a `make stats`
+      # crash -- which is the failure mode this job exists to catch, e.g. a BTS refresh
+      # renaming a column that `stats_reference.sql` still references -- would never reach the
+      # framing text below. The reader would get a bare red step and a raw traceback instead of
+      # "this is a structural upstream change, other reds are consequences". Folding them into
+      # one step means both failure modes -- `make stats` erroring, and it succeeding but
+      # disagreeing with what's committed -- run the same summary-writing code.
+      - name: Regenerate the reference values and assert they match what is committed
         run: |
           set -euo pipefail
-          if ! git diff --exit-code -- pipeline/reference/stats.generated.json; then
+          if ! make stats; then
+            {
+              echo "## Data contract FAILED"
+              echo
+              echo "\`make stats\` itself failed while regenerating the reference values --"
+              echo "it never got as far as producing JSON to diff."
+              echo "**This usually means a STRUCTURAL upstream change** (a renamed or dropped"
+              echo "column, a mart whose shape no longer matches \`stats_reference.sql\`) --"
+              echo "not just numbers moving. **Any other failing job in this run is most"
+              echo "likely a consequence of this.**"
+              echo
+              echo "Fix: run \`make stats\` locally, read the traceback, and update the SQL or"
+              echo "pipeline to match the new shape, then re-pin the reference values in the"
+              echo "same commit."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          diff_output="$(git diff -- pipeline/reference/stats.generated.json)"
+          if [ -n "$diff_output" ]; then
             {
               echo "## Data contract FAILED"
               echo
@@ -94,9 +118,9 @@ jobs:
               echo "old values in the same commit."
               echo
               echo '```diff'
-              git diff -- pipeline/reference/stats.generated.json
+              echo "$diff_output"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
           fi
-          echo "### Data contract ok — warehouse matches committed reference values" >> "$GITHUB_STEP_SUMMARY"
+          echo "## Data contract ok — warehouse matches committed reference values" >> "$GITHUB_STEP_SUMMARY"
