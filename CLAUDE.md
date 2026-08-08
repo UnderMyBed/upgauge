@@ -201,6 +201,26 @@ three more times. **That size crossing 64 KB also exposed a latent `smoke.sh` bu
 needle sat, and made `check_not` report a silent **ok** for a string that was present. Fixed;
 see `docs/architecture/pipeline.md` § M4c.
 
+**The third `smoke.sh` self-defect, and the worst of them: the gate could certify a build it
+never ran.** `cleanup()` tore the server down with `kill "$SERVER_PID"` and
+`pkill -f "next start app -p ${PORT}"`. Neither can work. Next rewrites its own process title
+to `next-server (v16.3.0)`, so that pattern matches **no process at all**; and `cap` starts the
+server under `systemd-run --user --scope`, which execs, so `$SERVER_PID` is not the pid holding
+the port by the time the server is up. Every run therefore leaked a live `next-server` still
+listening on `:3199` — measured, four per run across the main and gap ports (3195, 3196, 3198,
+3199). The next run's `next start` then could not bind and died, and **all ~260 content curls
+were answered by the previous run's build**: every needle passes, because the orphan serves the
+same routes. Measured for real — one orphan held `:3199` for 34 minutes across two consecutive
+runs that each reported `266 ok` for a build that did not contain the change under test. The
+only check that noticed was `open handles = 1` reading `0`, and it noticed **by accident**: that
+check is about `DuckDBInstance` memoization and knows nothing about staleness. Fixed with a
+`kill_port` that kills the actual listener via `ss` (title-independent) **and** — the half that
+matters — a `port_free_or_die` preflight on all four ports, because `kill_port` only stops *this*
+run leaking, while the preflight is what stops a run inheriting a leak from a crash, a `kill -9`,
+or a developer's own `make dev`. Verified as a falsifiable pair: with a real orphan planted on
+`:3199` the gate aborts at exit 2 having run **zero** checks and naming the offending pid; with
+the port clear it is 267 ok and leaks nothing.
+
 **A smoke needle is written in the bytes React EMITS, not the bytes the source contains.**
 `check_not … 'can&rsquo;t be read'`, copied verbatim from a JSX `<h1>`, could never fire: JSX
 decodes entities at compile time and React emits raw U+2019, so the check printed `ok`

@@ -134,22 +134,61 @@ check_not_re() {
 # meta_pivot_dimensions). GAP_PORT3/GAP_PID3/BROKEN_DB3 are M7 Task 10's own instance, a FOURTH
 # short-lived server, run strictly after the third has been killed, against a copy broken a
 # THIRD way again (dim_airport's lat/lon columns dropped, not a whole catalog view or table).
+# Kill whatever is LISTENING on a port, whatever it calls itself.
+#
+# `pkill -f "next start app -p <port>"` cannot work and silently did nothing for every run
+# before this. Two independent reasons, either one sufficient: Next rewrites its own process
+# title to `next-server (v16.3.0)`, so the pattern matches no process at all; and `cap` runs
+# the server under `systemd-run --user --scope`, which execs, so `$SERVER_PID` is not the pid
+# holding the port by the time the server is up. Verified directly -- with an orphan holding
+# :3199, `pgrep -f "next start app -p 3199"` matched nothing (a first attempt appeared to match
+# and was the probing shell finding its own command line, which is its own lesson).
+#
+# The consequence was not a stray process. It was a DISHONEST GATE. The orphan keeps :PORT, so
+# the next run's `next start` cannot bind and dies -- and every content curl is answered by the
+# PREVIOUS run's build. All ~260 needles pass, because the orphan serves the same routes.
+# Measured: one orphan held :3199 for 34 minutes across two consecutive runs, each reporting
+# 266 ok against a build that did not contain the change under test. The ONLY check that
+# noticed was the open-handle count reading 0 instead of 1, and it noticed by accident -- that
+# check is about DuckDBInstance memoization and knows nothing about staleness. A gate that
+# certifies the wrong build is worse than no gate, which is this file's entire premise.
+kill_port() {
+  local pid
+  for pid in $(ss -lptnH "sport = :${1}" 2>/dev/null | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u); do
+    kill -9 "$pid" 2>/dev/null
+  done
+}
+
+# Refuse to start against an occupied port rather than silently testing someone else's server.
+# This is the half that actually makes the gate honest: kill_port above stops THIS run leaking,
+# but only this guard stops a run inheriting a leak it did not create (a crashed run, a kill -9,
+# a developer's own `make dev` on the same port).
+port_free_or_die() {
+  if ss -lntH "sport = :${1}" 2>/dev/null | grep -q .; then
+    echo "  FAIL port ${1} is already in use before this run started."
+    echo "       Refusing to continue: every check would pass against THAT server's build"
+    echo "       instead of the one just built. Kill it and re-run."
+    ss -lptnH "sport = :${1}" 2>/dev/null | sed 's/^/       /'
+    exit 1
+  fi
+}
+
 cleanup() {
   [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null
-  pkill -f "next start app -p ${PORT}" 2>/dev/null
+  kill_port "$PORT"
   [ -n "${GAP_PID:-}" ] && kill "$GAP_PID" 2>/dev/null
-  [ -n "${GAP_PORT:-}" ] && pkill -f "next start app -p ${GAP_PORT}" 2>/dev/null
+  [ -n "${GAP_PORT:-}" ] && kill_port "$GAP_PORT"
   [ -n "${BROKEN_DB:-}" ] && rm -f "$BROKEN_DB"
   # M6 Task 8's own gap check, appended after the M5 Task 7 Part A one below: a SECOND broken
   # copy and a SECOND short-lived server, same reason the first pair exists (an 8 GB box with
   # zram-only swap does not run two `next start` processes at once).
   [ -n "${GAP_PID2:-}" ] && kill "$GAP_PID2" 2>/dev/null
-  [ -n "${GAP_PORT2:-}" ] && pkill -f "next start app -p ${GAP_PORT2}" 2>/dev/null
+  [ -n "${GAP_PORT2:-}" ] && kill_port "$GAP_PORT2"
   [ -n "${BROKEN_DB2:-}" ] && rm -f "$BROKEN_DB2"
   # M7 Task 10's own gap check, appended after M6 Task 8's: a THIRD broken copy and a THIRD
   # short-lived server, same reason the first two pairs exist.
   [ -n "${GAP_PID3:-}" ] && kill "$GAP_PID3" 2>/dev/null
-  [ -n "${GAP_PORT3:-}" ] && pkill -f "next start app -p ${GAP_PORT3}" 2>/dev/null
+  [ -n "${GAP_PORT3:-}" ] && kill_port "$GAP_PORT3"
   [ -n "${BROKEN_DB3:-}" ] && rm -f "$BROKEN_DB3"
 }
 trap cleanup EXIT
@@ -159,6 +198,7 @@ echo "==> build"
 cap 4G mise exec -- npm --prefix app run build >/dev/null 2>&1 || { echo "  FAIL build"; exit 1; }
 
 echo "==> serve on :${PORT}"
+port_free_or_die "$PORT"
 cap 2G mise exec -- npx next start app -p "$PORT" >/tmp/upgauge-smoke.log 2>&1 &
 SERVER_PID=$!
 for _ in $(seq 1 60); do curl -sf -o /dev/null --max-time 2 "${BASE}/" && break; sleep 1; done
@@ -1208,6 +1248,7 @@ con.close()
 else
   GAP_PORT="${SMOKE_GAP_PORT:-3198}"
   GAP_BASE="http://127.0.0.1:${GAP_PORT}"
+  port_free_or_die "$GAP_PORT"
   UPGAUGE_DB="$BROKEN_DB" cap 2G mise exec -- npx next start app -p "$GAP_PORT" \
     >/tmp/upgauge-smoke-gap.log 2>&1 &
   GAP_PID=$!
@@ -1241,7 +1282,7 @@ else
     check_not "gap: /explore is not Next's own force-dynamic fallback (proves proxy.ts ran)" "$HDRS" "must-revalidate"
   fi
   kill "$GAP_PID" 2>/dev/null; wait "$GAP_PID" 2>/dev/null; GAP_PID=
-  pkill -f "next start app -p ${GAP_PORT}" 2>/dev/null
+  kill_port "$GAP_PORT"
 fi
 rm -f "$BROKEN_DB"; BROKEN_DB=
 
@@ -1295,6 +1336,7 @@ con.close()
 else
   GAP_PORT2="${SMOKE_GAP_PORT2:-3195}"
   GAP_BASE2="http://127.0.0.1:${GAP_PORT2}"
+  port_free_or_die "$GAP_PORT2"
   UPGAUGE_DB="$BROKEN_DB2" cap 2G mise exec -- npx next start app -p "$GAP_PORT2" \
     >/tmp/upgauge-smoke-gap2.log 2>&1 &
   GAP_PID2=$!
@@ -1317,7 +1359,7 @@ else
       "$HDRS" "$HTML_CACHE_EXPECTED"
   fi
   kill "$GAP_PID2" 2>/dev/null; wait "$GAP_PID2" 2>/dev/null; GAP_PID2=
-  pkill -f "next start app -p ${GAP_PORT2}" 2>/dev/null
+  kill_port "$GAP_PORT2"
 fi
 rm -f "$BROKEN_DB2"; BROKEN_DB2=
 
@@ -1369,6 +1411,7 @@ con.close()
 else
   GAP_PORT3="${SMOKE_GAP_PORT3:-3196}"
   GAP_BASE3="http://127.0.0.1:${GAP_PORT3}"
+  port_free_or_die "$GAP_PORT3"
   UPGAUGE_DB="$BROKEN_DB3" cap 2G mise exec -- npx next start app -p "$GAP_PORT3" \
     >/tmp/upgauge-smoke-gap3.log 2>&1 &
   GAP_PID3=$!
@@ -1394,7 +1437,7 @@ else
     check "gap: /route/JFK-LAX is unaffected (the break is scoped to coordinates)" "$CODE_ROUTE" '200'
   fi
   kill "$GAP_PID3" 2>/dev/null; wait "$GAP_PID3" 2>/dev/null; GAP_PID3=
-  pkill -f "next start app -p ${GAP_PORT3}" 2>/dev/null
+  kill_port "$GAP_PORT3"
 fi
 rm -f "$BROKEN_DB3"; BROKEN_DB3=
 
