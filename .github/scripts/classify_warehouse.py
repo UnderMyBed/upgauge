@@ -10,12 +10,20 @@ PR. Three classes, ordered by how much human attention they deserve:
 
 Class 3 exists because BTS reference tables carry CURRENT identity with no name history: a
 rename lands silently in a rebuild with no superseded row to fall back on.
+
+INVARIANT: `previous["measures"]` and `current["measures"]` carry the SAME key set. Both come
+from the same commit's `pipeline.stats.collect()` -- the schema does not change between the two
+sides of a single comparison, only the values do. `classify()` asserts this loudly at the top
+rather than defending each lookup with `.get()`: a tolerant fallback would let a `stats.py`
+schema drift silently degrade into "nothing moved" instead of surfacing it, which is exactly
+the failure mode this whole module exists to refuse.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import secrets
 import sys
 from dataclasses import dataclass, field
 
@@ -41,8 +49,26 @@ class Classification:
         return 0
 
 
+def _assert_same_measure_keys(prev: dict, cur: dict) -> None:
+    """Enforce the module-level invariant: both sides come from the same `collect()` shape.
+
+    Every check below subscripts `prev[...]`/`cur[...]` directly rather than `.get(...)` --
+    that is only safe because this runs first and fails loudly on the one precondition that
+    makes direct subscripting safe.
+    """
+    only_prev = prev.keys() - cur.keys()
+    only_cur = cur.keys() - prev.keys()
+    if only_prev or only_cur:
+        raise KeyError(
+            "previous and current measures have different key sets -- classify() cannot "
+            f"compare them: only in previous: {sorted(only_prev)}, only in current: "
+            f"{sorted(only_cur)}"
+        )
+
+
 def classify(previous: dict, current: dict) -> Classification:
     prev, cur = previous["measures"], current["measures"]
+    _assert_same_measure_keys(prev, cur)
     c = Classification()
 
     if prev["max_year_month"] != cur["max_year_month"]:
@@ -55,9 +81,19 @@ def classify(previous: dict, current: dict) -> Classification:
         if was and (was["rows"], was["quarantined"]) != (row["rows"], row["quarantined"]):
             c.moved_years.append(year)
 
+    # The forward loop above can only see years that SURVIVED into the current build. A year
+    # that was in `prev` and vanished entirely -- a pipeline regression dropping an early
+    # partition -- is invisible to it by construction; this is the reverse direction.
+    cur_year_set = {str(r["year"]) for r in cur["rows_by_year"]}
+    for year in sorted(set(prev_years) - cur_year_set):
+        c.shape_changes.append(
+            f"year {year} vanished from rows_by_year -- present in the previous build, "
+            "absent from the current one"
+        )
+
     for key in _SHAPE_SCALARS:
-        if prev.get(key) != cur.get(key):
-            c.shape_changes.append(f"{key}: {prev.get(key)} -> {cur.get(key)}")
+        if prev[key] != cur[key]:
+            c.shape_changes.append(f"{key}: {prev[key]} -> {cur[key]}")
 
     prev_names = {r["code"]: r["short_name"] for r in prev["aircraft_short_names"]}
     cur_names = {r["code"]: r["short_name"] for r in cur["aircraft_short_names"]}
@@ -98,12 +134,32 @@ def _issue_body(c: Classification) -> str:
     return "\n".join(lines)
 
 
+def _write_multiline_output(fh, name: str, value: str) -> None:
+    """Append a `name<<DELIM ... DELIM` block to an open $GITHUB_OUTPUT handle.
+
+    The delimiter is randomized, per GitHub's own guidance for output values built from
+    unpredictable upstream text: a static delimiter (e.g. a fixed `EOF`) that happens to
+    appear verbatim on its own line inside `value` would truncate the value silently instead
+    of failing loudly. Not reachable today -- the only free-text fields in `_issue_body()` are
+    rendered through `!r` -- but the cost of generating one is a function call, and the
+    alternative is a delimiter collision nobody would notice until an issue body went missing
+    its tail.
+    """
+    delim = secrets.token_hex(16)
+    while delim in value:
+        delim = secrets.token_hex(16)
+    fh.write(f"{name}<<{delim}\n{value}\n{delim}\n")
+
+
 def main() -> int:
-    previous = json.loads(sys.argv[1]) if len(sys.argv) > 1 else None
-    current = json.loads(sys.argv[2])
-    if previous is None:
-        print("no previous warehouse; nothing to classify")
+    # The only caller (warehouse.yml's `classify` step) invokes this with exactly two
+    # positional args, and only when a previous warehouse exists to compare against -- a run
+    # with fewer args means something upstream is wrong, not that there's nothing to compare.
+    if len(sys.argv) < 3:
+        print("usage: classify_warehouse.py <previous-json> <current-json>")
         return 0
+    previous = json.loads(sys.argv[1])
+    current = json.loads(sys.argv[2])
     c = classify(previous, current)
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     report = [f"## Warehouse delta — class {c.worst_class}", ""]
@@ -119,7 +175,7 @@ def main() -> int:
         if out:
             with open(out, "a") as fh:
                 fh.write("file_issue=1\n")
-                fh.write("issue_body<<EOF\n" + _issue_body(c) + "\nEOF\n")
+                _write_multiline_output(fh, "issue_body", _issue_body(c))
     return 0
 
 
