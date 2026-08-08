@@ -633,7 +633,7 @@ restores the warehouse but not `data/raw/`, so **15 raw-dependent tests skip the
 CI greps for the skip reasons that appear only when the *restore itself* broke
 (`no built catalog`, `no built Parquet warehouse`) rather than failing on any skip. Those 15 run
 nightly in `verify.yml`, which restores raw and runs `make check` alongside `make verify`. So
-466 of 481 run per PR, all 481 run nightly, and **nothing runs only on one developer's machine.**
+476 of 491 run per PR, all 491 run nightly, and **nothing runs only on one developer's machine.**
 
 **Node is pinned at 24.13.0** — LTS since 2025-10, and Next.js 16 needs ≥ 20.9.
 

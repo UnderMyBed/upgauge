@@ -746,10 +746,17 @@ Two test layers:
   to enable them. This layer is what caught both refinements above; neither was visible
   from synthetic values.
 
-**That skip is load-bearing, and there is no CI to compensate for it.** No automated runner
-exists yet (see [architecture/pipeline.md](../architecture/pipeline.md#toolchain)), so this
-layer executes only where someone has fetched the full 2015–2026 window. Everywhere else the
-suite passes *without* checking a single real row against these rules, and says nothing about
-it — the skip is silent by design, which is correct for a clone and dangerous as a
-verification claim. Until CI runs with data mounted, "the invariants pass" is only true of
-the machine it was run on.
+**That skip is load-bearing, and CI now compensates for it — but only in the one job that
+restores raw.** The per-PR `check` job (`.github/workflows/ci.yml`) restores the warehouse but
+not `data/raw/`, so this layer skips there by design, same as on a fresh clone — and that job
+greps the pytest output for the skip *reasons* that mean the restore itself broke (`no built
+catalog`, `no built Parquet warehouse`), so a silently-broken restore still fails loudly even
+though a by-design skip does not. `verify.yml` runs nightly, restores `data/raw/`, and runs
+`make check` — so this layer executes against the real 2015–2026 window automatically, once a
+day, with nobody's laptop involved. Full accounting:
+[architecture/pipeline.md](../architecture/pipeline.md#toolchain).
+
+The underlying caution still holds on any machine or job that skipped for lack of data: a green
+suite without `data/raw/` mounted is a materially weaker claim than the same number with it, and
+the count alone does not say which one produced it — read the skip reasons, not just the
+totals.
