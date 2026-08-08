@@ -247,7 +247,7 @@ being invisible to whoever added a route:
 > false — is `no-store` regardless of the probe, same as every other 404 in this file.
 >
 > **M5 Task 8 is also where the matcher's evidence stopped being hypothetical a second time.**
-> `app/sitemap.ts` and `app/robots.ts` shipped in M5 Task 5 with no `dynamic` export, which Next
+> `app/src/app/sitemap.ts` and `app/src/app/robots.ts` shipped in M5 Task 5 with no `dynamic` export, which Next
 > tried to prerender at `next build` time — and `next build` runs with `cwd` wherever the build
 > tool started it (`npm --prefix app run build`, every documented entry point's exact command,
 > changes `cwd` to `app/` before invoking the real `next build`), not the repo root `db.ts`'s
@@ -895,7 +895,7 @@ should be sensitive to it are.
 **Fix wave, final whole-branch review (F4): `/sitemap.xml` and `/robots.txt` reopened this exact
 gap at 30 days, gated behind nothing.** The branch that sets `PROJECT_CACHE` on those two paths
 originally did so unconditionally — no `isDataLayerHealthy()` probe, unlike `/explore`
-immediately above it in the same file, despite `app/sitemap.ts` running four DuckDB queries via
+immediately above it in the same file, despite `app/src/app/sitemap.ts` running four DuckDB queries via
 `lib/sitemap.ts` (`app/src/lib/sitemap.ts`) and both `parseLastmod` and `dedupeAircraftBySlug`
 throwing by design on malformed input. A broken data layer therefore 500ed `/sitemap.xml` — the
 one URL the entire crawl graph is submitted through — under a 30-day shared-cache header, a

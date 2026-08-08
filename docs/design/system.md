@@ -280,6 +280,12 @@ trend.
 
 ## Charts
 
+**The aircraft-mix chart adds no SQL and no catalog entries.** It composes the existing
+segment-grain pivot (`year_month` × `aircraft_type`, seats + departures) through the composite
+`route` filter. That is why chart work leaves `make goldens` byte-identical, and it is a
+property to preserve: a chart that needs its own query has escaped the pivot contract that
+`/explore` and every entity page share.
+
 Observable Plot under the hood. These are encoding rules, not library configuration.
 
 **Axis numerics obey the same rule as every other numeric here: monospaced and

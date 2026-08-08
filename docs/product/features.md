@@ -173,7 +173,7 @@ and both were dropped when it became a plan; the whole-branch review caught them
 graph from the front door, which no per-task review could have done.
 
 **M6 re-created the same island one milestone later, and the third link is the fix.** `/watch`
-shipped with **zero** inbound internal links — nothing outside `app/watch/`, `lib/watch.ts`,
+shipped with **zero** inbound internal links — nothing outside `app/src/app/watch/`, `lib/watch.ts`,
 `proxy.ts` and `sitemap.ts` referenced it, so the product's entire editorial surface was
 reachable only by typing the URL or through `/sitemap.xml`. The top bar now carries a standing
 `/watch` link (`TopBar`'s `nav.nav`, `prefetch={false}` for the wordmark's own reason), which

@@ -13,13 +13,13 @@ bite you.
 |---|---|
 | [product/overview.md](product/overview.md) | What this is, the audience, locked decisions, UI constraints |
 | [product/features.md](product/features.md) | Explorer, entity pages, maps, `/watch` presets, route-health score |
-| [product/scope.md](product/scope.md) | Out of scope for v0, open decisions (D2, D3) |
+| [product/scope.md](product/scope.md) | Out of scope for v0; the D1–D4 decision record, all four resolved |
 | [data/sources.md](data/sources.md) | The BTS endpoint, request shape, obfuscation, measured volumes |
 | [data/model.md](data/model.md) | Fact/dim/map tables, measures, the derived-measure rule |
 | [data/invariants.md](data/invariants.md) | The rules that gate the pipeline, each with its evidence |
 | [data/carrier-model.md](data/carrier-model.md) | Operating-carrier grain, the date-ranged mainline map |
 | [architecture/hosting.md](architecture/hosting.md) | Deployment shape, cost, the hosting survey, portability test |
-| [architecture/pipeline.md](architecture/pipeline.md) | Repo layout, milestones, M1 phase order, **the M2 marts layer and the load-bearing CWD constraint** |
+| [architecture/pipeline.md](architecture/pipeline.md) | Repo layout, the milestone record, M1 phase order, the ingest/query layer, **the M2 marts layer and the load-bearing CWD constraint** |
 | [design/system.md](design/system.md) | **The design system: tokens, components, chart and map encodings, states** |
 | [design/brief.md](design/brief.md) | The design problem statement — constraints, anti-goals, content inventory (answered) |
 
