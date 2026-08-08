@@ -1,0 +1,116 @@
+name: Warehouse
+
+on:
+  # BTS publishes monthly with a 2-3 month lag and NO published day-of-month schedule
+  # (transtats releaseinfo.asp records dates only after the fact), so this polls rather than
+  # firing on a calendar date. Daily is free on a public repo.
+  schedule:
+    - cron: "41 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write        # create releases
+  id-token: write        # provenance attestation
+  attestations: write
+  issues: write          # Task 11 files drift issues
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          install: true
+          cache: true
+
+      - run: mise exec -- uv sync --extra dev
+
+      - id: previous
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+                  --json tagName,createdAt \
+                  --jq '[.[] | select(.tagName | startswith("warehouse-"))]
+                        | sort_by(.createdAt) | reverse | .[0].tagName')
+          echo "tag=${tag:-}" >> "$GITHUB_OUTPUT"
+
+      # Restoring raw BEFORE fetching is what makes this incremental. The fetcher's cache is
+      # keyed (table, year) on the filesystem, so without this every run re-drives 12 years of
+      # TranStats POSTs -- slow, and poor citizenship toward a .gov endpoint.
+      - name: Restore previous raw and warehouse
+        if: steps.previous.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "${{ steps.previous.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" --pattern '*.tar.zst'
+          for f in *.tar.zst; do tar --zstd -xf "$f"; done
+          rm -f *.tar.zst
+          cp upgauge.duckdb /tmp/previous.duckdb
+          find data/raw -type f | wc -l
+
+      - name: Ingest and build
+        run: |
+          set -euo pipefail
+          make ingest
+          make build
+
+      # Emits all three names. `raw_name` is a separate output on purpose: GitHub Actions
+      # expressions do NOT support bash parameter expansion, so `${{ steps.x.outputs.tag#pre }}`
+      # would expand to nothing and silently produce a file called `.tar.zst`.
+      - id: stamp
+        run: |
+          set -euo pipefail
+          ym=$(mise exec -- uv run python -c "import duckdb;print(duckdb.connect('upgauge.duckdb',read_only=True).execute('SELECT max(year_month) FROM fct_segment_month').fetchone()[0])")
+          dotted=${ym/-/.}
+          echo "year_month=$ym" >> "$GITHUB_OUTPUT"
+          echo "tag=warehouse-$dotted" >> "$GITHUB_OUTPUT"
+          echo "raw_name=raw-$dotted" >> "$GITHUB_OUTPUT"
+
+      - name: Stop if this month is already published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "${{ steps.stamp.outputs.tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::${{ steps.stamp.outputs.tag }} already published; nothing to do"
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Pack the assets
+        if: env.SKIP != '1'
+        run: |
+          set -euo pipefail
+          tar --zstd -cf "${{ steps.stamp.outputs.tag }}.tar.zst" upgauge.duckdb data/parquet
+          tar --zstd -cf "${{ steps.stamp.outputs.raw_name }}.tar.zst" data/raw
+          ls -la *.tar.zst
+          # Both assets must exist and be non-trivial. A zero-byte tarball published as a
+          # release is worse than a failed run: CI would restore it and every gate would fail
+          # for an unexplained reason.
+          for f in *.tar.zst; do
+            size=$(stat -c%s "$f")
+            [ "$size" -gt 1000000 ] || { echo "::error::$f is only $size bytes"; exit 1; }
+          done
+
+      - name: Attest provenance
+        if: env.SKIP != '1'
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: "*.tar.zst"
+
+      - name: Publish the release
+        if: env.SKIP != '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ steps.stamp.outputs.tag }}" *.tar.zst \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Warehouse ${{ steps.stamp.outputs.year_month }}" \
+            --notes "BTS T-100 warehouse through ${{ steps.stamp.outputs.year_month }}."
