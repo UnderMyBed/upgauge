@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install ingest build goldens basemap dev app-check app-build app-smoke test lint fmt check check-docs clean
+.PHONY: help install ingest build goldens stats basemap dev app-check app-build app-smoke test lint fmt check check-docs clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -41,6 +41,9 @@ build:  ## Run sql/02_marts/ in order -> upgauge.duckdb
 
 goldens:  ## Regenerate the Explorer contract fixtures from the reference implementation
 	$(UV) run python -m pipeline.pivot --write-goldens
+
+stats:  ## Regenerate the reference-values artifact (pipeline/reference/stats.generated.json)
+	$(UV) run python -m pipeline.stats --write
 
 basemap:  ## Regenerate the pre-projected basemap (app/src/lib/map/basemapPaths.generated.ts) from the two committed inputs, app/geo/ne_110m_us.json and app/geo/ne_50m_car.json
 	$(MISE) node --no-warnings app/scripts/build-basemap.mjs
