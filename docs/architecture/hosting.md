@@ -227,7 +227,9 @@ invalidates `COPY app ./app`, which re-runs `next build`, which mints a fresh bu
 next `make image` produced a *different image from an unchanged tree*. Confirmed by mutation, both
 directions: with the `.dockerignore` entries in place, appending a byte to
 `app/tsconfig.tsbuildinfo` leaves `COPY app ./app` `CACHED` and `.Size` byte-identical; with them
-removed, the same one-byte append re-runs the stage and moves `.Size` by 2,327 bytes.
+removed, the same append re-runs the stage and changes `.Size`. **No delta is quoted for that
+second half on purpose** — it is whatever two `next build` runs happened to differ by, so it is a
+property of one pair of builds and re-measuring it yields a different number, not a broken rule.
 
 **`ARG BUILD_SHA` and its `ENV` go LAST in the `runtime` stage, below every `RUN` and `COPY`.** An
 `ARG` is consumed where its `ENV` sits, and `BUILD_SHA` changes on every commit — declared at the
@@ -240,8 +242,8 @@ with byte-identical layers. This is a deploy cost, not only a build one: a regis
 layer again for every commit whose layers did not actually change.
 
 **Measured image size: ≈413 MB / 394 MiB** — `docker inspect upgauge:local --format='{{.Size}}'`
-reports 412,743,409 bytes, cross-checked against `docker save upgauge:local | wc -c`
-(412,766,720 bytes; the ~23 KB difference is tar-format overhead) and against the 13 layers in
+reports 412,797,161 bytes, cross-checked against `docker save upgauge:local | wc -c`
+(412,819,968 bytes; the ~23 KB difference is tar-format overhead) and against the 13 layers in
 `docker inspect --format '{{len .RootFS.Layers}}'`. **Quote ≈413 MB, not the byte count.** Every
 run of the `build` stage mints a new `next build` id, so any real source change moves `.Size` by
 kilobytes, and the baked identity moves it by the 3 bytes above; the exact figure is a property of
@@ -355,10 +357,14 @@ host-only gap sections.
 
 ```
 /api/health status=503
-/api/health body={"status":"degraded","build":{"sha":"df4278e","warehouse":"warehouse-2026.04"},"data":{"asOf":null,"missing":[]}}
+/api/health body={"status":"degraded","build":{…},"data":{"asOf":null,"missing":[]}}
 /explore    status=500
 ⨯ [Error: IO Error: No files found that match the pattern "data/parquet/t100_segment/**/*.parquet"]
 ```
+
+(`build` is elided in both bodies above and below: it carries the working tree's own short SHA, so
+quoting it here would go stale on the next commit. `image-smoke`'s `assert_identity` is what checks
+that field, against a value it computes rather than one written down.)
 
 All eight paths the healthy container serves at 200 return **500** here — `/`, `/explore`, the
 four entity pages, `/watch`, `/sitemap.xml` — so not even a "looks alive" surface survives. Why

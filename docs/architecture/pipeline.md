@@ -205,13 +205,23 @@ A test asserts no absolute path appears in any view definition, because that fai
 invisible until deploy.
 
 **Confirmed empirically, not just by assertion.** With `upgauge.duckdb` built from the repo
-root (views referencing `data/parquet/...`), opening that same file from `/tmp` — a foreign
-CWD, the way a container would if `WORKDIR` were wrong — and querying `fct_segment_month`
-raises `duckdb.IOException`: `IO Error: No files found that match the pattern
-"data/parquet/t100_segment/**/*.parquet"`. The database opens fine; only the read fails. **The
-real container reproduces that message verbatim** — `make portability`'s negative 1 shadows
-`/srv/upgauge/data/parquet` and every route 500s with the same `IO Error`
-([hosting.md § The test itself](hosting.md#the-test-itself--run-2026-08-09-m8-task-6)).
+root (views referencing `data/parquet/...`), opening that same file **by absolute path** from a
+cwd of `/tmp` and querying `fct_segment_month` raises `duckdb.IOException`: `IO Error: No files
+found that match the pattern "data/parquet/t100_segment/**/*.parquet"`. The database opens; only
+the read fails — which is what makes an absolute path inside a view definition invisible until
+deploy.
+
+> ⚠️ **A wrong container `WORKDIR` does NOT produce that failure.** Reaching it needs the
+> database opened by *absolute* path while cwd points elsewhere, and `db.ts` never does that:
+> `DB_PATH` is anchored on the same `ROOT` as `file_search_path`, so a wrong cwd moves **both**.
+> Measured in the same session, same database, cwd `/tmp`: the absolute open succeeds and the
+> read fails as above, while the cwd-anchored open fails outright with `IO Error: Cannot open
+> database "/tmp/upgauge.duckdb" in read-only mode: database does not exist` — before any query,
+> and it never emits the pattern error at all. The read failure needs the *opposite* pairing: a
+> **correct** cwd with the Parquet tree absent. Both are measured against the real container as
+> `make portability`'s negatives 3 and 1 respectively
+> ([hosting.md § The test itself](hosting.md#the-test-itself--run-2026-08-09-m8-task-6)). A
+> healthcheck planned around the read path alone would miss the `WORKDIR` break entirely.
 
 ### The M2 gate
 

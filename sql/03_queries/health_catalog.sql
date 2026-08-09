@@ -13,6 +13,15 @@
 -- Keeping this list current is not left to memory: health.test.ts's drift test strips comments
 -- from every sql/03_queries/*.sql, extracts FROM/JOIN identifiers, subtracts CTE names, and
 -- fails if any referenced object is absent below.
+--
+-- COUPLED TO A GATE ASSERTION, and the gate is not `make check`. duckdb_columns() answers out of
+-- the catalog and never opens a Parquet file, so this manifest is BLIND to a present catalog whose
+-- data is gone: it returns zero rows, and /api/health degrades on `asOf` alone. `make portability`
+-- negative 1 asserts that blindness verbatim (`"missing":[]`) to pin which clause is load-bearing.
+-- Strengthening this query to probe an actual row is an IMPROVEMENT -- and it will turn that
+-- assertion red. Update sql, docs/architecture/hosting.md § "The test itself" and the Makefile
+-- assertion in the SAME commit, and run `make portability`; neither `make check` nor
+-- `make app-check` will tell you.
 WITH required(object_name, column_name) AS (
     VALUES
         ('dim_aircraft_type',      'code'),

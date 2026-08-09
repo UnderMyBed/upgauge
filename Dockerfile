@@ -62,12 +62,11 @@ COPY sql ./sql
 COPY --from=warehouse /w/upgauge.duckdb ./upgauge.duckdb
 COPY --from=warehouse /w/data/parquet ./data/parquet
 # LAST, and below every RUN and COPY above -- BUILD_SHA changes on every commit, and an ARG is
-# consumed where its ENV sits. Declared at the top of this stage, it invalidated `npm ci` and all
-# five COPYs beneath it, so every commit re-installed the deps and re-materialised the 96 MB
-# data/parquet layer for a one-line identity change. Measured before the move: `npm ci --omit=dev`
-# re-ran (13.9 s) and `.Size` shifted 2,098 bytes between two commits with an identical tree.
-# Nothing below this line reads either value at build time; they are read at request time by
-# lib/health.ts.
+# consumed where its ENV sits. Declared at the top of this stage it invalidated `npm ci` and all
+# five COPYs beneath it, so every commit re-installed the production deps and re-materialised the
+# 96 MB data/parquet layer for a one-line identity change. Nothing below this line reads either
+# value at build time; lib/health.ts reads them at request time. Measurement and the
+# both-directions check: docs/architecture/hosting.md, "ARG BUILD_SHA and its ENV go LAST".
 ARG WAREHOUSE_TAG
 ARG BUILD_SHA=dev
 ENV UPGAUGE_WAREHOUSE_TAG=${WAREHOUSE_TAG} \

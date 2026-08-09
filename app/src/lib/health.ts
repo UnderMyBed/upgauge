@@ -58,6 +58,13 @@ export async function healthReport(
     // dataAsOf() throws when max(year_month) is NULL. The catalog can be intact and the data
     // still absent -- an empty build. Degraded, and the null is the report.
   }
+  // `stamp !== null` is NOT redundant with the missing[] check, and no unit test can show that.
+  // Shadow data/parquet under a correct WORKDIR and the catalog is fully intact -- missing[] is
+  // empty -- while every query fails. Mutant, measured: drop this clause and /api/health returns
+  // 200 "ok" while /explore returns 500, i.e. Docker's HEALTHCHECK and any load balancer keep
+  // sending traffic to a container that cannot answer anything. Only `make portability` negative 1
+  // catches it (docs/architecture/hosting.md § "The test itself"); `make check` and `make
+  // app-check` both stay green.
   return {
     status: missing.length === 0 && stamp !== null ? "ok" : "degraded",
     build,

@@ -197,7 +197,9 @@ portability: image  ## Prove the WORKDIR/data contract by breaking it three ways
 	docker rm -f upgauge-neg1 >/dev/null 2>&1 || true; \
 	docker run -d --rm --name upgauge-neg1 \
 	  --mount type=tmpfs,destination=/srv/upgauge/data/parquet \
-	  -p 127.0.0.1:$(NEG1_PORT):3000 $(IMAGE) >/dev/null; \
+	  -p 127.0.0.1:$(NEG1_PORT):3000 $(IMAGE) >/dev/null || { \
+	  echo "  FAIL could not start upgauge-neg1 -- this case tested NOTHING. Most likely"; \
+	  echo "       :$(NEG1_PORT) is already allocated, or the daemon is unreachable."; exit 1; }; \
 	for i in $$(seq 1 60); do \
 	  curl -s -o /dev/null --max-time 2 http://127.0.0.1:$(NEG1_PORT)/api/health && break; \
 	  sleep 1; \
@@ -237,15 +239,24 @@ portability: image  ## Prove the WORKDIR/data contract by breaking it three ways
 	@trap 'docker rm -f upgauge-neg2 >/dev/null 2>&1 || true' EXIT; \
 	docker rm -f upgauge-neg2 >/dev/null 2>&1 || true; \
 	docker run -d --name upgauge-neg2 -w /tmp \
-	  -p 127.0.0.1:$(NEG2_PORT):3000 $(IMAGE) >/dev/null; \
-	fail=0; rc=$$(timeout 30 docker wait upgauge-neg2) || { \
+	  -p 127.0.0.1:$(NEG2_PORT):3000 $(IMAGE) >/dev/null || { \
+	  echo "  FAIL could not start upgauge-neg2 -- this case tested NOTHING. Most likely"; \
+	  echo "       :$(NEG2_PORT) is already allocated, or the daemon is unreachable."; exit 1; }; \
+	fail=0; rc=$$(timeout 30 docker wait upgauge-neg2); wt=$$?; \
+	if [ $$wt -eq 124 ]; then \
 	  echo "  FAIL upgauge-neg2 was still running 30s after start. CMD is a RELATIVE path, so a"; \
 	  echo "       wrong -w must stop the process before it can listen. A server that comes up"; \
 	  echo "       here would serve errors from a wrong cwd instead of refusing to start."; \
-	  rc=""; fail=1; }; \
+	  rc=""; fail=1; \
+	elif [ $$wt -ne 0 ]; then \
+	  echo "  FAIL \`docker wait upgauge-neg2\` itself failed (exit $$wt) -- the container is not"; \
+	  echo "       waitable, so nothing about the start failure was observed. This is NOT the"; \
+	  echo "       'still running' case; do not read it as one."; \
+	  rc=""; fail=1; \
+	fi; \
 	logs=$$(docker logs upgauge-neg2 2>&1); \
 	code=$$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 http://127.0.0.1:$(NEG2_PORT)/explore || true); \
-	echo "    exit code   =$${rc:-<still running>}"; \
+	echo "    exit code   =$${rc:-<not observed -- see the FAIL above for which case>}"; \
 	echo "    /explore    status=$$code"; \
 	printf '%s\n' "$$logs" | grep -F 'Cannot find module' | head -1 | sed 's/^/    /'; \
 	[ -n "$$rc" ] && [ "$$rc" != "0" ] || { \
@@ -253,9 +264,10 @@ portability: image  ## Prove the WORKDIR/data contract by breaking it three ways
 	printf '%s' "$$logs" | grep -qF "Cannot find module '/tmp/app/node_modules/.bin/next'" || { \
 	  echo "  FAIL the documented start failure did not appear. The base image's own"; \
 	  echo "       docker-entrypoint.sh cannot resolve the relative CMD from the wrong cwd and"; \
-	  echo "       falls back to \`node <arg>\`, which then resolves it against that cwd. A"; \
-	  echo "       different error means this is failing for a reason hosting.md does not"; \
-	  echo "       describe."; fail=1; }; \
+	  echo "       falls back to \`node <arg>\`, which then resolves it against that cwd. Either"; \
+	  echo "       this is failing for a reason hosting.md does not describe, OR the base image's"; \
+	  echo "       entrypoint script changed -- NODE_VERSION is a build ARG, so a base bump can"; \
+	  echo "       land here. Re-read the failure before touching the assertion."; fail=1; }; \
 	[ "$$code" = "000" ] || { \
 	  echo "  FAIL something answered on :$(NEG2_PORT) (status $$code). Nothing ever listened in"; \
 	  echo "       this case, so a response means a foreign server holds the port."; fail=1; }; \
@@ -265,7 +277,9 @@ portability: image  ## Prove the WORKDIR/data contract by breaking it three ways
 	docker rm -f upgauge-neg3 >/dev/null 2>&1 || true; \
 	docker run -d --rm --name upgauge-neg3 -w /tmp \
 	  --entrypoint /srv/upgauge/app/node_modules/.bin/next \
-	  -p 127.0.0.1:$(NEG3_PORT):3000 $(IMAGE) start /srv/upgauge/app -p 3000 >/dev/null; \
+	  -p 127.0.0.1:$(NEG3_PORT):3000 $(IMAGE) start /srv/upgauge/app -p 3000 >/dev/null || { \
+	  echo "  FAIL could not start upgauge-neg3 -- this case tested NOTHING. Most likely"; \
+	  echo "       :$(NEG3_PORT) is already allocated, or the daemon is unreachable."; exit 1; }; \
 	for i in $$(seq 1 60); do \
 	  curl -s -o /dev/null --max-time 2 http://127.0.0.1:$(NEG3_PORT)/api/health && break; \
 	  sleep 1; \

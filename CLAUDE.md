@@ -125,11 +125,9 @@ without.
 
 Two findings worth keeping here rather than only in the tracker, because both are rules:
 
-- **The deploy fell off the roadmap silently.** `docs/architecture/pipeline.md`'s milestone
-  table still reads "M6 — Deploy + Cloudflare cache + edge rate limit + monthly cron +
-  freshness alert". Actual M6 shipped Gauge Watch, M7 shipped maps, and shipping was never
-  rescheduled. Seven milestones of building, none of releasing. When a milestone is repurposed,
-  say where its original content went.
+- **When a milestone is repurposed, say where its original content went.** M6's deploy content was
+  never rescheduled and seven milestones passed before anyone noticed, because nothing forced
+  `docs/architecture/pipeline.md`'s milestone table to record the move. It does now.
 - **`make app-smoke` could certify a build it never ran** (fixed — see the `kill_port` /
   `port_free_or_die` commit and the § above). The gate leaked a server holding its own port, so
   the next run's checks were answered by the previous run's build. Measured: two consecutive
