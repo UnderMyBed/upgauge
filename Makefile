@@ -53,8 +53,36 @@ verify:  ## M2 GATE: build twice, prove every Parquet artifact AND database obje
 # .gov endpoint -- 2 year-pulls instead of 12 -- while making a new month actually reachable.
 # --force appends a NEW date-stamped file rather than overwriting (data/raw/ is append-only),
 # so the previous download that produced published numbers survives.
+#
+# The first pass is bounded at (current-2) and that bound is load-bearing, not tidiness. Without
+# it, a FRESH clone fetches all 12 years on line 1 and the forced pass immediately re-fetches the
+# newest 2 -- same day, same filename, so the second write overwrites the first. Two redundant
+# POSTs against a .gov endpoint on the first-ever publisher run, which is precisely what the
+# paragraph above claims not to do. Bounded, the two passes partition the window: 10 + 2 = 12.
+#
+# ARGS is REJECTED rather than composed. Composing would put `$(ARGS)` ahead of the forced flags
+# so ours win on conflict -- which silently discards a caller's own `--start`/`--end` and lands
+# right back at half-honored, the defect this guard exists to remove. `--raw-dir` is the only
+# genuinely useful override and it is one `make fetch` away.
+#
+# At a year boundary this goes RED and stays red: on 2027-01-02 the forced pass asks BTS for
+# 2027, which it will not serve until ~April. That is unchanged from before the bound (line 1
+# asked for 2027 too) and it is DELIBERATE -- tolerating a fetch failure is exactly how the
+# publisher was silently frozen at 2026-04 in the first place. A loud daily failure is the
+# correct signal; only its duration is unfortunate, and shortening it means teaching fetch to
+# tell "BTS has not published this year yet" from "the fetch broke", which is its own change.
 ingest:  ## Fetch + build everything. The full M1 pipeline.
-	$(MAKE) fetch
+	@if [ -n "$(strip $(ARGS))" ]; then \
+	  echo "  FAIL  make ingest does not accept ARGS (got: $(ARGS))."; \
+	  echo "        Two of its four steps must override ARGS to force a refetch, so a"; \
+	  echo "        caller's flags would apply to some steps and not others."; \
+	  echo "        Call the step you meant directly:"; \
+	  echo "          make fetch ARGS=\"$(ARGS)\""; \
+	  echo "          make fetch-reference ARGS=\"$(ARGS)\""; \
+	  echo "          make warehouse ARGS=\"$(ARGS)\""; \
+	  exit 1; \
+	fi
+	$(MAKE) fetch ARGS="--end $$(( $$(date -u +%Y) - 2 ))"
 	$(MAKE) fetch ARGS="--start $$(( $$(date -u +%Y) - 1 )) --force"
 	$(MAKE) fetch-reference ARGS="--force"
 	$(MAKE) warehouse

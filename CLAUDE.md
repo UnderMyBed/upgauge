@@ -85,7 +85,7 @@ lives in git and `docs/architecture/pipeline.md`):
 
 | gate | result |
 |---|---|
-| `make check` | 493 Python tests · 49 skip without `data/` · +`actionlint` |
+| `make check` | 498 Python tests · 49 skip without `data/` · +`actionlint` |
 | `make app-check` | 781 app tests · needs a built `upgauge.duckdb` or 349 fail |
 | `make app-smoke` | 267 served-build checks |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
@@ -162,7 +162,7 @@ versions.** `make` shells through `mise exec`, so the commands below work withou
 | `make normalize` | Raw zips → `data/parquet/t100_segment/year=YYYY/` | ✅ |
 | `make warehouse` | Facts + all 5 dims from `data/raw/` | ✅ |
 | **`make verify`** | **M2 gate: build twice, prove Parquet + database byte-identical** | ✅ |
-| `make ingest` | `fetch` + `fetch-reference` + `warehouse`, **force-refetching the last 2 years** | ✅ |
+| `make ingest` | `fetch` + `fetch-reference` + `warehouse`, **force-refetching the last 2 years**. Rejects `ARGS` — two of its four steps must override it | ✅ |
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |
 | `make goldens` | Regenerate the Explorer contract fixtures (`sql/03_queries/goldens/`) from `pipeline/pivot.py` | ✅ |
 | `make stats` | Regenerate `pipeline/reference/stats.generated.json`. **CI diff-gates it** — a diff means the upstream dataset moved | ✅ |

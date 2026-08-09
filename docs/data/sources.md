@@ -149,11 +149,34 @@ failure.
   next to each new month — so the current year alone is not the mutable set. Support tables
   carry no year, so one cached file suppresses them permanently and an aircraft-type **rename**
   (the class-3 change `.github/scripts/classify_warehouse.py` exists to catch) stays invisible.
-  This is what `make ingest` does: `fetch` (2015..current−2 short-circuit on the cache),
-  `fetch --start $((year-1)) --force`, `fetch-reference --force`, then `warehouse`. Two
-  year-pulls per run instead of twelve is the citizenship argument; zero is a broken pipeline.
-  `--force` **appends** a new date-stamped file rather than overwriting, so the download that
-  produced already-published numbers survives.
+  This is what `make ingest` does: `fetch --end $((year-2))`, `fetch --start $((year-1))
+  --force`, `fetch-reference --force`, then `warehouse`. Two year-pulls per run instead of
+  twelve is the citizenship argument; zero is a broken pipeline. `--force` **appends** a new
+  date-stamped file rather than overwriting, so the download that produced already-published
+  numbers survives.
+
+  **The `--end` bound on the first pass is load-bearing.** Unbounded, it plans the whole
+  window, so on a fresh clone it fetches all twelve years and the forced pass immediately
+  re-fetches the newest two — same day, same filename, second write overwriting the first.
+  Measured with `BtsFetcher.download_year` stubbed and counted: **14 POSTs, with 2025 and
+  2026 each requested twice.** Bounded, the two passes partition the window into 10 + 2 = 12,
+  one per year. `pipeline/tests/test_ingest_plan.py` parses the recipe out of the Makefile
+  and re-counts, so editing the recipe cannot quietly restore the overlap.
+
+  **`make ingest` rejects `ARGS`**, and that is deliberate. Two of its four steps must
+  override `ARGS` to force a refetch, so a caller's flags reached `fetch` and `warehouse`
+  but not the forced steps — `make ingest ARGS="--raw-dir /alt"` wrote some files to `/alt`
+  and the rest to `data/raw`. Composing instead of rejecting only moves the problem: with the
+  forced flags last they win on conflict, silently discarding a caller's own `--start`/`--end`.
+  A partially-applied override is more dangerous than a refused one, because it half-works.
+
+  **At a year boundary the publisher goes red and stays red**, by decision. On 2027-01-02 the
+  forced pass asks BTS for 2027, which it does not serve until roughly April. That is unchanged
+  from before the `--end` bound (the unbounded first pass asked for 2027 too), so it is not a
+  regression — and tolerating a failed fetch is exactly how the publisher came to sit silently
+  frozen at `2026-04`. A loud daily failure is the correct signal. Shortening it means teaching
+  `fetch` to distinguish "BTS has not published this year yet" from "the fetch broke", which is
+  a change to `fetch`, not to the ingest recipe.
 
 ---
 
