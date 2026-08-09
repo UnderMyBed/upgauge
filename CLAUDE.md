@@ -85,7 +85,7 @@ lives in git and `docs/architecture/pipeline.md`):
 
 | gate | result |
 |---|---|
-| `make check` | 498 Python tests · 49 skip without `data/` · +`actionlint` |
+| `make check` | 510 Python tests · 49 skip without `data/` · +`actionlint` |
 | `make app-check` | 781 app tests · needs a built `upgauge.duckdb` or 349 fail |
 | `make app-smoke` | 267 served-build checks |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |

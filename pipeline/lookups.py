@@ -24,7 +24,7 @@ from pathlib import Path
 import httpx
 
 from pipeline.btscodec import encode_lookup, encode_param
-from pipeline.fetch import USER_AGENT, Table, latest_raw, raw_path
+from pipeline.fetch import USER_AGENT, Table, _unchanged, latest_raw, raw_path
 
 LOOKUP_URL = "https://www.transtats.bts.gov/Download_Lookup.asp"
 
@@ -118,6 +118,11 @@ def fetch_support_table(fetcher, table: Table, raw_dir: Path, *, force: bool = F
         return existing
 
     body, served = fetcher.download_year(table, "All")
+    # Same content dedupe as fetch_year: `make ingest` forces all three support tables on
+    # every run, and a re-download that changes nothing must not append to an append-only tree.
+    if _unchanged(body, existing):
+        return existing
+
     download_date = dt.date.today().isoformat()
     path = raw_path(raw_dir, table, None, download_date)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -157,8 +162,12 @@ def main(argv: list[str] | None = None) -> int:
     failures: list[str] = []
     for table in SUPPORT_TABLES:
         try:
+            before = latest_raw(args.raw_dir, table)
             path = fetch_support_table(fetcher, table, args.raw_dir, force=args.force)
-            log.info("%-20s %s", table.slug, path.name)
+            if args.force and path == before:
+                log.info("%-20s unchanged (%s kept)", table.slug, path.name)
+            else:
+                log.info("%-20s %s", table.slug, path.name)
         except Exception as exc:  # noqa: BLE001 — report all, fail at the end
             log.error("%-20s FAILED: %s", table.slug, exc)
             failures.append(table.slug)

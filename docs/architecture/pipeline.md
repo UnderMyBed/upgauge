@@ -689,6 +689,31 @@ exited **0 — every day, forever, with nothing to notice it.** See
 [../data/sources.md § Rules](../data/sources.md#rules) for the fetch contract and why *two*
 years (BTS revises closed months) plus every support table (a rename is otherwise invisible).
 
+### BTS revisions: corrections ship with the next month, by decision
+
+A BTS revision to an already-published month rebuilds a **corrected** warehouse under an
+**unchanged tag** — the tag is `warehouse-` + `max(year_month)`, and a revision does not move
+that. The "Stop if this month is already published" guard therefore sets `SKIP=1` and the
+corrected build is discarded. This was latent until the force-refetch landed: the year-keyed
+fetch cache meant revisions were never downloaded in the first place, so making them *reachable*
+is what exposed it.
+
+**The decision is to accept this.** A correction reaches the site when the next BTS month lands —
+at most about a month, against a lag that is already 2–3 months and stamped honestly by
+`DATA AS OF`. The alternatives both cost more than the defect: a `warehouse-2026.04r2` suffix
+breaks the `^warehouse-[0-9]{4}\.[0-9]{2}$` shape all three resolvers now validate, and
+publishing on a content digest with date-stamped tags replaces a scheme whose one-release-per-
+data-month property is what makes `resolve` legible.
+
+What was *not* acceptable is the summary reading as though the correction shipped.
+`classify_warehouse.py` now says plainly, on a class-2 delta with no new month, that the build is
+discarded and names the month the correction waits for. The condition is `moved_years and not
+new_months`: a revision arriving *alongside* a new month does publish, and warning there would be
+false. Both directions are pinned by test — mutant-verified in both, since a warning that is
+always printed carries no information, and a fixture holding only the revision cannot tell the
+two implementations apart. **Class 3 is unaffected** and still files a `critical` issue whether
+or not anything publishes.
+
 **The real-data tests are no longer dark, and the accounting is exact.** The per-PR `check` job
 restores the warehouse but not `data/raw/`, so **15 raw-dependent tests skip there by design** —
 CI greps for the skip reasons that appear only when the *restore itself* broke
