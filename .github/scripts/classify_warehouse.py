@@ -166,6 +166,21 @@ def main() -> int:
     report += [f"- appended: {c.new_months or 'none'}"]
     report += [f"- revised years: {c.moved_years or 'none'}"]
     report += [f"- shape changes: {c.shape_changes or 'none'}"]
+    # A revision with no new month rebuilds a CORRECTED warehouse under an UNCHANGED tag
+    # (the tag is `warehouse-` + max(year_month)), so the "already published" guard skips the
+    # publish and the correction is discarded. That is a deliberate decision, not an oversight
+    # -- see docs/architecture/pipeline.md -- but the summary has to say so, or the only trace
+    # of a correction is a line that reads like it shipped. Class 3 is unaffected: it files a
+    # `critical` issue regardless of whether anything publishes.
+    if c.moved_years and not c.new_months:
+        report += [
+            "",
+            "> **Revised data will NOT ship from this run.** The release tag is derived from "
+            f"`max(year_month)`, which has not moved, so this build is discarded. The "
+            f"correction to {', '.join(c.moved_years)} reaches the site when the next BTS "
+            "month lands — at most about a month. This is the recorded decision "
+            "(docs/architecture/pipeline.md § BTS revisions), not a failure.",
+        ]
     if summary:
         with open(summary, "a") as fh:
             fh.write("\n".join(report) + "\n")

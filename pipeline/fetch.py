@@ -10,9 +10,12 @@ See docs/data/sources.md for the endpoint detail and the measured timings.
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
+import io
 import json
 import re
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlencode
@@ -230,6 +233,66 @@ def latest_raw(raw_dir: Path, table: Table, year: int | None = None) -> Path | N
     return found[-1] if found else None
 
 
+def data_csv_digest(source: Path | bytes) -> str:
+    """sha256 of the single DATA CSV inside a BTS zip. Accepts a path or a downloaded body.
+
+    Digests the extracted member, never the zip, and that is the whole point. Measured on two
+    consecutive real downloads of `aircraft_types`: identical member CRCs (`c78623da`) and
+    identical sizes, but entry mtimes of `2026-08-08 01:18:58` and `22:18:04` — so the zips
+    differ byte-for-byte while the data is unchanged. A zip-level hash reports every re-download
+    as new, forever, which is why this is not `sha256(body)`.
+
+    `Documentation.csv` is excluded along with it: it ships in every BTS zip and a docs-only
+    edit would otherwise read as a data change.
+    """
+    handle = io.BytesIO(source) if isinstance(source, bytes) else source
+    try:
+        with zipfile.ZipFile(handle) as z:
+            members = [
+                n
+                for n in z.namelist()
+                if n.lower().endswith(".csv") and "documentation" not in n.lower()
+            ]
+            if len(members) != 1:
+                raise NotAZipError(f"expected 1 data CSV in the zip, found {members}")
+            digest = hashlib.sha256()
+            with z.open(members[0]) as f:
+                # Chunked: the 2025 extract is ~14 MB compressed and far larger open.
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    digest.update(chunk)
+    except zipfile.BadZipFile as exc:
+        raise NotAZipError(f"not a readable zip: {exc}") from exc
+    return digest.hexdigest()
+
+
+def _unchanged(body: bytes, existing: Path | None) -> bool:
+    """True when `body` carries the same data CSV as the download already on disk.
+
+    A re-fetch that changes nothing must not append a file. `data/raw/` is append-only and
+    `make ingest` forces the current year, the previous year and all three support tables on
+    every run — measured on the real tree after two consecutive publisher days, ALL FIVE of the
+    second day's downloads were content-identical to the first day's: 20.3 MB of 162.4 MB,
+    in one day. Skipping the WRITE keeps the append-only rule intact rather than bending it;
+    nothing is overwritten and nothing is deleted, and the file that produced published numbers
+    stays exactly where it is.
+
+    An existing file that cannot be read is treated as "no comparison available" — write the
+    new one. A truncated zip already on disk must not make every future ingest fail, and
+    writing is the safe direction. A malformed NEW body still raises, out of `data_csv_digest`.
+    """
+    if existing is None:
+        return False
+    # The NEW body is digested outside the guard on purpose. `download_year` only checks the
+    # `PK` magic and a minimum size, so a truncated response reaches here; letting it raise
+    # fails that year loudly (main collects and reports) instead of writing a corrupt zip into
+    # the append-only tree. Only the EXISTING file's unreadability is tolerated.
+    fresh = data_csv_digest(body)
+    try:
+        return fresh == data_csv_digest(existing)
+    except (NotAZipError, OSError):
+        return False
+
+
 def fetch_year(
     fetcher: BtsFetcher, table: Table, year: int, raw_dir: Path, *, force: bool = False
 ) -> Path:
@@ -243,6 +306,9 @@ def fetch_year(
         return existing
 
     body, served = fetcher.download_year(table, year)
+    if _unchanged(body, existing):
+        return existing
+
     download_date = dt.date.today().isoformat()
     path = raw_path(raw_dir, table, year, download_date)
 
@@ -294,7 +360,12 @@ def main(argv: list[str] | None = None) -> int:
         try:
             log.info("%s  fetching...", year)
             written = fetch_year(fetcher, T100D_SEGMENT_US, year, args.raw_dir, force=args.force)
-            log.info("%s  %s (%s bytes)", year, written.name, f"{written.stat().st_size:,}")
+            if written == existing:
+                # Downloaded and discarded: BTS served the same data. Say so, or the line
+                # reads as a fresh write of a file dated days earlier.
+                log.info("%s  unchanged (%s kept)", year, written.name)
+            else:
+                log.info("%s  %s (%s bytes)", year, written.name, f"{written.stat().st_size:,}")
         except Exception as exc:  # noqa: BLE001 — report every year, fail at the end
             log.error("%s  FAILED: %s", year, exc)
             failures.append((year, exc))

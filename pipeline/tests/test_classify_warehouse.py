@@ -170,7 +170,7 @@ def _run_main(monkeypatch, tmp_path, previous, current):
         sys, "argv", ["classify_warehouse.py", json.dumps(previous), json.dumps(current)]
     )
     assert main() == 0
-    return out_path.read_text()
+    return out_path.read_text(), summary_path.read_text()
 
 
 def test_main_hands_github_output_a_byte_identical_issue_body_with_backticks_intact(
@@ -178,7 +178,7 @@ def test_main_hands_github_output_a_byte_identical_issue_body_with_backticks_int
 ):
     previous = _measures(aircraft_short_names=[{"code": "699", "short_name": "A321/LR"}])
     current = _measures()
-    out_text = _run_main(monkeypatch, tmp_path, previous, current)
+    out_text, _ = _run_main(monkeypatch, tmp_path, previous, current)
     outputs = _parse_github_output(out_text)
 
     assert outputs["file_issue"] == "1"
@@ -203,5 +203,37 @@ def test_main_with_no_class_three_finding_writes_no_output_file(monkeypatch, tmp
     `file_issue`, no `issue_body`) when nothing shape-changed -- the issue-filing step's
     `if: steps.classify.outputs.file_issue == '1'` depends on that key being genuinely
     absent, not present-and-empty."""
-    out_text = _run_main(monkeypatch, tmp_path, _measures(), _measures())
+    out_text, _ = _run_main(monkeypatch, tmp_path, _measures(), _measures())
     assert out_text == ""
+
+
+# --- class 2: the summary must not read like the correction shipped ---------------------------
+#
+# A revision with no new month rebuilds a CORRECTED warehouse under an UNCHANGED tag, so the
+# publisher's "already published" guard discards it. That is the recorded decision (see
+# docs/architecture/pipeline.md), but a summary that only says "revised years: ['2026']" reads
+# as though the correction went out. These two tests pin the WINDOW in which the warning is
+# emitted -- present when nothing will publish, absent when something will -- because a warning
+# that is always printed carries no information at all.
+
+REVISED = {"rows_by_year": [{"year": 2026, "rows": 118999, "quarantined": 52}]}
+
+
+def test_a_revision_with_no_new_month_says_it_will_not_ship(monkeypatch, tmp_path):
+    _, summary = _run_main(monkeypatch, tmp_path, _measures(), _measures(**REVISED))
+    assert "will NOT ship from this run" in summary, (
+        f"class 2 summary reads as though the correction published:\n{summary}"
+    )
+    assert "2026" in summary
+    assert "next BTS month" in summary
+
+
+def test_a_revision_ALONGSIDE_a_new_month_does_not_claim_it_will_not_ship(monkeypatch, tmp_path):
+    """The distinguishing case. `max(year_month)` moves, so the tag moves, so the corrected
+    data DOES publish -- printing the warning here would be actively false. A fixture carrying
+    only the revision cannot tell a correct implementation from one that always warns."""
+    current = _measures(max_year_month="2026-05", **REVISED)
+    _, summary = _run_main(monkeypatch, tmp_path, _measures(), current)
+    assert "will NOT ship from this run" not in summary, (
+        f"warned about a build that does publish:\n{summary}"
+    )

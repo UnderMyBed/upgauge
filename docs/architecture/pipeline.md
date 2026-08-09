@@ -618,7 +618,36 @@ delete `fmt` and leave formatting unenforced.
 **CI runs the gates; `make check` on a developer's machine is no longer the only one.**
 `.github/workflows/ci.yml` resolves ONE warehouse release tag per run (`resolve`), restores it,
 and runs `data-contract`, `check`, `app-check`, `smoke` and `goldens`. `make verify` is nightly
-(`verify.yml`) because it needs the 232 MB raw+parquet pair and rebuilds twice.
+(`verify.yml`) because it needs the 232 MB raw+parquet pair and rebuilds twice. The `actions`
+job is the exception that takes no `needs:` and no warehouse — see below.
+
+**The Actions expression layer sits above YAML, and needed its own gate.** `warehouse.yml`
+reached `main` unparseable — `HTTP 422: failed to parse workflow: (Line: 116, Col: 14): An
+expression was expected` — from an empty `${{ }}` inside a **bash comment in a `run:` block**.
+A `#` there is not a comment: it is part of a YAML scalar, and Actions substitutes `${{ }}`
+into the raw text *before* bash parses it. Nothing caught it because the file is valid YAML and
+every check applied was a YAML check (`js-yaml`, `PyYAML`, and `yaml.safe_load` in two
+independent reviews). `actionlint` (pinned in `mise.toml`, run by `make lint-actions`, which
+`make check` includes) now covers `.github/workflows/`, and CI's `actions` job reports it in
+~40 s without touching the dataset — a broken workflow and a broken `resolve` are otherwise
+indistinguishable from outside.
+
+Two measured limits shape that gate, and neither is optional:
+
+- **actionlint cannot read composite actions.** Point it at `.github/actions/setup/action.yml`
+  and it parses the file as a workflow, reporting `"jobs" section is missing`. Injecting the
+  exact empty-`${{ }}` defect into that composite leaves it exiting **0**.
+  `pipeline/tests/test_workflow_expressions.py` closes that half: it walks every Actions YAML,
+  extracts `run:` scalars via `yaml.compose_all` (for source line marks) and rejects an empty
+  expression in any of them. It deliberately does *not* flag the empty `${{ }}` sitting in
+  YAML-level comments in that same file — those are stripped by the YAML parser and never reach
+  Actions, which is the whole distinction.
+- **actionlint silently skips its shellcheck pass when the binary is absent.** Measured: an
+  unquoted `[ $X = x ]` injected into `ci.yml` produced no finding at all. GitHub runners
+  preinstall shellcheck, so an unpinned setup makes local `make check` strictly weaker than CI
+  with nothing to say so. `shellcheck` is therefore pinned in `mise.toml` beside `actionlint`.
+  Turning it on surfaced four pre-existing findings in `warehouse.yml` (three `SC2035` bare
+  `*.tar.zst` globs, one `SC2129`), all fixed rather than suppressed.
 
 **The warehouse is deliberately NOT pinned.** CI restores the latest `warehouse-*` release, so an
 upstream BTS change reaches CI immediately instead of waiting for someone to bump a tag. Pinning
@@ -660,14 +689,90 @@ exited **0 — every day, forever, with nothing to notice it.** See
 [../data/sources.md § Rules](../data/sources.md#rules) for the fetch contract and why *two*
 years (BTS revises closed months) plus every support table (a rename is otherwise invisible).
 
+### Generated figures, and the boundary around them
+
+Two committed artifacts hold measured numbers so they cannot rot in prose, both in the shape
+`make basemap` established and `make verify` already gates:
+
+- **`pipeline/reference/stats.generated.json`** — `make stats`, from the warehouse via
+  `sql/03_queries/stats_reference.sql`. Entity counts, rows by year, fact-present aircraft
+  codes, aircraft short names and the slug-separator distribution. Diffed by CI's
+  `data-contract` job, where **a diff means the upstream BTS dataset moved**.
+- **`pipeline/reference/gates.generated.json`** — `make gate-counts`. The Python test total.
+  Diffed by `check-gate-counts` inside `make check`, where **a diff means a test was added
+  without regenerating**.
+
+They are deliberately separate files with separate gates. Folding the test count into the
+`data-contract` diff would make that job's message — "the upstream dataset no longer matches
+this commit's reference values" — wrong half the time it fired.
+
+**What is NOT generated, and why** (`pipeline/gatecounts.py` § The boundary is the canonical
+statement; #10 asks that it be stated rather than left half-done). The app test total is
+collectable via `vitest list` in ~4 s but needs `app/node_modules`, so gating it inside
+`make check` would break that gate on a clone that has not run `make install`. The smoke check
+count and the page weights need a real `next build` and a served port. The no-data skip count
+needs the suite run in an environment with neither `data/` nor `upgauge.duckdb`, which is a CI
+job, not a sub-second collection. Those four stay hand-maintained in CLAUDE.md's gates table and
+carry the same obligation as before: re-measure before quoting.
+
+> **A generated-artifact gate whose artifact is not tracked is not a gate.** `git diff` reports
+> nothing for an untracked file, so the first version of `check-gate-counts` printed `ok` for
+> every possible count — verified against two mutants that should have reddened it: a brand-new
+> test added without regenerating, and the committed number hand-edited to `999`. Both passed.
+> The target now refuses to run at all unless `git ls-files` can see the artifact.
+
+### BTS revisions: corrections ship with the next month, by decision
+
+A BTS revision to an already-published month rebuilds a **corrected** warehouse under an
+**unchanged tag** — the tag is `warehouse-` + `max(year_month)`, and a revision does not move
+that. The "Stop if this month is already published" guard therefore sets `SKIP=1` and the
+corrected build is discarded. This was latent until the force-refetch landed: the year-keyed
+fetch cache meant revisions were never downloaded in the first place, so making them *reachable*
+is what exposed it.
+
+**The decision is to accept this.** A correction reaches the site when the next BTS month lands —
+at most about a month, against a lag that is already 2–3 months and stamped honestly by
+`DATA AS OF`. The alternatives both cost more than the defect: a `warehouse-2026.04r2` suffix
+breaks the `^warehouse-[0-9]{4}\.[0-9]{2}$` shape all three resolvers now validate, and
+publishing on a content digest with date-stamped tags replaces a scheme whose one-release-per-
+data-month property is what makes `resolve` legible.
+
+What was *not* acceptable is the summary reading as though the correction shipped.
+`classify_warehouse.py` now says plainly, on a class-2 delta with no new month, that the build is
+discarded and names the month the correction waits for. The condition is `moved_years and not
+new_months`: a revision arriving *alongside* a new month does publish, and warning there would be
+false. Both directions are pinned by test — mutant-verified in both, since a warning that is
+always printed carries no information, and a fixture holding only the revision cannot tell the
+two implementations apart. **Class 3 is unaffected** and still files a `critical` issue whether
+or not anything publishes.
+
 **The real-data tests are no longer dark, and the accounting is exact.** The per-PR `check` job
 restores the warehouse but not `data/raw/`, so **15 raw-dependent tests skip there by design** —
 CI greps for the skip reasons that appear only when the *restore itself* broke
 (`no built catalog`, `no built Parquet warehouse`) rather than failing on any skip. Those 15 run
 nightly in `verify.yml`, which restores raw and runs `make check` alongside `make verify`. So
-476 of 491 run per PR, all 491 run nightly, and **nothing runs only on one developer's machine.**
+**all but 15 run per PR, every test runs nightly, and nothing runs only on one developer's
+machine.**
 
-**Node is pinned at 24.13.0** — LTS since 2025-10, and Next.js 16 needs ≥ 20.9.
+**15 is the durable figure here; the pass count is not, so it is not written down.** The total
+lives in `pipeline/reference/gates.generated.json` and moves whenever a test is added — it moved
+four times while this paragraph was being written, and each time the "N of M" phrasing that used
+to sit here went stale. Per-PR passes are that generated total minus 15.
+
+The 15 is measured from a real CI `check` job, not derived from a local run, and the two do not
+decompose the same way. With **no** `data/` at all only **14** skips name a `data/raw` reason;
+with the warehouse restored and raw absent — CI's actual state — it is 15. The extra one is
+`test_invariants_against_real_data.py`'s deliberately per-function `skipif`: without a catalog it
+skips under the module-level `no built catalog` and is invisible inside that group, and only once
+a catalog exists does it surface as `no 2015 extract`. **Counting raw-dependent skips from a
+no-data run undercounts by one.**
+
+**Node is pinned at 24.19.0** — the 24 LTS line; Next.js 16 itself needs only ≥ 20.9. The
+binding floor is `jsdom` 30, which declares `engines.node: ^22.22.2 || ^24.15.0 || >=26.0.0`.
+The previous pin, 24.13.0, was *below* that floor, and npm only **warns** on `EBADENGINE` — so
+the jsdom bump passed all ten CI checks while installing a dependency that did not support the
+pinned runtime. No gate in this repo can see that; the pin's own comment is the record. 26.x
+stays out until it goes LTS in 2026-10, because the serving box is always-on.
 
 **`make app-check` (typecheck + `vitest run`) is the app's gate, the way `make check` is
 `pipeline/`'s.** `app/` is Next.js 16 (App Router, TS, Tailwind v4, ESLint) with

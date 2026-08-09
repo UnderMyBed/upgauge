@@ -350,6 +350,37 @@ BTS accepts amended filings and silently overwrites. Stamp every ingest with a
 > This is not a wording nit — a `--force` that overwrites `data/raw/` in place leaves the
 > resolution rule below with nothing to resolve between.
 
+**A re-fetch that changes nothing is never written.** `make ingest` force-refetches the current
+year, the previous year and all three support tables on every run, so without this the tree grew
+by five zips per run whether or not BTS had published anything. Measured on the real `data/raw/`
+after two consecutive publisher days: **all five** of the 2026-08-08 downloads were identical in
+CSV content to their 2026-08-07 counterparts — **20.3 MB of a 162.4 MB tree, accrued in one
+day**, tracking to roughly 20–28 MB per published month (240–340 MB/year) against a 2 GB
+per-asset ceiling on the `raw-*.tar.zst` release. The daily publisher *and* the nightly
+`verify.yml` each download and re-pack that asset, so the cost arrives long before the ceiling
+does.
+
+`pipeline.fetch._unchanged` compares the incoming body against `latest_raw()` and skips the
+**write** — the request still happens, since only BTS can say whether anything changed. Growth
+is now proportional to actual revisions rather than to run count.
+
+> **The digest is over the extracted data CSV, never the zip.** Measured on
+> `aircraft_types_2026080{7,8}.zip`: identical member CRCs (`c78623da`, `598b52b0`) and identical
+> sizes, but entry mtimes of `2026-08-08 01:18:58` against `22:18:04` — BTS regenerates the
+> archive per request, so the zip bytes differ every single time while the data does not. A
+> `sha256(body)` dedupe would report every re-download as new, forever. `Documentation.csv` is
+> excluded for the same reason: it ships in every zip and a docs-only edit would read as a data
+> change.
+
+This **strengthens** the append-only rule rather than qualifying it. Nothing is overwritten and
+nothing is deleted; a redundant download is simply never created, so the file that produced
+already-published numbers stays exactly where it is. When content genuinely changes, the new
+file is appended as before and `latest_raw()` resolves to it — proven by mutant: forcing
+`_unchanged` to always return `True` reddens the "amended filing appends" tests in both
+`test_fetch_dedupe.py` and `test_lookups.py`. An existing file that cannot be read is treated as
+"no comparison available" and the new download is written; a malformed **new** body still raises,
+because writing it would poison the tree.
+
 **Resolution rule: latest `download_date` wins per `(year_month, grain key)`; prior
 partitions are audit-only and never feed a mart.** Without this the marts are
 non-deterministic across rebuilds, which breaks the M2 reproducibility guarantee.

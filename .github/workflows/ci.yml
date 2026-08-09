@@ -43,6 +43,34 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "### Warehouse \`$tag\`" >> "$GITHUB_STEP_SUMMARY"
 
+  # No `needs:`, no warehouse, no `data/` -- deliberately the one gate that still reports when
+  # the dataset is unreachable, because a broken workflow file and a broken `resolve` look
+  # identical from the outside otherwise. `check` runs `make check`, which includes
+  # `lint-actions`; this job exists to say so in ~40s instead of after a warehouse download.
+  #
+  # The Actions EXPRESSION layer sits above YAML: warehouse.yml reached main unparseable
+  # (`HTTP 422 ... An expression was expected`) past js-yaml, PyYAML and two review passes,
+  # all of which only ever asked whether the file was valid YAML. It was.
+  #
+  # This covers `.github/workflows/` ONLY. actionlint reads a composite action as a workflow
+  # and reports `"jobs" section is missing`; measured, it exits 0 on the same empty-`${{ }}`
+  # defect injected into `.github/actions/setup/action.yml`. Composites are covered by
+  # `pipeline/tests/test_workflow_expressions.py`, in the `check` job.
+  actions:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      # install: true so actionlint AND shellcheck come from mise.toml's pins -- the same two
+      # binaries `make lint-actions` uses locally. actionlint SILENTLY SKIPS its shellcheck
+      # pass when that binary is missing, so an unpinned runner-provided shellcheck would make
+      # this job's coverage depend on the image rather than on the repo.
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          cache: true
+      - run: make lint-actions
+
   check:
     needs: resolve
     runs-on: ubuntu-latest
@@ -190,7 +218,7 @@ jobs:
       pull-requests: write
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/dependency-review-action@v4
+      - uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
           comment-summary-in-pr: on-failure

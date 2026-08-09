@@ -141,8 +141,16 @@ def test_fetch_code_lookup_fails_loudly_on_a_redirect_to_the_homepage():
 # ------------------------------------------------------- append-only raw
 
 
-def test_support_table_downloads_are_also_date_stamped(tmp_path, monkeypatch):
-    """Reference tables get amended too — `data/raw/` is append-only for them as well."""
+def test_an_amended_support_table_appends_and_keeps_the_prior_download(tmp_path, monkeypatch):
+    """Reference tables get amended too — `data/raw/` is append-only for them as well.
+
+    The two responses carry DIFFERENT CSV bodies, and that is the point of the test rather
+    than incidental setup. Content dedupe (`pipeline.fetch._unchanged`) skips the write when a
+    forced re-fetch returns identical data, so serving the same payload twice would assert
+    "always append" — a rule this repo deliberately does not have — instead of the rule it
+    means: a genuine BTS amendment appends, and never destroys the download that produced
+    already-published numbers. The identical-content half is covered in test_fetch_dedupe.py.
+    """
     import datetime as dt
     import zipfile
     from io import BytesIO
@@ -150,17 +158,21 @@ def test_support_table_downloads_are_also_date_stamped(tmp_path, monkeypatch):
     from pipeline.fetch import BtsFetcher, find_raw
     from pipeline.lookups import MASTER_COORDINATE, fetch_support_table
 
-    buf = BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
-        z.writestr("T_MASTER_CORD.csv", "x" * 5000)
-    payload = buf.getvalue()
+    def _payload(body: str) -> bytes:
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+            z.writestr("T_MASTER_CORD.csv", body)
+        return buf.getvalue()
 
+    payloads = [_payload("x" * 5000), _payload("x" * 4999 + "AMENDED")]
     form = (Path(__file__).parent / "fixtures" / "dl_selectfields_form.html").read_text()
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.method == "GET":
             return httpx.Response(200, text=form)
-        return httpx.Response(200, content=payload, headers={"Content-Type": "application/zip"})
+        return httpx.Response(
+            200, content=payloads.pop(0), headers={"Content-Type": "application/zip"}
+        )
 
     fetcher = BtsFetcher(client=httpx.Client(transport=httpx.MockTransport(handler)))
 
@@ -179,8 +191,9 @@ def test_support_table_downloads_are_also_date_stamped(tmp_path, monkeypatch):
     assert first.name == "master_coordinate_20260729.zip"
 
     monkeypatch.setattr("pipeline.fetch.dt.date", Day2)
-    fetch_support_table(fetcher, MASTER_COORDINATE, tmp_path, force=True)
+    second = fetch_support_table(fetcher, MASTER_COORDINATE, tmp_path, force=True)
     assert len(find_raw(tmp_path, MASTER_COORDINATE)) == 2, "prior download destroyed"
+    assert second != first and first.exists(), "the amendment replaced rather than appended"
 
 
 def test_a_cached_support_table_is_not_refetched(tmp_path):

@@ -1,7 +1,13 @@
 version: 2
 updates:
-  # Majors are kept SEPARATE deliberately: typescript 5->7 and eslint 9->10 are both waiting,
-  # and a grouped PR carrying either of them alongside routine patches would be unreviewable.
+  # Majors are kept SEPARATE deliberately: a grouped PR carrying one alongside routine
+  # patches would be unreviewable. Two are blocked UPSTREAM, in eslint-config-next's own
+  # nested dependencies -- not in anything this repo can configure -- so Dependabot would
+  # otherwise re-file each of them weekly and burn ten failing jobs per re-file.
+  #
+  # Each `ignore` below names the version range that is blocked and the ONE command that
+  # proves it unblocked. Neither is open-ended: the next major after the blocked one is
+  # still offered, which is the deliberate re-evaluation point.
   - package-ecosystem: npm
     directory: /app
     schedule:
@@ -9,6 +15,23 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # TS 7 is fine for OUR code -- measured on next 16.3.0: `tsc --noEmit` clean,
+      # `next build` succeeds, 267/267 smoke. It fails only at the lint step, where
+      # eslint-config-next -> typescript-eslint hard-errors "typescript-eslint does not
+      # support TS 7.0." We took TypeScript to 6.0.3 instead, which is inside that range.
+      # Unblock test: `npm view typescript-eslint peerDependencies.typescript` no longer
+      # ends at `<6.1.0`. TS 8 is NOT ignored and will arrive as a normal PR.
+      - dependency-name: typescript
+        versions: [">=7.0.0 <8.0.0"]
+      # ESLint 10 removed `context.getFilename()`, which eslint-plugin-react still calls
+      # (`TypeError: contextOrFilename.getFilename is not a function`). 7.37.5 is the
+      # LATEST published eslint-plugin-react and its peer range ends at `eslint: ^9.7`, so
+      # there is no release to upgrade INTO -- this is not a pin we chose.
+      # Unblock test: `npm view eslint-plugin-react peerDependencies.eslint` includes ^10.
+      # ESLint 11 is NOT ignored.
+      - dependency-name: eslint
+        versions: [">=10.0.0 <11.0.0"]
 
   - package-ecosystem: uv
     directory: /
@@ -18,7 +41,18 @@ updates:
       minor-and-patch:
         update-types: [minor, patch]
 
+  # `directory: /` scans `.github/workflows/` and NOTHING ELSE -- composite actions under
+  # `.github/actions/*/action.yml` need their own entry, one per directory. Measured: the
+  # mise-action 2->4 PR bumped `warehouse.yml` and left `.github/actions/setup/action.yml`
+  # pinned at v2, so the repo ran two majors of the same action at once and Dependabot
+  # reported the bump complete. `actions/cache@v4` in that same file had never been offered
+  # a bump at all. Any new composite action needs a new entry here or its pins go unwatched.
   - package-ecosystem: github-actions
     directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /.github/actions/setup
     schedule:
       interval: weekly

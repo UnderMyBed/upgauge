@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats basemap dev app-check app-build app-smoke test lint fmt check check-docs clean
+.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap dev app-check app-build app-smoke test lint lint-actions fmt check check-docs clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -53,8 +53,36 @@ verify:  ## M2 GATE: build twice, prove every Parquet artifact AND database obje
 # .gov endpoint -- 2 year-pulls instead of 12 -- while making a new month actually reachable.
 # --force appends a NEW date-stamped file rather than overwriting (data/raw/ is append-only),
 # so the previous download that produced published numbers survives.
+#
+# The first pass is bounded at (current-2) and that bound is load-bearing, not tidiness. Without
+# it, a FRESH clone fetches all 12 years on line 1 and the forced pass immediately re-fetches the
+# newest 2 -- same day, same filename, so the second write overwrites the first. Two redundant
+# POSTs against a .gov endpoint on the first-ever publisher run, which is precisely what the
+# paragraph above claims not to do. Bounded, the two passes partition the window: 10 + 2 = 12.
+#
+# ARGS is REJECTED rather than composed. Composing would put `$(ARGS)` ahead of the forced flags
+# so ours win on conflict -- which silently discards a caller's own `--start`/`--end` and lands
+# right back at half-honored, the defect this guard exists to remove. `--raw-dir` is the only
+# genuinely useful override and it is one `make fetch` away.
+#
+# At a year boundary this goes RED and stays red: on 2027-01-02 the forced pass asks BTS for
+# 2027, which it will not serve until ~April. That is unchanged from before the bound (line 1
+# asked for 2027 too) and it is DELIBERATE -- tolerating a fetch failure is exactly how the
+# publisher was silently frozen at 2026-04 in the first place. A loud daily failure is the
+# correct signal; only its duration is unfortunate, and shortening it means teaching fetch to
+# tell "BTS has not published this year yet" from "the fetch broke", which is its own change.
 ingest:  ## Fetch + build everything. The full M1 pipeline.
-	$(MAKE) fetch
+	@if [ -n "$(strip $(ARGS))" ]; then \
+	  echo "  FAIL  make ingest does not accept ARGS (got: $(ARGS))."; \
+	  echo "        Two of its four steps must override ARGS to force a refetch, so a"; \
+	  echo "        caller's flags would apply to some steps and not others."; \
+	  echo "        Call the step you meant directly:"; \
+	  echo "          make fetch ARGS=\"$(ARGS)\""; \
+	  echo "          make fetch-reference ARGS=\"$(ARGS)\""; \
+	  echo "          make warehouse ARGS=\"$(ARGS)\""; \
+	  exit 1; \
+	fi
+	$(MAKE) fetch ARGS="--end $$(( $$(date -u +%Y) - 2 ))"
 	$(MAKE) fetch ARGS="--start $$(( $$(date -u +%Y) - 1 )) --force"
 	$(MAKE) fetch-reference ARGS="--force"
 	$(MAKE) warehouse
@@ -67,6 +95,30 @@ goldens:  ## Regenerate the Explorer contract fixtures from the reference implem
 
 stats:  ## Regenerate the reference-values artifact (pipeline/reference/stats.generated.json)
 	$(UV) run python -m pipeline.stats --write
+
+gate-counts:  ## Regenerate the gate-counts artifact (pipeline/reference/gates.generated.json)
+	$(UV) run python -m pipeline.gatecounts --write
+
+# Deliberately NOT folded into the `data-contract` job's `make stats` diff. The two reds must
+# stay distinguishable: a stats diff means the upstream BTS dataset moved; a gate-counts diff
+# means someone added a test and did not regenerate. Merging them would make the message
+# CLAUDE.md gives for a red data-contract ("the upstream dataset no longer matches this commit's
+# reference values") wrong half the time.
+#
+# The tracked-file check is not defensive padding. `git diff` reports NOTHING for an untracked
+# file, so before the artifact was committed this target printed `ok` for every possible count --
+# including with a brand-new test added and with the committed number hand-edited to 999. Both
+# mutants passed. A generated-artifact gate whose artifact is not tracked is not a gate.
+check-gate-counts:  ## Fail if the committed gate counts no longer match the suite
+	@git ls-files --error-unmatch pipeline/reference/gates.generated.json >/dev/null 2>&1 \
+	  || { echo "  FAIL pipeline/reference/gates.generated.json is not tracked by git."; \
+	       echo "       \`git diff\` reports NOTHING for an untracked file, so this gate would"; \
+	       echo "       print ok for every possible count. Commit the artifact."; exit 1; }
+	@$(MAKE) --no-print-directory gate-counts >/dev/null
+	@git diff --exit-code --stat pipeline/reference/gates.generated.json \
+	  || { echo "  FAIL gate counts moved. Run \`make gate-counts\` and commit the result"; \
+	       echo "       in the SAME commit as the test that moved it."; exit 1; }
+	@echo "  gate counts match ... ok"
 
 basemap:  ## Regenerate the pre-projected basemap (app/src/lib/map/basemapPaths.generated.ts) from the two committed inputs, app/geo/ne_110m_us.json and app/geo/ne_50m_car.json
 	$(MISE) node --no-warnings app/scripts/build-basemap.mjs
@@ -96,6 +148,18 @@ test:  ## Run the pipeline test suite
 
 lint:  ## Lint (ruff)
 	$(UV) run ruff check .
+
+# The Actions EXPRESSION layer sits above YAML. An empty `${{ }}` in a bash comment inside a
+# `run:` block made warehouse.yml unparseable on main while staying valid YAML, and every check
+# applied before that merge was a YAML check.
+#
+# Scope is workflows ONLY, deliberately: actionlint 1.7.12 parses a composite action as a
+# workflow and reports `"jobs" section is missing` for `.github/actions/setup/action.yml`.
+# Measured: with the empty-expression defect injected into that composite, actionlint exits 0.
+# `pipeline/tests/test_workflow_expressions.py` is what covers composites, and it runs in
+# `test` below -- do not "fix" this target by pointing actionlint at action.yml.
+lint-actions:  ## Lint GitHub Actions workflows (expressions, `needs:`, `uses:` inputs, shellcheck)
+	mise exec -- actionlint
 
 fmt:  ## Format (ruff)
 	$(UV) run ruff format .
@@ -130,7 +194,7 @@ check-docs:  ## Enforce the CLAUDE.md line budget (see CLAUDE.md § Working agre
 	fi; \
 	echo "  CLAUDE.md is $$n lines (budget $(CLAUDE_MD_BUDGET)) ... ok"
 
-check: lint check-docs test  ## Lint + test. Run this before every commit.
+check: lint lint-actions check-docs check-gate-counts test  ## Lint + test. Run this before every commit.
 
 clean:  ## Remove build artifacts and caches (NOT data/raw — that's the audit trail)
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ *.egg-info
