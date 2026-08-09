@@ -72,4 +72,10 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 # Explicit path, never npx: npx from this WORKDIR cannot resolve app/node_modules and would
 # fetch next@latest from the registry at container start. Same fix as smoke.sh Task 1.
+#
+# RELATIVE, and that is load-bearing -- do not "tidy" it to /srv/upgauge/app/node_modules/.bin/next.
+# A relative CMD cannot resolve from a wrong working directory, so `docker run -w /tmp` exits 1
+# before anything listens. Absolute, the same wrong -w brings up a server that answers every
+# request off a wrong cwd instead -- strictly worse, and measured: hosting.md § "The test itself"
+# negatives 2 and 3 are exactly those two outcomes, and `make portability` asserts both.
 CMD ["app/node_modules/.bin/next", "start", "app", "-p", "3000"]

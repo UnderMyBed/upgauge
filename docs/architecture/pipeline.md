@@ -56,9 +56,9 @@ the terminal one was lost; both columns are kept because the drift is the lesson
 | **M3** | Explorer: pivot query + URL state + table | ✅ as planned, split M3a/M3b — [§ M3](#m3--the-explorer-split-into-m3a-and-m3b) |
 | **M4** | Entity pages, charts, design system applied | ✅ as planned, split M4a–M4d |
 | **M5** | Maps (airport + carrier + aircraft), then `/watch` presets | ❌ **neither.** Shipped the link graph: cell links, `/search`, `/sitemap.xml` — [§ M5](#m5--connecting-the-graph) |
-| **M6** | **Deploy + Cloudflare cache + edge rate limit + monthly cron + freshness alert** | ❌ **none of it.** Shipped `/watch` and the health score — [§ M6](#m6--gauge-watch-and-the-top-n-builder) |
+| **M6** | **Deploy + Cloudflare cache + edge rate limit + monthly cron + freshness alert** | ❌ **none of it** — every item moved to **M8**, the row below. Shipped `/watch` and the health score — [§ M6](#m6--gauge-watch-and-the-top-n-builder) |
 | **M7** | *(unplanned)* | The airport network map + the either-endpoint filter — M5's map item, two milestones late — [§ M7](#m7--maps-and-the-either-endpoint-filter-they-need-first) |
-| **M8** | — | **Deploy.** See the tracker; this is M6's original content, never rescheduled after M6 was repurposed. |
+| **M8** | — | **Deploy** — M6's original content, rescheduled here. Shipped so far: the container, `/api/health`, and the portability test M2 specified and nothing could run until the container existed ([hosting.md § Portability test](hosting.md#portability-test)). Not yet: a public host, the CDN, the edge rate limit, the monthly cron, the freshness alert. |
 
 **Seven milestones of building, none of releasing.** Nothing was dropped deliberately — M5's
 maps slid to M7, M6's deploy simply fell off the end, and no one noticed because this table was
@@ -198,8 +198,8 @@ against the **process CWD, not the database file's directory**, which forces a c
   `/home/runner/...` does not exist in the image. Silently — the file opens fine and every
   query fails on read.
 - A *relative* path works anywhere, provided CWD is fixed. So views reference
-  `data/parquet/**` relatively, the container sets `WORKDIR /app` with data at `/app/data`, and
-  CI builds from the repo root.
+  `data/parquet/**` relatively, the container sets `WORKDIR /srv/upgauge` with data at
+  `/srv/upgauge/data`, and CI builds from the repo root.
 
 A test asserts no absolute path appears in any view definition, because that failure is
 invisible until deploy.
@@ -208,9 +208,10 @@ invisible until deploy.
 root (views referencing `data/parquet/...`), opening that same file from `/tmp` — a foreign
 CWD, the way a container would if `WORKDIR` were wrong — and querying `fct_segment_month`
 raises `duckdb.IOException`: `IO Error: No files found that match the pattern
-"data/parquet/t100_segment/**/*.parquet"`. The database opens fine; only the read fails. **That
-is the exact failure shape to expect if the Dockerfile ever ships without `WORKDIR /app`**, and
-it is the negative case the portability test has to reproduce deliberately.
+"data/parquet/t100_segment/**/*.parquet"`. The database opens fine; only the read fails. **The
+real container reproduces that message verbatim** — `make portability`'s negative 1 shadows
+`/srv/upgauge/data/parquet` and every route 500s with the same `IO Error`
+([hosting.md § The test itself](hosting.md#the-test-itself--run-2026-08-09-m8-task-6)).
 
 ### The M2 gate
 

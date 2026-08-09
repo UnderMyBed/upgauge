@@ -177,14 +177,11 @@ With Cloudflare's free tier in front, near-zero repeat traffic touches the box r
 `.duckdb` file alone.** As built, the catalog is views over
 *relative* Parquet paths — it carries almost no data itself — so it behaves identically
 under `docker run` only if `data/parquet/` is co-located with it and `WORKDIR` is the
-directory containing `data/`. Get that wrong and the container still starts and the file
-still opens; every query then fails with a "no files found" read error. Full detail,
-including a confirmed repro of that exact failure: [pipeline.md § Views cannot take bound
-parameters](pipeline.md#views-cannot-take-bound-parameters--so-cwd-is-load-bearing).
+directory containing `data/`. **`make portability` proves that by breaking it** — three ways,
+each asserting its own signature ([§ below](#the-test-itself--run-2026-08-09-m8-task-6)).
 
-`docker run` it locally against the same `.duckdb` file + `data/parquet/` and it must
-behave identically. Everything is Docker + Parquet + env vars. R2 is S3-compatible. **Do
-not build on provider-specific runtimes** (Workers, D1, KV). This must stay a normal app.
+Everything is Docker + Parquet + env vars. R2 is S3-compatible. **Do not build on
+provider-specific runtimes** (Workers, D1, KV). This must stay a normal app.
 
 **That artifact is published, not just described.** `warehouse.yml` publishes
 `warehouse-YYYY.MM.tar.zst` (`upgauge.duckdb` + `data/parquet/`) and `raw-YYYY.MM.tar.zst`
@@ -222,28 +219,36 @@ if a future page ever needs one (most likely `/srv/upgauge/app/.next/cache`), ad
 `--mount type=tmpfs,destination=/srv/upgauge/app/.next/cache` to the run command rather than
 dropping `--read-only`.
 
-**Measured image size: 412,723,318 bytes (≈413 MB / 394 MiB)** —
-`docker inspect upgauge:local --format='{{.Size}}'`, cross-checked against
-`docker save upgauge:local | wc -c` (412,746,752 bytes; the ~23 KB difference is tar-format
-overhead) and against the 13 layers in `docker inspect --format '{{len .RootFS.Layers}}'`. **This
-is NOT what `docker images --format '{{.Size}}' upgauge:local` reports** — that command printed
-`1.5GB` for the identical tag on the same host (Docker 29.6.2, containerd snapshotter).
+**The build context must contain only tracked files, or the image depends on what this host has
+run.** `app/tsconfig.tsbuildinfo` and `app/next-env.d.ts` are generated, gitignored and untracked;
+both are regenerated inside the `build` stage, so neither belongs in the context. Left in, they
+were load-bearing by accident: one `make app-check` rewrites `tsconfig.tsbuildinfo`, which
+invalidates `COPY app ./app`, which re-runs `next build`, which mints a fresh build id — so the
+next `make image` produced a *different image from an unchanged tree*. Confirmed by mutation, both
+directions: with the `.dockerignore` entries in place, appending a byte to
+`app/tsconfig.tsbuildinfo` leaves `COPY app ./app` `CACHED` and `.Size` byte-identical; with them
+removed, the same one-byte append re-runs the stage and moves `.Size` by 2,327 bytes.
 
-The gap is **not** multi-stage build discarding — that theory was tested and disproved.
-`docker history`'s per-instruction sizes for this image sum to ~1.09 GB, and the first
-explanation reached for was "it's counting the discarded `deps`/`build`/`warehouse` stage
-layers." Falsified directly: pulling the plain, unmodified `node:24.19.0-slim` base image — no
-multi-stage build, no discarded stage, nothing to discard — shows the identical pattern.
-Measured against that base image alone: `docker inspect --format='{{.Size}}'` reports
-**80,463,700 bytes**, `docker save node:24.19.0-slim | wc -c` reports **83,079,680 bytes** (both
-agree, same as `upgauge:local`'s own pair above), and `docker history --format '{{.Size}}'`
-summed over its 5 layers reports **247,710,100 bytes — a ~3.08× inflation with zero build
-stages, zero `COPY --from`, zero anything to discard.** `docker images` reports `331MB` for that
-same untouched base. So this is a general `docker history`/`docker images` over-count on this
-containerd-snapshotter Docker (29.6.2) — some accounting layer counts content more than once —
-not a symptom of anything this Dockerfile does. **Use `docker inspect`'s `.Size` or
-`docker save | wc -c` for any image's real size on this host; never `docker images` or
-`docker history`.**
+**Measured image size: ≈413 MB / 394 MiB** — `docker inspect upgauge:local --format='{{.Size}}'`
+reports 412,741,879 bytes, cross-checked against `docker save upgauge:local | wc -c`
+(412,765,184 bytes; the ~23 KB difference is tar-format overhead) and against the 13 layers in
+`docker inspect --format '{{len .RootFS.Layers}}'`. **Quote ≈413 MB, not the byte count.** Every
+run of the `build` stage mints a new `next build` id, so any real source change moves `.Size` by
+tens of kilobytes; the exact figure is a property of one build, not of this project, and is not a
+fixture. **It is also not what `docker images --format '{{.Size}}' upgauge:local` reports** — that
+printed `1.5GB` for the identical tag on the same host (Docker 29.6.2, containerd snapshotter),
+and `docker history`'s per-instruction sizes for the same image sum to ~1.09 GB.
+
+**Neither inflated figure is multi-stage discarding, and the proof is an image with nothing to
+discard.** A plain, unmodified `node:24.19.0-slim` — no multi-stage build, no `COPY --from`, no
+stage to throw away — shows the identical pattern: `docker inspect --format='{{.Size}}'` reports
+**80,463,700 bytes** and `docker save node:24.19.0-slim | wc -c` reports **83,079,680 bytes** (the
+two agree, exactly as `upgauge:local`'s own pair does), while `docker history --format
+'{{.Size}}'` summed over its 5 layers reports **247,710,100 bytes — a ~3.08× inflation** and
+`docker images` reports `331MB`. It is a general over-count in that accounting layer on this
+containerd-snapshotter Docker (29.6.2), not a symptom of anything this Dockerfile does. **Use
+`docker inspect`'s `.Size` or `docker save | wc -c` for any image's real size on this host; never
+`docker images` or `docker history`.**
 
 ### Container smoke mode — built, measured (M8 Task 5)
 
@@ -315,6 +320,108 @@ not a permission error, and true of Docker Desktop on any platform, not this one
 namespaces regardless of daemon topology, and PID-namespace isolation alone limits `/proc` there
 to this container's own processes, so no `pgrep` is needed either (`node:*-slim` ships no
 `procps`).
+
+### The test itself — run 2026-08-09 (M8 Task 6)
+
+`make portability` is the **negative** half: it breaks the WORKDIR/data-colocation contract three
+ways and asserts the *distinct* signature each break produces. The **positive** half is
+`make image-smoke` — 257 served-build checks against the real container, `--read-only`, no tmpfs
+(§ above) — against 267 in host mode, the difference being exactly the 10 checks inside the three
+host-only gap sections.
+
+**The contract is defended at four layers, and the failures are not interchangeable.** One shared
+"it 500s" assertion would pass for all of them and therefore prove none:
+
+| break | layer it fails at | observed |
+|---|---|---|
+| a mis-packed warehouse tarball | image build | `docker build` exits 1 at the `warehouse` stage's `test` assertions (§ The Dockerfile) — never reaches `docker run` |
+| `data/parquet/` shadowed, database present | Parquet read | server listens, `/api/health` **503**, every route **500** |
+| wrong `WORKDIR`, image `CMD` | `exec` | container **exits 1** in under a second; nothing ever listens |
+| wrong `WORKDIR`, absolute entrypoint | database open | server listens, `/api/health` **503**, every route **500** |
+
+**Negative 1 — `--mount type=tmpfs,destination=/srv/upgauge/data/parquet`.** The catalog opens
+(it is views over relative paths and carries almost no data of its own); every query then fails:
+
+```
+/api/health status=503
+/api/health body={"status":"degraded","build":{"sha":"df4278e","warehouse":"warehouse-2026.04"},"data":{"asOf":null,"missing":[]}}
+/explore    status=500
+⨯ [Error: IO Error: No files found that match the pattern "data/parquet/t100_segment/**/*.parquet"]
+```
+
+All eight paths the healthy container serves at 200 return **500** here — `/`, `/explore`, the
+four entity pages, `/watch`, `/sitemap.xml` — so not even a "looks alive" surface survives. Why
+cwd is what decides this: [pipeline.md § Views cannot take bound
+parameters](pipeline.md#views-cannot-take-bound-parameters--so-cwd-is-load-bearing).
+
+**`missing` is `[]`, and that is the finding.** The healthcheck's `(object, column)` manifest is
+**blind** to this break by construction — `duckdb_columns()` answers out of the catalog and never
+reads a Parquet file, so every required object and column is genuinely present. The 503 comes from
+the `asOf` clause alone. Confirmed by mutation: with `stamp !== null` dropped from
+`healthReport()`'s status expression and the image rebuilt, negative 1 returns
+**`200 {"status":"ok"}` while `/explore` still returns 500** — a container Docker's `HEALTHCHECK`
+and any load balancer would keep sending traffic to. So `portability` asserts the 503, the
+`asOf:null` **and** the `missing:[]`; the last of those pins *which* clause is load-bearing rather
+than detecting the break, and if the manifest ever does see this break, that is an improvement and
+this section and the assertion move in the same commit.
+
+**Negative 2 — `docker run -w /tmp`.** The `CMD` is a **relative** path
+(`app/node_modules/.bin/next`), so a wrong working directory stops the container before it can
+listen instead of bringing up a server that answers every request from the wrong place:
+
+```
+exit code   =1
+/explore    status=000
+Error: Cannot find module '/tmp/app/node_modules/.bin/next'
+```
+
+**Keep `CMD` relative.** Rewriting it to an absolute path turns this hard start failure into a
+running server serving 500s off a wrong cwd — strictly worse, and precisely why negative 3 has to
+override the entrypoint to reproduce that shape at all.
+
+The mechanism runs through the base image, worth knowing before editing either end of it:
+`node:24.19.0-slim` sets `ENTRYPOINT ["docker-entrypoint.sh"]`, and that script falls back to
+`exec node "$@"` whenever `command -v "$1"` finds nothing — which is what a relative path from the
+wrong cwd is. The error therefore arrives from node's module resolver, not from `execve`. Give
+`--entrypoint` that same relative path and it fails one step earlier, in `runc`:
+`exec: "app/node_modules/.bin/next": stat app/node_modules/.bin/next: no such file or directory`.
+
+This case is also the one that must run **without `--rm`**: the container is gone within a second,
+and `docker logs` against an `--rm` container that has already exited reports `No such container`
+— the evidence deletes itself, which is why the first attempt at this case observed nothing at
+all. Keep it, then `timeout 30 docker wait`: a `docker wait` that *times out* **is** the failure
+(a server came up), where a bare `docker wait` would hang forever in exactly that case.
+
+**Negative 3 — `-w /tmp` plus `--entrypoint /srv/upgauge/app/node_modules/.bin/next`.** An
+absolute entrypoint leaves `process.cwd()` at `/tmp`, so `db.ts`'s `ROOT` resolves there and the
+failure lands *earlier* than negative 1's — at the open, before any query:
+
+```
+/api/health status=503
+/api/health body={"status":"degraded",…,"data":{"asOf":null,"missing":["catalog probe failed: IO Error: Cannot open database \"/tmp/upgauge.duckdb\" in read-only mode: database does not exist"]}}
+/explore    status=500
+```
+
+`missing` names the cause here and is empty in negative 1, so the two breaks stay distinguishable
+in production from the health body alone — the reason `healthReport()` reports the probe's own
+error text instead of a boolean.
+
+**Mutants run — each break removed, the named assertions confirmed red, `make` exit 2:**
+
+| mutant | result |
+|---|---|
+| negative 1's tmpfs mount removed | health **200 `ok`**, `/explore` **200**, no log line — 4 of its 5 assertions red |
+| negative 2's `-w /tmp` corrected | container still up at 30 s, `/explore` **200** — all 4 assertions red |
+| negative 3's `-w /tmp` removed | health **200 `ok`**, `/explore` **200** — all 3 assertions red |
+| `healthReport()`'s `stamp !== null` dropped, image rebuilt | negative 1's *status* assertion red (**200** while `/explore` returned 500); its `asOf:null` body assertion stayed **green**, because the body still carried the null — the **status mapping** is what that first assertion owns, and only it |
+
+`missing:[]` stayed green under the first mutant, as it must: it is equally true of a healthy
+container. That is the difference between pinning a mechanism and detecting a break, and its FAIL
+text says which it is.
+
+Nothing here runs `--read-only`, deliberately: each negative isolates exactly one variable, and a
+second difference would leave a red ambiguous between the break under test and the read-only root.
+`--read-only`'s own proof is `image-smoke`'s, where every check runs under it.
 
 ## What `proxy.ts` owns
 
