@@ -354,6 +354,16 @@ describe("proxy", () => {
     const res = await proxy(new NextRequest("http://localhost/airport/SEA?y=2020&other=1"));
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
+
+  it("deliberately leaves /api/health out of the matcher", async () => {
+    const { config } = await import("@/proxy");
+    // Not a style preference. The matcher grants cacheability; the healthcheck must never be
+    // cached, sets its own no-store, takes no query and has no not-found path. This test exists
+    // so a future "add every route to the matcher" sweep cannot quietly make it cacheable.
+    expect(config.matcher).not.toContain("/api/health");
+    // Anti-vacuity: prove this test is reading the real matcher.
+    expect(config.matcher).toContain("/api/pivot");
+  });
 });
 
 /** NextResponse.next({request:{headers}}) encodes the upstream request headers into the
