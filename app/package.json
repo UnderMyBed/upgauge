@@ -13,7 +13,7 @@
   "dependencies": {
     "@duckdb/node-api": "^1.5.5-r.2",
     "@observablehq/plot": "^0.6.17",
-    "jsdom": "^29.1.1",
+    "jsdom": "^30.0.1",
     "next": "16.2.12",
     "react": "19.2.4",
     "react-dom": "19.2.4"
