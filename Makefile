@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap dev app-check app-build app-smoke image test lint lint-actions fmt check check-docs clean
+.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap dev app-check app-build app-smoke image image-smoke test lint lint-actions fmt check check-docs clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -152,6 +152,18 @@ image:  ## Build the deployable image from the published warehouse asset
 	docker build -t $(IMAGE) \
 	  --build-arg WAREHOUSE_TAG=$(WAREHOUSE_TAG) \
 	  --build-arg BUILD_SHA="$$(git rev-parse --short HEAD)" .
+
+# `image` as a prerequisite, always -- a stale local tag passing every check while the source
+# has moved on is a worse failure than the extra build time (docs/architecture/hosting.md's
+# whole point about a gate that passes for the wrong reason). SMOKE_EXPECT_SHA/_WAREHOUSE are
+# what turn "the container answers" into "this container is the build under test" -- the same
+# distinction port_free_or_die draws for the port, one layer up (app/smoke.sh's own comment on
+# the orphan-server incident this second guard exists alongside, not instead of).
+image-smoke: image  ## Run the served-build checks against the container, identity asserted
+	SMOKE_MODE=container SMOKE_IMAGE=$(IMAGE) \
+	SMOKE_EXPECT_SHA="$$(git rev-parse --short HEAD)" \
+	SMOKE_EXPECT_WAREHOUSE=$(WAREHOUSE_TAG) \
+	./app/smoke.sh
 
 test:  ## Run the pipeline test suite
 	$(UV) run pytest

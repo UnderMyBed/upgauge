@@ -245,6 +245,77 @@ not a symptom of anything this Dockerfile does. **Use `docker inspect`'s `.Size`
 `docker save | wc -c` for any image's real size on this host; never `docker images` or
 `docker history`.**
 
+### Container smoke mode — built, measured (M8 Task 5)
+
+`make image-smoke` runs `app/smoke.sh`'s served-build checks against the container `make image`
+produces (`--read-only`, no tmpfs, per the finding just above), instead of against a `next
+start` the script forked itself. `port_free_or_die` (`app/smoke.sh`'s own header, unchanged)
+proves *"I started this server"*; it cannot prove *"this is the build under test,"* and in
+container mode a container is **supposed** to hold the port — deleting the guard for this mode
+would reopen the exact hole `port_free_or_die`/`kill_port` exist to close (an orphaned server
+held `:3199` for 34 minutes across two runs; both reported `266 ok` against a build that was not
+the one under test). So container mode keeps the guard **and** adds `assert_identity()`, the
+positive check the guard never had: it reads `/api/health`'s `build.sha`/`build.warehouse` and
+aborts *before any content check runs* if either disagrees with `SMOKE_EXPECT_SHA`/
+`SMOKE_EXPECT_WAREHOUSE` — the two values `image-smoke` passes as the working tree's own short
+SHA and `WAREHOUSE_TAG`. `assert_identity` reads through `mise exec -- node -p …`, never bare
+`node`, with an explicit non-empty check on both values before the comparison — the same
+silently-green failure shape this file's `next`-version guard fixed once already (`set -e` is
+off and command substitution never propagates a child's exit status, so an absent `node` yields
+`""` for both sides and `"" != ""` passes).
+
+**Confirmed by mutation, both halves — against `app/smoke.sh` directly, not through `make
+image-smoke`, and that "not through" is itself a finding.** `image-smoke`'s own recipe (above)
+assigns `SMOKE_EXPECT_SHA="$(git rev-parse --short HEAD)"` as a shell prefix on the `./app/
+smoke.sh` invocation, and a prefix assignment always wins over an inherited exported variable of
+the same name for that one command — ordinary POSIX shell precedence, reproduced in isolation
+with a two-line Makefile before trusting it against this one. So `SMOKE_MODE=container
+SMOKE_EXPECT_SHA=deadbee make -s image-smoke` cannot inject a wrong expectation at all: the
+recipe recomputes the real SHA and passes *that*, the comparison matches, and the run reports
+`smoke: all checks passed` — silently proving nothing about `assert_identity`. That is a
+property of the wrapper, not a bug in it: `make image-smoke` deliberately computes its own
+ground truth rather than trusting a caller-supplied expectation, which is the correct shape for
+the real use case (nobody should be able to launder a stale image past this gate by also
+supplying the wrong expectation). The mutant therefore has to exercise `assert_identity` at the
+layer that actually owns the comparison:
+
+```
+$ SMOKE_MODE=container SMOKE_IMAGE=upgauge:local SMOKE_EXPECT_SHA=deadbee ./app/smoke.sh
+  FAIL the server on this port reports build 4170ac5, expected deadbee.
+       Every check below would pass against a build that is not under test.
+$ echo "exit=$?"
+exit=1
+```
+
+Aborted before `==> checks` ever printed — no served-build check ran. Then, with the
+`assert_identity "$BASE"` call itself deleted and the identical command re-run: `smoke: all
+checks passed`, 257 ok, against the same server whose identity (`deadbee` expected, `4170ac5`
+actual) was never read at all — the defect the assertion exists to make impossible. Restored
+immediately after; `git diff app/smoke.sh` empty against the committed version before
+re-verifying `make image-smoke` clean.
+
+**Three sections of `app/smoke.sh` are skipped under `SMOKE_MODE=container`** — the M5/M6/M7 gap
+checks, each of which starts its own short-lived `next start` against a deliberately-broken
+*copy* of the database. They test page and proxy behaviour against a broken catalog, nothing the
+container contributes, and containerising them would triple image builds for zero new coverage.
+The skip is **printed**, immediately before the pass/fail tally, never silent — reporting a
+narrower count as though it were the full one is the same dishonesty as a stale build passing
+every check, one level up. `make app-smoke` (host mode) still runs all three and reports the
+documented 267 checks, unchanged; `make image-smoke` reports the served-build subset alone.
+
+**One existing check needed a container-specific path, not a skip: the "ONE `DuckDBInstance`"
+handle count** (§ "One `DuckDBInstance` per process", below). Its host-mode form walks the local process tree with
+`pgrep` and reads `/proc/<pid>/fd` directly — valid because `smoke.sh` and `next start` share a
+PID namespace on the host. That does not hold for a container under **Docker Desktop**:
+`docker inspect --format '{{.State.Pid}}'` reports a PID in the *daemon's* own PID namespace,
+which measurably does not exist in the host's `/proc` at all (`docker info` reports
+`Operating System: Docker Desktop` — its own Linux VM, not this host) — a namespace mismatch,
+not a permission error, and true of Docker Desktop on any platform, not this one machine.
+`docker exec upgauge-smoke sh -c '…'` sidesteps it: it always runs inside the *container's own*
+namespaces regardless of daemon topology, and PID-namespace isolation alone limits `/proc` there
+to this container's own processes, so no `pgrep` is needed either (`node:*-slim` ships no
+`procps`).
+
 ## What `proxy.ts` owns
 
 `app/src/proxy.ts` does **three** jobs, and each of them has already shipped broken once by
