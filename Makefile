@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats basemap dev app-check app-build app-smoke test lint fmt check check-docs clean
+.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap dev app-check app-build app-smoke test lint lint-actions fmt check check-docs clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -96,6 +96,30 @@ goldens:  ## Regenerate the Explorer contract fixtures from the reference implem
 stats:  ## Regenerate the reference-values artifact (pipeline/reference/stats.generated.json)
 	$(UV) run python -m pipeline.stats --write
 
+gate-counts:  ## Regenerate the gate-counts artifact (pipeline/reference/gates.generated.json)
+	$(UV) run python -m pipeline.gatecounts --write
+
+# Deliberately NOT folded into the `data-contract` job's `make stats` diff. The two reds must
+# stay distinguishable: a stats diff means the upstream BTS dataset moved; a gate-counts diff
+# means someone added a test and did not regenerate. Merging them would make the message
+# CLAUDE.md gives for a red data-contract ("the upstream dataset no longer matches this commit's
+# reference values") wrong half the time.
+#
+# The tracked-file check is not defensive padding. `git diff` reports NOTHING for an untracked
+# file, so before the artifact was committed this target printed `ok` for every possible count --
+# including with a brand-new test added and with the committed number hand-edited to 999. Both
+# mutants passed. A generated-artifact gate whose artifact is not tracked is not a gate.
+check-gate-counts:  ## Fail if the committed gate counts no longer match the suite
+	@git ls-files --error-unmatch pipeline/reference/gates.generated.json >/dev/null 2>&1 \
+	  || { echo "  FAIL pipeline/reference/gates.generated.json is not tracked by git."; \
+	       echo "       \`git diff\` reports NOTHING for an untracked file, so this gate would"; \
+	       echo "       print ok for every possible count. Commit the artifact."; exit 1; }
+	@$(MAKE) --no-print-directory gate-counts >/dev/null
+	@git diff --exit-code --stat pipeline/reference/gates.generated.json \
+	  || { echo "  FAIL gate counts moved. Run \`make gate-counts\` and commit the result"; \
+	       echo "       in the SAME commit as the test that moved it."; exit 1; }
+	@echo "  gate counts match ... ok"
+
 basemap:  ## Regenerate the pre-projected basemap (app/src/lib/map/basemapPaths.generated.ts) from the two committed inputs, app/geo/ne_110m_us.json and app/geo/ne_50m_car.json
 	$(MISE) node --no-warnings app/scripts/build-basemap.mjs
 
@@ -170,7 +194,7 @@ check-docs:  ## Enforce the CLAUDE.md line budget (see CLAUDE.md § Working agre
 	fi; \
 	echo "  CLAUDE.md is $$n lines (budget $(CLAUDE_MD_BUDGET)) ... ok"
 
-check: lint lint-actions check-docs test  ## Lint + test. Run this before every commit.
+check: lint lint-actions check-docs check-gate-counts test  ## Lint + test. Run this before every commit.
 
 clean:  ## Remove build artifacts and caches (NOT data/raw — that's the audit trail)
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ *.egg-info

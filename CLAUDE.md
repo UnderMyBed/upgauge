@@ -85,11 +85,17 @@ lives in git and `docs/architecture/pipeline.md`):
 
 | gate | result |
 |---|---|
-| `make check` | 510 Python tests · 49 skip without `data/` · +`actionlint` |
+| `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 49 skip without `data/` |
 | `make app-check` | 781 app tests · needs a built `upgauge.duckdb` or 349 fail |
 | `make app-smoke` | 267 served-build checks |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
 | `make goldens` | byte-identical |
+
+**The Python test total is no longer written here, and that is the point.** It moved four times
+in one session (491 → 493 → 498 → 510), each move a hand-edit to this table — inside the file
+whose own rule says measurements belong in generated output. `pipeline/gatecounts.py` states
+which gate figures are generated and which are still by hand, and why; the ones still by hand
+are in this table and must be re-measured when quoted.
 
 **Numbers in this repo rot, and the rot is not cosmetic.** Every milestone closeout from M4c on
 found a figure written into a permanent doc and never re-measured — `/carrier/DL`'s page weight
@@ -166,6 +172,7 @@ versions.** `make` shells through `mise exec`, so the commands below work withou
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |
 | `make goldens` | Regenerate the Explorer contract fixtures (`sql/03_queries/goldens/`) from `pipeline/pivot.py` | ✅ |
 | `make stats` | Regenerate `pipeline/reference/stats.generated.json`. **CI diff-gates it** — a diff means the upstream dataset moved | ✅ |
+| `make gate-counts` | Regenerate `pipeline/reference/gates.generated.json`. **`make check` diff-gates it** — a diff means a test was added without regenerating. Separate artifact from `make stats` so the two reds stay distinguishable | ✅ |
 | `make dev` | Next.js dev server (needs node) | ✅ |
 | `make app-check` | Typecheck + lint + test the app (`app/`) | ✅ |
 | `make app-build` | Production build of the app | ✅ |

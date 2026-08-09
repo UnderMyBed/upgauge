@@ -689,6 +689,38 @@ exited **0 — every day, forever, with nothing to notice it.** See
 [../data/sources.md § Rules](../data/sources.md#rules) for the fetch contract and why *two*
 years (BTS revises closed months) plus every support table (a rename is otherwise invisible).
 
+### Generated figures, and the boundary around them
+
+Two committed artifacts hold measured numbers so they cannot rot in prose, both in the shape
+`make basemap` established and `make verify` already gates:
+
+- **`pipeline/reference/stats.generated.json`** — `make stats`, from the warehouse via
+  `sql/03_queries/stats_reference.sql`. Entity counts, rows by year, fact-present aircraft
+  codes, aircraft short names and the slug-separator distribution. Diffed by CI's
+  `data-contract` job, where **a diff means the upstream BTS dataset moved**.
+- **`pipeline/reference/gates.generated.json`** — `make gate-counts`. The Python test total.
+  Diffed by `check-gate-counts` inside `make check`, where **a diff means a test was added
+  without regenerating**.
+
+They are deliberately separate files with separate gates. Folding the test count into the
+`data-contract` diff would make that job's message — "the upstream dataset no longer matches
+this commit's reference values" — wrong half the time it fired.
+
+**What is NOT generated, and why** (`pipeline/gatecounts.py` § The boundary is the canonical
+statement; #10 asks that it be stated rather than left half-done). The app test total is
+collectable via `vitest list` in ~4 s but needs `app/node_modules`, so gating it inside
+`make check` would break that gate on a clone that has not run `make install`. The smoke check
+count and the page weights need a real `next build` and a served port. The no-data skip count
+needs the suite run in an environment with neither `data/` nor `upgauge.duckdb`, which is a CI
+job, not a sub-second collection. Those four stay hand-maintained in CLAUDE.md's gates table and
+carry the same obligation as before: re-measure before quoting.
+
+> **A generated-artifact gate whose artifact is not tracked is not a gate.** `git diff` reports
+> nothing for an untracked file, so the first version of `check-gate-counts` printed `ok` for
+> every possible count — verified against two mutants that should have reddened it: a brand-new
+> test added without regenerating, and the committed number hand-edited to `999`. Both passed.
+> The target now refuses to run at all unless `git ls-files` can see the artifact.
+
 ### BTS revisions: corrections ship with the next month, by decision
 
 A BTS revision to an already-published month rebuilds a **corrected** warehouse under an
