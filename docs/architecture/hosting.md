@@ -227,12 +227,23 @@ dropping `--read-only`.
 `docker save upgauge:local | wc -c` (412,746,752 bytes; the ~23 KB difference is tar-format
 overhead) and against the 13 layers in `docker inspect --format '{{len .RootFS.Layers}}'`. **This
 is NOT what `docker images --format '{{.Size}}' upgauge:local` reports** — that command printed
-`1.5GB` for the identical tag on the same host (Docker 29.6.2, containerd snapshotter). The gap
-is BuildKit's build-history bookkeeping: `docker history`'s per-instruction sizes sum to ~1.09 GB
-because they include the multi-stage build's DISCARDED intermediate layers (`deps`'s full
-`npm ci` with devDependencies, `build`'s working tree, `warehouse`'s pre-extraction download) —
-none of which are among the 13 layers the image actually ships. For this image, trust
-`docker inspect`'s `.Size` or `docker save | wc -c`, not `docker images`.
+`1.5GB` for the identical tag on the same host (Docker 29.6.2, containerd snapshotter).
+
+The gap is **not** multi-stage build discarding — that theory was tested and disproved.
+`docker history`'s per-instruction sizes for this image sum to ~1.09 GB, and the first
+explanation reached for was "it's counting the discarded `deps`/`build`/`warehouse` stage
+layers." Falsified directly: pulling the plain, unmodified `node:24.19.0-slim` base image — no
+multi-stage build, no discarded stage, nothing to discard — shows the identical pattern.
+Measured against that base image alone: `docker inspect --format='{{.Size}}'` reports
+**80,463,700 bytes**, `docker save node:24.19.0-slim | wc -c` reports **83,079,680 bytes** (both
+agree, same as `upgauge:local`'s own pair above), and `docker history --format '{{.Size}}'`
+summed over its 5 layers reports **247,710,100 bytes — a ~3.08× inflation with zero build
+stages, zero `COPY --from`, zero anything to discard.** `docker images` reports `331MB` for that
+same untouched base. So this is a general `docker history`/`docker images` over-count on this
+containerd-snapshotter Docker (29.6.2) — some accounting layer counts content more than once —
+not a symptom of anything this Dockerfile does. **Use `docker inspect`'s `.Size` or
+`docker save | wc -c` for any image's real size on this host; never `docker images` or
+`docker history`.**
 
 ## What `proxy.ts` owns
 
