@@ -367,8 +367,12 @@ readiness guard, not by a `check`** — a third check (`health: 200 on a healthy
 alongside these two and removed in the same review round, because it sat *after* a guard that
 already `exit 1`s unless the code is exactly 200: it could never be red, and it inflated both
 published counts by one. The guard is the stronger form regardless — it aborts rather than letting a
-degraded server report 259 consequential failures with one cause — and it has been red by name
-twice, at HTTP 000 and HTTP 503. `no-store` is the property that justifies
+degraded server report a mass of consequential failures with one cause (**no count is quoted for
+that**: it is a property of one broken build, exactly like the `.Size` delta two sections above, and
+the argument is the ratio of noise to cause) — and it has been red by name twice, at HTTP 000 and
+HTTP 503. `assert_identity` would not stop such a run either: it reads `build.sha`/`build.warehouse`,
+which a degraded 503 body still carries — identity and health are separate questions, and that is
+correct. `no-store` is the property that justifies
 this route being the one deliberate omission from `proxy.ts`'s matcher, and nothing verified it on
 a served response — `proxy.test.ts` pins the absence from the matcher *array*, and
 `api/health/route.test.ts` calls `GET()` directly. Both would stay green if a Next upgrade or an

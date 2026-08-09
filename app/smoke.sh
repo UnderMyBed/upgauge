@@ -334,10 +334,14 @@ for _ in $(seq 1 90); do curl -sf -o /dev/null --max-time 2 "${BASE}/api/health"
 # `check "$READY_CODE" '200'` placed AFTER this `exit 1` can only ever run when READY_CODE is
 # already exactly 200, so it could never be red, and it inflated both published counts by one.
 # CLAUDE.md: a test that has never been red proves nothing. This form is the stronger one anyway --
-# it aborts instead of continuing, so a degraded server cannot spend five minutes reporting 259
-# consequential failures whose single cause is the line printed here. Twice proven red, by name, as
-# an abort: HTTP 000 (stale container holding the name, nothing listening) and HTTP 503
-# (data/parquet emptied) -- see task-6-report.md's mutants I and J.
+# it aborts instead of continuing, so a degraded server cannot spend five minutes reporting a mass
+# of consequential failures whose single cause is the line printed here. (No count is quoted for
+# that: it is a property of one broken build, in the same way this repo declines to quote the
+# `.Size` delta of one pair of Docker builds. The point is the ratio of noise to cause, not a
+# number.) Twice proven red, by name, as an abort: HTTP 000 (stale container holding the name,
+# nothing listening) and HTTP 503 (data/parquet emptied) -- see task-6-report.md's mutants I and J.
+# Note that assert_identity below would NOT stop such a run: it reads build.sha/build.warehouse,
+# which a degraded 503 body still carries. Identity and health are separate questions, correctly.
 READY_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${BASE}/api/health")
 if [ "$READY_CODE" != "200" ]; then
   echo "  FAIL server not serving a healthy /api/health: HTTP ${READY_CODE} (000 = nothing listening)"
