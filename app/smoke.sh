@@ -31,8 +31,28 @@ if [ ! -x "$NEXT_BIN" ]; then
   echo "  FAIL ${NEXT_BIN} is missing or not executable. Run 'make install' first."
   exit 1
 fi
-PINNED_NEXT=$(node -p "require('${ROOT}/app/node_modules/next/package.json').version")
-DECLARED_NEXT=$(node -p "require('${ROOT}/app/package.json').dependencies.next")
+# Through `mise exec --`, like every other runtime call in this file -- a bare `node` is not
+# guaranteed on $PATH (a fresh clone before `mise activate`, a cron shell, `make app-smoke`'s
+# own invocation below, which calls this script directly rather than through `$(MISE)`).
+#
+# Fix round 1: the first version of this guard called bare `node -p ...` with `set -uo
+# pipefail` (no `-e`), and command substitution never propagates a child's exit status into
+# `$?` for an `if`, only its stdout. If `node` is unresolvable, BOTH substitutions silently
+# yield "" and "" != "" is false -- the mismatch check never fires, `==> next  ()` prints, and
+# the whole suite runs "certified" having verified nothing. Reproduced:
+#   $ bash -c 'set -uo pipefail; X=$(nonexistent -p a); Y=$(nonexistent -p b); [ "$X" != "$Y" ] && echo MISMATCH || echo EQUAL-PASSES-SILENTLY'
+#   EQUAL-PASSES-SILENTLY
+# So an explicit non-empty check on EACH value, before the comparison, is not optional --
+# routing through `mise exec --` narrows WHEN node is missing, it does not stop the silent-pass
+# shape if it still is.
+PINNED_NEXT=$(mise exec -- node -p "require('${ROOT}/app/node_modules/next/package.json').version")
+DECLARED_NEXT=$(mise exec -- node -p "require('${ROOT}/app/package.json').dependencies.next")
+if [ -z "$PINNED_NEXT" ] || [ -z "$DECLARED_NEXT" ]; then
+  echo "  FAIL could not determine the next version (installed='${PINNED_NEXT}' declared='${DECLARED_NEXT}')."
+  echo "       node/mise is unresolvable or a package.json is unreadable -- the guard could NOT"
+  echo "       run, this is not a report that the versions matched."
+  exit 1
+fi
 if [ "$PINNED_NEXT" != "$DECLARED_NEXT" ]; then
   echo "  FAIL installed next ${PINNED_NEXT} != declared ${DECLARED_NEXT} in app/package.json."
   echo "       Every check below would run against a Next this repo does not pin."
