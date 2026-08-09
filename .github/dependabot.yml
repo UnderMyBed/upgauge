@@ -1,0 +1,24 @@
+version: 2
+updates:
+  # Majors are kept SEPARATE deliberately: typescript 5->7 and eslint 9->10 are both waiting,
+  # and a grouped PR carrying either of them alongside routine patches would be unreviewable.
+  - package-ecosystem: npm
+    directory: /app
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

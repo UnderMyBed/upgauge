@@ -76,15 +76,16 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 served HTML, visible with JS off** — no client-side chart or map library anywhere in the render
 path. `data/raw/` holds the full 2015–2026 window.
 
-**Built, but never released.** There is no Dockerfile, no CI, and no cron. Deploy was originally
-M6 and fell off the roadmap when M6 was repurposed. That is the whole content of M8 — see below.
+**Built, but never released.** There is no Dockerfile. CI runs every gate
+(`.github/workflows/`), and `warehouse.yml` polls BTS and publishes the dataset as a release
+asset — but nothing is deployed. That is the remaining content of M8.
 
-Current gates, measured 2026-08-07 (these are the only counts kept here; per-milestone history
+Current gates, measured 2026-08-08 (these are the only counts kept here; per-milestone history
 lives in git and `docs/architecture/pipeline.md`):
 
 | gate | result |
 |---|---|
-| `make check` | 474 Python tests · 46 skip without `data/` |
+| `make check` | 491 Python tests · 49 skip without `data/` |
 | `make app-check` | 781 app tests · needs a built `upgauge.duckdb` or 349 fail |
 | `make app-smoke` | 267 served-build checks |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
@@ -161,9 +162,10 @@ versions.** `make` shells through `mise exec`, so the commands below work withou
 | `make normalize` | Raw zips → `data/parquet/t100_segment/year=YYYY/` | ✅ |
 | `make warehouse` | Facts + all 5 dims from `data/raw/` | ✅ |
 | **`make verify`** | **M2 gate: build twice, prove Parquet + database byte-identical** | ✅ |
-| `make ingest` | `fetch` + `fetch-reference` + `warehouse` | ✅ |
+| `make ingest` | `fetch` + `fetch-reference` + `warehouse`, **force-refetching the last 2 years** | ✅ |
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |
 | `make goldens` | Regenerate the Explorer contract fixtures (`sql/03_queries/goldens/`) from `pipeline/pivot.py` | ✅ |
+| `make stats` | Regenerate `pipeline/reference/stats.generated.json`. **CI diff-gates it** — a diff means the upstream dataset moved | ✅ |
 | `make dev` | Next.js dev server (needs node) | ✅ |
 | `make app-check` | Typecheck + lint + test the app (`app/`) | ✅ |
 | `make app-build` | Production build of the app | ✅ |
@@ -324,6 +326,12 @@ Full detail and the measurements behind each: `docs/data/invariants.md`.
 - **PREZIP is dead for T-100** — every file there is dated 2015-09-02. The
   `DL_SelectFields.aspx` POST is the only path, it's ASP.NET WebForms (GET for cookies +
   `__VIEWSTATE`, then POST), and TranStats obfuscates URL params with *two* ROT13 variants.
+- **The fetch cache is keyed by YEAR, so a plain re-fetch can never see a new month.** BTS
+  drops 2026-05 *inside* the already-downloaded 2026 zip, and support tables have no year at
+  all — one cached file suppresses them forever, hiding the aircraft **rename** that
+  `classify_warehouse.py` exists to catch. Any ingest path must force the current **and
+  previous** year (BTS revises closed months) plus every support table. `make ingest` does;
+  `make fetch` alone does not, and shipped as a permanent silent no-op in the publisher.
 - **Passenger filter is `AIRCRAFT_CONFIG IN (1,3,4)`**, not `= 1` — configs 3 (combi) and 4
   (seaplane) carry real passengers.
 - **`CLASS` has rollup codes** `K`(=F+G), `V`, `Z`. Summing service classes can double-count.
@@ -445,3 +453,9 @@ signature element; it does not own these.
 - **The cron must fail loudly.** A broken ingest doesn't error — the site keeps serving and
   `DATA AS OF` silently stops advancing. Alert when `max(year_month)` hasn't moved in ~45
   days.
+- **The warehouse CI restores is unpinned, and drift is caught at the producer.** A red
+  `data-contract` job means the upstream dataset no longer matches this commit's reference
+  values; every other red in that run is probably a consequence. Fix by `make stats`, then
+  re-pin dependants in the same commit. **When a renamed value was the fixture for a transform,
+  MOVE the fixture** — a replacement that no longer exercises the path passes against the very
+  bug it exists to catch.

@@ -138,6 +138,22 @@ failure.
 
 - Fail loudly rather than silently writing a short file. Back off politely.
 - Land raw zips in `data/raw/`. **Never mutate them** — they are the audit trail.
+- **The `(table, year)` cache above is why a plain re-fetch can never see a new month.** BTS
+  publishes 2026-05 *inside* the 2026 file, so `latest_raw(raw_dir, T100D_SEGMENT_US, 2026)`
+  still finds `t100d_segment_us_2026_20260807.zip`, logs `2026  cached`, and skips. Traced
+  against the real `data/raw/` listing with the network stubbed: **`make fetch` over a
+  populated `data/raw/` makes zero requests for all 12 years, and `make fetch-reference`
+  makes zero for all 3 support tables** — the ingest is a no-op that exits 0.
+- **Force the current *and* previous year, plus every support table.** BTS revises months that
+  are already closed — its own release page carries lines like *"10/2025 - 3/2026 updated"*
+  next to each new month — so the current year alone is not the mutable set. Support tables
+  carry no year, so one cached file suppresses them permanently and an aircraft-type **rename**
+  (the class-3 change `.github/scripts/classify_warehouse.py` exists to catch) stays invisible.
+  This is what `make ingest` does: `fetch` (2015..current−2 short-circuit on the cache),
+  `fetch --start $((year-1)) --force`, `fetch-reference --force`, then `warehouse`. Two
+  year-pulls per run instead of twelve is the citizenship argument; zero is a broken pipeline.
+  `--force` **appends** a new date-stamped file rather than overwriting, so the download that
+  produced already-published numbers survives.
 
 ---
 

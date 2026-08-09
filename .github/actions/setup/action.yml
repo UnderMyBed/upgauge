@@ -1,0 +1,96 @@
+name: Set up upguage
+description: Pinned runtimes, installed deps, and a restored warehouse.
+
+inputs:
+  warehouse-tag:
+    description: Release tag to restore. Passed in, never resolved here -- every job in a run must agree on one dataset.
+    required: true
+  restore-raw:
+    description: Also restore data/raw (only `make verify` needs it; it is 136 MB).
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # Versions come from mise.toml. Nothing here may hardcode a python/node/uv version.
+    - uses: jdx/mise-action@v2
+      with:
+        install: true
+        cache: true
+
+    - name: Install pipeline deps
+      shell: bash
+      run: mise exec -- uv sync --extra dev
+
+    - name: Install app deps
+      shell: bash
+      run: mise exec -- npm ci --prefix app
+
+    - name: Restore warehouse from cache
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: |
+          upgauge.duckdb
+          data/parquet
+        key: warehouse-${{ inputs.warehouse-tag }}
+
+    # WAREHOUSE_TAG reaches bash through `env:`, never `${{ }}` spliced into the script text.
+    # Actions substitutes `${{ }}` BEFORE bash parses the script, so a release tagged with a
+    # backtick (git ref names permit backticks, `$`, `;`, `&`, `|`, quotes and parens) would be
+    # executed as command substitution rather than passed to `gh`. `"$WAREHOUSE_TAG"` is a plain
+    # parameter expansion, which bash does not re-parse as source. Callers additionally validate
+    # the tag SHAPE against ^warehouse-[0-9]{4}\.[0-9]{2}$ before passing it here -- belt and
+    # braces, because a prefix check alone (`startswith("warehouse-")`) constrains nothing after
+    # the prefix. The `key:` above is a YAML input to actions/cache, not a shell context.
+    - name: Download warehouse asset on cache miss
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        WAREHOUSE_TAG: ${{ inputs.warehouse-tag }}
+      run: |
+        set -euo pipefail
+        gh release download "$WAREHOUSE_TAG" \
+          --repo "$GITHUB_REPOSITORY" --pattern 'warehouse-*.tar.zst'
+        tar --zstd -xf warehouse-*.tar.zst
+        rm -f warehouse-*.tar.zst
+
+    - name: Restore raw
+      if: inputs.restore-raw == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        WAREHOUSE_TAG: ${{ inputs.warehouse-tag }}
+      run: |
+        set -euo pipefail
+        gh release download "$WAREHOUSE_TAG" \
+          --repo "$GITHUB_REPOSITORY" --pattern 'raw-*.tar.zst'
+        tar --zstd -xf raw-*.tar.zst
+        rm -f raw-*.tar.zst
+
+    # The anti-vacuity guard. A silent download failure would otherwise leave the suite
+    # reporting a green 428 passed with 46 skips, which proves far less than it appears to.
+    #
+    # Specific, not just present: `data/parquet` has two independent subtrees --
+    # `dims/*.parquet` and `t100_segment/year=*/`. A partial extraction can land the small
+    # dims files while dropping t100_segment (or vice versa) and still satisfy a bare
+    # `find data/parquet -name '*.parquet' | wc -l` count. Check each subtree the warehouse
+    # actually needs, and name whichever one is missing.
+    - name: Assert the warehouse is actually present
+      shell: bash
+      run: |
+        set -euo pipefail
+        missing=()
+        [ -f upgauge.duckdb ] || missing+=("upgauge.duckdb")
+        compgen -G "data/parquet/t100_segment/year=*/*.parquet" > /dev/null \
+          || missing+=("data/parquet/t100_segment/year=*/ (no year partitions)")
+        compgen -G "data/parquet/dims/*.parquet" > /dev/null \
+          || missing+=("data/parquet/dims/*.parquet (no dims)")
+        if [ "${#missing[@]}" -gt 0 ]; then
+          echo "::error::warehouse restore incomplete -- missing: ${missing[*]}"
+          exit 1
+        fi
+        echo "t100_segment year partitions: $(compgen -G 'data/parquet/t100_segment/year=*/' | wc -l)"
+        echo "dims files: $(compgen -G 'data/parquet/dims/*.parquet' | wc -l)"

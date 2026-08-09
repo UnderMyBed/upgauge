@@ -1,0 +1,77 @@
+name: Verify (reproducibility)
+
+on:
+  schedule:
+    - cron: "17 4 * * *"   # nightly, off-peak; no upstream schedule to align to
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      # Same query as warehouse.yml's `previous` step, whose comment is the ONLY place the
+      # three-way divergence is written down -- read it before editing this. In short:
+      # publishedAt not createdAt (createdAt comes from the tag's COMMIT, so releases off an
+      # unchanged main tie and a reverse-sort picks the older one), and the tag shape is
+      # validated here on the consumer side, not merely prefix-matched. Strict, unlike
+      # warehouse.yml: a nightly reproducibility proof with no warehouse proves nothing.
+      - id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+                  --exclude-drafts --exclude-pre-releases \
+                  --json tagName,publishedAt \
+                  --jq '[.[] | select(.publishedAt != null)
+                             | select(.tagName | test("^warehouse-[0-9]{4}\\.[0-9]{2}$"))]
+                        | sort_by(.publishedAt, .tagName) | last | .tagName // ""')
+          [ -n "$tag" ] && [ "$tag" != "null" ] || { echo "::error::no published warehouse-YYYY.MM release found"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - uses: ./.github/actions/setup
+        with:
+          warehouse-tag: ${{ steps.pick.outputs.tag }}
+          restore-raw: "true"
+      # This job is the ONLY place the raw-dependent tests run. The per-PR `check` job restores
+      # no `data/raw/`, so 15 real-data invariant tests skip there by design -- including
+      # test_quarantine_stays_rare_on_real_data and the distance-variance bound. Running
+      # `make check` here, where raw IS restored, is what stops them being dark everywhere.
+      # Report which gate failed: a bare nightly red is ambiguous between the two.
+      - name: make check (the raw-dependent tests, which run nowhere else)
+        env:
+          # -rs prints WHY each test skipped. Without it, pytest's `-q` summary (this repo's
+          # default addopts) never prints skip reasons anywhere in the log -- confirmed by
+          # running the mutant: a plain `-q` skip of a test reasoned "no 2015 extract..."
+          # produces only an `s` and a bare count, so the grep below would never match and
+          # this guard would be vacuous exactly in the failure mode it exists to catch.
+          PYTEST_ADDOPTS: -rs
+        run: |
+          set -euo pipefail
+          make check 2>&1 | tee /tmp/check-nightly.log
+          if grep -qE 'no 2015 extract|no Master Coordinate|no real extract' /tmp/check-nightly.log; then
+            echo "::error::raw-dependent tests SKIPPED in the one job that restores raw -- the raw restore is broken"
+            exit 1
+          fi
+
+      - name: make verify
+        run: |
+          set -euo pipefail
+          make verify 2>&1 | tee /tmp/verify.log
+      - name: Summarise
+        if: always()
+        env:
+          TAG: ${{ steps.pick.outputs.tag }}
+        run: |
+          {
+            echo "## make verify on \`$TAG\`"
+            echo
+            echo "First cross-machine run of a proof that has only ever been produced locally."
+            echo '```'
+            grep -E 'artifacts|objects|basemap' /tmp/verify.log || tail -20 /tmp/verify.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
