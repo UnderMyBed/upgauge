@@ -32,6 +32,14 @@ updates:
       # ESLint 11 is NOT ignored.
       - dependency-name: eslint
         versions: [">=10.0.0 <11.0.0"]
+      # @types/node MUST track mise.toml's node pin rather than float ahead of it. Dependabot
+      # cannot see mise.toml, so the day node went to 24.19.0 it offered @types/node 24 -> 26.
+      # Typing a runtime you do not run is how you get code that typechecks and then fails on an
+      # API the pinned node does not have -- and it is the same class as the jsdom EBADENGINE
+      # miss, where npm only warned and all ten checks went green anyway.
+      # Unblock: raise `node` in mise.toml first, then raise this range in the SAME commit.
+      - dependency-name: "@types/node"
+        versions: [">=25.0.0"]
 
   - package-ecosystem: uv
     directory: /
