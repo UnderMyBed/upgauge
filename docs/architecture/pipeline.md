@@ -751,15 +751,21 @@ restores the warehouse but not `data/raw/`, so **15 raw-dependent tests skip the
 CI greps for the skip reasons that appear only when the *restore itself* broke
 (`no built catalog`, `no built Parquet warehouse`) rather than failing on any skip. Those 15 run
 nightly in `verify.yml`, which restores raw and runs `make check` alongside `make verify`. So
-478 of 493 run per PR, all 493 run nightly, and **nothing runs only on one developer's machine.**
+**all but 15 run per PR, every test runs nightly, and nothing runs only on one developer's
+machine.**
 
-The 15 is measured from CI, not derived from a local run, and the two do not decompose the same
-way. With **no** `data/` at all the suite reports 444 passed / 49 skipped, of which only 14 name
-a `data/raw` reason; with the warehouse restored and raw absent — CI's actual state — it reports
-15. The extra one is `test_invariants_against_real_data.py`'s deliberately per-function
-`skipif`: without a catalog it skips under the module-level `no built catalog` and is invisible
-among that group, and only once a catalog exists does it surface as `no 2015 extract`. Counting
-raw-dependent skips from a no-data run therefore undercounts by one.
+**15 is the durable figure here; the pass count is not, so it is not written down.** The total
+lives in `pipeline/reference/gates.generated.json` and moves whenever a test is added — it moved
+four times while this paragraph was being written, and each time the "N of M" phrasing that used
+to sit here went stale. Per-PR passes are that generated total minus 15.
+
+The 15 is measured from a real CI `check` job, not derived from a local run, and the two do not
+decompose the same way. With **no** `data/` at all only **14** skips name a `data/raw` reason;
+with the warehouse restored and raw absent — CI's actual state — it is 15. The extra one is
+`test_invariants_against_real_data.py`'s deliberately per-function `skipif`: without a catalog it
+skips under the module-level `no built catalog` and is invisible inside that group, and only once
+a catalog exists does it surface as `no 2015 extract`. **Counting raw-dependent skips from a
+no-data run undercounts by one.**
 
 **Node is pinned at 24.19.0** — the 24 LTS line; Next.js 16 itself needs only ≥ 20.9. The
 binding floor is `jsdom` 30, which declares `engines.node: ^22.22.2 || ^24.15.0 || >=26.0.0`.
