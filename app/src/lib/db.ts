@@ -210,6 +210,31 @@ export async function dataAsOf(): Promise<string> {
   return String(value);
 }
 
+/** One row per required (object, column) pair that the catalog does NOT have.
+ *
+ * `object_columns` is that object's total column count, so 0 means the object itself is absent
+ * -- health.ts collapses an all-columns-missing object to the object's own name rather than
+ * listing every column of something that does not exist.
+ *
+ * Deliberately NOT memoized, unlike proxy.ts's isDataLayerHealthy(): that answers a
+ * cacheability question cheaply and per-build, this answers "is the data layer serving right
+ * now". A healthcheck that caches its answer reports healthy after the data layer breaks. */
+export interface CatalogGap {
+  object: string;
+  column: string;
+  objectColumns: number;
+}
+
+export async function catalogGaps(): Promise<CatalogGap[]> {
+  const con = await connect();
+  const rows = await (await con.run(sql("health_catalog"))).getRowObjects();
+  return rows.map((r) => ({
+    object: String(r.object_name),
+    column: String(r.column_name),
+    objectColumns: Number(r.object_columns),
+  }));
+}
+
 export interface PivotResult {
   columns: string[];
   rows: Record<string, unknown>[];
