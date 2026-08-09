@@ -18,7 +18,18 @@ updates:
       minor-and-patch:
         update-types: [minor, patch]
 
+  # `directory: /` scans `.github/workflows/` and NOTHING ELSE -- composite actions under
+  # `.github/actions/*/action.yml` need their own entry, one per directory. Measured: the
+  # mise-action 2->4 PR bumped `warehouse.yml` and left `.github/actions/setup/action.yml`
+  # pinned at v2, so the repo ran two majors of the same action at once and Dependabot
+  # reported the bump complete. `actions/cache@v4` in that same file had never been offered
+  # a bump at all. Any new composite action needs a new entry here or its pins go unwatched.
   - package-ecosystem: github-actions
     directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /.github/actions/setup
     schedule:
       interval: weekly

@@ -14,7 +14,7 @@ runs:
   using: composite
   steps:
     # Versions come from mise.toml. Nothing here may hardcode a python/node/uv version.
-    - uses: jdx/mise-action@v2
+    - uses: jdx/mise-action@v4
       with:
         install: true
         cache: true
@@ -29,7 +29,7 @@ runs:
 
     - name: Restore warehouse from cache
       id: cache
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           upgauge.duckdb
@@ -71,7 +71,7 @@ runs:
         rm -f raw-*.tar.zst
 
     # The anti-vacuity guard. A silent download failure would otherwise leave the suite
-    # reporting a green 428 passed with 46 skips, which proves far less than it appears to.
+    # reporting a green 442 passed with 49 skips, which proves far less than it appears to.
     #
     # Specific, not just present: `data/parquet` has two independent subtrees --
     # `dims/*.parquet` and `t100_segment/year=*/`. A partial extraction can land the small
