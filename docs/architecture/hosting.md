@@ -229,13 +229,24 @@ directions: with the `.dockerignore` entries in place, appending a byte to
 `app/tsconfig.tsbuildinfo` leaves `COPY app ./app` `CACHED` and `.Size` byte-identical; with them
 removed, the same one-byte append re-runs the stage and moves `.Size` by 2,327 bytes.
 
+**`ARG BUILD_SHA` and its `ENV` go LAST in the `runtime` stage, below every `RUN` and `COPY`.** An
+`ARG` is consumed where its `ENV` sits, and `BUILD_SHA` changes on every commit — declared at the
+top of the stage it invalidated `npm ci --omit=dev` and all five `COPY`s beneath it, so a one-line
+identity change re-installed the production deps and re-materialised the 96 MB `data/parquet`
+layer. Measured before the move: `npm ci --omit=dev` re-ran (13.9 s), every subsequent `COPY`
+re-ran, and `.Size` shifted 2,098 bytes between two commits with an identical tree. After: both
+are `CACHED` across a `BUILD_SHA` change and `.Size` moves by **3 bytes** — the config blob alone,
+with byte-identical layers. This is a deploy cost, not only a build one: a registry pulls the data
+layer again for every commit whose layers did not actually change.
+
 **Measured image size: ≈413 MB / 394 MiB** — `docker inspect upgauge:local --format='{{.Size}}'`
-reports 412,741,879 bytes, cross-checked against `docker save upgauge:local | wc -c`
-(412,765,184 bytes; the ~23 KB difference is tar-format overhead) and against the 13 layers in
+reports 412,743,409 bytes, cross-checked against `docker save upgauge:local | wc -c`
+(412,766,720 bytes; the ~23 KB difference is tar-format overhead) and against the 13 layers in
 `docker inspect --format '{{len .RootFS.Layers}}'`. **Quote ≈413 MB, not the byte count.** Every
 run of the `build` stage mints a new `next build` id, so any real source change moves `.Size` by
-tens of kilobytes; the exact figure is a property of one build, not of this project, and is not a
-fixture. **It is also not what `docker images --format '{{.Size}}' upgauge:local` reports** — that
+kilobytes, and the baked identity moves it by the 3 bytes above; the exact figure is a property of
+one build, not of this project, and is not a fixture. **It is also not what
+`docker images --format '{{.Size}}' upgauge:local` reports** — that
 printed `1.5GB` for the identical tag on the same host (Docker 29.6.2, containerd snapshotter),
 and `docker history`'s per-instruction sizes for the same image sum to ~1.09 GB.
 
