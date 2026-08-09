@@ -124,7 +124,7 @@ jobs:
           # publish rather than mint a `warehouse-None` release that `resolve` could later pick.
           #
           # This regex is also what makes `steps.stamp.outputs.*` the ONLY values in this file
-          # still spliced into a `run:` body via `${{ }}`. They are provably [0-9]{4}[-.][0-9]{2}
+          # still spliced directly into a `run:` body. They are provably [0-9]{4}[-.][0-9]{2}
           # by the time they are written, so there is nothing left for bash to re-parse. Do not
           # generalise that clearance to a value merely checked with `startswith(...)`: a prefix
           # check constrains the prefix and nothing after it, which is exactly why PREVIOUS_TAG
