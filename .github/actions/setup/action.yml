@@ -71,7 +71,14 @@ runs:
         rm -f raw-*.tar.zst
 
     # The anti-vacuity guard. A silent download failure would otherwise leave the suite
-    # reporting a green 444 passed with 49 skips, which proves far less than it appears to.
+    # reporting a green 461 passed with 49 skips, which proves far less than it appears to.
+    #
+    # That pair is HAND-MAINTAINED and it rots fast: 428/46 -> 442/49 -> 444/49 -> 461/49, the
+    # last three inside a single branch, each because a test was added elsewhere. It is
+    # deliberately NOT generated -- producing it means running the suite with neither `data/`
+    # nor `upgauge.duckdb`, which is a CI job rather than a sub-second collection (see
+    # pipeline/gatecounts.py § The boundary). 49 is the stable half; re-measure the other in a
+    # worktree with no data before quoting it.
     #
     # Specific, not just present: `data/parquet` has two independent subtrees --
     # `dims/*.parquet` and `t100_segment/year=*/`. A partial extraction can land the small
