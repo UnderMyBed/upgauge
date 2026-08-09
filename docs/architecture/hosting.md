@@ -242,6 +242,28 @@ removed, the same append re-runs the stage and changes `.Size`. **No delta is qu
 second half on purpose** — it is whatever two `next build` runs happened to differ by, so it is a
 property of one pair of builds and re-measuring it yields a different number, not a broken rule.
 
+**`app/smoke.sh` is `.dockerignore`d too, and it is TRACKED — the second reason a file leaves the
+context is that the build does not need it.** The gate script runs on the *host* in both modes
+(container mode drives the container from outside; the image never contains it) and `next build`
+never reads it, but it lives under `app/`, so every edit to it invalidated `COPY app ./app`, re-ran
+`next build` and minted a fresh build id. That is how the `.Size` figure below went stale one commit
+after being measured — by a **comment-only** edit to `app/smoke.sh`, which is as small as a change
+to this file gets.
+
+Confirmed by mutation, both directions, **with `BUILD_SHA` pinned to the same value in all three
+builds** so the only variable is the ignore entry: with it in place, appending a comment to
+`app/smoke.sh` leaves `.Size` byte-identical *and* the `RootFS.Layers` digest list identical; with it
+removed, the same append changes the layer list and moves `.Size`. No delta is quoted for that
+second half, for the same reason as the paragraph above. Anything else under `app/` that only the
+host or CI reads belongs here too.
+
+**Pinning `BUILD_SHA` for that mutant was not optional, and the reason is worth keeping:** `make
+image` derives it from `git describe --always --dirty`, so *any* uncommitted edit — including one to
+a file this very entry excludes — lengthens the identity string from 7 characters to 13 and moves
+`.Size` by **18 bytes** with byte-identical layers. Unpinned, that 18 bytes would have read as the
+ignore entry failing. Overriding it (`make image IMAGE_SHA=…`) is a measurement tool, never a build
+step: the whole point of `--dirty` is that nobody can label a modified tree as the commit.
+
 **`ARG BUILD_SHA` and its `ENV` go LAST in the `runtime` stage, below every `RUN` and `COPY`.** An
 `ARG` is consumed where its `ENV` sits, and `BUILD_SHA` changes on every commit — declared at the
 top of the stage it invalidated `npm ci --omit=dev` and all five `COPY`s beneath it, so a one-line
@@ -253,9 +275,11 @@ with byte-identical layers. This is a deploy cost, not only a build one: a regis
 layer again for every commit whose layers did not actually change.
 
 **Measured image size: ≈413 MB / 394 MiB** — `docker inspect upgauge:local --format='{{.Size}}'`
-reports 412,749,726 bytes, cross-checked against `docker save upgauge:local | wc -c`
-(412,772,864 bytes; the ~23 KB difference is tar-format overhead) and against the 13 layers in
-`docker inspect --format '{{len .RootFS.Layers}}'`. **Quote ≈413 MB, not the byte count.** Every
+reports 412,715,491 bytes, cross-checked against `docker save upgauge:local | wc -c`
+(412,738,560 bytes; the ~23 KB difference is tar-format overhead) and against the 13 layers in
+`docker inspect --format '{{len .RootFS.Layers}}'`. Both figures come from **two consecutive builds
+of the same commit that agreed exactly**, every step `CACHED` — a number that moves on a second
+identical build is not worth writing down. **Quote ≈413 MB, not the byte count.** Every
 run of the `build` stage mints a new `next build` id, so any real source change moves `.Size` by
 kilobytes, and the baked identity moves it by the 3 bytes above; the exact figure is a property of
 one build, not of this project, and is not a fixture. **It is also not what
@@ -335,10 +359,16 @@ that red beside a green host gate will reach for the needles, which is the wrong
 CLAUDE.md's "when a renamed value was the fixture for a transform, MOVE the fixture", applied to
 this coupling; stated at the pin itself (`Makefile`, `WAREHOUSE_TAG`) as well as here.
 
-**`/api/health` carries its own served-build checks, in both modes** — status **200**, exactly
+**`/api/health` carries its own served-build checks, in both modes** — exactly
 `cache-control: no-store`, and no `s-maxage=2592000`. It was the readiness probe and the identity
 source and had no check of its own: the probe reads only *whether* it answered, `assert_identity`
-reads only `build.sha`/`build.warehouse` out of the body. `no-store` is the property that justifies
+reads only `build.sha`/`build.warehouse` out of the body. **Its status code is asserted by the
+readiness guard, not by a `check`** — a third check (`health: 200 on a healthy build`) was added
+alongside these two and removed in the same review round, because it sat *after* a guard that
+already `exit 1`s unless the code is exactly 200: it could never be red, and it inflated both
+published counts by one. The guard is the stronger form regardless — it aborts rather than letting a
+degraded server report 259 consequential failures with one cause — and it has been red by name
+twice, at HTTP 000 and HTTP 503. `no-store` is the property that justifies
 this route being the one deliberate omission from `proxy.ts`'s matcher, and nothing verified it on
 a served response — `proxy.test.ts` pins the absence from the matcher *array*, and
 `api/health/route.test.ts` calls `GET()` directly. Both would stay green if a Next upgrade or an
@@ -354,7 +384,7 @@ container contributes, and containerising them would triple image builds for zer
 The skip is **printed**, immediately before the pass/fail tally, never silent — reporting a
 narrower count as though it were the full one is the same dishonesty as a stale build passing
 every check, one level up. `make app-smoke` (host mode) still runs all three and reports the
-documented 270 checks; `make image-smoke` reports the served-build subset alone.
+documented 269 checks; `make image-smoke` reports the served-build subset alone.
 
 **One existing check needed a container-specific path, not a skip: the "ONE `DuckDBInstance`"
 handle count** (§ "One `DuckDBInstance` per process", below). Its host-mode form walks the local process tree with
@@ -373,8 +403,8 @@ to this container's own processes, so no `pgrep` is needed either (`node:*-slim`
 
 `make portability` is the **negative** half: it breaks the WORKDIR/data-colocation contract three
 ways and asserts the *distinct* signature each break produces. The **positive** half is
-`make image-smoke` — 260 served-build checks against the real container, `--read-only`, no tmpfs
-(§ above) — against 270 in host mode, the difference being exactly the 10 checks inside the three
+`make image-smoke` — 259 served-build checks against the real container, `--read-only`, no tmpfs
+(§ above) — against 269 in host mode, the difference being exactly the 10 checks inside the three
 host-only gap sections.
 
 **The contract is defended at four layers, and the failures are not interchangeable.** One shared

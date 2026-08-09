@@ -15,3 +15,11 @@ docs/superpowers
 # docs/architecture/hosting.md, "The build context must contain only tracked files".
 **/*.tsbuildinfo
 app/next-env.d.ts
+# TRACKED, and excluded for the other reason: nothing in the image needs it. smoke.sh runs on the
+# HOST in both modes (container mode drives the container from outside), and `next build` never
+# reads it -- but it lives under app/, so every edit to it invalidated `COPY app ./app`, re-ran
+# `next build`, minted a fresh build id and moved the image's `.Size` -- which is how a COMMENT-ONLY
+# edit to this file silently staled the size figure written down in docs/architecture/hosting.md one
+# commit earlier. Two-direction mutant, BUILD_SHA pinned so the ignore entry is the only variable:
+# hosting.md § "The build context must contain only tracked files".
+app/smoke.sh

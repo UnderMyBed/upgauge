@@ -328,6 +328,16 @@ for _ in $(seq 1 90); do curl -sf -o /dev/null --max-time 2 "${BASE}/api/health"
 # why". Reporting the second as "server never came up" throws away the one diagnostic the
 # readiness probe was pointed at /api/health to get -- so re-probe without -f and print what it
 # said. %{http_code} is 000 exactly when there was no HTTP response at all.
+#
+# THIS GUARD *IS* THE SERVED-BUILD 200 ASSERTION for /api/health -- there is deliberately no
+# `check` for the status code below it. One was added and removed in the same review round: a
+# `check "$READY_CODE" '200'` placed AFTER this `exit 1` can only ever run when READY_CODE is
+# already exactly 200, so it could never be red, and it inflated both published counts by one.
+# CLAUDE.md: a test that has never been red proves nothing. This form is the stronger one anyway --
+# it aborts instead of continuing, so a degraded server cannot spend five minutes reporting 259
+# consequential failures whose single cause is the line printed here. Twice proven red, by name, as
+# an abort: HTTP 000 (stale container holding the name, nothing listening) and HTTP 503
+# (data/parquet emptied) -- see task-6-report.md's mutants I and J.
 READY_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${BASE}/api/health")
 if [ "$READY_CODE" != "200" ]; then
   echo "  FAIL server not serving a healthy /api/health: HTTP ${READY_CODE} (000 = nothing listening)"
@@ -338,10 +348,10 @@ if [ "$READY_CODE" != "200" ]; then
 fi
 assert_identity "$BASE"
 
-# /api/health's OWN served-build contract. It was the readiness probe and the identity source and
-# had no check of its own in either mode: the probe reads only whether it answered, and
-# assert_identity reads only build.sha/build.warehouse out of the body. Nothing asserted the
-# status code or a single header on a served build.
+# /api/health's OWN served-build HEADER contract. Its status code is owned by the readiness guard
+# above (see the note there); these two checks are what nothing asserted on a served build at all,
+# in either mode -- the guard reads only whether it answered 200, and assert_identity reads only
+# build.sha/build.warehouse out of the body.
 #
 # `no-store` is this route's defining property and the reason it is the ONE route deliberately
 # absent from proxy.ts's matcher (route.ts's header comment). proxy.test.ts pins that absence in
@@ -349,9 +359,7 @@ assert_identity "$BASE"
 # a served response, so a Next upgrade -- or an "add every route to the matcher" sweep -- could
 # ship the project's 30-day s-maxage on this endpoint with all 805 app tests and both smoke gates
 # green, and a shared CDN would pin `{"status":"ok"}` for a month in front of a degraded container.
-check "health: 200 on a healthy build" "$READY_CODE" '200'
 HDRS=$(curl -s -o /dev/null -D - --max-time 10 "${BASE}/api/health")
-#
 # The needle is the header LINE, not the bare value: Next's own fallback for a route that set no
 # header at all is `private, no-cache, no-store, max-age=0, must-revalidate`, which contains the
 # substring `no-store` -- route.test.ts asserts the exact value for that same reason.
