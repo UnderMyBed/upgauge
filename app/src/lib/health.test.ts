@@ -11,16 +11,48 @@ const QUERIES = path.resolve(__dirname, "../../../sql/03_queries");
  * Comment stripping is not cosmetic: a naive FROM/JOIN scan over these files returns prose
  * ("...aggregates FROM the segment grain..."), because every query here carries a long
  * comment header. CTE subtraction matters for the same reason -- `WITH derived AS (...)`
- * followed by `FROM derived` is not a catalog object. */
-function referencedObjects(sqlText: string): Set<string> {
+ * followed by `FROM derived` is not a catalog object.
+ *
+ * This is NOT a SQL parser, and does not try to be -- it understands exactly the constructs
+ * `sql/03_queries/*.sql` uses today: a bare or double-quoted, optionally aliased identifier
+ * after FROM/JOIN, and `WITH [RECURSIVE] name AS (` for CTEs (including double-quoted CTE
+ * names and the comma-joined multi-CTE form). Anything this function does NOT reason about --
+ * a schema-qualified reference (`FROM main.dim_airport`) or what reads like a table function
+ * call (`FROM read_parquet(...)`) -- throws instead of silently under-matching, naming the
+ * file and the construct: a drift test that goes quiet on a construct it cannot classify is
+ * exactly the failure class it exists to prevent (a real object reference vanishing from
+ * `referencedObjects()`'s output is indistinguishable from that object simply not being
+ * referenced). `file` is caller-supplied purely for that error message. */
+function referencedObjects(sqlText: string, file: string): Set<string> {
   const bare = sqlText.replace(/--[^\n]*/g, "");
+
   const ctes = new Set<string>();
-  for (const m of bare.matchAll(/(?:WITH|,)\s+([a-z_][a-z0-9_]*)\s+AS\s*\(/gi)) {
-    ctes.add(m[1].toLowerCase());
+  for (const m of bare.matchAll(
+    /(?:WITH(?:\s+RECURSIVE)?|,)\s+(?:"([^"]+)"|([a-z_][a-z0-9_]*))\s+AS\s*\(/gi,
+  )) {
+    ctes.add((m[1] ?? m[2]).toLowerCase());
   }
+
   const refs = new Set<string>();
-  for (const m of bare.matchAll(/\b(?:FROM|JOIN)\s+([a-z_][a-z0-9_]*)/gi)) {
-    const name = m[1].toLowerCase();
+  for (const m of bare.matchAll(/\b(?:FROM|JOIN)\s+(?:"([^"]+)"|([a-z_][a-z0-9_]*))/gi)) {
+    const name = (m[1] ?? m[2]).toLowerCase();
+    const rest = bare.slice(m.index + m[0].length);
+    if (/^\s*\./.test(rest)) {
+      throw new Error(
+        `${file}: drift parser cannot vouch for this file -- "${m[0].trim()}." is a ` +
+          "schema-qualified reference after FROM/JOIN, which referencedObjects() does not " +
+          "understand. Extend the parser (or the manifest, if it's a new catalog object) " +
+          "before trusting this file's drift check.",
+      );
+    }
+    if (/^\s*\(/.test(rest)) {
+      throw new Error(
+        `${file}: drift parser cannot vouch for this file -- "${m[0].trim()}(" after ` +
+          "FROM/JOIN reads like a table function call, not a plain relation reference, " +
+          "which referencedObjects() does not understand. Extend the parser before " +
+          "trusting this file's drift check.",
+      );
+    }
     if (!ctes.has(name)) refs.add(name);
   }
   return refs;
@@ -50,11 +82,42 @@ describe("the health manifest cannot fall behind the served queries", () => {
     expect(files.length).toBeGreaterThan(20); // anti-vacuity: the glob still finds the corpus
     for (const file of files) {
       if (file === "health_catalog.sql") continue;
-      for (const obj of referencedObjects(readFileSync(path.join(QUERIES, file), "utf8"))) {
+      const text = readFileSync(path.join(QUERIES, file), "utf8");
+      for (const obj of referencedObjects(text, file)) {
         if (!manifest.has(obj)) missing.push(`${file} reads ${obj}`);
       }
     }
     expect(missing).toEqual([]);
+  });
+});
+
+describe("referencedObjects handles the constructs the corpus uses, and refuses the rest", () => {
+  it("recognizes a double-quoted identifier after FROM/JOIN", () => {
+    expect(referencedObjects('SELECT * FROM "dim_airport" a', "fixture.sql")).toEqual(
+      new Set(["dim_airport"]),
+    );
+  });
+
+  it("excludes a double-quoted CTE name from the reference set", () => {
+    const sql = 'WITH "recent" AS (SELECT 1) SELECT * FROM "recent" JOIN dim_airport a ON true';
+    expect(referencedObjects(sql, "fixture.sql")).toEqual(new Set(["dim_airport"]));
+  });
+
+  it("excludes a WITH RECURSIVE CTE name from the reference set", () => {
+    const sql = "WITH RECURSIVE ladder AS (SELECT 1) SELECT * FROM ladder JOIN dim_airport a ON true";
+    expect(referencedObjects(sql, "fixture.sql")).toEqual(new Set(["dim_airport"]));
+  });
+
+  it("refuses to vouch for a schema-qualified reference, naming the file and the construct", () => {
+    expect(() => referencedObjects("SELECT * FROM main.dim_airport", "fixture.sql")).toThrow(
+      /fixture\.sql.*cannot vouch.*schema-qualified/,
+    );
+  });
+
+  it("refuses to vouch for what reads like a table function call", () => {
+    expect(() => referencedObjects("SELECT * FROM read_parquet('x.parquet')", "fixture.sql")).toThrow(
+      /fixture\.sql.*cannot vouch.*table function call/,
+    );
   });
 });
 
