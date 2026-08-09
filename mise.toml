@@ -7,7 +7,11 @@
 # re-runs `make verify`, not something that happens while someone's shell resolves a version.
 [tools]
 python = "3.12.12"   # the exact CPython every reproducibility proof to date was produced on
-node = "24.13.0"     # LTS since 2025-10; Next.js 15 needs >= 18.18
+# Node stays on the 24 LTS line. jsdom 30 declares `^22.22.2 || ^24.15.0 || >=26.0.0`, so
+# 24.13.0 was UNSUPPORTED by it -- npm only warns on EBADENGINE, so the bump's CI run was
+# green with a dependency that did not support the pinned runtime. 26.x is Current, not LTS,
+# until 2026-10; an always-on production box takes the LTS.
+node = "24.19.0"     # floor is jsdom 30's ^24.15.0; next 16 itself needs only >= 20.9.0
 uv = "0.12.0"        # resolves and locks the Python deps; a floating uv can change resolution
 
 [env]
