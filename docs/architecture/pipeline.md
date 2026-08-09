@@ -628,6 +628,38 @@ wrong reason. What makes that survivable is that drift is caught at the **produc
 `critical` issue when the dataset's *shape* moves (a renamed aircraft type, a moved dim count) —
 the 2026-08-07 failure mode, which reddened 17 assertions while moving no number.
 
+**"Latest release" is `publishedAt`, never `createdAt`, and the tag shape is validated by the
+consumer.** GitHub stamps a release's `created_at` from its **tag's commit**, not from the
+release: `warehouse-2026.04` carries `created_at=2026-08-08T17:00:48Z`, which is `main` HEAD's
+commit date to the second, against `published_at=2026-08-08T19:00:50Z`. This repo's steady state
+is publishing off an unchanged `main`, so two releases a month apart carry **identical**
+`createdAt`. `gh release list` returns newest-first and jq's `sort_by` is stable, so
+`sort_by(.createdAt) | reverse | .[0]` reverses a tie into the **older** tag — measured: with
+`warehouse-2026.05` and `warehouse-2026.06` tied, it returned `2026.05`. All three resolvers
+(`ci.yml`'s `pick`, `verify.yml`'s `pick`, `warehouse.yml`'s `previous`) therefore sort ascending
+on `publishedAt` with `tagName` as tiebreak and take `last`. They also match
+`^warehouse-[0-9]{4}\.[0-9]{2}$` rather than `startswith("warehouse-")`: a prefix check
+constrains the prefix and **nothing after it**, and on a list containing a tag literally named
+`` warehouse-`id` `` the old form selected that tag. Git ref names permit backticks, `$`, `;`,
+`&`, `|`, quotes and parens, so every tag that reaches a `run:` body also goes through `env:`
+and is referenced as `"$PREVIOUS_TAG"` / `"$WAREHOUSE_TAG"` — Actions splices `${{ }}` into the
+script *before* bash parses it, and the publisher job holds `contents: write`, `id-token: write`
+and `issues: write`. The only values still spliced textually are `steps.stamp.outputs.*`, which
+the `stamp` step proves are `[0-9]{4}[-.][0-9]{2}` before writing them. The three resolvers stay
+deliberately divergent in one respect only — `ci.yml`/`verify.yml` exit 1 on an empty result,
+`warehouse.yml` tolerates it, because a first-ever publisher run has no previous release.
+
+**The publisher's `make ingest` force-refetches the last two years, and that is load-bearing.**
+Restoring the previous release's `data/raw/` is a cache for the years BTS can no longer change,
+**not** the mechanism that finds new data — `fetch.py`'s cache is keyed by `(table, year)` and a
+new BTS month lands *inside* an already-downloaded year's zip. Traced with the network stubbed
+against the real `data/raw/` listing: a plain `make fetch` makes **zero** requests for all 12
+years and `make fetch-reference` **zero** for all 3 support tables, so the publisher would have
+rebuilt an identical warehouse, stamped the same `warehouse-2026.04`, skipped the publish and
+exited **0 — every day, forever, with nothing to notice it.** See
+[../data/sources.md § Rules](../data/sources.md#rules) for the fetch contract and why *two*
+years (BTS revises closed months) plus every support table (a rename is otherwise invisible).
+
 **The real-data tests are no longer dark, and the accounting is exact.** The per-PR `check` job
 restores the warehouse but not `data/raw/`, so **15 raw-dependent tests skip there by design** —
 CI greps for the skip reasons that appear only when the *restore itself* broke

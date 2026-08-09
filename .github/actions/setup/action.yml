@@ -36,14 +36,23 @@ runs:
           data/parquet
         key: warehouse-${{ inputs.warehouse-tag }}
 
+    # WAREHOUSE_TAG reaches bash through `env:`, never `${{ }}` spliced into the script text.
+    # Actions substitutes `${{ }}` BEFORE bash parses the script, so a release tagged with a
+    # backtick (git ref names permit backticks, `$`, `;`, `&`, `|`, quotes and parens) would be
+    # executed as command substitution rather than passed to `gh`. `"$WAREHOUSE_TAG"` is a plain
+    # parameter expansion, which bash does not re-parse as source. Callers additionally validate
+    # the tag SHAPE against ^warehouse-[0-9]{4}\.[0-9]{2}$ before passing it here -- belt and
+    # braces, because a prefix check alone (`startswith("warehouse-")`) constrains nothing after
+    # the prefix. The `key:` above is a YAML input to actions/cache, not a shell context.
     - name: Download warehouse asset on cache miss
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        WAREHOUSE_TAG: ${{ inputs.warehouse-tag }}
       run: |
         set -euo pipefail
-        gh release download "${{ inputs.warehouse-tag }}" \
+        gh release download "$WAREHOUSE_TAG" \
           --repo "$GITHUB_REPOSITORY" --pattern 'warehouse-*.tar.zst'
         tar --zstd -xf warehouse-*.tar.zst
         rm -f warehouse-*.tar.zst
@@ -53,9 +62,10 @@ runs:
       shell: bash
       env:
         GH_TOKEN: ${{ github.token }}
+        WAREHOUSE_TAG: ${{ inputs.warehouse-tag }}
       run: |
         set -euo pipefail
-        gh release download "${{ inputs.warehouse-tag }}" \
+        gh release download "$WAREHOUSE_TAG" \
           --repo "$GITHUB_REPOSITORY" --pattern 'raw-*.tar.zst'
         tar --zstd -xf raw-*.tar.zst
         rm -f raw-*.tar.zst

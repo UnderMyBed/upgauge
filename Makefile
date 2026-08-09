@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install ingest build goldens stats basemap dev app-check app-build app-smoke test lint fmt check check-docs clean
+.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats basemap dev app-check app-build app-smoke test lint fmt check check-docs clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -34,7 +34,30 @@ verify:  ## M2 GATE: build twice, prove every Parquet artifact AND database obje
 	$(MAKE) basemap
 	git diff --exit-code --stat app/src/lib/map/basemapPaths.generated.ts
 
-ingest: fetch fetch-reference warehouse  ## Fetch + build everything. The full M1 pipeline.
+# A plain `fetch` + `fetch-reference` is NOT enough to pick up a new BTS month, and this was a
+# permanent silent no-op in the monthly publisher before anyone traced it.
+#
+#   * fetch.py's cache is keyed by (table, YEAR) -- `latest_raw(raw_dir, table, year)`. A new BTS
+#     month lands INSIDE an already-downloaded year's zip: t100d_segment_us_2026_*.zip already
+#     holds 2026-01..2026-04, so when BTS publishes 2026-05 the cache still finds a 2026 file,
+#     logs "cached", and skips. `make ingest` over a populated data/raw/ therefore rebuilds the
+#     SAME warehouse forever, and nothing errors.
+#   * BTS also revises months that are already closed -- its own release page carries lines like
+#     "10/2025 - 3/2026 updated" next to each new month -- so the current year alone is not the
+#     mutable set. The current AND previous year are re-downloaded unconditionally.
+#   * Support tables carry no year at all, so ONE cached file suppresses their fetch forever.
+#     An aircraft-type RENAME (the class-3 change .github/scripts/classify_warehouse.py exists
+#     to catch) is invisible without --force. Three small files; always re-pull them.
+#
+# 2015..(current-2) still short-circuit on the cache. That is what keeps this polite toward a
+# .gov endpoint -- 2 year-pulls instead of 12 -- while making a new month actually reachable.
+# --force appends a NEW date-stamped file rather than overwriting (data/raw/ is append-only),
+# so the previous download that produced published numbers survives.
+ingest:  ## Fetch + build everything. The full M1 pipeline.
+	$(MAKE) fetch
+	$(MAKE) fetch ARGS="--start $$(( $$(date -u +%Y) - 1 )) --force"
+	$(MAKE) fetch-reference ARGS="--force"
+	$(MAKE) warehouse
 
 build:  ## Run sql/02_marts/ in order -> upgauge.duckdb
 	$(UV) run python -m pipeline.marts $(ARGS)

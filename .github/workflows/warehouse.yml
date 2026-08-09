@@ -36,31 +36,67 @@ jobs:
 
       - run: mise exec -- uv sync --extra dev
 
+      # THE tag resolver. ci.yml's `pick` and verify.yml's `pick` are the same query with
+      # deliberately different empty-handling (see the note below the command); this comment is
+      # the one place the three-way divergence is explained -- both point here.
+      #
+      # sort_by(.publishedAt), NEVER .createdAt. GitHub stamps a release's `created_at` from its
+      # TAG's commit, not from the release: `warehouse-2026.04` carries
+      # created_at=2026-08-08T17:00:48Z, which is `main` HEAD's commit date to the second, while
+      # published_at=2026-08-08T19:00:50Z. This repo's steady state is publishing off an
+      # UNCHANGED main, so two releases a month apart carry IDENTICAL createdAt -- an exact tie.
+      # `gh` lists newest-first and jq's `sort_by` is stable, so `sort_by | reverse | .[0]`
+      # reverses a tie into the OLDER tag. Measured against a synthetic tie: the old form
+      # returned warehouse-2026.05 with warehouse-2026.06 present. Ascending `sort_by | last`
+      # with tagName as the tiebreak (shape-validated below, so it sorts chronologically) fixes
+      # both the field and the tie.
+      #
+      # The shape regex is a CONSUMER-side check, not a restatement of the producer's `ym` guard:
+      # `startswith("warehouse-")` constrains the PREFIX ONLY, and git ref names permit backticks,
+      # `$`, `;`, `&`, `|`, quotes and parens. On a list containing a tag literally named
+      # ``warehouse-`id` ``, the old form selected it; this one selects the well-formed tag.
+      # Drafts have publishedAt=null, which would sort as the smallest value -- excluded twice,
+      # by the gh flag and by the jq guard.
       - id: previous
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
-                  --json tagName,createdAt \
-                  --jq '[.[] | select(.tagName | startswith("warehouse-"))]
-                        | sort_by(.createdAt) | reverse | .[0].tagName')
-          # Tolerant, not strict: an empty tag is a VALID state here (first-ever run), so this
-          # normalizes the literal string "null" jq/gh can emit -- it does not exit 1 on empty,
-          # unlike ci.yml/verify.yml's `pick` step, which requires a warehouse to already exist.
+                  --exclude-drafts --exclude-pre-releases \
+                  --json tagName,publishedAt \
+                  --jq '[.[] | select(.publishedAt != null)
+                             | select(.tagName | test("^warehouse-[0-9]{4}\\.[0-9]{2}$"))]
+                        | sort_by(.publishedAt, .tagName) | last | .tagName // ""')
+          # Tolerant, not strict: an empty tag is a VALID state here (first-ever run). `// ""`
+          # above already turns "no match" into an empty string; this normalizes the literal
+          # "null" jq/gh can still emit. It does NOT exit 1 on empty, unlike ci.yml/verify.yml's
+          # `pick`, which require a warehouse to already exist.
           [ "$tag" = "null" ] && tag=""
           echo "tag=${tag:-}" >> "$GITHUB_OUTPUT"
 
-      # Restoring raw BEFORE fetching is what makes this incremental. The fetcher's cache is
-      # keyed (table, year) on the filesystem, so without this every run re-drives 12 years of
-      # TranStats POSTs -- slow, and poor citizenship toward a .gov endpoint.
+      # Restoring raw before fetching is a CACHE for the years BTS can no longer change, not the
+      # mechanism that finds new data. `make ingest` re-downloads the current and previous year
+      # unconditionally and always re-pulls the support tables (see the Makefile's `ingest`
+      # comment for why: the fetch cache is keyed by YEAR, and a new BTS month lands inside an
+      # already-downloaded year's zip). What this restore buys is the other ten years --
+      # 2 TranStats year-pulls per run instead of 12, which is the citizenship argument toward a
+      # .gov endpoint. It also carries data/raw/'s append-only history forward, and stages
+      # /tmp/previous.duckdb for the classifier at the end of this job.
+      #
+      # PREVIOUS_TAG goes through `env:`, never `${{ }}` spliced into the script text -- same
+      # rule as ISSUE_BODY at the bottom of this file. Actions splices `${{ }}` in BEFORE bash
+      # parses the script, so a release tagged with a backtick would execute as command
+      # substitution in a job holding contents:write + id-token:write + issues:write. The jq
+      # shape regex above is the belt; this is the braces.
       - name: Restore previous raw and warehouse
         if: steps.previous.outputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
+          PREVIOUS_TAG: ${{ steps.previous.outputs.tag }}
         run: |
           set -euo pipefail
-          gh release download "${{ steps.previous.outputs.tag }}" \
+          gh release download "$PREVIOUS_TAG" \
             --repo "$GITHUB_REPOSITORY" --pattern '*.tar.zst'
           for f in *.tar.zst; do tar --zstd -xf "$f"; done
           rm -f *.tar.zst
@@ -86,6 +122,13 @@ jobs:
           # string "None" (SQL NULL, printed by Python) -- and the size guard cannot catch
           # this, since the .duckdb stays well over 1MB from schema and dims alone. Refuse to
           # publish rather than mint a `warehouse-None` release that `resolve` could later pick.
+          #
+          # This regex is also what makes `steps.stamp.outputs.*` the ONLY values in this file
+          # still spliced into a `run:` body via `${{ }}`. They are provably [0-9]{4}[-.][0-9]{2}
+          # by the time they are written, so there is nothing left for bash to re-parse. Do not
+          # generalise that clearance to a value merely checked with `startswith(...)`: a prefix
+          # check constrains the prefix and nothing after it, which is exactly why PREVIOUS_TAG
+          # and ISSUE_BODY go through `env:` instead.
           [[ "$ym" =~ ^[0-9]{4}-[0-9]{2}$ ]] || { echo "::error::max(year_month) is '$ym', not YYYY-MM -- refusing to publish"; exit 1; }
           dotted=${ym/-/.}
           echo "year_month=$ym" >> "$GITHUB_OUTPUT"

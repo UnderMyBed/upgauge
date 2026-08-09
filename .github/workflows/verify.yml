@@ -14,16 +14,24 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      # Same query as warehouse.yml's `previous` step, whose comment is the ONLY place the
+      # three-way divergence is written down -- read it before editing this. In short:
+      # publishedAt not createdAt (createdAt comes from the tag's COMMIT, so releases off an
+      # unchanged main tie and a reverse-sort picks the older one), and the tag shape is
+      # validated here on the consumer side, not merely prefix-matched. Strict, unlike
+      # warehouse.yml: a nightly reproducibility proof with no warehouse proves nothing.
       - id: pick
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           tag=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
-                  --json tagName,createdAt \
-                  --jq '[.[] | select(.tagName | startswith("warehouse-"))]
-                        | sort_by(.createdAt) | reverse | .[0].tagName')
-          [ -n "$tag" ] && [ "$tag" != "null" ] || { echo "::error::no warehouse-* release found"; exit 1; }
+                  --exclude-drafts --exclude-pre-releases \
+                  --json tagName,publishedAt \
+                  --jq '[.[] | select(.publishedAt != null)
+                             | select(.tagName | test("^warehouse-[0-9]{4}\\.[0-9]{2}$"))]
+                        | sort_by(.publishedAt, .tagName) | last | .tagName // ""')
+          [ -n "$tag" ] && [ "$tag" != "null" ] || { echo "::error::no published warehouse-YYYY.MM release found"; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - uses: ./.github/actions/setup
         with:
