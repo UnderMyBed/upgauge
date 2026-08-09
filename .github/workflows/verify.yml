@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Same query as warehouse.yml's `previous` step, whose comment is the ONLY place the
       # three-way divergence is written down -- read it before editing this. In short:
       # publishedAt not createdAt (createdAt comes from the tag's COMMIT, so releases off an
