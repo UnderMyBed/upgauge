@@ -219,6 +219,17 @@ if a future page ever needs one (most likely `/srv/upgauge/app/.next/cache`), ad
 `--mount type=tmpfs,destination=/srv/upgauge/app/.next/cache` to the run command rather than
 dropping `--read-only`.
 
+**The base image is TAG-pinned, not digest-pinned, and that bounds every size figure in this
+section.** `node:24.19.0-slim` is a moving target: Debian security rebuilds re-push the same tag, so
+two `make image` runs from an identical tree can produce different images — the opposite of the
+reproducibility argument the Makefile makes for `WAREHOUSE_TAG` a few lines from it, and it
+invalidates the `.Size` and layer counts below whenever it happens. Accepted deliberately: a digest
+pin freezes out those same security rebuilds until someone bumps it by hand, which is a patching
+policy decision, not a Dockerfile tidy-up. Keep `ARG NODE_VERSION` equal to `mise.toml`'s `node`
+(24.19.0 today) so the container runs the Node the gates ran against. **Open follow-up**, not a
+finding: if this ever ships behind an SLA, decide digest-pin-plus-renovation versus tag-pin
+explicitly.
+
 **The build context must contain only tracked files, or the image depends on what this host has
 run.** `app/tsconfig.tsbuildinfo` and `app/next-env.d.ts` are generated, gitignored and untracked;
 both are regenerated inside the `build` stage, so neither belongs in the context. Left in, they
@@ -242,8 +253,8 @@ with byte-identical layers. This is a deploy cost, not only a build one: a regis
 layer again for every commit whose layers did not actually change.
 
 **Measured image size: ≈413 MB / 394 MiB** — `docker inspect upgauge:local --format='{{.Size}}'`
-reports 412,797,161 bytes, cross-checked against `docker save upgauge:local | wc -c`
-(412,819,968 bytes; the ~23 KB difference is tar-format overhead) and against the 13 layers in
+reports 412,749,726 bytes, cross-checked against `docker save upgauge:local | wc -c`
+(412,772,864 bytes; the ~23 KB difference is tar-format overhead) and against the 13 layers in
 `docker inspect --format '{{len .RootFS.Layers}}'`. **Quote ≈413 MB, not the byte count.** Every
 run of the `build` stage mints a new `next build` id, so any real source change moves `.Size` by
 kilobytes, and the baked identity moves it by the 3 bytes above; the exact figure is a property of
@@ -307,10 +318,34 @@ exit=1
 
 Aborted before `==> checks` ever printed — no served-build check ran. Then, with the
 `assert_identity "$BASE"` call itself deleted and the identical command re-run: `smoke: all
-checks passed`, 257 ok, against the same server whose identity (`deadbee` expected, `4170ac5`
-actual) was never read at all — the defect the assertion exists to make impossible. Restored
+checks passed` — every served-build check green — against the same server whose identity
+(`deadbee` expected, `4170ac5` actual) was never read at all — the defect the assertion exists to make impossible. Restored
 immediately after; `git diff app/smoke.sh` empty against the committed version before
 re-verifying `make image-smoke` clean.
+
+**`WAREHOUSE_TAG` and `app/smoke.sh`'s dataset needles are ONE fixture — bump the pin in the same
+commit that re-measures the needles.** The Makefile pins the tag for reproducibility, but
+`make image-smoke` then runs dataset-month-specific checks against that pinned asset: the two
+chart-window needles (`2015-01 → 2026-04`, on `/route` and `/carrier`), the current-year asterisk
+(`>2026*<` on `/airport`), `2026 is a partial year — filed through April 2026 only.` and `this
+dataset covers 2015–2026`. When BTS publishes 2026-05, `make ingest && make build` moves the local
+database, those needles get re-measured, and **`make app-smoke` goes green while `make image-smoke`
+goes red with no defect present** — it is still building from `warehouse-2026.04`. Whoever meets
+that red beside a green host gate will reach for the needles, which is the wrong end. Same rule as
+CLAUDE.md's "when a renamed value was the fixture for a transform, MOVE the fixture", applied to
+this coupling; stated at the pin itself (`Makefile`, `WAREHOUSE_TAG`) as well as here.
+
+**`/api/health` carries its own served-build checks, in both modes** — status **200**, exactly
+`cache-control: no-store`, and no `s-maxage=2592000`. It was the readiness probe and the identity
+source and had no check of its own: the probe reads only *whether* it answered, `assert_identity`
+reads only `build.sha`/`build.warehouse` out of the body. `no-store` is the property that justifies
+this route being the one deliberate omission from `proxy.ts`'s matcher, and nothing verified it on
+a served response — `proxy.test.ts` pins the absence from the matcher *array*, and
+`api/health/route.test.ts` calls `GET()` directly. Both would stay green if a Next upgrade or an
+"add every route to the matcher" sweep put the project's 30-day `s-maxage` on this endpoint, which
+would pin `{"status":"ok"}` in a shared CDN for a month in front of a degraded container. The
+negative check is not redundant with the positive one: a response carrying *two* `Cache-Control`
+values still contains `cache-control: no-store`.
 
 **Three sections of `app/smoke.sh` are skipped under `SMOKE_MODE=container`** — the M5/M6/M7 gap
 checks, each of which starts its own short-lived `next start` against a deliberately-broken
@@ -319,7 +354,7 @@ container contributes, and containerising them would triple image builds for zer
 The skip is **printed**, immediately before the pass/fail tally, never silent — reporting a
 narrower count as though it were the full one is the same dishonesty as a stale build passing
 every check, one level up. `make app-smoke` (host mode) still runs all three and reports the
-documented 267 checks, unchanged; `make image-smoke` reports the served-build subset alone.
+documented 270 checks; `make image-smoke` reports the served-build subset alone.
 
 **One existing check needed a container-specific path, not a skip: the "ONE `DuckDBInstance`"
 handle count** (§ "One `DuckDBInstance` per process", below). Its host-mode form walks the local process tree with
@@ -338,8 +373,8 @@ to this container's own processes, so no `pgrep` is needed either (`node:*-slim`
 
 `make portability` is the **negative** half: it breaks the WORKDIR/data-colocation contract three
 ways and asserts the *distinct* signature each break produces. The **positive** half is
-`make image-smoke` — 257 served-build checks against the real container, `--read-only`, no tmpfs
-(§ above) — against 267 in host mode, the difference being exactly the 10 checks inside the three
+`make image-smoke` — 260 served-build checks against the real container, `--read-only`, no tmpfs
+(§ above) — against 270 in host mode, the difference being exactly the 10 checks inside the three
 host-only gap sections.
 
 **The contract is defended at four layers, and the failures are not interchangeable.** One shared
@@ -357,10 +392,12 @@ host-only gap sections.
 
 ```
 /api/health status=503
-/api/health body={"status":"degraded","build":{…},"data":{"asOf":null,"missing":[]}}
+/api/health body={"status":"degraded","build":{…},"data":{"asOf":null,"missing":[],
+                  "error":"IO Error: No files found that match the pattern \"data/parquet/t100_segment/**/*.parquet\""}}
 /explore    status=500
 ⨯ [Error: IO Error: No files found that match the pattern "data/parquet/t100_segment/**/*.parquet"]
 ```
+(`data` wrapped across two lines for width; it is one object in the response.)
 
 (`build` is elided in both bodies above and below: it carries the working tree's own short SHA, so
 quoting it here would go stale on the next commit. `image-smoke`'s `assert_identity` is what checks
@@ -381,6 +418,19 @@ and any load balancer would keep sending traffic to. So `portability` asserts th
 `asOf:null` **and** the `missing:[]`; the last of those pins *which* clause is load-bearing rather
 than detecting the break, and if the manifest ever does see this break, that is an improvement and
 this section and the assertion move in the same commit.
+
+**`data.error` names the cause, and this is the break that needs it most.** `asOf: null` with an
+empty `missing[]` says *that* the data layer is unreadable without saying *what happened* — and an
+unmounted data volume is both the most likely container break and the one this whole section is
+about. The freshness probe's own message is therefore carried verbatim in `data.error` (it was
+swallowed by a bare `catch {}` until this review), which is exactly the trip to `docker logs` the
+endpoint exists to remove. It is a **separate field from `missing`, deliberately**: the catalog
+probe's message goes in `missing` (negative 3 below), so the two breaks — catalog unopenable vs.
+Parquet unreadable — stay distinguishable from the health body alone. `portability` asserts
+`"error":"IO Error` here; mutant, measured: restore the bare `catch {}`, rebuild the image, and that
+assertion is the **only** one of negative 1's six that goes red (the 503, the `asOf:null`, the
+`missing:[]`, `/explore`'s 500 and the log line all stay green — none of them can see the
+difference).
 
 **Negative 2 — `docker run -w /tmp`.** The `CMD` is a **relative** path
 (`app/node_modules/.bin/next`), so a wrong working directory stops the container before it can
@@ -419,18 +469,22 @@ failure lands *earlier* than negative 1's — at the open, before any query:
 /explore    status=500
 ```
 
-`missing` names the cause here and is empty in negative 1, so the two breaks stay distinguishable
-in production from the health body alone — the reason `healthReport()` reports the probe's own
-error text instead of a boolean.
+`missing` names this cause and `error` names negative 1's, which is what keeps the two breaks
+distinguishable in production from the health body alone — the reason `healthReport()` reports each
+probe's own error text instead of a boolean, in the field belonging to that probe. `missing` here
+is a one-element list holding a *message*, not an object name: that is how a catalog probe that
+could not even open the database reports, and it is why negative 1 must not push its message there
+too.
 
 **Mutants run — each break removed, the named assertions confirmed red, `make` exit 2:**
 
 | mutant | result |
 |---|---|
-| negative 1's tmpfs mount removed | health **200 `ok`**, `/explore` **200**, no log line — 4 of its 5 assertions red |
+| negative 1's tmpfs mount removed | health **200 `ok`**, `/explore` **200**, no log line — 4 of its 5 assertions red (measured when negative 1 had five; `data.error` is the sixth, added later and mutant-checked in its own row below) |
 | negative 2's `-w /tmp` corrected | container still up at 30 s, `/explore` **200** — all 4 assertions red |
 | negative 3's `-w /tmp` removed | health **200 `ok`**, `/explore` **200** — all 3 assertions red |
 | `healthReport()`'s `stamp !== null` dropped, image rebuilt | negative 1's *status* assertion red (**200** while `/explore` returned 500); its `asOf:null` body assertion stayed **green**, because the body still carried the null — the **status mapping** is what that first assertion owns, and only it |
+| `healthReport()`'s `asOf` catch reduced to a bare `catch {}`, image rebuilt | negative 1's **`data.error` assertion red, and nothing else** — body `{"asOf":null,"missing":[]}`, still 503, `/explore` still 500, log line still present. A 503 that names no cause is invisible to every other assertion in the case |
 
 `missing:[]` stayed green under the first mutant, as it must: it is equally true of a healthy
 container. That is the difference between pinning a mechanism and detecting a break, and its FAIL
@@ -1387,7 +1441,7 @@ first three, and what a local `next start` reports unchanged for the last two.
 | `UPGAUGE_ROOT` | `process.cwd()` | The directory containing `data/` and `sql/` — anchors both `upgauge.duckdb`'s default location and every `.sql` file read (`sql/03_queries/*.sql`). Also passed to DuckDB as `file_search_path`, so the catalog's relative Parquet globs (`read_parquet('data/parquet/...')`) resolve against it regardless of the process's actual OS working directory. | Set to the wrong directory: every `.sql` file read fails with ENOENT, and every query against a Parquet-backed view fails with `IO Error: No files found that match the pattern "data/parquet/..."` — the exact failure the Portability test section above describes, just triggered by a bad env var instead of a bad `WORKDIR`. |
 | `UPGAUGE_DB` | `${UPGAUGE_ROOT}/upgauge.duckdb` | Overrides the `.duckdb` file path directly, independent of `UPGAUGE_ROOT` — for a deploy that keeps the database file somewhere other than the repo-root default (e.g. a mounted volume). | Set to a path that doesn't exist or isn't a valid DuckDB file: `DuckDBInstance.create()` rejects and every route handler 500s. Note this does NOT relocate `data/parquet/` — that's still resolved via `UPGAUGE_ROOT`'s `file_search_path`, so pointing `UPGAUGE_DB` at a database file whose Parquet tree lives elsewhere still needs `UPGAUGE_ROOT` set to match. |
 | `UPGAUGE_BASE_URL` | `http://localhost:3000` | The scheme+host every fully-qualified URL this app emits is prefixed with: every `<loc>` in `/sitemap.xml`, the `Sitemap:` line in `/robots.txt`, **and** (M5 Task 2) every entity page's self-referential `<link rel="canonical">`. The sitemap protocol requires a fully-qualified URL, `sitemapEntries()` (`app/src/lib/sitemap.ts`) and the entity resolvers alike only ever return a site-relative path or a bare code, on purpose (CLAUDE.md's portability rule: no hardcoded hostname, Docker + env vars only) — a hardcoded `https://upgauge.shipman.dev` was Task 2's fix-round-1 Critical finding. | Left at the default in a real deploy: the sitemap validates and crawls fine locally, and every entity page still renders, but every submitted `<loc>` and every canonical `<link>` points at `localhost`, so a crawler resolves none of them and every canonical tag is wrong for wherever this is actually served. |
-| `UPGAUGE_BUILD_SHA` | `dev` | The git SHA the image was built from, baked in as a Docker build arg and read by `app/src/lib/health.ts`'s `identity()`, reported verbatim in `/api/health`'s `build.sha` field. `dev` is also what a plain `next start` reports, unchanged, so local runs and the unit tests (`route.test.ts`'s `{ sha: "dev", warehouse: "dev" }` assertion) keep working without setting anything. | Left unset or wrong on a real deploy: `/api/health` still returns 200/`ok` — this var carries no correctness signal for the health check itself — but `make image-smoke`'s identity assertion (#15) now passes against a container that is not the build under test, which is the exact failure that gate exists to catch. A stale or blank SHA reported as healthy is indistinguishable from the right one until someone diffs it by hand. |
+| `UPGAUGE_BUILD_SHA` | `dev` | The git SHA the image was built from — `git describe --always --dirty --abbrev=7`, so an image built from a modified tree is labelled `a2020f0-dirty` and cannot pass itself off as the commit (`git rev-parse --short HEAD` reported the clean SHA regardless, and `image-smoke` compared against the same expression, so identity passed for an image whose contents were not that commit). One `IMAGE_SHA` variable in the Makefile feeds both the build arg and the expectation. Baked in as a Docker build arg and read by `app/src/lib/health.ts`'s `identity()`, reported verbatim in `/api/health`'s `build.sha` field. `dev` is also what a plain `next start` reports, unchanged, so local runs and the unit tests (`route.test.ts`'s `{ sha: "dev", warehouse: "dev" }` assertion) keep working without setting anything. | Left unset or wrong on a real deploy: `/api/health` still returns 200/`ok` — this var carries no correctness signal for the health check itself — but `make image-smoke`'s identity assertion (#15) now passes against a container that is not the build under test, which is the exact failure that gate exists to catch. A stale or blank SHA reported as healthy is indistinguishable from the right one until someone diffs it by hand. |
 | `UPGAUGE_WAREHOUSE_TAG` | `dev` | The release tag (`warehouse-YYYY.MM`) whose `warehouse-YYYY.MM.tar.zst` asset (`upgauge.duckdb` + `data/parquet/`) is baked into this image, read the same way as `UPGAUGE_BUILD_SHA` and reported in `/api/health`'s `build.warehouse` field. | Wrong on a real deploy: `/api/health` reports a dataset provenance the image does not actually carry — a container built from `warehouse-2026.03` claiming `warehouse-2026.04` looks fresh to anyone reading the healthcheck, even though `DATA AS OF` on the served pages (read from the data itself, never this var) tells the truth regardless. This var is a label on the artifact, not a source of freshness — CLAUDE.md's freshness alert (#2) still has to read `max(year_month)`, not this string. |
 
 Neither of the first two is a substitute for the WORKDIR contract — they exist so the default

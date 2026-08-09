@@ -17,7 +17,8 @@ updates:
         update-types: [minor, patch]
     ignore:
       # TS 7 is fine for OUR code -- measured on next 16.3.0: `tsc --noEmit` clean,
-      # `next build` succeeds, 267/267 smoke. It fails only at the lint step, where
+      # `next build` succeeds, every smoke check green (267 of them at that run). It fails
+      # only at the lint step, where
       # eslint-config-next -> typescript-eslint hard-errors "typescript-eslint does not
       # support TS 7.0." We took TypeScript to 6.0.3 instead, which is inside that range.
       # Unblock test: `npm view typescript-eslint peerDependencies.typescript` no longer

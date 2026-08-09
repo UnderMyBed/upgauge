@@ -192,7 +192,16 @@ export async function loadAllowlist(): Promise<Allowlist> {
 }
 
 /** The freshness badge is read from the data, never configured. If it could be set by hand
- * it could disagree with what is served, and the lag is the product's credibility. */
+ * it could disagree with what is served, and the lag is the product's credibility.
+ *
+ * **DO NOT MEMOIZE THIS.** It is also `/api/health`'s only Parquet-touching probe -- the other
+ * one, `catalogGaps()`, answers out of `duckdb_columns()` and never opens a Parquet file -- so
+ * this query failing is the ONLY thing that makes a container with an unmounted or shadowed
+ * `data/parquet/` report degraded (`lib/health.ts`; `make portability` negative 1 measures it).
+ * Caching the result is the obvious optimisation, since every page renders `DATA AS OF` from it,
+ * and it would silently blind the healthcheck to that entire class of break: the memo would keep
+ * answering with the stamp read before the volume went away. Neither `make check` nor
+ * `make app-check` can see it -- `make portability` is the only gate that would go red. */
 export async function dataAsOf(): Promise<string> {
   const con = await connect();
   const rows = await (await con.run(sql("data_as_of"))).getRowObjects();

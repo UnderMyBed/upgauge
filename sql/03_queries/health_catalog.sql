@@ -10,9 +10,24 @@
 -- is missing" -- 0 means the object has no columns at all in the catalog, i.e. it does not
 -- exist. health.ts collapses the rows on that.
 --
--- Keeping this list current is not left to memory: health.test.ts's drift test strips comments
+-- The OBJECT half of this list is not left to memory: health.test.ts's drift test strips comments
 -- from every sql/03_queries/*.sql, extracts FROM/JOIN identifiers, subtracts CTE names, and
 -- fails if any referenced object is absent below.
+--
+-- THE COLUMN HALF IS LEFT TO MEMORY, and that is a known limitation of this gate, not a property
+-- of it. Proven by mutant: a query added with `SELECT elevation_ft_not_declared FROM dim_airport`
+-- leaves all 18 of health.test.ts's tests GREEN (measured 2026-08-09), while the same file with an
+-- undeclared OBJECT (`FROM dim_airport_not_declared`) correctly reddens the drift test.
+-- So a served query can read a column this manifest never checks, and the healthcheck will report
+-- ok against a database missing it -- exactly the M7 Task 10 break (dim_airport without lat/lon)
+-- that the column half exists to catch, one column over. Adding a column here when a query starts
+-- reading it is a manual step; nothing enforces it.
+-- Why the parser was not extended: referencedObjects() classifies a FROM/JOIN identifier, and
+-- refuses anything it cannot classify. Collecting `alias.column` would additionally require
+-- resolving aliases to relations, then reading columns out of SELECT lists, CASE arms, window
+-- clauses and function arguments across this corpus -- with bare (unqualified) column references
+-- unattributable to a relation at all without a real binder. A parser that half-does that would
+-- under-collect silently, which is the failure shape referencedObjects() throws to avoid.
 --
 -- COUPLED TO A GATE ASSERTION, and the gate is not `make check`. duckdb_columns() answers out of
 -- the catalog and never opens a Parquet file, so this manifest is BLIND to a present catalog whose

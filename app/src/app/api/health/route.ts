@@ -1,4 +1,4 @@
-import { healthReport, type GapProbe } from "@/lib/health";
+import { healthReport, type AsOfFn, type GapProbe } from "@/lib/health";
 
 /** Deliberately ABSENT from proxy.ts's matcher, and proxy.test.ts pins that.
  *
@@ -21,8 +21,8 @@ export const dynamic = "force-dynamic";
  * test calling `GET()` with no arguments passed. Green suite, broken production, which is the
  * exact class app-smoke exists to catch. Keep the injection point out of the handler's
  * signature. */
-export async function healthResponse(probe?: GapProbe): Promise<Response> {
-  const report = await healthReport(probe);
+export async function healthResponse(probe?: GapProbe, asOf?: AsOfFn): Promise<Response> {
+  const report = await healthReport(probe, asOf);
   return Response.json(report, {
     status: report.status === "ok" ? 200 : 503,
     headers: { "Cache-Control": "no-store" },

@@ -7,6 +7,15 @@
 # No `output: "standalone"`. sql/03_queries/*.sql is read with readFileSync at request time and
 # is invisible to the module tracer, so standalone would build and start cleanly and then ENOENT
 # every query -- hosting.md § "If the Dockerfile ever adopts output: standalone".
+# TAG-PINNED, NOT DIGEST-PINNED, and that is a deliberate trade with a consequence: Debian
+# security rebuilds re-push `node:24.19.0-slim` under the same tag, so two `make image` runs from
+# an identical tree can produce different images, and every layer/size figure measured for this
+# image (docs/architecture/hosting.md § The Dockerfile) is only valid for the base that was current
+# when it was measured. That is the opposite of the reproducibility argument the Makefile makes for
+# WAREHOUSE_TAG six lines from here, and it is knowingly accepted: a digest pin freezes out those
+# same security rebuilds until someone bumps the digest by hand. Keep this version equal to
+# `mise.toml`'s `node` (24.19.0 today) so the container runs the Node the gates ran against. Do not
+# "fix" the tag-vs-digest inconsistency without deciding the patching question first.
 ARG NODE_VERSION=24.19.0
 
 # --------------------------------------------------------------------- warehouse

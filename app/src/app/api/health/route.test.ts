@@ -10,6 +10,10 @@ describe("/api/health", () => {
     expect(body.status).toBe("ok");
     expect(body.data.asOf).toMatch(/^\d{4}-\d{2}$/);
     expect(body.data.missing).toEqual([]);
+    // `error` is the freshness probe's own message and must be ABSENT here: its presence is what
+    // says "the data layer is unreadable", the most likely container break, so a report that
+    // carried it on a healthy build would make it meaningless as a signal.
+    expect(body.data.error).toBeUndefined();
     expect(body.build).toEqual({ sha: "dev", warehouse: "dev" });
   });
 
@@ -37,5 +41,25 @@ describe("/api/health", () => {
     const body = await res.json();
     expect(body.status).toBe("degraded");
     expect(body.data.missing.join(" ")).toContain("IO Error");
+  });
+
+  it("is 503 that NAMES the cause when only the freshness probe fails", async () => {
+    // The shape of the most likely container break: catalog intact (missing[] empty), every
+    // Parquet read failing. Asserted through the serialised RESPONSE, not the report object,
+    // because `error` is set by a conditional spread -- an unconditional `error: undefined` would
+    // pass an object-level assertion and vanish from the JSON an operator actually reads.
+    const res = await healthResponse(
+      async () => [],
+      async () => {
+        throw new Error('IO Error: No files found that match the pattern "data/parquet/…"');
+      },
+    );
+    expect(res.status).toBe(503);
+    const body = await res.json();
+    expect(body.data).toEqual({
+      asOf: null,
+      missing: [],
+      error: 'IO Error: No files found that match the pattern "data/parquet/…"',
+    });
   });
 });

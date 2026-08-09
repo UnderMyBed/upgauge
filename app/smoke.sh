@@ -88,8 +88,19 @@ SMOKE_IMAGE="${SMOKE_IMAGE:-upgauge:local}"
 # so the guard alone would be watching for exactly the thing that is now correct.
 start_container() { # start_container <port>
   port_free_or_die "$1"
+  # `|| exit` is not belt-and-braces: `set -e` is off, so an unchecked `docker run` failure falls
+  # straight through to the readiness loop, which burns 90 s and then dumps `docker logs
+  # upgauge-smoke` -- from the container that ALREADY held that name, i.e. it points the diagnosis
+  # at the previous run's build. The name collision is the case the port guard cannot see: a stale
+  # container not publishing $1 leaves the port free, so port_free_or_die passes. All three
+  # `docker run`s in `make portability` carry this guard; this one was the omission.
   docker run -d --rm --name upgauge-smoke --read-only \
-    -p "127.0.0.1:${1}:3000" "$SMOKE_IMAGE" >/dev/null
+    -p "127.0.0.1:${1}:3000" "$SMOKE_IMAGE" >/dev/null || {
+    echo "  FAIL docker run could not start upgauge-smoke -- NOTHING is under test."
+    echo "       Most likely a container of that name already exists (\`docker rm -f"
+    echo "       upgauge-smoke\`), the image ${SMOKE_IMAGE} is missing, or the daemon is down."
+    exit 1
+  }
 }
 
 assert_identity() { # assert_identity <base-url>
@@ -312,13 +323,45 @@ else
 fi
 # Readiness probes /api/health, not "/": it is the one route that reports WHY it is not ready.
 for _ in $(seq 1 90); do curl -sf -o /dev/null --max-time 2 "${BASE}/api/health" && break; sleep 1; done
-curl -sf -o /dev/null --max-time 2 "${BASE}/api/health" || {
-  echo "  FAIL server never came up"
+# `curl -sf` treats the 503 this endpoint returns for a broken data layer as "not up", so the loop
+# above cannot distinguish "nothing is listening" from "a server is answering, and telling us
+# why". Reporting the second as "server never came up" throws away the one diagnostic the
+# readiness probe was pointed at /api/health to get -- so re-probe without -f and print what it
+# said. %{http_code} is 000 exactly when there was no HTTP response at all.
+READY_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${BASE}/api/health")
+if [ "$READY_CODE" != "200" ]; then
+  echo "  FAIL server not serving a healthy /api/health: HTTP ${READY_CODE} (000 = nothing listening)"
+  echo "       Body: $(curl -s --max-time 5 "${BASE}/api/health" | head -c 500)"
   [ "$SMOKE_MODE" = "container" ] && docker logs upgauge-smoke 2>&1 | tail -30 \
                                   || cat /tmp/upgauge-smoke.log
   exit 1
-}
+fi
 assert_identity "$BASE"
+
+# /api/health's OWN served-build contract. It was the readiness probe and the identity source and
+# had no check of its own in either mode: the probe reads only whether it answered, and
+# assert_identity reads only build.sha/build.warehouse out of the body. Nothing asserted the
+# status code or a single header on a served build.
+#
+# `no-store` is this route's defining property and the reason it is the ONE route deliberately
+# absent from proxy.ts's matcher (route.ts's header comment). proxy.test.ts pins that absence in
+# the matcher ARRAY; the vitest at api/health/route.test.ts calls GET() directly. Neither crosses
+# a served response, so a Next upgrade -- or an "add every route to the matcher" sweep -- could
+# ship the project's 30-day s-maxage on this endpoint with all 805 app tests and both smoke gates
+# green, and a shared CDN would pin `{"status":"ok"}` for a month in front of a degraded container.
+check "health: 200 on a healthy build" "$READY_CODE" '200'
+HDRS=$(curl -s -o /dev/null -D - --max-time 10 "${BASE}/api/health")
+#
+# The needle is the header LINE, not the bare value: Next's own fallback for a route that set no
+# header at all is `private, no-cache, no-store, max-age=0, must-revalidate`, which contains the
+# substring `no-store` -- route.test.ts asserts the exact value for that same reason.
+check "health: is never cached" "$HDRS" 'cache-control: no-store'
+# And the negative is not redundant with it. A response carrying TWO Cache-Control values (a proxy
+# appending to a header the handler already set, comma-joined or as a second line) still contains
+# `cache-control: no-store` while being cacheable for 30 days -- the positive check alone would
+# print ok. This one names the value that must never appear on this route, so a red also says
+# which of the two failures happened.
+check_not "health: never gets the project cache" "$HDRS" 's-maxage=2592000'
 
 echo "==> checks"
 

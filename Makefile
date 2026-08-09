@@ -145,13 +145,34 @@ app-smoke:  ## Build, serve, and curl real URLs. Catches production-only bugs no
 
 # Pinned, not resolved from the latest release: an image whose dataset changes because someone
 # rebuilt on a different day is not reproducible. Bumping this is a deliberate commit.
+#
+# AND IT IS A TEST FIXTURE, not only a reproducibility pin. `make image-smoke` runs app/smoke.sh's
+# dataset-specific needles against THIS asset: the two chart-window checks (`2015-01 -> 2026-04`),
+# the current-year asterisk (`>2026*<`), `2026 is a partial year -- filed through April 2026
+# only.` and `this dataset covers 2015-2026`. So when BTS publishes a new month, `make ingest &&
+# make build` moves the local database, those needles get re-measured, `make app-smoke` goes green
+# -- and `make image-smoke` keeps building from the OLD pinned asset, so the same needles go red
+# with no defect present. Whoever meets that red beside a green host gate will reach for the
+# needles, which is the wrong end. BUMP THIS TAG IN THE SAME COMMIT that re-measures those
+# needles; they are one fixture (the project's existing rule -- "when a renamed value was the
+# fixture for a transform, MOVE the fixture" -- applied to this coupling).
 WAREHOUSE_TAG ?= warehouse-2026.04
 IMAGE ?= upgauge:local
+
+# `git describe --always --dirty`, never `git rev-parse --short HEAD`: rev-parse ignores
+# uncommitted changes, so `make image` labelled a dirty tree with a clean SHA -- and image-smoke
+# compared against the same expression, so identity PASSED for an image whose contents are not
+# that commit, which is the one thing that gate exists to refuse. /api/health publishes this value
+# as provenance (docs/architecture/hosting.md § UPGAUGE_BUILD_SHA). One variable, referenced by
+# both targets: two copies of the expression could drift and fail identity for a non-reason.
+# `--always` keeps it a bare SHA if no tag describes HEAD, which is the case here (the repo's only
+# tag, warehouse-2026.04, is lightweight, and describe ignores those without --tags).
+IMAGE_SHA := $(shell git describe --always --dirty --abbrev=7)
 
 image:  ## Build the deployable image from the published warehouse asset
 	docker build -t $(IMAGE) \
 	  --build-arg WAREHOUSE_TAG=$(WAREHOUSE_TAG) \
-	  --build-arg BUILD_SHA="$$(git rev-parse --short HEAD)" .
+	  --build-arg BUILD_SHA="$(IMAGE_SHA)" .
 
 # `image` as a prerequisite, always -- a stale local tag passing every check while the source
 # has moved on is a worse failure than the extra build time (docs/architecture/hosting.md's
@@ -161,7 +182,7 @@ image:  ## Build the deployable image from the published warehouse asset
 # the orphan-server incident this second guard exists alongside, not instead of).
 image-smoke: image  ## Run the served-build checks against the container, identity asserted
 	SMOKE_MODE=container SMOKE_IMAGE=$(IMAGE) \
-	SMOKE_EXPECT_SHA="$$(git rev-parse --short HEAD)" \
+	SMOKE_EXPECT_SHA="$(IMAGE_SHA)" \
 	SMOKE_EXPECT_WAREHOUSE=$(WAREHOUSE_TAG) \
 	./app/smoke.sh
 
@@ -224,7 +245,16 @@ portability: image  ## Prove the WORKDIR/data contract by breaking it three ways
 	  echo "  FAIL /api/health named missing catalog objects. The (object,column) manifest is"; \
 	  echo "       BLIND to this break by construction -- duckdb_columns() answers from the"; \
 	  echo "       catalog and never reads a Parquet file. If it now sees it, that is an"; \
-	  echo "       improvement: update hosting.md and this assertion in the SAME commit."; fail=1; }; \
+	  echo "       improvement: update hosting.md and this assertion in the SAME commit."; \
+	  echo "       Or the report grew a new field for the asOf failure and its message landed"; \
+	  echo "       in missing[] rather than in data.error -- that is a regression, not an"; \
+	  echo "       improvement: the two breaks (catalog unopenable vs. Parquet unreadable) stay"; \
+	  echo "       distinguishable from the body alone only while they use separate fields."; fail=1; }; \
+	printf '%s' "$$body" | grep -qF '"error":"IO Error' || { \
+	  echo "  FAIL /api/health reported a 503 that does not NAME its cause. This is the most"; \
+	  echo "       likely production break -- the data volume not mounted -- and data.error is"; \
+	  echo "       what saves the operator a trip to the container logs for a message this"; \
+	  echo "       endpoint already had. A bare catch{} around asOf() is what removes it."; fail=1; }; \
 	case "$$explore" in 5??) ;; *) \
 	  echo "  FAIL /explore returned $$explore, expected 5xx. Serving a 2xx off an unreadable"; \
 	  echo "       data layer would mean a page rendering something other than the data."; fail=1;; \

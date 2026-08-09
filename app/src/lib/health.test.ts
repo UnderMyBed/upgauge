@@ -58,13 +58,26 @@ function referencedObjects(sqlText: string, file: string): Set<string> {
   return refs;
 }
 
-function manifestObjects(): Set<string> {
-  const text = readFileSync(path.join(QUERIES, "health_catalog.sql"), "utf8");
-  const block = text.slice(text.indexOf("VALUES"), text.indexOf("FROM required"));
+/** The declared (object, column) pairs' object names, out of health_catalog.sql's VALUES list.
+ *
+ * Anchored on `WITH required(`, a STRUCTURE, not on the word VALUES. `indexOf("VALUES")` started
+ * the slice until this review: a future comment containing that word -- in a header that already
+ * discusses this query at length -- moves the start EARLIER and WIDENS the slice, which can only
+ * ADD names to the returned set and so silently weakens the drift check below. The anti-vacuity
+ * test guards a floor, not a ceiling, so it cannot fire on a widened slice. Takes its text as an
+ * argument purely so that property is testable against a decoyed copy. */
+function manifestObjectsFrom(text: string): Set<string> {
+  const block = text.slice(text.indexOf("WITH required("), text.indexOf("FROM required"));
   const objs = new Set<string>();
   for (const m of block.matchAll(/\(\s*'([a-z_][a-z0-9_]*)'\s*,/g)) objs.add(m[1]);
   return objs;
 }
+
+function manifestSql(): string {
+  return readFileSync(path.join(QUERIES, "health_catalog.sql"), "utf8");
+}
+
+const manifestObjects = (): Set<string> => manifestObjectsFrom(manifestSql());
 
 describe("the health manifest cannot fall behind the served queries", () => {
   it("parses a non-empty manifest", () => {
@@ -73,6 +86,17 @@ describe("the health manifest cannot fall behind the served queries", () => {
     expect(objs.size).toBeGreaterThanOrEqual(10);
     expect(objs.has("dim_airport")).toBe(true);
     expect(objs.has("mart_route_health")).toBe(true);
+  });
+
+  it("reads the VALUES list only, not a comment above it that mentions VALUES", () => {
+    // The bug: an `indexOf("VALUES")` anchor. A header comment mentioning the word moves the
+    // slice's start above the query, so anything in that header shaped like a manifest pair joins
+    // the set -- and every such addition makes the drift test below accept an object the real
+    // manifest does not declare. Red under the old anchor, green under `WITH required(`.
+    const decoyed = `-- The VALUES list below, e.g. ('never_declared_object', 'col'), is the manifest.\n${manifestSql()}`;
+    expect(manifestObjectsFrom(decoyed).has("never_declared_object")).toBe(false);
+    // ...and the real names still parse, so this is not passing by slicing nothing.
+    expect(manifestObjectsFrom(decoyed).has("dim_airport")).toBe(true);
   });
 
   it("declares every object the served queries read", () => {
@@ -161,10 +185,41 @@ describe("healthReport shapes gaps into a report", () => {
     expect(r.data.missing.join(" ")).toContain("IO Error");
   });
 
-  it("is degraded when asOf fails but the catalog is intact", async () => {
-    const r = await healthReport(async () => [], async () => { throw new Error("empty"); });
+  it("is degraded when asOf fails but the catalog is intact, and NAMES the cause", async () => {
+    // The bug this catches: a bare `catch {}` around asOf(), which is what shipped. `asOf: null`
+    // with an empty missing[] is the signature of the most likely production break -- the data
+    // volume unmounted, catalog intact, every query failing -- and it reported no cause at all,
+    // so the operator had to read container logs for the message the endpoint had in hand.
+    const r = await healthReport(async () => [], async () => {
+      throw new Error('IO Error: No files found that match the pattern "data/parquet/…"');
+    });
     expect(r.status).toBe("degraded");
     expect(r.data.asOf).toBeNull();
+    expect(r.data.missing).toEqual([]); // the catalog probe is blind to this break, by construction
+    expect(r.data.error).toContain("No files found that match the pattern");
+  });
+
+  it("carries no error key when nothing failed", async () => {
+    // The other half of the field's contract: `error` present MEANS a freshness-probe failure.
+    // An unconditional `error: undefined` would serialise away and read the same in the JSON, so
+    // the assertion is on the key, not on the value.
+    const r = await healthReport(async () => [], async () => "2026-04");
+    expect("error" in r.data).toBe(false);
+  });
+
+  it("names a non-Error rejection instead of reporting undefined", async () => {
+    // `(e as Error).message` -- a cast, not a check -- produced "catalog probe failed: undefined"
+    // for anything thrown that was not an Error. Thrown through a variable rather than as a bare
+    // literal so the test does not depend on which throw-literal lint rule is enabled.
+    const notAnError: unknown = "duckdb exploded";
+    const probeThrew = await healthReport(async () => {
+      throw notAnError;
+    });
+    expect(probeThrew.data.missing).toEqual(["catalog probe failed: duckdb exploded"]);
+    const asOfThrew = await healthReport(async () => [], async () => {
+      throw notAnError;
+    });
+    expect(asOfThrew.data.error).toBe("duckdb exploded");
   });
 
   it("re-probes on every call and never memoizes", async () => {

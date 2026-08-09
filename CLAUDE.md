@@ -87,9 +87,10 @@ counts kept here — per-milestone history lives in git and `docs/architecture/p
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 49 skip without `data/` |
-| `make app-check` | 801 app tests · needs a built `upgauge.duckdb` or 349 fail |
-| `make app-smoke` | 267 served-build checks |
-| `make image-smoke` / `make portability` | 257 served-build checks against the container (the 10 host-only gap checks print as skipped) · all three negative cases must reproduce their documented failure |
+| `make app-check` | 805 app tests · without a built `upgauge.duckdb`, 352 of them fail |
+| `make app-smoke` | 270 served-build checks |
+| `make image-smoke` | **hand-run, no workflow invokes it** · 260 served-build checks against the container (the 10 host-only gap checks print as skipped) |
+| `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
 | `make goldens` | byte-identical |
 

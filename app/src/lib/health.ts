@@ -7,7 +7,10 @@ export type AsOfFn = () => Promise<string>;
 export interface HealthReport {
   status: "ok" | "degraded";
   build: { sha: string; warehouse: string };
-  data: { asOf: string | null; missing: string[] };
+  /** `error` is the `asOf` probe's own message, present only when that probe threw. The catalog
+   * probe's message goes in `missing` instead (`make portability` negative 3 is its fixture);
+   * these are two different breaks at two different layers and the report keeps them apart. */
+  data: { asOf: string | null; missing: string[]; error?: string };
 }
 
 /** Baked from build args in the Dockerfile's runtime stage; `dev` under a local `next start`,
@@ -32,10 +35,21 @@ function names(gaps: CatalogGap[]): string[] {
   return [...absent, ...columns];
 }
 
+/** A thrown value's message, whatever it was thrown as. `(e as Error).message` reports
+ * `undefined` for a non-Error rejection -- a cast is not a check, and the string it produces
+ * ("catalog probe failed: undefined") is the no-named-cause failure this file exists to avoid. */
+function message(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
 /** Never throws. A broken data layer is a 503 with a named cause, not a rendered 500 -- a 500
  * tells a load balancer nothing the TCP connect did not already, which is the distinction this
  * endpoint exists to draw. That includes DuckDBInstance.create() rejecting outright on a
- * missing or invalid database file, which happens before any query runs. */
+ * missing or invalid database file, which happens before any query runs.
+ *
+ * "Named cause" is the whole contract, so EVERY degraded path names one: the catalog probe's in
+ * `missing`, the freshness probe's in `error`. A degraded report with neither is a 503 an operator
+ * has to leave the endpoint to diagnose. */
 export async function healthReport(
   probe: GapProbe = catalogGaps,
   asOf: AsOfFn = dataAsOf,
@@ -48,15 +62,24 @@ export async function healthReport(
     return {
       status: "degraded",
       build,
-      data: { asOf: null, missing: [`catalog probe failed: ${(e as Error).message}`] },
+      data: { asOf: null, missing: [`catalog probe failed: ${message(e)}`] },
     };
   }
   let stamp: string | null = null;
+  let asOfError: string | undefined;
   try {
     stamp = await asOf();
-  } catch {
-    // dataAsOf() throws when max(year_month) is NULL. The catalog can be intact and the data
-    // still absent -- an empty build. Degraded, and the null is the report.
+  } catch (e) {
+    // dataAsOf() throws when max(year_month) is NULL, and -- the case that matters in production
+    // -- when reading fct_segment_month raises at all, because it is the only Parquet-touching
+    // probe this endpoint makes (db.ts's dataAsOf(), lib/db.ts). So this branch is where the most
+    // likely container break lands: the data volume is not mounted, the catalog is intact,
+    // missing[] is empty, and `asOf: null` alone says degraded. A bare `catch {}` here made the
+    // report state THAT there was a failure without naming ONE, which sent the operator to the
+    // container logs for the message the endpoint had in hand. Measured on `make portability`
+    // negative 1: `IO Error: No files found that match the pattern
+    // "data/parquet/t100_segment/**/*.parquet"`, now carried verbatim.
+    asOfError = message(e);
   }
   // `stamp !== null` is NOT redundant with the missing[] check, and no unit test can show that.
   // Shadow data/parquet under a correct WORKDIR and the catalog is fully intact -- missing[] is
@@ -68,6 +91,9 @@ export async function healthReport(
   return {
     status: missing.length === 0 && stamp !== null ? "ok" : "degraded",
     build,
-    data: { asOf: stamp, missing },
+    // Spread, not `error: asOfError`: an explicit `error: undefined` key serialises away in
+    // Response.json() but is NOT absent to a structural comparison, so a healthy report would
+    // stop being deep-equal to `{ asOf, missing }` in the tests that pin its exact shape.
+    data: { asOf: stamp, missing, ...(asOfError !== undefined ? { error: asOfError } : {}) },
   };
 }
