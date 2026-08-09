@@ -767,6 +767,26 @@ test can, because a test has one module graph by construction. If a future Next 
 proxy into its own realm, this degrades to exactly the old behaviour (one memo per realm)
 rather than breaking, and that smoke check is what would say so.
 
+### `app/smoke.sh` served its checks through npx's cache, not the pinned `next`
+
+**The gate that exists to catch production-only bugs was serving its checks under a Next this
+repo does not pin.** `app/smoke.sh` started every server with `next start app -p "$PORT"` via
+`npx`, run from `$ROOT` — but there is no root `node_modules` and no root `package.json`, so npx
+cannot resolve `app/node_modules` and falls back to its own cache instead. Traced 2026-08-09: it
+resolved `~/.npm/_npx/8b377f6eec906bc4/node_modules/next`, a cached download that happened to be
+`16.3.0`, the exact version `app/package.json` pins (`"next": "16.3.0"`, not a range). On a cold
+npx cache — a fresh clone, a fresh CI runner, a cleared `~/.npm` — npx fetches `next@latest`
+instead, serving the gate's checks under a Next this repo never pinned, tested, or shipped. CI
+runs `make app-smoke` through this same code path, so the exposure was not local-only.
+
+**Fix:** `app/smoke.sh` resolves `NEXT_BIN="${ROOT}/app/node_modules/.bin/next"` directly, fails
+loudly if it is missing (`make install` not run), and asserts the installed
+`next/package.json` version equals `app/package.json`'s declared `"next"` pin — a plain string
+equality, since the pin is exact — before starting anything. One `serve_next <port> <logfile>
+[VAR=value...]` function wraps all four servers this script starts (the primary server and the
+three gap-check servers), so the pinned binary cannot be reintroduced as `npx` at one call site
+and missed at the others.
+
 ### The gap: a **5xx** still gets a long-cached header — M5 Task 7 narrowed it, didn't close it
 
 CLAUDE.md's rule is *"404s get `no-store`"* and that is deliberately narrow. **A 500 does

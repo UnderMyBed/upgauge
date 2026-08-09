@@ -20,6 +20,44 @@ set -uo pipefail
 
 PORT="${SMOKE_PORT:-3199}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# The gate must serve from the PINNED next, not whatever `npx` resolves. Running `next start
+# app` via npx from $ROOT cannot resolve app/node_modules (no root node_modules, no root
+# package.json) -- traced 2026-08-09, it resolved ~/.npm/_npx/8b377f6eec906bc4/node_modules/next,
+# a cached download that happened to match the pin. On a cold cache npx fetches next@latest. A
+# gate serving a different Next than the build under test certifies nothing.
+NEXT_BIN="${ROOT}/app/node_modules/.bin/next"
+if [ ! -x "$NEXT_BIN" ]; then
+  echo "  FAIL ${NEXT_BIN} is missing or not executable. Run 'make install' first."
+  exit 1
+fi
+PINNED_NEXT=$(node -p "require('${ROOT}/app/node_modules/next/package.json').version")
+DECLARED_NEXT=$(node -p "require('${ROOT}/app/package.json').dependencies.next")
+if [ "$PINNED_NEXT" != "$DECLARED_NEXT" ]; then
+  echo "  FAIL installed next ${PINNED_NEXT} != declared ${DECLARED_NEXT} in app/package.json."
+  echo "       Every check below would run against a Next this repo does not pin."
+  exit 1
+fi
+echo "==> next ${PINNED_NEXT} (${NEXT_BIN})"
+
+# One serve path for all four servers this script starts, so the pinned binary cannot be
+# reintroduced as npx in one site and missed in the others.
+#
+# `cap` (below) is a SHELL FUNCTION, not a binary, so it cannot follow `env` -- `env NAME=val
+# cap ...` execs "cap" via PATH lookup and fails (`env: 'cap': No such file or directory`,
+# verified). `env`'s VAR=value args go inside cap's OWN forwarded command instead, immediately
+# before `mise` (a real binary): `cap 2G env "$@" mise exec -- ...`. The plain assignment form
+# the four call sites used before this (`UPGAUGE_DB="$BROKEN_DB" cap 2G mise exec -- ...`)
+# cannot be reused as-is here either -- that form is parsed at PARSE TIME as a prefix on the
+# literal word `cap`, but this function receives its assignments as already-expanded strings in
+# "$@", and bash does not re-parse an expanded string as an assignment prefix (verified: `set --
+# FOO=bar; "$@" printenv FOO` fails with "FOO=bar: command not found", not a set variable) --
+# only the real `env` binary can turn a runtime string into a child's environment.
+serve_next() { # serve_next <port> <logfile> [VAR=value ...]
+  local port="$1" log="$2"; shift 2
+  cap 2G env "$@" mise exec -- "$NEXT_BIN" start app -p "$port" >"$log" 2>&1 &
+}
+
 BASE="http://127.0.0.1:${PORT}"
 CACHE_EXPECTED="public, s-maxage=2592000, stale-while-revalidate=86400"
 # M5 Task 7, Part B split proxy.ts's one 30-day CACHE constant into two: /api/pivot (its own
@@ -199,7 +237,7 @@ cap 4G mise exec -- npm --prefix app run build >/dev/null 2>&1 || { echo "  FAIL
 
 echo "==> serve on :${PORT}"
 port_free_or_die "$PORT"
-cap 2G mise exec -- npx next start app -p "$PORT" >/tmp/upgauge-smoke.log 2>&1 &
+serve_next "$PORT" /tmp/upgauge-smoke.log
 SERVER_PID=$!
 for _ in $(seq 1 60); do curl -sf -o /dev/null --max-time 2 "${BASE}/" && break; sleep 1; done
 curl -sf -o /dev/null --max-time 2 "${BASE}/" || { echo "  FAIL server never came up"; cat /tmp/upgauge-smoke.log; exit 1; }
@@ -1249,8 +1287,7 @@ else
   GAP_PORT="${SMOKE_GAP_PORT:-3198}"
   GAP_BASE="http://127.0.0.1:${GAP_PORT}"
   port_free_or_die "$GAP_PORT"
-  UPGAUGE_DB="$BROKEN_DB" cap 2G mise exec -- npx next start app -p "$GAP_PORT" \
-    >/tmp/upgauge-smoke-gap.log 2>&1 &
+  serve_next "$GAP_PORT" /tmp/upgauge-smoke-gap.log UPGAUGE_DB="$BROKEN_DB"
   GAP_PID=$!
   # "/" reads ONLY dataAsOf() (fct_segment_month directly), never meta_pivot_dimensions, so it
   # stays healthy on the broken copy and is a valid readiness probe -- unlike /explore itself,
@@ -1337,8 +1374,7 @@ else
   GAP_PORT2="${SMOKE_GAP_PORT2:-3195}"
   GAP_BASE2="http://127.0.0.1:${GAP_PORT2}"
   port_free_or_die "$GAP_PORT2"
-  UPGAUGE_DB="$BROKEN_DB2" cap 2G mise exec -- npx next start app -p "$GAP_PORT2" \
-    >/tmp/upgauge-smoke-gap2.log 2>&1 &
+  serve_next "$GAP_PORT2" /tmp/upgauge-smoke-gap2.log UPGAUGE_DB="$BROKEN_DB2"
   GAP_PID2=$!
   UP=0
   for _ in $(seq 1 60); do
@@ -1412,8 +1448,7 @@ else
   GAP_PORT3="${SMOKE_GAP_PORT3:-3196}"
   GAP_BASE3="http://127.0.0.1:${GAP_PORT3}"
   port_free_or_die "$GAP_PORT3"
-  UPGAUGE_DB="$BROKEN_DB3" cap 2G mise exec -- npx next start app -p "$GAP_PORT3" \
-    >/tmp/upgauge-smoke-gap3.log 2>&1 &
+  serve_next "$GAP_PORT3" /tmp/upgauge-smoke-gap3.log UPGAUGE_DB="$BROKEN_DB3"
   GAP_PID3=$!
   UP=0
   for _ in $(seq 1 60); do
