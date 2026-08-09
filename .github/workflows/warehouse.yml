@@ -99,7 +99,7 @@ jobs:
           gh release download "$PREVIOUS_TAG" \
             --repo "$GITHUB_REPOSITORY" --pattern '*.tar.zst'
           for f in *.tar.zst; do tar --zstd -xf "$f"; done
-          rm -f *.tar.zst
+          rm -f ./*.tar.zst
           cp upgauge.duckdb /tmp/previous.duckdb
           find data/raw -type f | wc -l
 
@@ -131,9 +131,11 @@ jobs:
           # and ISSUE_BODY go through `env:` instead.
           [[ "$ym" =~ ^[0-9]{4}-[0-9]{2}$ ]] || { echo "::error::max(year_month) is '$ym', not YYYY-MM -- refusing to publish"; exit 1; }
           dotted=${ym/-/.}
-          echo "year_month=$ym" >> "$GITHUB_OUTPUT"
-          echo "tag=warehouse-$dotted" >> "$GITHUB_OUTPUT"
-          echo "raw_name=raw-$dotted" >> "$GITHUB_OUTPUT"
+          {
+            echo "year_month=$ym"
+            echo "tag=warehouse-$dotted"
+            echo "raw_name=raw-$dotted"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Stop if this month is already published
         env:
@@ -151,7 +153,7 @@ jobs:
           set -euo pipefail
           tar --zstd -cf "${{ steps.stamp.outputs.tag }}.tar.zst" upgauge.duckdb data/parquet
           tar --zstd -cf "${{ steps.stamp.outputs.raw_name }}.tar.zst" data/raw
-          ls -la *.tar.zst
+          ls -la ./*.tar.zst
           # Both assets must exist and be non-trivial. A zero-byte tarball published as a
           # release is worse than a failed run: CI would restore it and every gate would fail
           # for an unexplained reason.
@@ -175,7 +177,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh release create "${{ steps.stamp.outputs.tag }}" *.tar.zst \
+          gh release create "${{ steps.stamp.outputs.tag }}" ./*.tar.zst \
             --repo "$GITHUB_REPOSITORY" \
             --title "Warehouse ${{ steps.stamp.outputs.year_month }}" \
             --notes "BTS T-100 warehouse through ${{ steps.stamp.outputs.year_month }}."

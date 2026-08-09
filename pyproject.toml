@@ -12,6 +12,10 @@ dependencies = [
 dev = [
     "pytest>=8.3",
     "ruff>=0.16.1",
+    # Dev-only, and only for `test_workflow_expressions.py`, which needs source line marks
+    # from `yaml.compose_all`. Hand-rolling block-scalar indentation rules to avoid one dev
+    # dependency would put a silently-wrong parser underneath a gate.
+    "pyyaml>=6.0",
 ]
 
 [build-system]

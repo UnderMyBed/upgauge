@@ -618,7 +618,36 @@ delete `fmt` and leave formatting unenforced.
 **CI runs the gates; `make check` on a developer's machine is no longer the only one.**
 `.github/workflows/ci.yml` resolves ONE warehouse release tag per run (`resolve`), restores it,
 and runs `data-contract`, `check`, `app-check`, `smoke` and `goldens`. `make verify` is nightly
-(`verify.yml`) because it needs the 232 MB raw+parquet pair and rebuilds twice.
+(`verify.yml`) because it needs the 232 MB raw+parquet pair and rebuilds twice. The `actions`
+job is the exception that takes no `needs:` and no warehouse — see below.
+
+**The Actions expression layer sits above YAML, and needed its own gate.** `warehouse.yml`
+reached `main` unparseable — `HTTP 422: failed to parse workflow: (Line: 116, Col: 14): An
+expression was expected` — from an empty `${{ }}` inside a **bash comment in a `run:` block**.
+A `#` there is not a comment: it is part of a YAML scalar, and Actions substitutes `${{ }}`
+into the raw text *before* bash parses it. Nothing caught it because the file is valid YAML and
+every check applied was a YAML check (`js-yaml`, `PyYAML`, and `yaml.safe_load` in two
+independent reviews). `actionlint` (pinned in `mise.toml`, run by `make lint-actions`, which
+`make check` includes) now covers `.github/workflows/`, and CI's `actions` job reports it in
+~40 s without touching the dataset — a broken workflow and a broken `resolve` are otherwise
+indistinguishable from outside.
+
+Two measured limits shape that gate, and neither is optional:
+
+- **actionlint cannot read composite actions.** Point it at `.github/actions/setup/action.yml`
+  and it parses the file as a workflow, reporting `"jobs" section is missing`. Injecting the
+  exact empty-`${{ }}` defect into that composite leaves it exiting **0**.
+  `pipeline/tests/test_workflow_expressions.py` closes that half: it walks every Actions YAML,
+  extracts `run:` scalars via `yaml.compose_all` (for source line marks) and rejects an empty
+  expression in any of them. It deliberately does *not* flag the empty `${{ }}` sitting in
+  YAML-level comments in that same file — those are stripped by the YAML parser and never reach
+  Actions, which is the whole distinction.
+- **actionlint silently skips its shellcheck pass when the binary is absent.** Measured: an
+  unquoted `[ $X = x ]` injected into `ci.yml` produced no finding at all. GitHub runners
+  preinstall shellcheck, so an unpinned setup makes local `make check` strictly weaker than CI
+  with nothing to say so. `shellcheck` is therefore pinned in `mise.toml` beside `actionlint`.
+  Turning it on surfaced four pre-existing findings in `warehouse.yml` (three `SC2035` bare
+  `*.tar.zst` globs, one `SC2129`), all fixed rather than suppressed.
 
 **The warehouse is deliberately NOT pinned.** CI restores the latest `warehouse-*` release, so an
 upstream BTS change reaches CI immediately instead of waiting for someone to bump a tag. Pinning
@@ -665,9 +694,22 @@ restores the warehouse but not `data/raw/`, so **15 raw-dependent tests skip the
 CI greps for the skip reasons that appear only when the *restore itself* broke
 (`no built catalog`, `no built Parquet warehouse`) rather than failing on any skip. Those 15 run
 nightly in `verify.yml`, which restores raw and runs `make check` alongside `make verify`. So
-476 of 491 run per PR, all 491 run nightly, and **nothing runs only on one developer's machine.**
+478 of 493 run per PR, all 493 run nightly, and **nothing runs only on one developer's machine.**
 
-**Node is pinned at 24.13.0** — LTS since 2025-10, and Next.js 16 needs ≥ 20.9.
+The 15 is measured from CI, not derived from a local run, and the two do not decompose the same
+way. With **no** `data/` at all the suite reports 444 passed / 49 skipped, of which only 14 name
+a `data/raw` reason; with the warehouse restored and raw absent — CI's actual state — it reports
+15. The extra one is `test_invariants_against_real_data.py`'s deliberately per-function
+`skipif`: without a catalog it skips under the module-level `no built catalog` and is invisible
+among that group, and only once a catalog exists does it surface as `no 2015 extract`. Counting
+raw-dependent skips from a no-data run therefore undercounts by one.
+
+**Node is pinned at 24.19.0** — the 24 LTS line; Next.js 16 itself needs only ≥ 20.9. The
+binding floor is `jsdom` 30, which declares `engines.node: ^22.22.2 || ^24.15.0 || >=26.0.0`.
+The previous pin, 24.13.0, was *below* that floor, and npm only **warns** on `EBADENGINE` — so
+the jsdom bump passed all ten CI checks while installing a dependency that did not support the
+pinned runtime. No gate in this repo can see that; the pin's own comment is the record. 26.x
+stays out until it goes LTS in 2026-10, because the serving box is always-on.
 
 **`make app-check` (typecheck + `vitest run`) is the app's gate, the way `make check` is
 `pipeline/`'s.** `app/` is Next.js 16 (App Router, TS, Tailwind v4, ESLint) with

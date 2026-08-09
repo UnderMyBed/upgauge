@@ -97,6 +97,18 @@ test:  ## Run the pipeline test suite
 lint:  ## Lint (ruff)
 	$(UV) run ruff check .
 
+# The Actions EXPRESSION layer sits above YAML. An empty `${{ }}` in a bash comment inside a
+# `run:` block made warehouse.yml unparseable on main while staying valid YAML, and every check
+# applied before that merge was a YAML check.
+#
+# Scope is workflows ONLY, deliberately: actionlint 1.7.12 parses a composite action as a
+# workflow and reports `"jobs" section is missing` for `.github/actions/setup/action.yml`.
+# Measured: with the empty-expression defect injected into that composite, actionlint exits 0.
+# `pipeline/tests/test_workflow_expressions.py` is what covers composites, and it runs in
+# `test` below -- do not "fix" this target by pointing actionlint at action.yml.
+lint-actions:  ## Lint GitHub Actions workflows (expressions, `needs:`, `uses:` inputs, shellcheck)
+	mise exec -- actionlint
+
 fmt:  ## Format (ruff)
 	$(UV) run ruff format .
 
@@ -130,7 +142,7 @@ check-docs:  ## Enforce the CLAUDE.md line budget (see CLAUDE.md § Working agre
 	fi; \
 	echo "  CLAUDE.md is $$n lines (budget $(CLAUDE_MD_BUDGET)) ... ok"
 
-check: lint check-docs test  ## Lint + test. Run this before every commit.
+check: lint lint-actions check-docs test  ## Lint + test. Run this before every commit.
 
 clean:  ## Remove build artifacts and caches (NOT data/raw — that's the audit trail)
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ *.egg-info
