@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap dev app-check app-build app-smoke test lint lint-actions fmt check check-docs clean
+.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap dev app-check app-build app-smoke image test lint lint-actions fmt check check-docs clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -142,6 +142,16 @@ app-build:  ## Production build
 
 app-smoke:  ## Build, serve, and curl real URLs. Catches production-only bugs no unit test can.
 	./app/smoke.sh
+
+# Pinned, not resolved from the latest release: an image whose dataset changes because someone
+# rebuilt on a different day is not reproducible. Bumping this is a deliberate commit.
+WAREHOUSE_TAG ?= warehouse-2026.04
+IMAGE ?= upgauge:local
+
+image:  ## Build the deployable image from the published warehouse asset
+	docker build -t $(IMAGE) \
+	  --build-arg WAREHOUSE_TAG=$(WAREHOUSE_TAG) \
+	  --build-arg BUILD_SHA="$$(git rev-parse --short HEAD)" .
 
 test:  ## Run the pipeline test suite
 	$(UV) run pytest

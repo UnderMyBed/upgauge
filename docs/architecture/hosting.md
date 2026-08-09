@@ -195,6 +195,45 @@ one producer for CI, the image, and the portability test.
 > This constraint earned its keep: swapping the original Fly pick for Hetzner was a one-line
 > change precisely because nothing depended on the provider.
 
+### The Dockerfile — built, measured (M8 Task 4)
+
+Four stages: `warehouse` (fetches and unpacks the published release asset), `deps` (full
+`npm ci`, for the build only), `build` (`next build`; touches no `data/` and no `sql/`, so it
+runs concurrently with `warehouse`), `runtime` (`npm ci --omit=dev` plus the warehouse output
+copied in). `runtime` runs as `USER node` — confirmed: `docker run --rm upgauge:local id` →
+`uid=1000(node) gid=1000(node) groups=1000(node)`. No `output: "standalone"` (§ above).
+
+**The WORKDIR contract above is asserted at BUILD time, not left for the first query to
+discover.** `warehouse`'s extraction is followed by three `test` assertions — `upgauge.duckdb`
+at the tarball root, `data/parquet` a directory at the tarball root, `data/raw` absent — so a
+future change to `warehouse.yml`'s packing step fails the image build instead of shipping a
+container that starts cleanly and then fails every query. **Confirmed by mutation**: changing
+the extraction to `mkdir -p x && tar --zstd -xf w.tar.zst -C x` (landing `upgauge.duckdb` one
+directory down) fails the BUILD at `RUN test -f upgauge.duckdb …` with exit code 1 — it never
+reaches `docker run`, and never reaches a query.
+
+**`--read-only` works with no tmpfs mount.** Every DB-touching route in this app already carries
+`export const dynamic = "force-dynamic"`, so there is no ISR page cache and no on-demand
+revalidation write to `.next/cache` at request time, and `db.ts` opens the database
+`access_mode: "READ_ONLY"` always — no candidate write path survives from either direction.
+Measured: `docker run --read-only` served `/`, `/explore`, all four entity pages, `/watch`,
+`/sitemap.xml` and `/api/health` at 200 with an empty, error-free log. No tmpfs mount is added;
+if a future page ever needs one (most likely `/srv/upgauge/app/.next/cache`), add
+`--mount type=tmpfs,destination=/srv/upgauge/app/.next/cache` to the run command rather than
+dropping `--read-only`.
+
+**Measured image size: 412,723,318 bytes (≈413 MB / 394 MiB)** —
+`docker inspect upgauge:local --format='{{.Size}}'`, cross-checked against
+`docker save upgauge:local | wc -c` (412,746,752 bytes; the ~23 KB difference is tar-format
+overhead) and against the 13 layers in `docker inspect --format '{{len .RootFS.Layers}}'`. **This
+is NOT what `docker images --format '{{.Size}}' upgauge:local` reports** — that command printed
+`1.5GB` for the identical tag on the same host (Docker 29.6.2, containerd snapshotter). The gap
+is BuildKit's build-history bookkeeping: `docker history`'s per-instruction sizes sum to ~1.09 GB
+because they include the multi-stage build's DISCARDED intermediate layers (`deps`'s full
+`npm ci` with devDependencies, `build`'s working tree, `warehouse`'s pre-extraction download) —
+none of which are among the 13 layers the image actually ships. For this image, trust
+`docker inspect`'s `.Size` or `docker save | wc -c`, not `docker images`.
+
 ## What `proxy.ts` owns
 
 `app/src/proxy.ts` does **three** jobs, and each of them has already shipped broken once by
