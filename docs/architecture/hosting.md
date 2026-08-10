@@ -1258,11 +1258,14 @@ Written in the same idiom as § The gap, and for the same reason: a permanent do
 **The value axis is open, and it is much larger than the key axis this branch closed.** `decode()`
 validates *identifiers* against the catalog via `renderPivot`; it does not validate *values*.
 Reading `urlstate.ts`: `parseFilter` accepts any non-empty value list, so
-`f=origin_state:<arbitrary string>` decodes; `t` is checked only against `MONTH_RE`, so
-`t=<any YYYY-MM>:<any YYYY-MM>` is ~10⁸ combinations that all decode; `n` is any Python-shaped
-integer. Every one of those is a distinct 200 under `HTML_CACHE` on the most expensive page on the
-site. `/airport/:code`'s `y` is the counter-example that shows the shape of a fix: a closed set,
-validated by `parseYear`, so an out-of-range year declines the cache instead of minting an entry.
+`f=origin_state:<arbitrary string>` decodes; `t` is checked only against `MONTH_RE`
+(`/^\d{4}-(0[1-9]|1[0-2])$/`, `urlstate.ts:14`), which admits 10,000 × 12 = 1.2×10⁵ valid values per
+side, and nothing requires `from ≤ to` — `normalizeQuery` (`types.ts:31-33`) only touches
+`sortDesc`, and `decode` range-checks neither bound — so `t` alone admits (1.2×10⁵)² ≈ 1.4×10¹⁰
+combinations that all decode; `n` is any Python-shaped integer. Every one of those is a distinct 200
+under `HTML_CACHE` on the most expensive page on the site. `/airport/:code`'s `y` is the
+counter-example that shows the shape of a fix: a closed set, validated by `parseYear`, so an
+out-of-range year declines the cache instead of minting an entry.
 
 A key table cannot express any of that. `QUERY_ROWS` maps a path to the *names* it reads; deciding
 whether a *value* is one of finitely many legitimate ones needs the catalog, the dataset's own

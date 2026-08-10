@@ -11,9 +11,10 @@ import { presetSlugFromPath } from "@/lib/watch";
  * claimed first and is wider than anything here can deliver. What is decided below is byte-
  * equality over the KEYS a path reads: an unknown key, a keyless chunk, a trailing `&` and a
  * leading `?` are each non-canonical, but key ORDER survives (see rule 4), and VALUES are never
- * inspected -- `/explore?t=<any YYYY-MM>:<any YYYY-MM>` alone is ~10^8 distinct spellings that
- * every rule here calls clean. `docs/architecture/hosting.md` § "What this does not close" states
- * that axis and why a key table cannot express it.
+ * inspected -- `/explore?t=<any YYYY-MM>:<any YYYY-MM>` alone admits ~1.4x10^10 distinct spellings
+ * (MONTH_RE's 10,000 x 12 valid values per side, squared, since nothing requires from <= to) that
+ * every rule here calls clean. `docs/architecture/hosting.md` § "What this does not close" has the
+ * full derivation and why a key table cannot express it.
  *
  * Measured on a served build at 4aa8087, before this file existed: every cacheable path accepted
  * arbitrary unknown query keys and still returned the long cache header -- `/watch?x=1`,
@@ -217,9 +218,15 @@ export type Canonical =
  * orderings, finite and bounded, where `?x=1..N` is not bounded at all. Reordering to a fixed
  * canonical order is possible and is not done, because the redirect would rewrite permalinks
  * users hold, and because the byte-for-byte rejoin above is what keeps a percent-encoded `,`
- * inside a filter value intact. */
-export function queryVerdict(pathname: string, rawQuery: string): Canonical {
-  const row = QUERY_ROWS.find((r) => r.matches(pathname));
+ * inside a filter value intact.
+ *
+ * The walk itself lives in `applyRules` below, taking an already-resolved `row` rather than
+ * re-finding it. `queryVerdict` and `canonicalize` each match `QUERY_ROWS` exactly once per call
+ * -- twelve `matches` predicates, five of them `startsWith` + `decodeURIComponent`, are not free,
+ * and this path is the one every gated request runs. Before this split, `canonicalize` found its
+ * own row AND called `queryVerdict`, which found it again: two walks of `QUERY_ROWS` per gated
+ * request for one answer. */
+function applyRules(row: QueryRow | undefined, pathname: string, rawQuery: string): Canonical {
   if (row === undefined) return { kind: "clean" };
 
   const kept: string[] = [];
@@ -246,15 +253,24 @@ export function queryVerdict(pathname: string, rawQuery: string): Canonical {
   return { kind: "strip", location: canonical === "" ? pathname : `${pathname}?${canonical}` };
 }
 
-/** `proxy.ts`'s view of `queryVerdict`: identical, except that an `exempt` row is always `clean`.
+export function queryVerdict(pathname: string, rawQuery: string): Canonical {
+  return applyRules(
+    QUERY_ROWS.find((r) => r.matches(pathname)),
+    pathname,
+    rawQuery,
+  );
+}
+
+/** `proxy.ts`'s view of the same rules: identical, except that an `exempt` row is always `clean`.
  *
  * `exempt` is about the ACTION, not the rules (see `QueryRow.exempt`). `/search` must never
  * redirect -- it is `no-store` unconditionally, so there is no cache entry for a canonical
  * spelling to protect -- and `/api/pivot` must answer its own 400 rather than 307 an XHR. Both
- * still have real `keys`, and `queryVerdict` still applies them; this wrapper is only the proxy
- * declining to act. */
+ * still have real `keys`, and `applyRules` still applies them; this function only declines to act
+ * on an exempt row's verdict. It does NOT call `queryVerdict` -- that would re-find the row this
+ * function already found. */
 export function canonicalize(pathname: string, rawQuery: string): Canonical {
   const row = QUERY_ROWS.find((r) => r.matches(pathname));
   if (row === undefined || row.exempt !== undefined) return { kind: "clean" };
-  return queryVerdict(pathname, rawQuery);
+  return applyRules(row, pathname, rawQuery);
 }

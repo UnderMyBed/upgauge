@@ -1443,8 +1443,9 @@ check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize 
 #
 # Not "one canonical spelling", which is what this header claimed first and is wider than the gate
 # delivers: key ORDER survives and VALUES are never inspected, so `/explore?t=<any YYYY-MM>:<any
-# YYYY-MM>` is still ~10^8 distinct long-cached spellings (docs/architecture/hosting.md § "What
-# this does not close").
+# YYYY-MM>` alone is still ~1.4x10^10 distinct long-cached spellings -- MONTH_RE admits 10,000 x 12
+# valid values per side and nothing requires from <= to (docs/architecture/hosting.md § "What this
+# does not close" has the derivation).
 #
 # Cloudflare's default cache key includes the full query string, so before this gate `?x=1..N`
 # minted an unbounded family of long-cached entries on every cacheable path -- measured on a
@@ -1625,7 +1626,7 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}//evil.com?x
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}//evil.com?x=1")
 LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
 check_not_re "canonical: //evil.com never redirects off this host" "$LOC" '[Ll]ocation: *(https?:)?//evil\.com'
-check_re     "canonical: ...Next collapses it to a same-host path" "$LOC" '^[Ll]ocation: /evil\.com'
+check_re     "canonical: ...Next collapses it to a same-host path" "$LOC" '^[Ll]ocation: /evil\.com\?x=1$'
 check        "canonical: ...as its own 308, before proxy() runs"   "$CODE" '308'
 
 # CRITICAL 1 (whole-branch review round 2). An RSC request to a GATED path used to be an
