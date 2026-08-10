@@ -87,9 +87,9 @@ Current gates (`verify` and `goldens` measured 2026-08-08, `portability` 2026-08
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 49 skip without `data/` |
-| `make app-check` | 850 app tests · without a built `upgauge.duckdb`, 353 of them fail |
-| `make app-smoke` | 312 served-build checks |
-| `make image-smoke` | **hand-run, no workflow invokes it** · 302 served-build checks against the container (the 10 host-only gap checks print as skipped) |
+| `make app-check` | 887 app tests · without a built `upgauge.duckdb`, 353 of them fail |
+| `make app-smoke` | 348 served-build checks |
+| `make image-smoke` | **hand-run, no workflow invokes it** · 338 served-build checks against the container (the 10 host-only gap checks print as skipped) |
 | `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
 | `make goldens` | byte-identical |
@@ -442,24 +442,25 @@ signature element; it does not own these.
   that would still fix it). Do not restate any of this as "errors get `no-store`"; it is 404s
   only, and even those are per-route (`/sitemap.xml`/`/robots.txt` 404 the same way any Next
   route does, uncached by `proxy.ts` since they never leave the 200 path in practice).
-  **A new page route must be added to `proxy.ts`'s matcher or it ships uncached and without
-  the raw-query and pathname headers** — twelve entries as of M8 Task 1 (`/` joined the eleven
-  from M6 Task 7, which itself added `/watch` and `/watch/:preset` to the nine from M5 Task 8).
-  A static, closed slug set (like `/watch`'s
-  four presets) is necessary but not sufficient for the matcher's own cacheability branch to
-  skip a database probe — every preset page still runs a `mart_route_health` query the proxy
-  commits to a cache header before, so `isDataLayerHealthy()` gates it exactly like `/explore`
-  and `/sitemap.xml`/`robots.txt` do, even though the slug set alone never needs the database.
-  Full detail: `docs/architecture/hosting.md`.
-- **Every matcher path except `/api/pivot` and `/search` declares its legitimate query keys
-  (`lib/canonicalQuery.ts`), and an unknown key on one of those ten is a 307 to the canonical URL
-  under `no-store`, never a cached 200 — `/api/pivot` answers 400 in its own handler, and `/search`
-  is `no-store` unconditionally (`docs/architecture/hosting.md` has both).** Cloudflare's cache key
-  includes the query string, so `?x=1…N` was an unbounded family of CDN entries on those ten paths
-  — `/sitemap.xml?x=1` at 30 days and 2.4 MB. `/api/pivot` is an eleventh cacheable path (its own
-  successes, never this gate) but was never part of that family — its handler already closed an
-  unknown key with 400. The test is byte-equality against the canonical string, not "unknown key
-  present": `?&&` has none. `f` is repeatable — `encode()` emits one per filter.
+  **A new page route must be added to `proxy.ts`'s matcher or it ships uncached and without the
+  raw-query and pathname headers** — twelve entries as of M8 Task 1. A static, closed slug set
+  (like `/watch`'s four presets) is necessary but not sufficient for the matcher's own cacheability
+  branch to skip a database probe — every preset page still runs a `mart_route_health` query the
+  proxy commits to a cache header before, so `isDataLayerHealthy()` gates it exactly like
+  `/explore` and `/sitemap.xml`/`robots.txt` do. Full detail: `docs/architecture/hosting.md`.
+- **Every matcher path declares its legitimate query keys (`lib/canonicalQuery.ts`), and a
+  non-canonical query is never a cached 200:** 307 + `no-store` on the ten paths the proxy gates,
+  400 + `no-store` from `/api/pivot`'s own handler (a JSON endpoint must not 307), nothing on
+  `/search` (`no-store` unconditionally, must never redirect). A CDN's cache key includes the query
+  string, so `?x=1…N` was unbounded. **`exempt` means "the proxy does not redirect this path",
+  never "the rules do not apply"** — the second reading left `/api/pivot`'s `&&`/trailing-`&` axis
+  a 30-day-cached 200 (`splitPairs` skips an empty chunk), on the ELEVENTH cacheable path this file
+  had called ten. Byte-equality against the canonical string, not "unknown key present": `?&&` has
+  none. `f` is repeatable. It is one canonical KEY SET, never "one spelling" — key order survives
+  and values are never validated at all; don't restate it wider.
+- **Nothing on the proxy path may throw.** `canonicalize()` threw on a leading `?` as a "wiring
+  bug"; `proxy.ts` strips only ONE `?` (non-global regex) and has no try/catch, so `GET /watch??x=1`
+  500ed all twelve matcher paths — and no smoke check used a doubled `?`, so both gates missed it.
 - Build the **aircraft-type-mix chart before the load-factor chart**. Everyone does load
   factor; the gauge story is the differentiator.
 - **The `/watch` presets are NOT saved instances of a generic Top-N builder**, and the opposite

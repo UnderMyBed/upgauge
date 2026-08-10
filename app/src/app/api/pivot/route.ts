@@ -2,13 +2,21 @@ import { decode, encode, UrlStateError } from "@/lib/pivot/urlstate";
 import { PivotError } from "@/lib/pivot/types";
 import { loadAllowlist, runPivot } from "@/lib/db";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
+import { queryVerdict } from "@/lib/canonicalQuery";
 
 const CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 
-/** Decode is total at this boundary: an unknown key, a duplicate non-`f` key, a malformed
+/** This boundary is total: an unknown key, a duplicate non-`f` key, a keyless chunk, a malformed
  * time range, or an off-allowlist identifier always produces a 400 with a message, never a
  * fallback to defaults. A permalink that quietly renders a different query than it encodes
  * is worse than one that errors -- the screenshot still looks authoritative.
+ *
+ * Two guards, in this order, and the split is not arbitrary: `queryVerdict` (below) owns the
+ * SHAPE of the query -- which keys, how many of each, and the exact bytes joining them -- because
+ * that is what a CDN's cache key is made of; `decode()` owns the MEANING of the values. An
+ * unknown or duplicated key is caught by the first now rather than the second, so its 400 names
+ * the canonical spelling instead of the offending key; the outcome (400 + `no-store`, never a
+ * default) is what has not changed.
  *
  * `loadAllowlist()` is called here (to decode) and again inside `runPivot()` (to render and
  * execute) -- two catalog reads per request rather than one. Fixing that would mean adding
@@ -32,6 +40,45 @@ export async function GET(request: Request): Promise<Response> {
     // would leak a Next stack trace with real filesystem paths). A misconfigured deploy is
     // exactly the catch-all's generic 500.
     const qs = rawQueryFromHeaders(request.headers);
+    // The canonical-key gate, before the catalog read it would otherwise pay for. Whole-branch
+    // review, Finding 2: this endpoint was declared exempt from lib/canonicalQuery.ts on the
+    // grounds that it already answers 400 + no-store to an unknown key -- true, and irrelevant to
+    // the KEYLESS axis. urlstate.ts's splitPairs does `if (!chunk) continue`, so
+    // `?<valid permalink>&`, `&&`, `&&&`... all decode cleanly and this handler returned 200
+    // under `s-maxage=2592000` for every one of them: an unbounded, attacker-chosen family of
+    // 30-day CDN entries, each a full pivot render, on the ONE path the gate called closed and at
+    // ten times the TTL of any HTML page it protects. Measured by disabling this gate: a
+    // trailing `&`, `&&`, `&&&` and a LEADING `&` all returned 200 under
+    // `public, s-maxage=2592000, stale-while-revalidate=86400`. Key ORDER is a separate axis and
+    // this does NOT close it -- see hosting.md § What this does not close.
+    //
+    // `queryVerdict`, not `canonicalize`: the second is the proxy's action (an exempt row is
+    // always `clean` there, so /api/pivot is never 307ed and /search is never redirected at all),
+    // the first is the rules. The rules are not restated here -- a second copy of the key table is
+    // exactly what that module exists to prevent.
+    //
+    // 400, never 307, and that is a design ruling rather than a convenience: a JSON endpoint that
+    // redirects makes every XHR client's error handling depend on `redirect: "follow"`, and a
+    // named error is a better answer than a silent hop. It is the same 400 + no-store this
+    // handler already gives an unknown key -- BEHAVIOUR CHANGE, deliberate and signed off:
+    // `/api/pivot?<valid>&&` went from 200 to 400.
+    //
+    // Pathname off `request.url` rather than RAW_PATH_HEADER: only the QUERY is normalized by
+    // Next (the comment above), the path is not, and reading the header would turn every unit
+    // test that builds a bare `Request` into a 500. An unmatched pathname is `clean` by
+    // construction (lib/canonicalQuery.ts rule 1), so a future rewrite that changed it fails open,
+    // never closed.
+    const verdict = queryVerdict(new URL(request.url).pathname, qs);
+    if (verdict.kind !== "clean") {
+      const detail =
+        verdict.kind === "reject"
+          ? verdict.reason
+          : `the canonical spelling of this query is '${verdict.location}'`;
+      return Response.json(
+        { error: `non-canonical query: ${detail}` },
+        { status: 400, headers: { "Cache-Control": "no-store" } },
+      );
+    }
     const allowlist = await loadAllowlist();
     const query = decode(qs, allowlist);
     const result = await runPivot(query);

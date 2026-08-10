@@ -444,7 +444,11 @@ describe("proxy", () => {
 
   // M8 Task 3 (epic #3). Cloudflare's default cache key includes the full query string, so
   // before this gate `?x=1..N` minted an unbounded family of long-cached entries on every
-  // cacheable path -- measured at 4aa8087, all ten of them.
+  // cacheable path -- measured at 4aa8087, on all TEN that this gate answers for. `/api/pivot` is
+  // an ELEVENTH cacheable path (its own successes take the same 30-day PROJECT_CACHE) and it
+  // carried the same disease on a different axis, closed in its own handler rather than here --
+  // see app/api/pivot/route.ts and lib/canonicalQuery.ts's `queryVerdict`. `/search` is the
+  // twelfth matcher entry and the only one that is never cacheable at all.
   //
   // DEVIATION from the task brief's literal code, measured rather than assumed (see the doc
   // comment on this gate in proxy.ts, and this task's report for the exact served-build error):
@@ -468,6 +472,33 @@ describe("proxy", () => {
     expect(res.status).toBe(307);
     expect(res.headers.get("Location")).toBe("http://localhost/watch");
     expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // CRITICAL, whole-branch review. `rawQuery` above is
+  // `new URL(request.url).search.replace(/^\?/, "")` and that regex is NOT global, so a doubled
+  // `?` in the request line reaches canonicalize() with one `?` still on the front. It used to
+  // throw there ("a wiring bug, not something a real request can trigger"), proxy() has no
+  // try/catch around the call, and Next answered 500 -- on all twelve matcher paths, `/` and
+  // `/sitemap.xml` included, to any client with no auth and no unusual encoding. Measured on a
+  // served build at d109845, and re-measured by restoring the throw on top of the fix:
+  // `/watch?x=1` 307, `/watch??x=1` 500, and the same for every other doubled-`?` row in
+  // app/smoke.sh §15. `?x=1..N` behind a doubled `?` is itself an unbounded family of
+  // origin-hitting 500s -- the same cost shape this gate exists to close.
+  it("307s a doubled '?' instead of 500ing on it", async () => {
+    const res = await proxy(new NextRequest("http://localhost/watch??x=1"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("Location")).toBe("http://localhost/watch");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("keeps the legitimate key behind a doubled '?', rather than dropping it", async () => {
+    // The discriminating half: a fix that answered `?y=2019` by treating "?y" as an unknown key
+    // would 307 to `/airport/ORD` -- no 500, and the year silently gone. The location is also the
+    // one `/airport/ORD??y=2019` and `/airport/ORD???y=2019` must SHARE, or the same typo typed
+    // twice is two cache entries again (canonicalQuery.test.ts pins the run-collapsing rule).
+    const res = await proxy(new NextRequest("http://localhost/airport/ORD??y=2019"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("Location")).toBe("http://localhost/airport/ORD?y=2019");
   });
 
   it("redirects with 307, never 308", async () => {

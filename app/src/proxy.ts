@@ -159,6 +159,39 @@ export async function proxy(request: NextRequest) {
   // `/watch?x=1` served its ordinary 200 under its ordinary HTML_CACHE, unredirected -- the same
   // property this comment exists to protect, by a different mechanism. Full detail in this
   // task's report.
+  //
+  // NO try/catch around the call below, deliberately, and the deliberation was earned: an earlier
+  // revision of `canonicalize()` threw on a `rawQuery` carrying a leading `?`, calling it a wiring
+  // bug -- and `rawQuery` above is `.replace(/^\?/, "")`, NON-GLOBAL, so `GET /watch??x=1`
+  // delivered exactly that and 500ed every one of the twelve matcher paths for any client
+  // (measured at d109845: `/watch?x=1` 307, `/watch??x=1` 500). The fix is that the function is
+  // TOTAL -- every `matches` predicate is a string test or the already-guarded
+  // `entitySlugFromPath`, and a leading `?` is now just another non-canonical spelling
+  // (`canonicalQuery.test.ts` asserts totality over a corpus of hostile inputs rather than
+  // leaving it a claim). A catch here would be the wrong repair for that: swallowing to `clean`
+  // silently re-opens the unbounded cache family this gate exists to close, and swallowing to
+  // `reject` makes a real bug invisible for as long as it takes someone to notice the site is
+  // uncacheable.
+  //
+  // `new URL(canonical.location, origin)` re-serialises, which is the one thing this file exists
+  // to avoid everywhere else -- so it is pinned rather than assumed. Measured against Node's own
+  // URL for `smoke.sh`'s RESERVED permalink (every reserved character this format must survive):
+  // `new URL("/explore?" + RESERVED, origin).toString()` is byte-identical to `origin +
+  // "/explore?" + RESERVED`. It is safe because the URL serializer's QUERY percent-encode set is
+  // only C0 controls, space, `"`, `#`, `<` and `>` -- none of `: , % + -`, which is all this
+  // format's structural punctuation. `app/smoke.sh`'s canonical-query section asserts the wire
+  // bytes of that exact redirect, because "safe by the spec I read" is how the last three
+  // corrections on this branch were written.
+  //
+  // It is also an open-redirect SHAPE -- `new URL("//evil.com", origin)` is `http://evil.com/` --
+  // and it is unreachable for two independent reasons, neither of them luck. (1) `canonical.location`
+  // begins with the matched row's own pathname, and no `QUERY_ROWS` predicate can accept a
+  // `//`-leading one: each is either `p === "/literal"` or an `entitySlugFromPath` prefix test
+  // requiring `/<prefix>/` at position 0, so `//evil.com` matches no row and comes back `clean`
+  // with no Location at all (asserted in `canonicalQuery.test.ts`). (2) Next answers `GET
+  // //evil.com` with its own 308 to `/evil.com` before `proxy()` runs at all (asserted on a served
+  // build in `app/smoke.sh`). Both are assertions, so a future row with a looser predicate breaks
+  // a test rather than opening a redirector.
   const canonical = canonicalize(pathname, rawQuery);
   if (canonical.kind === "strip") {
     return new NextResponse(null, {
