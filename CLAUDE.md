@@ -443,18 +443,23 @@ signature element; it does not own these.
   only, and even those are per-route (`/sitemap.xml`/`/robots.txt` 404 the same way any Next
   route does, uncached by `proxy.ts` since they never leave the 200 path in practice).
   **A new page route must be added to `proxy.ts`'s matcher or it ships uncached and without
-  the raw-query and pathname headers** — eleven entries as of M6 Task 7 (`/watch` and
-  `/watch/:preset` joined the nine from M5 Task 8). A static, closed slug set (like `/watch`'s
+  the raw-query and pathname headers** — twelve entries as of M8 Task 1 (`/` joined the eleven
+  from M6 Task 7, which itself added `/watch` and `/watch/:preset` to the nine from M5 Task 8).
+  A static, closed slug set (like `/watch`'s
   four presets) is necessary but not sufficient for the matcher's own cacheability branch to
   skip a database probe — every preset page still runs a `mart_route_health` query the proxy
   commits to a cache header before, so `isDataLayerHealthy()` gates it exactly like `/explore`
   and `/sitemap.xml`/`robots.txt` do, even though the slug set alone never needs the database.
   Full detail: `docs/architecture/hosting.md`.
-- **Every matcher path declares its legitimate query keys (`lib/canonicalQuery.ts`), and an unknown
-  key is a 307 to the canonical URL under `no-store`, never a cached 200.** Cloudflare's cache key
-  includes the query string, so `?x=1…N` was an unbounded family of CDN entries on all ten cacheable
-  paths — `/sitemap.xml?x=1` at 30 days and 2.4 MB. The test is byte-equality against the canonical
-  string, not "unknown key present": `?&&` has none. `f` is repeatable — `encode()` emits one per filter.
+- **Every matcher path except `/api/pivot` and `/search` declares its legitimate query keys
+  (`lib/canonicalQuery.ts`), and an unknown key on one of those ten is a 307 to the canonical URL
+  under `no-store`, never a cached 200 — `/api/pivot` answers 400 in its own handler, and `/search`
+  is `no-store` unconditionally (`docs/architecture/hosting.md` has both).** Cloudflare's cache key
+  includes the query string, so `?x=1…N` was an unbounded family of CDN entries on those ten paths
+  — `/sitemap.xml?x=1` at 30 days and 2.4 MB. `/api/pivot` is an eleventh cacheable path (its own
+  successes, never this gate) but was never part of that family — its handler already closed an
+  unknown key with 400. The test is byte-equality against the canonical string, not "unknown key
+  present": `?&&` has none. `f` is repeatable — `encode()` emits one per filter.
 - Build the **aircraft-type-mix chart before the load-factor chart**. Everyone does load
   factor; the gauge story is the differentiator.
 - **The `/watch` presets are NOT saved instances of a generic Top-N builder**, and the opposite

@@ -163,12 +163,13 @@ With Cloudflare's free tier in front, near-zero repeat traffic touches the box r
 `stale-while-revalidate` keeps serving from the edge while either value revalidates.
 
 **Leaderboard precompute was specified for three milestones and is retired, not deferred**
-(M8, #14). Measured against the real warehouse rather than argued: `mart_route_health` is 8,080
-rows, and the four `/watch` preset queries cost **2.2-5.0 ms** each (median of seven warm runs,
-fresh read-only connection per preset). End-to-end TTFB on a served production build puts
-`/watch/gauge` at **43-46 ms** — against `/route/JFK-LAX` at 63-69 ms and `/airport/ORD` at
-85-104 ms, neither of which anyone proposes precomputing. Precompute would have optimised the
-third-cheapest page on the site and left the two most expensive per-request.
+(M8, #14). Measured 2026-08-09 against a served build at `4aa8087`, not argued: `mart_route_health`
+is 8,080 rows, and the four `/watch` preset queries cost **2.2-2.5 ms** each at a warm median
+(fresh read-only connection per preset, median of seven runs), **5.0 ms** at the cold worst case
+(`watch_death_watch`; the other three cold runs were 3.3-3.5 ms). End-to-end TTFB on that same
+build puts `/watch/gauge` at **43-46 ms** — against `/route/JFK-LAX` at 63-69 ms and
+`/airport/ORD` at 85-104 ms, neither of which anyone proposes precomputing. Precompute would have
+optimised the third-cheapest page on the site and left the two most expensive per-request.
 
 ## Avoid
 
@@ -1145,11 +1146,27 @@ guaranteed origin miss. Measured on a served build at `4aa8087`, before the gate
 | `/api/pivot?…&bogus=1` | 400 | `no-store` — already closed, in the handler |
 | `/search?q=DL&x=1` | 307 | `no-store` — never cacheable |
 
-`app/src/lib/canonicalQuery.ts` declares the legitimate query keys per matcher path — the third
-list that must agree with `config.matcher` and `ENTITY_ROUTES`, asserted by its own test. An
-unknown key gets a **307 to the canonical URL under `no-store`**, answered before any database
-probe: origin cost is ~0 instead of a full render, the CDN stores nothing, and a visitor arriving
-with a tracking param still lands on the page. A duplicated key gets `no-store` with **no**
+`/` is missing from the rows above for a different reason, not a survivor of this bug: at
+`4aa8087` it had not yet joined `proxy.ts`'s matcher (M8 Task 1 added it) and returned Next's own
+`private, no-cache, no-store, max-age=0, must-revalidate` unconditionally, so a junk query on it
+changed nothing — there was no long-cached response yet for one to corrupt. Once Task 1 landed,
+`/` joined the same exposure the seven rows above demonstrate, for **ten** gated paths in total
+(the seven shown, plus `/aircraft/:name` and `/watch/:preset`, both the identical mechanism as a
+row already shown). `/api/pivot` is an **eleventh** cacheable path — its own successful responses
+take the identical `PROJECT_CACHE` value `/sitemap.xml` and `/robots.txt` do — but it was never
+exposed to *this* bug: its handler already answered an unknown key with 400 + `no-store`, which
+is why its row above reads "already closed" rather than an `s-maxage`. `/search` alone is never
+cacheable, gated or not.
+
+`app/src/lib/canonicalQuery.ts` declares the legitimate query keys for those ten gated paths —
+the third list, alongside `ENTITY_ROUTES`, that the app's cacheable surface depends on. Only
+agreement with `config.matcher` is asserted by its own test (`canonicalQuery.test.ts`):
+`QUERY_ROWS` (12 rows, one per matcher entry, including the two exempt ones above) is a strict
+superset of `ENTITY_ROUTES` (3 rows), so row-for-row agreement with the latter isn't a property
+that test could assert. An unknown key gets a **307 to the canonical URL under `no-store`**,
+answered before any database probe: origin cost is ~0 instead of a full render, the CDN stores
+nothing, and a visitor arriving with a tracking param still lands on the page. A duplicated key
+gets `no-store` with **no**
 redirect — there is no canonical form, because choosing one occurrence renders a different query
 than the URL encodes, which is `decode()`'s own reason for erroring on duplicates.
 
