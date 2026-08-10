@@ -365,21 +365,31 @@ export async function proxy(request: NextRequest) {
 /** A cheap, generic health probe: succeeds iff `loadAllowlist()` succeeds, nothing more.
  *
  * Callers, as of M8 Task 4: `/sitemap.xml` and `/robots.txt` (unconditionally, whenever the
- * pathname matches -- see the F4 comment on that branch, above, for why a bare
- * `loadAllowlist()` check is the right probe even though neither route calls `loadAllowlist()`
- * itself; both are built from `lib/sitemap.ts`'s own DuckDB queries instead), and `/watch` plus
- * every `/watch/:preset` (gated additionally on the slug being a known preset -- see that
- * branch's own comment, above). `/explore` used this function through M5-M7; M8 Task 4 gave it
- * `isExploreCacheable()` (below) instead, which wraps this same `loadAllowlist()` call but
- * additionally requires the permalink to `decode()` -- a check with no meaning for a slug-only
- * route like `/watch` or a slug-less one like `/sitemap.xml`.
+ * pathname matches), and `/watch` plus every `/watch/:preset` (gated additionally on the slug
+ * being a known preset -- see that branch's own comment, above). `/explore` used this function
+ * through M5-M7; M8 Task 4 gave it `isExploreCacheable()` (below) instead, which wraps this same
+ * `loadAllowlist()` call but additionally requires the permalink to `decode()` -- a check with no
+ * meaning for a slug-only route like `/watch` or a slug-less one like `/sitemap.xml`.
+ *
+ * The sitemap/robots pair shares a branch, not a risk profile. Neither calls `loadAllowlist()`
+ * itself (no reference to it in `app/sitemap.ts` or `app/robots.ts`) -- but `app/sitemap.ts`
+ * calls `lib/sitemap.ts`'s `sitemapEntries()`, which runs its own DuckDB queries and can throw
+ * (the F4 comment on that branch, above, names the two functions that do by design), while
+ * `app/robots.ts` runs no query of any kind: its own header comment says so directly ("This one
+ * reads no database at all (BASE_URL is an env var)"), and its output is a static object built
+ * only from an env var. So `/robots.txt` is gated on a probe it cannot fail: this branch answers
+ * both pathnames with one `if` and one `Cache-Control` expression, and `/robots.txt` inherits the
+ * probe as a side effect of that sharing, not because anyone reasoned about its own risk and
+ * decided it needed one. Cost is negligible either way (`loadAllowlist()` is memoized on
+ * `globalThis`, `lib/db.ts`) -- flagged here as a pointless-but-harmless gate, not fixed, since
+ * changing it is outside this task.
  *
  * What this does NOT cover, and cannot from here: a throw AFTER this probe succeeds, from a
- * query this bare check never touches. Measured for the two routes that still call it:
- * `app/sitemap.ts` runs four DuckDB queries via `lib/sitemap.ts`, and `parseLastmod` /
+ * query this bare check never touches. Measured for `/sitemap.xml`, the one caller this
+ * applies to: `app/sitemap.ts` runs four DuckDB queries via `lib/sitemap.ts`, and `parseLastmod` /
  * `dedupeAircraftBySlug` both throw by design (the F4 finding, above) -- none of that is
- * `loadAllowlist()`, so a break in any of them still 500s under `PROJECT_CACHE`. `app/smoke.sh`'s
- * M6 Task 8 gap check measured the identical shape for `/watch/gauge`: dropping
+ * `loadAllowlist()`, so a break in any of them still 500s `/sitemap.xml` under `PROJECT_CACHE`.
+ * `app/smoke.sh`'s M6 Task 8 gap check measured the identical shape for `/watch/gauge`: dropping
  * `mart_route_health` (what `WatchPresetView`'s `runPreset()` actually reads) leaves
  * `loadAllowlist()` healthy, so the proxy commits to `HTML_CACHE` before the page ever runs its
  * own query, and the 500 that follows still ships the cacheable header. Open gap, and NOT the
