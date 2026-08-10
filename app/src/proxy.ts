@@ -362,21 +362,29 @@ export async function proxy(request: NextRequest) {
   return response;
 }
 
-/** `/explore`'s fail-safe probe (M5 Task 7, Part A). Reuses `loadAllowlist()` rather than
- * inventing a cheaper standalone query, for two reasons: (1) it is exactly what `ExploreView`
- * (`app/src/app/explore/page.tsx`) calls FIRST, before its own try/catch -- which wraps only
- * `decode()` and `runPivot()` -- so a broken `meta_pivot_dimensions` / `meta_pivot_measures`
- * catalog view throws there today, unguarded, precisely the scenario this closes; and (2) the
- * ENTITY_ROUTES precedent already accepts paying for a second, proxy-side copy of a query the
- * page will also run (see isCacheable's own doc comment: "This is a SECOND resolution for the
- * request").
+/** A cheap, generic health probe: succeeds iff `loadAllowlist()` succeeds, nothing more.
  *
- * What this does NOT cover, and cannot from here: a throw AFTER this probe succeeds -- e.g.
- * `dataAsOf()` failing when `loadAllowlist()` didn't, or `runPivot()` failing on a query this
- * exact allowlist read could not have anticipated (a template bug, a value that passes
- * `decode()`'s structural check but not the executable SQL, an OOM). Those are page-specific
- * throws whose proxy resolution succeeded, and closing them is Part B's job, not this
- * function's -- see docs/architecture/hosting.md § "The gap" for which exit Part B took.
+ * Callers, as of M8 Task 4: `/sitemap.xml` and `/robots.txt` (unconditionally, whenever the
+ * pathname matches -- see the F4 comment on that branch, above, for why a bare
+ * `loadAllowlist()` check is the right probe even though neither route calls `loadAllowlist()`
+ * itself; both are built from `lib/sitemap.ts`'s own DuckDB queries instead), and `/watch` plus
+ * every `/watch/:preset` (gated additionally on the slug being a known preset -- see that
+ * branch's own comment, above). `/explore` used this function through M5-M7; M8 Task 4 gave it
+ * `isExploreCacheable()` (below) instead, which wraps this same `loadAllowlist()` call but
+ * additionally requires the permalink to `decode()` -- a check with no meaning for a slug-only
+ * route like `/watch` or a slug-less one like `/sitemap.xml`.
+ *
+ * What this does NOT cover, and cannot from here: a throw AFTER this probe succeeds, from a
+ * query this bare check never touches. Measured for the two routes that still call it:
+ * `app/sitemap.ts` runs four DuckDB queries via `lib/sitemap.ts`, and `parseLastmod` /
+ * `dedupeAircraftBySlug` both throw by design (the F4 finding, above) -- none of that is
+ * `loadAllowlist()`, so a break in any of them still 500s under `PROJECT_CACHE`. `app/smoke.sh`'s
+ * M6 Task 8 gap check measured the identical shape for `/watch/gauge`: dropping
+ * `mart_route_health` (what `WatchPresetView`'s `runPreset()` actually reads) leaves
+ * `loadAllowlist()` healthy, so the proxy commits to `HTML_CACHE` before the page ever runs its
+ * own query, and the 500 that follows still ships the cacheable header. Open gap, and NOT the
+ * same one `/explore` carries (that one is `isExploreCacheable`'s to describe, below) -- see
+ * docs/architecture/hosting.md § "The gap" for the general account.
  *
  * Errors are swallowed to `false`, matching `isCacheable`'s own reasoning below: a transient
  * failure here would 500 a request the page might well still serve, and declining the cache is
