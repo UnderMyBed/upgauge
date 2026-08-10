@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { canonicalize } from "@/lib/canonicalQuery";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { RAW_PATH_HEADER, routeSlugFromPath } from "@/lib/rawPath";
 import { resolveRoutePair } from "@/lib/routePair";
@@ -45,6 +46,73 @@ export async function proxy(request: NextRequest) {
   // can stay a Server Component and still name the slug that was requested.
   headers.set(RAW_PATH_HEADER, pathname);
   const response = NextResponse.next({ request: { headers } });
+
+  // M8 Task 3 (epic #3). The canonical-query gate, ahead of every branch below because its
+  // answer depends on none of them, and because a `strip` must not pay for a database probe it
+  // is about to redirect away from. `lib/canonicalQuery.ts` carries the measurements and the
+  // per-path key table; what belongs here is the response shape.
+  //
+  // `new NextResponse`, NOT `NextResponse.redirect()`: the latter parses its argument into a URL,
+  // which is exactly the re-serialisation this file exists to route around (see `rawQuery`
+  // above -- `nextUrl` re-encodes, and that broke every filtered query on both entry points).
+  //
+  // The `Location` VALUE below is built ABSOLUTE (`request.nextUrl.origin` + the canonical path),
+  // not the bare relative string `canonical.location` the first version of this gate returned --
+  // measured against a served build, a bare relative Location 500s every single redirect here,
+  // unconditionally: `next/dist/server/web/adapter.js` (the code that runs AFTER this function
+  // returns, on every request, not just middleware-authored redirects) reads `Location` off
+  // WHATEVER response comes back and does `new NextURL(redirect, { forceLocale: false, ... })`
+  // with NO base argument -- and `NextURL`'s constructor resolves that to `new URL(redirect,
+  // undefined)`, which throws `TypeError [ERR_INVALID_URL]` for any relative string. This is not
+  // a `NextResponse.redirect()`-specific behavior (that factory forces an absolute URL itself,
+  // via `validateURL()`) -- it is what the ADAPTER does to every response with a Location header,
+  // built by any means. The comment above (this file exists to route around `NextResponse.redirect
+  // ()`'s re-serialisation) is still the reason a raw `new NextResponse` is used instead of that
+  // factory; it does not mean the Location value itself can stay relative.
+  //
+  // The CDN-facing property survives anyway: `adapter.js`'s SAME code, immediately after
+  // constructing that `NextURL`, checks `redirectURL.host === requestURL.host` and -- when it
+  // matches, which it always does here, since `request.nextUrl.origin` IS the request's own host
+  // -- OVERWRITES `Location` with `getRelativeURL(redirectURL, requestURL)`, i.e. strips the
+  // scheme and host back off before the response leaves this process. Measured on a served build
+  // (see this task's report for the literal header bytes): the wire-level `Location` is relative,
+  // exactly as designed, even though the value constructed here is absolute. `proxy.test.ts`
+  // cannot see this -- it calls `proxy()` directly and never crosses `adapter.js` -- so its
+  // "sends a RELATIVE Location" test necessarily asserts the pre-adapter (absolute) value; only
+  // `app/smoke.sh`'s canonical-query section asserts the actual wire bytes.
+  //
+  // 307, never 308: CLAUDE.md's rule for `/search` generalises to every redirect this project
+  // mints. A 308 is cached by the requesting browser permanently, so if this gate's key table
+  // ever gains a key, every browser that saw the old 308 keeps stripping it forever.
+  //
+  // `no-store` on the redirect itself, so the junk URL fills no cache entry either -- the whole
+  // point is that an unbounded family of spellings cannot become an unbounded family of CDN
+  // entries. The canonical URL it points at is cached normally by the branches below.
+  //
+  // MUTANT 15 (M8 Task 3, run and reverted): moved this block below the `ENTITY_ROUTES` loop and
+  // measured against a served build. `/route/JFK-LAX?cachebust=99` and `/carrier/DL?utm_source=x`
+  // -- the two paths this plan named -- kept passing: the `strip` branch always builds a fresh
+  // `NextResponse`, never reuses `response`, so no branch's header can land on it regardless of
+  // position, and ENTITY_ROUTES has no early return of its own for the gate to fall behind. What
+  // actually went red: every path with its OWN early `return response` ABOVE the new position
+  // (`/`, `/watch`, `/sitemap.xml`, `/robots.txt`) never reached the moved gate at all, so
+  // `/watch?x=1` served its ordinary 200 under its ordinary HTML_CACHE, unredirected -- the same
+  // property this comment exists to protect, by a different mechanism. Full detail in this
+  // task's report.
+  const canonical = canonicalize(pathname, rawQuery);
+  if (canonical.kind === "strip") {
+    return new NextResponse(null, {
+      status: 307,
+      headers: {
+        Location: new URL(canonical.location, request.nextUrl.origin).toString(),
+        "Cache-Control": NO_STORE,
+      },
+    });
+  }
+  if (canonical.kind === "reject") {
+    response.headers.set("Cache-Control", NO_STORE);
+    return response;
+  }
 
   // CLAUDE.md's caching IS the cost control, not the hosting tier (docs/architecture/
   // hosting.md). /api/pivot sets its own on the JSON response, including `no-store` on

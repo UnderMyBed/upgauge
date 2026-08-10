@@ -350,12 +350,15 @@ describe("proxy", () => {
 
   it("reads y from the raw query string, not from a normalized searchParams", async () => {
     // Same discipline as the raw-query tests at the top of this file: constructing a
-    // NextRequest here does not exercise Next's own normalization, but this pins that the
-    // value read is whatever rawQuery carries, by using a key ordering searchParams would not
-    // reorder differently -- a regression to `request.nextUrl.searchParams.get("y")` would
-    // still pass this one, so app/smoke.sh is what actually proves the raw-header path (see
-    // that file's /airport section).
-    const res = await proxy(new NextRequest("http://localhost/airport/SEA?y=2020&other=1"));
+    // NextRequest here does not exercise Next's own normalization, so this test cannot itself
+    // distinguish rawQuery from request.nextUrl.searchParams -- app/smoke.sh's own /airport
+    // section is what actually proves the raw-header path end to end. This used to carry a
+    // second, unrelated `&other=1` key to prove the branch reads a real query rather than an
+    // empty one, but M8 Task 3's canonicalization gate (canonicalize(), lib/canonicalQuery.ts)
+    // now 307s any key outside AIRPORT_KEYS = {"y"} before this branch ever runs -- so a lone
+    // `y` is the only shape this branch still sees, and that second key would make this test
+    // assert a redirect, not a cache header.
+    const res = await proxy(new NextRequest("http://localhost/airport/SEA?y=2020"));
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
 
@@ -401,6 +404,80 @@ describe("proxy", () => {
     vi.mocked(loadAllowlist).mockClear();
     await proxy(new NextRequest("http://localhost/"));
     expect(vi.mocked(loadAllowlist)).not.toHaveBeenCalled();
+  });
+
+  // M8 Task 3 (epic #3). Cloudflare's default cache key includes the full query string, so
+  // before this gate `?x=1..N` minted an unbounded family of long-cached entries on every
+  // cacheable path -- measured at 4aa8087, all ten of them.
+  //
+  // DEVIATION from the task brief's literal code, measured rather than assumed (see the doc
+  // comment on this gate in proxy.ts, and this task's report for the exact served-build error):
+  // the brief's `Location: canonical.location` (bare relative) 500s EVERY redirect below on a
+  // served build. `next/dist/server/web/adapter.js` reads `Location` off whatever `proxy()`
+  // returns and does `new NextURL(redirect, {...})` with no base argument -- `ERR_INVALID_URL`
+  // for any relative string, for a `new NextResponse` exactly as much as for
+  // `NextResponse.redirect()` (that factory only forces its OWN argument absolute; it does not
+  // change what the adapter does to the header afterward). So every `Location` value below is
+  // built ABSOLUTE, scoped to `request.nextUrl.origin` -- and that SAME adapter code then strips
+  // the scheme+host back off before the response reaches the wire, because the host it built
+  // always matches the request's own (`redirectURL.host === requestURL.host`). `proxy()` alone
+  // can only see the pre-adapter (absolute) value, which is what every assertion below pins;
+  // `app/smoke.sh`'s canonical-query section is what asserts the actual wire bytes are relative.
+  it("307s an unknown query key to the canonical URL, uncached", async () => {
+    const res = await proxy(new NextRequest("http://localhost/watch?x=1"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("Location")).toBe("http://localhost/watch");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("redirects with 307, never 308", async () => {
+    // A 308 is cached by the requesting browser permanently, independent of any CDN, so a
+    // canonicalisation rule that ever changes would leave wrong permanent client-side redirects
+    // no server-side fix could reach. Same reason /search 307s.
+    const res = await proxy(new NextRequest("http://localhost/carrier/DL?utm_source=x"));
+    expect(res.status).toBe(307);
+    expect(res.status).not.toBe(308);
+  });
+
+  it("keeps a legitimate key while stripping the junk beside it", async () => {
+    const res = await proxy(new NextRequest("http://localhost/airport/ORD?y=2019&junk=1"));
+    expect(res.headers.get("Location")).toBe("http://localhost/airport/ORD?y=2019");
+  });
+
+  // The property that actually matters at this layer, given the deviation above: the origin
+  // comes from the REQUEST, not a hardcoded host -- a request against a different host must
+  // redirect to that same host, not to whatever default this process was last configured with.
+  // A mutant that hardcodes the origin (e.g. `request.url` replaced by a literal
+  // `"http://localhost:3000"`) would pass every test above, which all happen to use `localhost`,
+  // and only goes red here.
+  it("builds the Location from the request's own origin, not a hardcoded host", async () => {
+    const res = await proxy(new NextRequest("https://upgauge.example/route/JFK-LAX?cachebust=99"));
+    expect(res.headers.get("Location")).toBe("https://upgauge.example/route/JFK-LAX");
+  });
+
+  it("declines to cache a duplicated key, and does not redirect it", async () => {
+    // ?y=2019&y=2020 was cacheable at 4aa8087 because parseYear reads the FIRST y. There is no
+    // canonical form to send the caller to, so this is no-store on the page as rendered, not a
+    // redirect that silently drops one occurrence.
+    const res = await proxy(new NextRequest("http://localhost/airport/ORD?y=2019&y=2020"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Location")).toBeNull();
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("leaves /api/pivot's own query untouched, header and all", async () => {
+    // The handler already answers 400 + no-store for an unknown key; a 307 on a JSON endpoint
+    // would be worse. The raw-query header must still reach it.
+    const raw = "v=1&bogus=1";
+    const res = await proxy(new NextRequest(`http://localhost/api/pivot?${raw}`));
+    expect(res.headers.get("Location")).toBeNull();
+    expect(getReqHeader(res, RAW_QUERY_HEADER)).toBe(raw);
+  });
+
+  it("leaves /search's unbounded query untouched and unconditionally uncached", async () => {
+    const res = await proxy(new NextRequest("http://localhost/search?q=DL&x=1"));
+    expect(res.headers.get("Location")).toBeNull();
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 });
 

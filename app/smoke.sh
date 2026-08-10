@@ -1421,7 +1421,84 @@ check     "watch: 404 is no-store"                  "$HDRS" "no-store"
 check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize the preset .{1,10}nope"
 
 # ---------------------------------------------------------------------------------------------
-# 15. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.
+# 15. M8 Task 3: one canonical spelling per cacheable URL.
+#
+# Cloudflare's default cache key includes the full query string, so before this gate `?x=1..N`
+# minted an unbounded family of long-cached entries on every cacheable path -- measured on a
+# served build at 4aa8087, all ten of them, `/sitemap.xml?x=1` at 30 days and 2.4 MB. Each entry
+# is a guaranteed origin miss, against the exact cost model the CDN exists to protect.
+#
+# `check` is `grep -F`, a SUBSTRING test, which is a trap for a Location assertion: a needle of
+# '/airport/ORD?y=2019' is satisfied by 'location: /airport/ORD?y=2019&junk=1', which is the
+# failure being tested for. Every Location check below is `check_re` with a `$`-anchored regex.
+#
+# The origin prefix is optional in those regexes, and measurement (not assumption) is why: a bare
+# relative Location 500s here -- next/dist/server/web/adapter.js reads Location off whatever
+# proxy() returns and resolves it with no base URL, which throws on anything relative -- so
+# proxy.ts builds an ABSOLUTE Location from request.nextUrl.origin, and proxy.test.ts pins that
+# pre-adapter absolute value (it calls proxy() directly and never crosses adapter.js). That SAME
+# adapter code then strips the scheme+host back off before the response reaches the wire, because
+# the host it built always matches the request's own -- this section is what proves THAT, against
+# the real server, hence the optional prefix below rather than a bare assumption either way.
+echo "==> canonical query gate"
+for U in "/?utm_source=twitter|/" \
+         "/watch?x=1|/watch" \
+         "/route/JFK-LAX?cachebust=99|/route/JFK-LAX" \
+         "/carrier/DL?utm_source=x|/carrier/DL" \
+         "/robots.txt?x=1|/robots.txt" \
+         "/sitemap.xml?x=1|/sitemap.xml"; do
+  REQ="${U%%|*}"; WANT="${U##*|}"
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}${REQ}")
+  HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}${REQ}")
+  LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+  check     "canonical: ${REQ} is a 307"            "$CODE" '307'
+  check_re  "canonical: ${REQ} points at ${WANT}"   "$LOC"  "^[Ll]ocation: (http://127\.0\.0\.1:[0-9]+)?${WANT}$"
+  check     "canonical: ${REQ} is never cached"     "$HDRS" 'no-store'
+  check_not "canonical: ${REQ} is never long-cached" "$HDRS" 's-maxage'
+done
+
+# The case that proves stripping KEEPS the legitimate key rather than discarding the query
+# wholesale. A `check` substring needle would pass here even if `junk=1` survived.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/airport/ORD?y=2019&junk=1")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/ORD?y=2019&junk=1")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check    "canonical: a junk key beside y=2019 is a 307" "$CODE" '307'
+check_re "canonical: ...and y=2019 survives it exactly" "$LOC" \
+  "^[Ll]ocation: (http://127\.0\.0\.1:[0-9]+)?/airport/ORD\?y=2019$"
+
+# The keyless family. `?&&` has no key to reject, so a key-presence rule serves it as a
+# cacheable 200 -- which is why the predicate is byte-equality against the canonical string.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/watch?&&")
+check "canonical: a keyless query is still a 307" "$CODE" '307'
+
+# A duplicated key is NOT a redirect: choosing one occurrence would render a different query
+# than the URL encodes. ?y=2019&y=2020 was a long-cached 200 at 4aa8087, because parseYear reads
+# the first y.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/airport/ORD?y=2019&y=2020")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/ORD?y=2019&y=2020")
+check     "canonical: a duplicated y renders rather than redirecting" "$CODE" '200'
+check     "canonical: ...and is never cached"                        "$HDRS" 'no-store'
+check_not "canonical: ...and is never long-cached"                   "$HDRS" 's-maxage'
+
+# A two-filter permalink is a shape encode() itself emits (one f= per filter), so it must stay
+# clean AND long-cached. This is the check that stands between `repeatable` and a broken product;
+# no fixture in this file covered a repeated key before M8 Task 3.
+TWO='v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=origin_state:OR&f=dest_state:WA&n=25&g=op'
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${TWO}")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore?${TWO}")
+check "canonical: a two-filter permalink is a 200, not a redirect" "$CODE" '200'
+check "canonical: ...and keeps the project Cache-Control"          "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# The exemptions, asserted rather than assumed. /api/pivot already answers 400 + no-store for an
+# unknown key; a 307 on a JSON endpoint would be a worse answer than the 400 it gives.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?v=1&bogus=1")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/api/pivot?v=1&bogus=1")
+check     "canonical: /api/pivot keeps its own 400" "$CODE" '400'
+check     "canonical: ...under no-store"            "$HDRS" 'no-store'
+check_not "canonical: ...and is not redirected"     "$HDRS" 'location:'
+
+# ---------------------------------------------------------------------------------------------
+# 16. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.
 #
 # proxy.test.ts pins isDataLayerHealthy() with `vi.mock`/`mockRejectedValueOnce`: a fast, precise
 # unit test, but one that never crosses Next's own routing or a real DuckDB open the way this
@@ -1505,7 +1582,7 @@ rm -f "$BROKEN_DB"; BROKEN_DB=
 fi
 
 # ---------------------------------------------------------------------------------------------
-# 16. M6 Task 8's own gap check -- /watch/gauge against a database missing `mart_route_health`,
+# 17. M6 Task 8's own gap check -- /watch/gauge against a database missing `mart_route_health`,
 #     NOT `meta_pivot_dimensions`. Same method as the block just above (a second, short-lived
 #     `next start` against a broken COPY, never the original), but a different table dropped on
 #     purpose: `mart_route_health` is what every preset query actually reads (runPreset()), and
@@ -1585,7 +1662,7 @@ rm -f "$BROKEN_DB2"; BROKEN_DB2=
 fi
 
 # ---------------------------------------------------------------------------------------------
-# 17. M7 Task 10's own gap check -- /airport/ORD against a database whose dim_airport view is
+# 18. M7 Task 10's own gap check -- /airport/ORD against a database whose dim_airport view is
 #     missing its lat/lon COLUMNS, not the whole view and not a whole table. That distinction is
 #     the point: dropping the whole view (or the whole dim_airport TABLE, mirroring section 16's
 #     "TABLE not VIEW" note) would also break resolveAirportCode/airportCodesExist (both query
