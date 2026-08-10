@@ -107,6 +107,47 @@ describe("GET /api/pivot", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
+  // Whole-branch review, Finding 2. lib/canonicalQuery.ts declared this path exempt because the
+  // handler already answers 400 + no-store to an unknown KEY -- which says nothing about the
+  // keyless axis: urlstate.ts's splitPairs does `if (!chunk) continue`, so every one of
+  // `?<valid>&`, `&&`, `&&&`... decoded cleanly and came back 200 under
+  // `public, s-maxage=2592000` -- an unbounded, attacker-chosen family of 30-day CDN entries,
+  // each a full pivot render, ten times the TTL of any HTML page the proxy's gate protects.
+  // Deliberate behaviour change on a public endpoint: these were 200, they are now 400.
+  it("rejects a trailing '&' with 400 + no-store rather than serving a 30-day-cached 200", async () => {
+    const res = await GET(req(`${OK}&`));
+    expect(res.status).toBe(400);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect((await res.json()).error).toMatch(/non-canonical query/);
+  });
+
+  it("rejects an empty chunk in the middle of an otherwise valid query", async () => {
+    // `&&` carries no key for decode() to object to, and is a distinct CDN cache key regardless.
+    const res = await GET(req("v=1&&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op"));
+    expect(res.status).toBe(400);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("names the canonical spelling in the 400, so a client can fix the request", async () => {
+    const res = await GET(req(`${OK}&&`));
+    expect((await res.json()).error).toContain(`/api/pivot?${OK}`);
+  });
+
+  // The control the three tests above need, and the reason this endpoint's `keys` had to stop
+  // being NO_KEYS: a gate that called everything non-canonical would pass every one of them
+  // while 400ing every real query in the product. Two filters, because `f` is the one repeatable
+  // key and a blanket duplicate rule breaks exactly the multi-filter permalink this API exists
+  // to serve.
+  it("still answers a two-filter permalink 200, under the project cache header", async () => {
+    const two =
+      "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&f=origin_state:OR&f=dest_state:WA&n=5&g=op";
+    const res = await GET(req(two));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=2592000, stale-while-revalidate=86400",
+    );
+  });
+
   it("turns an unexpected (non-UrlStateError) failure into an uncached 500 with no leaked detail", async () => {
     // Simulates a failure deeper than decode()'s own validation -- e.g. a transient catalog
     // read problem -- surfacing as a plain Error rather than a UrlStateError. The handler

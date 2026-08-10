@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { canonicalize } from "@/lib/canonicalQuery";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { RAW_PATH_HEADER, routeSlugFromPath } from "@/lib/rawPath";
 import { resolveRoutePair } from "@/lib/routePair";
@@ -9,7 +10,8 @@ import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
 import { presetSlugFromPath, presetBySlug } from "@/lib/watch";
 import { parseYear } from "@/lib/year";
-import { loadAllowlist } from "@/lib/db";
+import { decode } from "@/lib/pivot/urlstate";
+import { dataAsOf, loadAllowlist } from "@/lib/db";
 
 // `proxy`, not `middleware`: Next 16 deprecated and renamed the convention
 // (node_modules/next/dist/docs/01-app/02-guides/upgrading/version-16.md, "middleware to
@@ -45,6 +47,165 @@ export async function proxy(request: NextRequest) {
   // can stay a Server Component and still name the slug that was requested.
   headers.set(RAW_PATH_HEADER, pathname);
   const response = NextResponse.next({ request: { headers } });
+
+  // CRITICAL FIX (whole-branch review round 2, Finding 1 -- this is the milestone controller's
+  // ruling, not a design choice made here). An RSC request must never be redirected by ANYTHING
+  // in this file, and must never be cached. Next's own client appends a `_rsc=<hash>`
+  // cache-busting query param to every RSC fetch (`set-cache-busting-search-param.js`) and sets
+  // the `RSC: 1` request header (`fetch-server-response.js`); `skipProxyUrlNormalize` (above)
+  // is what lets that raw query reach `canonicalize()` unstripped, and `_rsc` is not in ANY
+  // row's `keys` -- so the gate below used to 307 it away. Next's OWN server then sees an RSC
+  // request whose `_rsc` is missing or wrong (`experimental.validateRSCRequestHeaders`, default
+  // `true`, `base-server.js`) and 307s BACK to the same URL WITH the correct hash. The two
+  // redirects alternate forever -- Next's own source names this exact hazard ("It only affects
+  // redirects that occur in a middleware or a third-party proxy",
+  // `fetch-server-response.js`). Measured on a served build: `/`, `/explore`,
+  // `/route/JFK-LAX`, `/carrier/DL`, `/airport/ORD`, `/watch`, `/watch/gauge`,
+  // `/aircraft/737-800` all hit the redirect cap and never settle. This is reachable from a real
+  // browser, not only curl: the client bundle ships the cache-buster on every RSC fetch, and
+  // `TopBar.tsx` puts a dozen `next/link`s on every page with prefetch on by default in
+  // production, so every prefetch and every client-side navigation hits this.
+  //
+  // Fix: an RSC request never reaches `canonicalize()` at all -- it is answered `no-store`,
+  // unconditionally, before any branch (including the gate below) runs. That closes the loop
+  // (this file never redirects an RSC request, so there is nothing left to alternate with
+  // Next's own redirect) without reopening the hole the obvious fix would: adding `_rsc` to
+  // every row's `keys` would make a PLAIN `GET /watch?_rsc=1..N` -- no `RSC` header, so Next's
+  // own hash check never runs at all -- clean and long-cached, the exact unbounded-cache-key
+  // family this gate exists to close, reopened by an attacker who simply never sends the
+  // header. Gating on the HEADER rather than the query key closes both variants: a genuine RSC
+  // request never redirects and is never cached, and a request that merely SETS `RSC` to probe
+  // for a bypass gets `no-store` regardless of what `_rsc` says, so there is no cache entry for
+  // either shape to fill. It also closes a hazard that predates this branch: a shared CDN that
+  // ignores `Vary` (Cloudflare ignores everything but `Accept-Encoding` by default) could
+  // otherwise serve a stored RSC payload to a plain document request.
+  //
+  // The cost, accepted deliberately: client-side navigations and prefetches are never served
+  // from a CDN and always reach the origin -- an uncached hit is a 40-100 ms DuckDB query on an
+  // always-on box, and correctness ahead of a CDN is this milestone's entire purpose.
+  if (request.headers.get("RSC") !== null) {
+    response.headers.set("Cache-Control", NO_STORE);
+    return response;
+  }
+
+  // M8 Task 3 (epic #3). The canonical-query gate, ahead of every branch below because its
+  // answer depends on none of them, and because a `strip` must not pay for a database probe it
+  // is about to redirect away from. `lib/canonicalQuery.ts` carries the measurements and the
+  // per-path key table; what belongs here is the response shape.
+  //
+  // `new NextResponse`, NOT `NextResponse.redirect()`: the latter parses its argument into a URL,
+  // which is exactly the re-serialisation this file exists to route around (see `rawQuery`
+  // above -- `nextUrl` re-encodes, and that broke every filtered query on both entry points).
+  //
+  // The `Location` VALUE below is built ABSOLUTE (`request.nextUrl.origin` + the canonical path),
+  // not the bare relative string `canonical.location` the first version of this gate returned --
+  // measured against a served build, a bare relative Location 500s every single redirect here,
+  // unconditionally: `next/dist/server/web/adapter.js` (the code that runs AFTER this function
+  // returns, on every request, not just middleware-authored redirects) reads `Location` off
+  // WHATEVER response comes back and does `new NextURL(redirect, { forceLocale: false, ... })`
+  // with NO base argument -- and `NextURL`'s constructor resolves that to `new URL(redirect,
+  // undefined)`, which throws `TypeError [ERR_INVALID_URL]` for any relative string. This is not
+  // a `NextResponse.redirect()`-specific behavior (that factory forces an absolute URL itself,
+  // via `validateURL()`) -- it is what the ADAPTER does to every response with a Location header,
+  // built by any means. The comment above (this file exists to route around `NextResponse.redirect
+  // ()`'s re-serialisation) is still the reason a raw `new NextResponse` is used instead of that
+  // factory; it does not mean the Location value itself can stay relative.
+  //
+  // The CDN-facing property survives anyway, but NOT via that same `adapter.js` code -- whole-
+  // branch review round 2 (Finding 3) found that half of the citation wrong. The
+  // `redirectURL.host === requestURL.host` / `getRelativeURL` branch quoted above is itself
+  // gated on `!process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE`, and `skipProxyUrlNormalize`
+  // (next.config.ts) sets that env var TRUE -- so that whole branch is dead-code eliminated
+  // from THIS build: confirmed absent from `app/.next/server/chunks/`, and `getRelativeURL`
+  // appears nowhere under `.next/server/`. Only the CONSTRUCTOR call two paragraphs up (the one
+  // that throws) survives elimination; the relativization above never runs in this file's
+  // compiled output at all.
+  //
+  // What actually relativizes it: `next/dist/server/lib/router-utils/resolve-routes.js` --
+  // Next's own router/server process, which calls the compiled proxy bundle above rather than
+  // being part of it -- reads the raw `location` header this function returns and, for any
+  // allowed redirect status (307 included), calls `getRelativeURL(value, initUrl)`
+  // UNCONDITIONALLY (~line 492 there; no env-var gate on this call site). `initUrl` (~lines
+  // 117-118 of the same file) is built from THIS SERVER'S OWN `opts.hostname`/`opts.port` bind
+  // config, or the bare already-relative `req.url` -- it only reads the incoming request's
+  // `Host` header at all when `experimental.trustHostHeader` is set, which this repo's
+  // `next.config.ts` does not set. `request.nextUrl.origin`, which this function uses to build
+  // `Location` above, is resolved from that SAME request Next's server already parsed -- so the
+  // two origins `getRelativeURL` compares cannot disagree, and the relativization always fires
+  // regardless of what a CLIENT claims its `Host` is. Measured directly, not merely inferred:
+  // spoofing the incoming request's `Host` header, and separately its `X-Forwarded-Host`, to a
+  // domain this server was never configured with still produced a bare relative
+  // `location: /watch` -- never absolute, never the spoofed host (this task's fix report has
+  // the exact curl output). `proxy.test.ts` cannot see any of this -- it calls `proxy()`
+  // directly and never crosses `resolve-routes.js` -- so its `Location` assertions necessarily
+  // pin the pre-relativization (absolute) value; only `app/smoke.sh`'s canonical-query section,
+  // against a served build, asserts the actual wire bytes.
+  //
+  // 307, never 308: CLAUDE.md's rule for `/search` generalises to every redirect this project
+  // mints. A 308 is cached by the requesting browser permanently, so if this gate's key table
+  // ever gains a key, every browser that saw the old 308 keeps stripping it forever.
+  //
+  // `no-store` on the redirect itself, so the junk URL fills no cache entry either -- the whole
+  // point is that an unbounded family of spellings cannot become an unbounded family of CDN
+  // entries. The canonical URL it points at is cached normally by the branches below.
+  //
+  // MUTANT 15 (M8 Task 3, run and reverted): moved this block below the `ENTITY_ROUTES` loop and
+  // measured against a served build. `/route/JFK-LAX?cachebust=99` and `/carrier/DL?utm_source=x`
+  // -- the two paths this plan named -- kept passing: the `strip` branch always builds a fresh
+  // `NextResponse`, never reuses `response`, so no branch's header can land on it regardless of
+  // position, and ENTITY_ROUTES has no early return of its own for the gate to fall behind. What
+  // actually went red: every path with its OWN early `return response` ABOVE the new position
+  // (`/`, `/watch`, `/sitemap.xml`, `/robots.txt`) never reached the moved gate at all, so
+  // `/watch?x=1` served its ordinary 200 under its ordinary HTML_CACHE, unredirected -- the same
+  // property this comment exists to protect, by a different mechanism. Full detail in this
+  // task's report.
+  //
+  // NO try/catch around the call below, deliberately, and the deliberation was earned: an earlier
+  // revision of `canonicalize()` threw on a `rawQuery` carrying a leading `?`, calling it a wiring
+  // bug -- and `rawQuery` above is `.replace(/^\?/, "")`, NON-GLOBAL, so `GET /watch??x=1`
+  // delivered exactly that and 500ed every one of the twelve matcher paths for any client
+  // (measured at d109845: `/watch?x=1` 307, `/watch??x=1` 500). The fix is that the function is
+  // TOTAL -- every `matches` predicate is a string test or the already-guarded
+  // `entitySlugFromPath`, and a leading `?` is now just another non-canonical spelling
+  // (`canonicalQuery.test.ts` asserts totality over a corpus of hostile inputs rather than
+  // leaving it a claim). A catch here would be the wrong repair for that: swallowing to `clean`
+  // silently re-opens the unbounded cache family this gate exists to close, and swallowing to
+  // `reject` makes a real bug invisible for as long as it takes someone to notice the site is
+  // uncacheable.
+  //
+  // `new URL(canonical.location, origin)` re-serialises, which is the one thing this file exists
+  // to avoid everywhere else -- so it is pinned rather than assumed. Measured against Node's own
+  // URL for `smoke.sh`'s RESERVED permalink (every reserved character this format must survive):
+  // `new URL("/explore?" + RESERVED, origin).toString()` is byte-identical to `origin +
+  // "/explore?" + RESERVED`. It is safe because the URL serializer's QUERY percent-encode set is
+  // only C0 controls, space, `"`, `#`, `<` and `>` -- none of `: , % + -`, which is all this
+  // format's structural punctuation. `app/smoke.sh`'s canonical-query section asserts the wire
+  // bytes of that exact redirect, because "safe by the spec I read" is how the last three
+  // corrections on this branch were written.
+  //
+  // It is also an open-redirect SHAPE -- `new URL("//evil.com", origin)` is `http://evil.com/` --
+  // and it is unreachable for two independent reasons, neither of them luck. (1) `canonical.location`
+  // begins with the matched row's own pathname, and no `QUERY_ROWS` predicate can accept a
+  // `//`-leading one: each is either `p === "/literal"` or an `entitySlugFromPath` prefix test
+  // requiring `/<prefix>/` at position 0, so `//evil.com` matches no row and comes back `clean`
+  // with no Location at all (asserted in `canonicalQuery.test.ts`). (2) Next answers `GET
+  // //evil.com` with its own 308 to `/evil.com` before `proxy()` runs at all (asserted on a served
+  // build in `app/smoke.sh`). Both are assertions, so a future row with a looser predicate breaks
+  // a test rather than opening a redirector.
+  const canonical = canonicalize(pathname, rawQuery);
+  if (canonical.kind === "strip") {
+    return new NextResponse(null, {
+      status: 307,
+      headers: {
+        Location: new URL(canonical.location, request.nextUrl.origin).toString(),
+        "Cache-Control": NO_STORE,
+      },
+    });
+  }
+  if (canonical.kind === "reject") {
+    response.headers.set("Cache-Control", NO_STORE);
+    return response;
+  }
 
   // CLAUDE.md's caching IS the cost control, not the hosting tier (docs/architecture/
   // hosting.md). /api/pivot sets its own on the JSON response, including `no-store` on
@@ -94,16 +255,30 @@ export async function proxy(request: NextRequest) {
   //
   // M4d generalized that from one route to four: see ENTITY_ROUTES below.
   //
+  // M8 Task 1 (#13). `/` was the one page route absent from the matcher below, so it served
+  // Next's own force-dynamic fallback -- measured on a served build at 4aa8087:
+  // `private, no-cache, no-store, max-age=0, must-revalidate`, which forbids caching everywhere
+  // including the CDN, on the front door, which queries DuckDB to render DATA AS OF. CLAUDE.md
+  // already stated the rule this violated: a new page route must be added to this matcher or it
+  // ships uncached and without the raw-query and pathname headers.
+  if (pathname === "/") {
+    response.headers.set("Cache-Control", (await isFreshnessReadable()) ? HTML_CACHE : NO_STORE);
+    return response;
+  }
   // M5 Task 7, Part A: `/explore` has no slug to resolve, so unlike every ENTITY_ROUTES row it
   // ran NO database query at all -- this branch used to set the long cache unconditionally.
   // That is the exact gap docs/architecture/hosting.md § "The gap" measured: a served build
   // pointed at a database missing a catalog view 500s on /explore, and the response still
   // carried the project's then-30-day header because nothing on this path had asked the
-  // database anything before committing to it. isDataLayerHealthy() is /explore's equivalent
-  // of an entity row's resolve() -- the proxy's own probe, run and caught BEFORE the header is
-  // chosen, never after.
+  // database anything before committing to it. isExploreCacheable() (below) is /explore's
+  // equivalent of an entity row's resolve() -- the proxy's own probe, run and caught BEFORE the
+  // header is chosen, never after. M8 Task 4 widened that probe from a bare data-layer health
+  // check to include the permalink's own validity; see that function's own doc comment.
   if (pathname === "/explore") {
-    response.headers.set("Cache-Control", (await isDataLayerHealthy()) ? HTML_CACHE : NO_STORE);
+    response.headers.set(
+      "Cache-Control",
+      (await isExploreCacheable(rawQuery)) ? HTML_CACHE : NO_STORE,
+    );
     return response;
   }
   // M5 Task 8. `/search` runs no proxy-side resolution at all -- unlike every branch above and
@@ -220,21 +395,38 @@ export async function proxy(request: NextRequest) {
   return response;
 }
 
-/** `/explore`'s fail-safe probe (M5 Task 7, Part A). Reuses `loadAllowlist()` rather than
- * inventing a cheaper standalone query, for two reasons: (1) it is exactly what `ExploreView`
- * (`app/src/app/explore/page.tsx`) calls FIRST, before its own try/catch -- which wraps only
- * `decode()` and `runPivot()` -- so a broken `meta_pivot_dimensions` / `meta_pivot_measures`
- * catalog view throws there today, unguarded, precisely the scenario this closes; and (2) the
- * ENTITY_ROUTES precedent already accepts paying for a second, proxy-side copy of a query the
- * page will also run (see isCacheable's own doc comment: "This is a SECOND resolution for the
- * request").
+/** A cheap, generic health probe: succeeds iff `loadAllowlist()` succeeds, nothing more.
  *
- * What this does NOT cover, and cannot from here: a throw AFTER this probe succeeds -- e.g.
- * `dataAsOf()` failing when `loadAllowlist()` didn't, or `runPivot()` failing on a query this
- * exact allowlist read could not have anticipated (a template bug, a value that passes
- * `decode()`'s structural check but not the executable SQL, an OOM). Those are page-specific
- * throws whose proxy resolution succeeded, and closing them is Part B's job, not this
- * function's -- see docs/architecture/hosting.md § "The gap" for which exit Part B took.
+ * Callers, as of M8 Task 4: `/sitemap.xml` and `/robots.txt` (unconditionally, whenever the
+ * pathname matches), and `/watch` plus every `/watch/:preset` (gated additionally on the slug
+ * being a known preset -- see that branch's own comment, above). `/explore` used this function
+ * through M5-M7; M8 Task 4 gave it `isExploreCacheable()` (below) instead, which wraps this same
+ * `loadAllowlist()` call but additionally requires the permalink to `decode()` -- a check with no
+ * meaning for a slug-only route like `/watch` or a slug-less one like `/sitemap.xml`.
+ *
+ * The sitemap/robots pair shares a branch, not a risk profile. Neither calls `loadAllowlist()`
+ * itself (no reference to it in `app/sitemap.ts` or `app/robots.ts`) -- but `app/sitemap.ts`
+ * calls `lib/sitemap.ts`'s `sitemapEntries()`, which runs its own DuckDB queries and can throw
+ * (the F4 comment on that branch, above, names the two functions that do by design), while
+ * `app/robots.ts` runs no query of any kind: its own header comment says so directly ("This one
+ * reads no database at all (BASE_URL is an env var)"), and its output is a static object built
+ * only from an env var. So `/robots.txt` is gated on a probe it cannot fail: this branch answers
+ * both pathnames with one `if` and one `Cache-Control` expression, and `/robots.txt` inherits the
+ * probe as a side effect of that sharing, not because anyone reasoned about its own risk and
+ * decided it needed one. Flagged here as a pointless gate, not fixed, since changing it is
+ * outside this task.
+ *
+ * What this does NOT cover, and cannot from here: a throw AFTER this probe succeeds, from a
+ * query this bare check never touches. Measured for `/sitemap.xml`, the one caller this
+ * applies to: `app/sitemap.ts` runs four DuckDB queries via `lib/sitemap.ts`, and `parseLastmod` /
+ * `dedupeAircraftBySlug` both throw by design (the F4 finding, above) -- none of that is
+ * `loadAllowlist()`, so a break in any of them still 500s `/sitemap.xml` under `PROJECT_CACHE`.
+ * `app/smoke.sh`'s M6 Task 8 gap check measured the identical shape for `/watch/gauge`: dropping
+ * `mart_route_health` (what `WatchPresetView`'s `runPreset()` actually reads) leaves
+ * `loadAllowlist()` healthy, so the proxy commits to `HTML_CACHE` before the page ever runs its
+ * own query, and the 500 that follows still ships the cacheable header. Open gap, and NOT the
+ * same one `/explore` carries (that one is `isExploreCacheable`'s to describe, below) -- see
+ * docs/architecture/hosting.md § "The gap" for the general account.
  *
  * Errors are swallowed to `false`, matching `isCacheable`'s own reasoning below: a transient
  * failure here would 500 a request the page might well still serve, and declining the cache is
@@ -242,6 +434,60 @@ export async function proxy(request: NextRequest) {
 async function isDataLayerHealthy(): Promise<boolean> {
   try {
     await loadAllowlist();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** `/explore`'s predicate: the data-layer probe AND the permalink's own validity, in one call.
+ *
+ * M8 Task 4. The canonical-query gate above rejects unknown query KEYS, but junk VALUES ride
+ * legitimate ones: `ExploreView` catches `UrlStateError`/`PivotError` and renders "This permalink
+ * can't be read" as a **200** (`app/src/app/explore/page.tsx`), which the proxy long-cached --
+ * measured at 4aa8087, `?d=junk1..N` was an unbounded family of cacheable error pages that no
+ * key-level rule can see. `decode()` is exactly what `ExploreView` calls next, on the same raw
+ * string, and it ends by running `renderPivot()` to validate identifiers -- so this costs no
+ * extra database query beyond the `loadAllowlist()` this branch already made as its probe.
+ *
+ * Consequence, accepted deliberately rather than discovered later: **bare `/explore` is
+ * `no-store`**, because `decode("")` throws `missing required key 'v'` and that page has always
+ * rendered the error state for it. Nothing links it -- `TopBar` links `/` and `/watch`, the front
+ * door links the full sample permalink, and `app/sitemap.ts` has no `/explore` entry.
+ *
+ * NOT extended to `runPivot()` throwing after `decode()` has succeeded: that is the residual gap
+ * `docs/architecture/hosting.md` § "The gap" documents, and this task does not change it. */
+async function isExploreCacheable(rawQuery: string): Promise<boolean> {
+  try {
+    const allowlist = await loadAllowlist();
+    decode(rawQuery, allowlist);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** `/`'s fail-safe probe, and deliberately NOT `isDataLayerHealthy()`.
+ *
+ * The two probes read different objects, and only this one reads what the front door depends on:
+ * `isDataLayerHealthy()` calls `loadAllowlist()`, which reads the pivot catalog views, while
+ * `app/src/app/page.tsx` calls `dataAsOf()`, which reads `fct_segment_month` -- a view over
+ * `data/parquet/`. A deployment holding `upgauge.duckdb` but not its Parquet tree (`make
+ * portability` negative 1, already reproducible) leaves `loadAllowlist()` succeeding while
+ * `dataAsOf()` throws, so a `loadAllowlist`-shaped probe here would stamp `HTML_CACHE` on a `/`
+ * that is about to 500. That is M6 Task 8's measured bug (§ "The gap", hosting.md) with a
+ * different table name: `loadAllowlist()` never opens a Parquet file at all -- it reads only the
+ * pivot catalog views -- which is exactly why it cannot stand in for this probe.
+ *
+ * Costs one extra `data_as_of` per request -- 4.8-5.5 ms measured against the real warehouse --
+ * on top of the page's own call. That is the "SECOND resolution for the request" trade
+ * `isCacheable`'s doc comment already documents and accepts.
+ *
+ * Errors are swallowed to `false`, same reasoning as `isDataLayerHealthy()` and `isCacheable()`:
+ * declining the cache costs a cache miss, and the page still surfaces the real failure loudly. */
+async function isFreshnessReadable(): Promise<boolean> {
+  try {
+    await dataAsOf();
     return true;
   } catch {
     return false;
@@ -466,8 +712,14 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 //
 // STILL eleven at M7 Task 9 -- `/airport/:code` was already here; only its `ENTITY_ROUTES` row
 // moved into its own branch above (see that branch's doc comment, and `ENTITY_ROUTES`'s own).
+//
+// TWELVE as of M8 Task 1 (#13) -- `/` added here, an exact-path entry like `/search`,
+// `/sitemap.xml`, `/robots.txt` and `/watch`. It is the only entry whose branch probes
+// `dataAsOf()` rather than `isDataLayerHealthy()`; see `isFreshnessReadable`'s doc comment for
+// why those two are not interchangeable.
 export const config = {
   matcher: [
+    "/",
     "/explore",
     "/api/pivot",
     "/route/:pair",

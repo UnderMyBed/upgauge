@@ -33,7 +33,11 @@ const URL_TO_GROUPING: ReadonlyMap<string, Grouping> = new Map([
   ["op", "operating"],
   ["ml", "mainline"],
 ]);
-const ALLOWED_KEYS = new Set(["v", "k", "d", "m", "t", "f", "s", "n", "g"]);
+/** Exported for `lib/canonicalQuery.ts`'s `/explore` row (M8 Task 2). One source of truth: a
+ * second hand-maintained copy of this set would let the proxy strip a key `decode()` accepts. */
+export const ALLOWED_KEYS: ReadonlySet<string> = new Set([
+  "v", "k", "d", "m", "t", "f", "s", "n", "g",
+]);
 
 /** Python's urllib.parse.quote(v, safe=""). encodeURIComponent leaves ! * ' ( ) literal;
  * Python does not, and the goldens pin Python. Real data hits this: 119 carrier codes

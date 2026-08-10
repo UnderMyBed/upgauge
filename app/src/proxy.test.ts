@@ -7,14 +7,18 @@ import { describe, expect, it, vi } from "vitest";
 // for that (route.test.ts, page.test.tsx) is a partial mock, not a fake in-memory database.
 vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
-  return { ...actual, loadAllowlist: vi.fn(actual.loadAllowlist) };
+  return {
+    ...actual,
+    loadAllowlist: vi.fn(actual.loadAllowlist),
+    dataAsOf: vi.fn(actual.dataAsOf),
+  };
 });
 
 import { NextRequest } from "next/server";
 import { proxy } from "@/proxy";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { RAW_PATH_HEADER } from "@/lib/rawPath";
-import { loadAllowlist } from "@/lib/db";
+import { dataAsOf, loadAllowlist } from "@/lib/db";
 
 // M5 Task 7, Part B fallback: /explore and every entity page get the shorter HTML_CACHE value
 // (proxy.ts's own constant, renamed and re-documented there), not CLAUDE.md's project-wide
@@ -50,7 +54,14 @@ describe("proxy", () => {
   });
 
   it("sets the project's Cache-Control on /explore", async () => {
-    const res = await proxy(new NextRequest("http://localhost/explore?v=1"));
+    // A permalink that actually DECODES. This test used `?v=1` until M8 Task 4, which was
+    // missing four required keys -- fine while the branch only probed the data layer, wrong once
+    // cacheability includes the permalink's own validity.
+    const res = await proxy(
+      new NextRequest(
+        "http://localhost/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op",
+      ),
+    );
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
 
@@ -65,7 +76,15 @@ describe("proxy", () => {
     vi.mocked(loadAllowlist).mockRejectedValueOnce(
       new Error("duckdb: Catalog Error: Table with name meta_pivot_dimensions does not exist"),
     );
-    const res = await proxy(new NextRequest("http://localhost/explore?v=1"));
+    // Same decoding permalink as the healthy-case test above, added M8 Task 4: with `?v=1` this
+    // would pass for two reasons at once once cacheability includes decode() -- the mocked
+    // rejection AND the permalink's own failure to decode -- which makes it vacuous as a probe
+    // test. The mocked loadAllowlist() rejection is the only reason this can go red now.
+    const res = await proxy(
+      new NextRequest(
+        "http://localhost/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op",
+      ),
+    );
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
@@ -73,6 +92,27 @@ describe("proxy", () => {
   // database) proves the SAME code path returns CACHE when loadAllowlist() is not made to
   // fail, so the assertion above is actually discriminating on the probe's outcome rather than
   // the branch never being reachable at all.
+
+  // M8 Task 4. The canonical-query gate rejects unknown query KEYS; junk VALUES ride legitimate
+  // ones. ExploreView catches UrlStateError/PivotError and renders "This permalink can't be read"
+  // as a 200 (app/src/app/explore/page.tsx), and the proxy long-cached it -- so at 4aa8087
+  // `?d=junk1..N` was an unbounded family of cacheable error pages. `d=junk` reaches decode()'s
+  // renderPivot() call, which raises "unknown dimension 'junk'".
+  it("does not long-cache /explore when the permalink does not decode", async () => {
+    const res = await proxy(
+      new NextRequest("http://localhost/explore?v=1&k=seg&d=junk&m=seats&t=2025-05:2026-04"),
+    );
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not long-cache a bare /explore, which has always been the error page", async () => {
+    // decode("") throws `missing required key 'v'`, so bare /explore renders the error state and
+    // is not a cacheable answer. Accepted consequence, and nothing links it: TopBar links / and
+    // /watch, the front door links the full sample permalink, and app/sitemap.ts has no
+    // /explore entry.
+    const res = await proxy(new NextRequest("http://localhost/explore"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
 
   it("sets the project's Cache-Control on a real /route/<pair>", async () => {
     // Critical fix, final whole-branch review: the matcher used to omit /route/<pair>
@@ -168,9 +208,9 @@ describe("proxy", () => {
 
   // The prefix readers must not net each other, or a request would be resolved by the wrong
   // entity's lookup -- and `/aircraft/...` sits under a prefix that shares its first four
-  // characters with nothing else here only by luck of naming.
+  // characters with nothing else here only by luck of naming. `/` itself moved out of this list
+  // in M8 Task 1 (#13): it now has its own branch above and is no longer "not an entity page".
   it.each([
-    ["/", null],
     ["/routes/JFK-LAX", null],
     ["/airports/SEA", null],
     ["/carrierz/DL", null],
@@ -346,12 +386,15 @@ describe("proxy", () => {
 
   it("reads y from the raw query string, not from a normalized searchParams", async () => {
     // Same discipline as the raw-query tests at the top of this file: constructing a
-    // NextRequest here does not exercise Next's own normalization, but this pins that the
-    // value read is whatever rawQuery carries, by using a key ordering searchParams would not
-    // reorder differently -- a regression to `request.nextUrl.searchParams.get("y")` would
-    // still pass this one, so app/smoke.sh is what actually proves the raw-header path (see
-    // that file's /airport section).
-    const res = await proxy(new NextRequest("http://localhost/airport/SEA?y=2020&other=1"));
+    // NextRequest here does not exercise Next's own normalization, so this test cannot itself
+    // distinguish rawQuery from request.nextUrl.searchParams -- app/smoke.sh's own /airport
+    // section is what actually proves the raw-header path end to end. This used to carry a
+    // second, unrelated `&other=1` key to prove the branch reads a real query rather than an
+    // empty one, but M8 Task 3's canonicalization gate (canonicalize(), lib/canonicalQuery.ts)
+    // now 307s any key outside AIRPORT_KEYS = {"y"} before this branch ever runs -- so a lone
+    // `y` is the only shape this branch still sees, and that second key would make this test
+    // assert a redirect, not a cache header.
+    const res = await proxy(new NextRequest("http://localhost/airport/SEA?y=2020"));
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
 
@@ -363,6 +406,183 @@ describe("proxy", () => {
     expect(config.matcher).not.toContain("/api/health");
     // Anti-vacuity: prove this test is reading the real matcher.
     expect(config.matcher).toContain("/api/pivot");
+  });
+
+  // M8 Task 1 (#13). `/` was the one page route missing from config.matcher, so it fell through
+  // to Next's own force-dynamic fallback: measured on a served build at 4aa8087:
+  // `private, no-cache, no-store, max-age=0, must-revalidate` -- which forbids caching
+  // EVERYWHERE including the CDN, on the front door, which queries DuckDB for DATA AS OF.
+  it("sets the project's Cache-Control on /", async () => {
+    const res = await proxy(new NextRequest("http://localhost/"));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  // The bug this catches: giving `/` the isDataLayerHealthy() probe every other branch uses.
+  // That probe calls loadAllowlist(), which reads the pivot catalog views; `/`'s page reads
+  // dataAsOf(), which reads fct_segment_month -- a view over data/parquet/. A deployment holding
+  // upgauge.duckdb but not its Parquet tree (`make portability` negative 1) leaves loadAllowlist()
+  // succeeding while dataAsOf() throws, so the wrong probe stamps HTML_CACHE on a 500. That is
+  // M6 Task 8's measured bug with a different table name.
+  it("does not long-cache / when dataAsOf throws", async () => {
+    vi.mocked(dataAsOf).mockRejectedValueOnce(
+      new Error("duckdb: IO Error: No files found that match the pattern data/parquet/..."),
+    );
+    const res = await proxy(new NextRequest("http://localhost/"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // The other half of the same pair, and the reason it is a PAIR: a wrong probe passes every
+  // test where both probes agree, so only an input where they DISAGREE can tell them apart.
+  // `/` must not consult the pivot catalog at all. Asserted as "was never called" rather than
+  // by rejecting loadAllowlist, because a queued mockRejectedValueOnce that `/` never consumes
+  // would leak into whichever later test calls loadAllowlist first.
+  it("never asks the pivot catalog about /", async () => {
+    vi.mocked(loadAllowlist).mockClear();
+    await proxy(new NextRequest("http://localhost/"));
+    expect(vi.mocked(loadAllowlist)).not.toHaveBeenCalled();
+  });
+
+  // M8 Task 3 (epic #3). Cloudflare's default cache key includes the full query string, so
+  // before this gate `?x=1..N` minted an unbounded family of long-cached entries on every
+  // cacheable path -- measured at 4aa8087, on all TEN that this gate answers for. `/api/pivot` is
+  // an ELEVENTH cacheable path (its own successes take the same 30-day PROJECT_CACHE) and it
+  // carried the same disease on a different axis, closed in its own handler rather than here --
+  // see app/api/pivot/route.ts and lib/canonicalQuery.ts's `queryVerdict`. `/search` is the
+  // twelfth matcher entry and the only one that is never cacheable at all.
+  //
+  // DEVIATION from the task brief's literal code, measured rather than assumed (see the doc
+  // comment on this gate in proxy.ts, and this task's report for the exact served-build error):
+  // the brief's `Location: canonical.location` (bare relative) 500s EVERY redirect below on a
+  // served build. `next/dist/server/web/adapter.js` reads `Location` off whatever `proxy()`
+  // returns and does `new NextURL(redirect, {...})` with no base argument -- `ERR_INVALID_URL`
+  // for any relative string, for a `new NextResponse` exactly as much as for
+  // `NextResponse.redirect()` (that factory only forces its OWN argument absolute; it does not
+  // change what the adapter does to the header afterward). So every `Location` value below is
+  // built ABSOLUTE, scoped to `request.nextUrl.origin`. What relativizes it back down before the
+  // wire is NOT that same adapter code (whole-branch review round 2, Finding 3: that
+  // relativization branch is dead-code eliminated by `skipProxyUrlNormalize` in this build) --
+  // it is `next/dist/server/lib/router-utils/resolve-routes.js`'s unconditional
+  // `getRelativeURL(location, initUrl)`, where `initUrl` is THIS SERVER'S OWN bind config, not
+  // the client's `Host` header (proxy.ts's own doc comment on this gate has the full citation
+  // and the Host-spoofing measurement that confirms it). `proxy()` alone can only see the
+  // pre-relativization (absolute) value, which is what every assertion below pins;
+  // `app/smoke.sh`'s canonical-query section is what asserts the actual wire bytes are relative.
+  it("307s an unknown query key to the canonical URL, uncached", async () => {
+    const res = await proxy(new NextRequest("http://localhost/watch?x=1"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("Location")).toBe("http://localhost/watch");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // CRITICAL, whole-branch review. `rawQuery` above is
+  // `new URL(request.url).search.replace(/^\?/, "")` and that regex is NOT global, so a doubled
+  // `?` in the request line reaches canonicalize() with one `?` still on the front. It used to
+  // throw there ("a wiring bug, not something a real request can trigger"), proxy() has no
+  // try/catch around the call, and Next answered 500 -- on all twelve matcher paths, `/` and
+  // `/sitemap.xml` included, to any client with no auth and no unusual encoding. Measured on a
+  // served build at d109845, and re-measured by restoring the throw on top of the fix:
+  // `/watch?x=1` 307, `/watch??x=1` 500, and the same for every other doubled-`?` row in
+  // app/smoke.sh §15. `?x=1..N` behind a doubled `?` is itself an unbounded family of
+  // origin-hitting 500s -- the same cost shape this gate exists to close.
+  it("307s a doubled '?' instead of 500ing on it", async () => {
+    const res = await proxy(new NextRequest("http://localhost/watch??x=1"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("Location")).toBe("http://localhost/watch");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("keeps the legitimate key behind a doubled '?', rather than dropping it", async () => {
+    // The discriminating half: a fix that answered `?y=2019` by treating "?y" as an unknown key
+    // would 307 to `/airport/ORD` -- no 500, and the year silently gone. The location is also the
+    // one `/airport/ORD??y=2019` and `/airport/ORD???y=2019` must SHARE, or the same typo typed
+    // twice is two cache entries again (canonicalQuery.test.ts pins the run-collapsing rule).
+    const res = await proxy(new NextRequest("http://localhost/airport/ORD??y=2019"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("Location")).toBe("http://localhost/airport/ORD?y=2019");
+  });
+
+  it("redirects with 307, never 308", async () => {
+    // A 308 is cached by the requesting browser permanently, independent of any CDN, so a
+    // canonicalisation rule that ever changes would leave wrong permanent client-side redirects
+    // no server-side fix could reach. Same reason /search 307s.
+    const res = await proxy(new NextRequest("http://localhost/carrier/DL?utm_source=x"));
+    expect(res.status).toBe(307);
+    expect(res.status).not.toBe(308);
+  });
+
+  it("keeps a legitimate key while stripping the junk beside it", async () => {
+    const res = await proxy(new NextRequest("http://localhost/airport/ORD?y=2019&junk=1"));
+    expect(res.headers.get("Location")).toBe("http://localhost/airport/ORD?y=2019");
+  });
+
+  // The property that actually matters at this layer, given the deviation above: the origin
+  // comes from the REQUEST, not a hardcoded host -- a request against a different host must
+  // redirect to that same host, not to whatever default this process was last configured with.
+  // A mutant that hardcodes the origin (e.g. `request.url` replaced by a literal
+  // `"http://localhost:3000"`) would pass every test above, which all happen to use `localhost`,
+  // and only goes red here.
+  it("builds the Location from the request's own origin, not a hardcoded host", async () => {
+    const res = await proxy(new NextRequest("https://upgauge.example/route/JFK-LAX?cachebust=99"));
+    expect(res.headers.get("Location")).toBe("https://upgauge.example/route/JFK-LAX");
+  });
+
+  it("declines to cache a duplicated key, and does not redirect it", async () => {
+    // ?y=2019&y=2020 was cacheable at 4aa8087 because parseYear reads the FIRST y. There is no
+    // canonical form to send the caller to, so this is no-store on the page as rendered, not a
+    // redirect that silently drops one occurrence.
+    const res = await proxy(new NextRequest("http://localhost/airport/ORD?y=2019&y=2020"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Location")).toBeNull();
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("leaves /api/pivot's own query untouched, header and all", async () => {
+    // The handler already answers 400 + no-store for an unknown key; a 307 on a JSON endpoint
+    // would be worse. The raw-query header must still reach it.
+    const raw = "v=1&bogus=1";
+    const res = await proxy(new NextRequest(`http://localhost/api/pivot?${raw}`));
+    expect(res.headers.get("Location")).toBeNull();
+    expect(getReqHeader(res, RAW_QUERY_HEADER)).toBe(raw);
+  });
+
+  it("leaves /search's unbounded query untouched and unconditionally uncached", async () => {
+    const res = await proxy(new NextRequest("http://localhost/search?q=DL&x=1"));
+    expect(res.headers.get("Location")).toBeNull();
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // CRITICAL 1 (whole-branch review round 2). Every RSC request to a gated path used to be an
+  // infinite redirect loop: Next's own client appends a `_rsc=<hash>` cache-busting query param
+  // to every RSC fetch and sets the `RSC: 1` header; `_rsc` is in no row's `keys`, so the gate
+  // above 307d it away, and Next's OWN server then 307d BACK to the URL WITH the correct hash
+  // (`experimental.validateRSCRequestHeaders`, default true) -- the two alternated forever.
+  // Measured on a served build: `/`, `/explore`, every entity page, `/watch`, `/watch/gauge` all
+  // hit the redirect cap and never settled (see this task's fix report for the exact curl
+  // output). The fix: an RSC request never reaches `canonicalize()` -- see proxy.ts's own doc
+  // comment on this branch for why gating on the HEADER, not adding `_rsc` to `keys`, is what
+  // closes the hole rather than reopening it (a plain `GET ?_rsc=1..N` with no `RSC` header
+  // would otherwise become clean-and-cacheable).
+  //
+  // This unit test cannot see the loop itself -- `proxy()` never crosses Next's own server-side
+  // RSC validation, so it can only pin what THIS file does: does not redirect, does carry
+  // `no-store`. `app/smoke.sh`'s "RSC requests never loop" section is what proves the loop is
+  // actually gone against a served build.
+  it("never redirects an RSC request, and answers it no-store instead", async () => {
+    const res = await proxy(
+      new NextRequest("http://localhost/watch?x=1", { headers: { RSC: "1" } }),
+    );
+    expect(res.status).not.toBe(307);
+    expect(res.headers.get("Location")).toBeNull();
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // The control this pair needs to mean anything: the IDENTICAL URL, minus the RSC header,
+  // must still 307 exactly as every other non-canonical-query test in this file does. Without
+  // this, the test above would pass just as well against a gate that had been deleted entirely
+  // -- it is the pair, not either half alone, that proves the bypass fires ONLY on RSC.
+  it("...and the control: the identical URL without the RSC header still 307s", async () => {
+    const res = await proxy(new NextRequest("http://localhost/watch?x=1"));
+    expect(res.status).toBe(307);
   });
 });
 

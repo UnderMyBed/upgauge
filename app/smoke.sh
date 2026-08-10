@@ -235,6 +235,24 @@ check_not_re() {
   fi
 }
 
+# Turns a literal string into an ERE that matches only itself, so a `$`-anchored `check_re` is
+# actually exact. Section 15 needed this: `check_re ... "^[Ll]ocation: ${WANT}$"` interpolated
+# `/robots.txt` and `/sitemap.xml` unescaped, and an unescaped `.` matches ANY character -- the
+# very block whose header argues that a substring Location needle is a trap was itself asserting
+# `/robots<any>txt`. Pure bash rather than sed: no delimiter to collide with the `/` in every
+# pathname, and no shell-quoting layer between the pattern and grep.
+re_escape() { # re_escape <literal> -> ERE source matching exactly that literal
+  local s="$1" out="" c i
+  for ((i = 0; i < ${#s}; i++)); do
+    c="${s:i:1}"
+    case "$c" in
+      [\\.^\$*+?\(\)\[\]\{\}\|]) out+="\\${c}" ;;
+      *) out+="$c" ;;
+    esac
+  done
+  printf '%s' "$out"
+}
+
 # GAP_PORT/GAP_PID/BROKEN_DB belong to the Task 7 Part A gap check at the very end of this
 # file, which runs a SECOND, short-lived server against a deliberately broken copy of the
 # database -- declared here, not there, so cleanup() can always find them regardless of where
@@ -433,6 +451,21 @@ BODY=$(curl -s --max-time 15 "${BASE}/")
 check     "home: renders our own front door"        "$BODY" 'Is this route healthy'
 check     "home: DATA AS OF is present"             "$BODY" 'DATA AS OF'
 check_not "home: no create-next-app boilerplate"    "$BODY" 'vercel.com/new'
+
+# M8 Task 1 (#13): the header, not just the content. `/` was absent from proxy.ts's matcher
+# (eleven entries through M7 Task 9), so it served Next's own force-dynamic fallback --
+# `private, no-cache, no-store, max-age=0, must-revalidate` -- which forbids caching at the CDN
+# too, on the most-requested URL of the site. Only THIS gate can see it: proxy.test.ts calls
+# proxy() directly and never crosses Next's routing layer, so a missing matcher entry leaves
+# every one of its tests green.
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/")
+check     "home: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+# Not decoration, and not redundant with the check above. Next's own fallback string CONTAINS
+# the substring "no-store", so a positive HTML_CACHE check paired with a negative "no-store"
+# check would BOTH stay green under a "remove / from the matcher" mutant. `must-revalidate` is
+# the one token present in Next's fallback and absent from every header proxy.ts sets -- the
+# same discriminator the /search block and the /explore gap check already use.
+check_not "home: is not Next's own force-dynamic fallback (proves proxy.ts ran)" "$HDRS" "must-revalidate"
 
 # 7. Resolution: the reader must see codes, never the catalog's ids.
 BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op")
@@ -1406,7 +1439,230 @@ check     "watch: 404 is no-store"                  "$HDRS" "no-store"
 check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize the preset .{1,10}nope"
 
 # ---------------------------------------------------------------------------------------------
-# 15. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.
+# 15. M8 Task 3: one canonical KEY SET per cacheable URL.
+#
+# Not "one canonical spelling", which is what this header claimed first and is wider than the gate
+# delivers: key ORDER survives and VALUES are never inspected, so `/explore?t=<any YYYY-MM>:<any
+# YYYY-MM>` alone is still ~1.4x10^10 distinct long-cached spellings -- MONTH_RE admits 10,000 x 12
+# valid values per side and nothing requires from <= to (docs/architecture/hosting.md § "What this
+# does not close" has the derivation).
+#
+# Cloudflare's default cache key includes the full query string, so before this gate `?x=1..N`
+# minted an unbounded family of long-cached entries on every cacheable path -- measured on a
+# served build at 4aa8087, on all TEN that the proxy gates, `/sitemap.xml?x=1` at 30 days and
+# 2.4 MB. `/api/pivot` is an ELEVENTH cacheable path, closed in its own handler with a 400 rather
+# than here with a 307 (below); `/search` is the twelfth matcher entry and never cacheable at all.
+# Each entry is a guaranteed origin miss, against the exact cost model the CDN exists to protect.
+#
+# `check` is `grep -F`, a SUBSTRING test, which is a trap for a Location assertion: a needle of
+# '/airport/ORD?y=2019' is satisfied by 'location: /airport/ORD?y=2019&junk=1', which is the
+# failure being tested for. Every Location check below is `check_re` with a `$`-anchored regex.
+#
+# These Location regexes are anchored to the MEASURED wire form, not an alternation that would
+# also accept the unmeasured one -- whole-branch review round 2 (Finding 2) is why: a bare
+# relative Location 500s in this Next version (next/dist/server/web/adapter.js's NextURL
+# constructor throws on a relative string with no base), so proxy.ts builds an ABSOLUTE Location
+# from request.nextUrl.origin -- but what actually reaches the wire is relative, because
+# next/dist/server/lib/router-utils/resolve-routes.js relativizes it against `initUrl` (THIS
+# server's own bind config, not the client's Host header) before the response leaves the process
+# (proxy.ts's own doc comment on the gate has the full citation). proxy.test.ts, which calls
+# proxy() directly and never crosses that relativization, necessarily pins the pre-relativization
+# ABSOLUTE value -- this section is what proves the WIRE form, and an optional origin prefix here
+# would make the regex pass for either form, silently accepting the regression (an absolute
+# Location reaching a real client) this section exists to catch. Anchored to the relative form
+# only, per the measurement.
+#
+# THE DOUBLED-`?` ROWS ARE NOT DECORATION. proxy.ts derives rawQuery with
+# `.search.replace(/^\?/, "")` -- non-global, so it strips one `?` of two -- and canonicalize()
+# used to THROW on a leading `?`, documented as "a wiring bug, not something a real request can
+# trigger". proxy() has no try/catch around that call, so `GET /watch??x=1` was a 500 on every one
+# of the twelve matcher paths, `/` and `/sitemap.xml` included, for any client. Measured at
+# d109845, and re-measured against a served build by restoring the throw on top of the fix: the
+# five doubled-`?` rows below all 500, while their single-`?` neighbours all stay 307 -- so the
+# branch that exists to bound an unbounded cache family had introduced an unbounded family of
+# origin-hitting 500s. (Note which checks discriminate: the `is never cached` / `is never
+# long-cached` pair stays GREEN on a 500, because Next's error response carries no-store of its
+# own. Only the status and Location rows go red.) NO CHECK IN THIS FILE USED A DOUBLED `?`, which
+# is exactly why neither `make app-smoke` nor `make image-smoke` saw it.
+echo "==> canonical query gate"
+for U in "/?utm_source=twitter|/" \
+         "/watch?x=1|/watch" \
+         "/watch??x=1|/watch" \
+         "/watch???|/watch" \
+         "/route/JFK-LAX?cachebust=99|/route/JFK-LAX" \
+         "/route/JFK-LAX??cachebust=99|/route/JFK-LAX" \
+         "/carrier/DL?utm_source=x|/carrier/DL" \
+         "/airport/ORD??y=2019|/airport/ORD?y=2019" \
+         "/robots.txt?x=1|/robots.txt" \
+         "/sitemap.xml?x=1|/sitemap.xml" \
+         "/sitemap.xml??x=1|/sitemap.xml"; do
+  REQ="${U%%|*}"; WANT="${U##*|}"
+  # Escaped, not interpolated raw: `.` in /robots.txt and /sitemap.xml, and `?` in the
+  # /airport/ORD row, are ERE metacharacters, and the whole point of the `$` anchor is exactness.
+  WANT_RE=$(re_escape "$WANT")
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}${REQ}")
+  HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}${REQ}")
+  LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+  check     "canonical: ${REQ} is a 307"            "$CODE" '307'
+  check_re  "canonical: ${REQ} points at ${WANT}"   "$LOC"  "^[Ll]ocation: ${WANT_RE}$"
+  check     "canonical: ${REQ} is never cached"     "$HDRS" 'no-store'
+  check_not "canonical: ${REQ} is never long-cached" "$HDRS" 's-maxage'
+done
+
+# The redirect target must itself be canonical, or the 307 is a redirect loop rather than a fix.
+# Asserted here on the wire and not only in canonicalQuery.test.ts, because the loop only exists
+# once a real client follows the header: `-L` with a redirect cap turns "the location strips
+# again" into a measurable non-200. `/airport/ORD??y=2019` is the fixture that needs it -- one
+# hop, to a URL that still carries a query.
+FOLLOW_CODE=$(curl -s -o /dev/null -w '%{http_code}'     -L --max-redirs 3 --max-time 20 "${BASE}/airport/ORD??y=2019")
+FOLLOW_HOPS=$(curl -s -o /dev/null -w '%{num_redirects}' -L --max-redirs 3 --max-time 20 "${BASE}/airport/ORD??y=2019")
+check    "canonical: following a doubled-? redirect settles at 200"  "$FOLLOW_CODE" '200'
+check_re "canonical: ...in exactly one hop, so the target is clean" "$FOLLOW_HOPS" '^1$'
+
+# `new URL(canonical.location, request.nextUrl.origin)` routes the canonical query back through a
+# URL serializer -- the re-serialisation this whole codebase exists to route around (proxy.ts's
+# rawQuery comment: Next's own form-encoding turned `k:a%2Cb,c` into `k%3Aa%2Cb%2Cc` and broke
+# EVERY filtered query on both entry points). It is safe because the URL query percent-encode set
+# is only C0 controls, space, `"`, `#`, `<`, `>` -- none of this format's punctuation -- but that
+# property was pinned NOWHERE: every other Location assertion in this file uses an escape-free
+# URL, so all of them would pass just as well against a serializer that mangled escapes. RESERVED
+# (§2, the golden `filter_value_reserved_characters` values) is the fixture that discriminates.
+# This is also the only served-build check that `/explore` -- the one row with a non-empty `keys`
+# set -- 307s a junk key at all; the loop above covers seven other paths and never this one.
+EXPLORE_LOC_RE=$(re_escape "/explore?${RESERVED}")
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${RESERVED}&bogus=1")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore?${RESERVED}&bogus=1")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check    "canonical: a junk key on a full /explore permalink is a 307" "$CODE" '307'
+check_re "canonical: ...and every percent-escape survives byte-for-byte" "$LOC" \
+  "^[Ll]ocation: ${EXPLORE_LOC_RE}$"
+check    "canonical: ...uncached"                                     "$HDRS" 'no-store'
+
+# The case that proves stripping KEEPS the legitimate key rather than discarding the query
+# wholesale. A `check` substring needle would pass here even if `junk=1` survived.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/airport/ORD?y=2019&junk=1")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/ORD?y=2019&junk=1")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check    "canonical: a junk key beside y=2019 is a 307" "$CODE" '307'
+check_re "canonical: ...and y=2019 survives it exactly" "$LOC" \
+  "^[Ll]ocation: /airport/ORD\?y=2019$"
+
+# The keyless family. `?&&` has no key to reject, so a key-presence rule serves it as a
+# cacheable 200 -- which is why the predicate is byte-equality against the canonical string.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/watch?&&")
+check "canonical: a keyless query is still a 307" "$CODE" '307'
+
+# A duplicated key is NOT a redirect: choosing one occurrence would render a different query
+# than the URL encodes. ?y=2019&y=2020 was a long-cached 200 at 4aa8087, because parseYear reads
+# the first y.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/airport/ORD?y=2019&y=2020")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/ORD?y=2019&y=2020")
+check     "canonical: a duplicated y renders rather than redirecting" "$CODE" '200'
+check     "canonical: ...and is never cached"                        "$HDRS" 'no-store'
+check_not "canonical: ...and is never long-cached"                   "$HDRS" 's-maxage'
+
+# A two-filter permalink is a shape encode() itself emits (one f= per filter), so it must stay
+# clean AND long-cached. This is the check that stands between `repeatable` and a broken product;
+# no fixture in this file covered a repeated key before M8 Task 3.
+TWO='v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=origin_state:OR&f=dest_state:WA&n=25&g=op'
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${TWO}")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore?${TWO}")
+check "canonical: a two-filter permalink is a 200, not a redirect" "$CODE" '200'
+check "canonical: ...and keeps the project Cache-Control"          "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# The exemptions, asserted rather than assumed. `exempt` means "the PROXY does not redirect this
+# path", never "the rules do not apply to it": /api/pivot answers 400 + no-store itself, because a
+# 307 on a JSON endpoint is a worse answer to an XHR than a named error.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?v=1&bogus=1")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/api/pivot?v=1&bogus=1")
+check        "canonical: /api/pivot keeps its own 400" "$CODE" '400'
+check        "canonical: ...under no-store"            "$HDRS" 'no-store'
+# MINOR-ELEVATED 4 (whole-branch review round 2): this was `check_not ... 'location:'`, a
+# case-sensitive grep -F, unlike every sibling Location assertion in this file (which all use
+# `[Ll]ocation`). It passed only because Next happens to emit lowercase here -- a `Location:`
+# (capital L) response would report a silent ok. `check_not_re` with `[Ll]ocation:` is the fix.
+#
+# KEEP THIS LINE ADJACENT TO THE `HDRS=` ABOVE. The final fix wave inserted three blocks between
+# the two, each reassigning $HDRS, and this check ran against the LAST of them (`//evil.com`,
+# which of course carries a Location) -- a red for a reason that had nothing to do with
+# /api/pivot. A shared mutable haystack two screens from its assertion is the same shape as this
+# file's three documented self-defects; every block added below opens with its own `HDRS=`.
+check_not_re "canonical: ...and is not redirected"     "$HDRS" '[Ll]ocation:'
+
+# Whole-branch review, Finding 2: the 400 above is about an unknown KEY, and says nothing about
+# the keyless axis. urlstate.ts's splitPairs does `if (!chunk) continue`, so `?<valid permalink>&`,
+# `&&`, `&&&`... all decoded cleanly and came back 200 under `s-maxage=2592000` -- 30 days, ten
+# times any HTML page here, each entry a full pivot render, on the ONE path this gate had declared
+# closed. Deliberate behaviour change on a public endpoint: 200 -> 400.
+PIVOT_OK='v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op'
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${PIVOT_OK}&&")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/api/pivot?${PIVOT_OK}&&")
+check        "canonical: /api/pivot 400s a keyless '&&' it used to cache for 30 days" "$CODE" '400'
+check        "canonical: ...under no-store"                                           "$HDRS" 'no-store'
+check_not    "canonical: ...never the 30-day header"                                  "$HDRS" 's-maxage'
+check_not_re "canonical: ...and still never redirected"                               "$HDRS" '[Ll]ocation:'
+# The control, and the only thing that distinguishes "the handler enforces the key set" from "the
+# handler broke": the identical query WITHOUT the trailing chunks is still a 200 under the full
+# 30-day header. §4 above asserts the header on a one-filter query; this pairs it with the /api
+# behaviour change directly, on the same URL minus two bytes.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${PIVOT_OK}")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/api/pivot?${PIVOT_OK}")
+check "canonical: the same /api/pivot query without them is a 200" "$CODE" '200'
+check "canonical: ...under the project's 30-day header"            "$HDRS" "$CACHE_EXPECTED"
+# A repeated `f=` is what encode() itself emits, and /api/pivot's row read `keys: NO_KEYS` while
+# nothing evaluated it -- left that way, the gate above 400s every filtered query in the product.
+BODY=$(curl -s --max-time 15 "${BASE}/api/pivot?v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=origin_state:OR&f=dest_state:WA&n=5&g=op")
+check     "canonical: /api/pivot still answers a two-filter permalink" "$BODY" '"rows"'
+check_not "canonical: ...without an error"                            "$BODY" '"error"'
+
+# proxy.ts builds `Location` as `new URL(canonical.location, request.nextUrl.origin)`, and
+# `new URL("//evil.com", origin)` is `http://evil.com/` -- an open-redirect SHAPE. It is
+# unreachable for two independent reasons and neither is left as luck: no QUERY_ROWS predicate can
+# claim a `//`-leading pathname (canonicalQuery.test.ts asserts it), and Next answers the request
+# with its own 308 to the single-slash path before proxy() runs at all -- which is what this
+# check measures. `check_not_re` on the host, so a Location that ever pointed off-box is a red
+# here rather than a discovery in production.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}//evil.com?x=1")
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}//evil.com?x=1")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check_not_re "canonical: //evil.com never redirects off this host" "$LOC" '[Ll]ocation: *(https?:)?//evil\.com'
+check_re     "canonical: ...Next collapses it to a same-host path" "$LOC" '^[Ll]ocation: /evil\.com\?x=1$'
+check        "canonical: ...as its own 308, before proxy() runs"   "$CODE" '308'
+
+# CRITICAL 1 (whole-branch review round 2). An RSC request to a GATED path used to be an
+# infinite redirect loop: this gate's canonicalize() saw Next's own `_rsc` cache-busting query
+# param as an unknown key (not in any row's `keys`) and 307d it away; Next's OWN server then saw
+# an RSC request with no `_rsc` (experimental.validateRSCRequestHeaders, default true) and 307d
+# BACK to the URL WITH it -- the two alternated forever. Measured before the fix: the request
+# below hit `--max-redirs 5` without ever reaching 200 (num_redirects pinned at 5, code stayed
+# 307 the whole way). The fix answers an RSC request `no-store`, unconditionally, before
+# canonicalize() ever runs, so the only redirect left on a gated path is Next's OWN single,
+# legitimate hash-mismatch hop -- exactly the one hop `/search` (exempt from canonicalize
+# entirely, never broken by this gate in the first place) has always taken, kept below as the
+# control that discriminates "the bypass fixed a real interaction" from "nothing was ever wrong
+# here": deleting the bypass must move the FIRST pair and leave this SECOND pair untouched.
+echo "==> RSC requests never loop"
+RSC_CODE=$(curl -s  -o /dev/null -w '%{http_code}'      -L --max-redirs 5 --max-time 15 -H 'RSC: 1' "${BASE}/watch?x=1")
+RSC_HOPS=$(curl -s  -o /dev/null -w '%{num_redirects}'  -L --max-redirs 5 --max-time 15 -H 'RSC: 1' "${BASE}/watch?x=1")
+check    "rsc: a gated path with an RSC header settles at 200, not a loop" "$RSC_CODE" '200'
+check_re "rsc: ...in exactly Next's own one legitimate hop"                "$RSC_HOPS" '^1$'
+
+SEARCH_RSC_CODE=$(curl -s -o /dev/null -w '%{http_code}'     -L --max-redirs 5 --max-time 15 -H 'RSC: 1' "${BASE}/search?q=DL")
+SEARCH_RSC_HOPS=$(curl -s -o /dev/null -w '%{num_redirects}' -L --max-redirs 5 --max-time 15 -H 'RSC: 1' "${BASE}/search?q=DL")
+check    "rsc: the control, /search (exempt from this gate), also settles at 200" "$SEARCH_RSC_CODE" '200'
+check_re "rsc: ...in the SAME one hop -- unaffected by this fix either way"        "$SEARCH_RSC_HOPS" '^1$'
+
+# Junk VALUES ride legitimate keys, so the key gate above cannot see them: /explore renders
+# "This permalink can" plus a right single quote plus "t be read" as a 200, and that 200 was
+# long-cached at 4aa8087 -- an unbounded family via ?d=junk1..N. Needle is the header, not the
+# copy: the page's own sentence contains an apostrophe React emits as raw U+2019, which is
+# exactly the shape of smoke.sh self-defect #2.
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore?v=1&k=seg&d=junk&m=seats&t=2025-05:2026-04")
+check     "canonical: an undecodable /explore permalink is never cached" "$HDRS" 'no-store'
+check_not "canonical: ...and never long-cached"                          "$HDRS" 's-maxage'
+
+# ---------------------------------------------------------------------------------------------
+# 16. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.
 #
 # proxy.test.ts pins isDataLayerHealthy() with `vi.mock`/`mockRejectedValueOnce`: a fast, precise
 # unit test, but one that never crosses Next's own routing or a real DuckDB open the way this
@@ -1490,7 +1746,7 @@ rm -f "$BROKEN_DB"; BROKEN_DB=
 fi
 
 # ---------------------------------------------------------------------------------------------
-# 16. M6 Task 8's own gap check -- /watch/gauge against a database missing `mart_route_health`,
+# 17. M6 Task 8's own gap check -- /watch/gauge against a database missing `mart_route_health`,
 #     NOT `meta_pivot_dimensions`. Same method as the block just above (a second, short-lived
 #     `next start` against a broken COPY, never the original), but a different table dropped on
 #     purpose: `mart_route_health` is what every preset query actually reads (runPreset()), and
@@ -1570,7 +1826,7 @@ rm -f "$BROKEN_DB2"; BROKEN_DB2=
 fi
 
 # ---------------------------------------------------------------------------------------------
-# 17. M7 Task 10's own gap check -- /airport/ORD against a database whose dim_airport view is
+# 18. M7 Task 10's own gap check -- /airport/ORD against a database whose dim_airport view is
 #     missing its lat/lon COLUMNS, not the whole view and not a whole table. That distinction is
 #     the point: dropping the whole view (or the whole dim_airport TABLE, mirroring section 16's
 #     "TABLE not VIEW" note) would also break resolveAirportCode/airportCodesExist (both query

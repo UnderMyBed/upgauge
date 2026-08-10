@@ -161,7 +161,15 @@ constant, bounding that exposure to an hour instead of a month rather than closi
 
 With Cloudflare's free tier in front, near-zero repeat traffic touches the box regardless —
 `stale-while-revalidate` keeps serving from the edge while either value revalidates.
-**Precompute all leaderboards as static JSON at build time.**
+
+**Leaderboard precompute was specified for three milestones and is retired, not deferred**
+(M8, #14). Measured 2026-08-09 against a served build at `4aa8087`, not argued: `mart_route_health`
+is 8,080 rows, and the four `/watch` preset queries cost **2.2-2.5 ms** each at a warm median
+(fresh read-only connection per preset, median of seven runs), **5.0 ms** at the cold worst case
+(`watch_death_watch`; the other three cold runs were 3.3-3.5 ms). End-to-end TTFB on that same
+build puts `/watch/gauge` at **43-46 ms** — against `/route/JFK-LAX` at 63-69 ms and
+`/airport/ORD` at 85-104 ms, neither of which anyone proposes precomputing. Precompute would have
+optimised the third-cheapest page on the site and left the two most expensive per-request.
 
 ## Avoid
 
@@ -1120,6 +1128,229 @@ equality, since the pin is exact — before starting anything. One `serve_next <
 three gap-check servers), so the pinned binary cannot be reintroduced as `npx` at one call site
 and missed at the others.
 
+### One canonical key set per cacheable URL — M8, epic #3
+
+**Key set, not spelling.** The gate decides by byte-equality over the query *keys* a path reads.
+Key *order* survives and *values* are never inspected, so a cacheable URL still has many spellings
+— see § What this does not close, below. The wider claim ("exactly one cacheable spelling") is what
+this section, `CLAUDE.md` and `canonicalQuery.ts`'s own header all said first, and it was never
+true of anything that shipped.
+
+Cloudflare's default cache key includes the full query string, so an unknown query key is not
+cosmetic: it is a distinct cache entry, and `?x=1…N` is an unbounded family of them, each a
+guaranteed origin miss. Measured on a served build at `4aa8087`, before the gate:
+
+| request | status | `Cache-Control` |
+|---|---|---|
+| `/watch?x=1` | 200 | `s-maxage=3600` |
+| `/airport/ORD?y=2019&junk=1` | 200 | `s-maxage=3600` |
+| `/carrier/DL?utm_source=x` | 200 | `s-maxage=3600` |
+| `/route/JFK-LAX?cachebust=99` | 200 | `s-maxage=3600` |
+| `/explore?…&bogus=1` | 200 | `s-maxage=3600` |
+| `/sitemap.xml?x=1` | 200 | `s-maxage=2592000` — 2.4 MB, ~45 ms of DuckDB, 30 days |
+| `/robots.txt?x=1` | 200 | `s-maxage=2592000` |
+| `/api/pivot?…&bogus=1` | 400 | `no-store` — already closed, in the handler |
+| `/search?q=DL&x=1` | 307 | `no-store` — never cacheable |
+
+`/` is missing from the rows above for a different reason, not a survivor of this bug: at
+`4aa8087` it had not yet joined `proxy.ts`'s matcher (M8 Task 1 added it) and returned Next's own
+`private, no-cache, no-store, max-age=0, must-revalidate` unconditionally, so a junk query on it
+changed nothing — there was no long-cached response yet for one to corrupt. Once Task 1 landed,
+`/` joined the same exposure the seven rows above demonstrate, for **ten** paths the proxy gates
+(the seven shown, plus `/aircraft/:name` and `/watch/:preset`, both the identical mechanism as a
+row already shown). `/api/pivot` is an **eleventh** cacheable path — its own successful responses
+take the identical `PROJECT_CACHE` value `/sitemap.xml` and `/robots.txt` do — and it is closed by
+its own handler rather than by the proxy (§ `/api/pivot` closes its own, below). `/search` alone is
+never cacheable, gated or not, which makes twelve matcher entries in all.
+
+`app/src/lib/canonicalQuery.ts` declares the legitimate query keys for every matcher path — the
+third list, alongside `ENTITY_ROUTES`, that the app's cacheable surface depends on. Only agreement
+with `config.matcher` is asserted by its own test (`canonicalQuery.test.ts`): `QUERY_ROWS` (12
+rows, one per matcher entry) is a strict superset of `ENTITY_ROUTES` (3 rows), so row-for-row
+agreement with the latter isn't a property that test could assert. An unknown key gets a **307 to
+the canonical URL under `no-store`**, answered before any database probe: origin cost is ~0 instead
+of a full render, the CDN stores nothing, and a visitor arriving with a tracking param still lands
+on the page. A duplicated key gets `no-store` with **no**
+redirect — there is no canonical form, because choosing one occurrence renders a different query
+than the URL encodes, which is `decode()`'s own reason for erroring on duplicates.
+
+**The predicate is byte-equality against the canonical string, not "were any unknown keys
+present".** `?&`, `?&&`, `?&&&…` carry no key to reject and were each a distinct cacheable entry;
+byte-equality closes that axis, and a trailing `&` and a leading `?` with it.
+
+**Key *order* survives, and the reason this document gave for that was false.** It read "a bounded
+family the app emits itself, not an attacker-chosen one". `encode()` emits exactly one order
+(`urlstate.ts`), so every *other* permutation of `/explore`'s nine keys is chosen by whoever typed
+the URL — up to 9! = 362,880 of them, more once repeated `f` interleavings are counted, each a
+distinct one-hour entry backed by a full DuckDB render. The decision to preserve order stands on a
+different ground: that family is **finite and bounded**, where `?x=1…N` is not bounded at all, and
+the two cures are both worse than the disease. Redirecting to a fixed order rewrites permalinks
+people already hold and made their screenshots from; and the byte-for-byte rejoin that preserves
+order is the same mechanism that keeps a percent-encoded `,` inside a filter value intact
+(`skipProxyUrlNormalize`'s whole reason for existing). Accepted, not closed.
+
+**A leading `?` is a spelling, not a wiring bug — and calling it one 500ed the entire site.** An
+earlier revision of `canonicalize()` threw on a `rawQuery` starting with `?`, documented as
+something "a real request can [not] trigger through correct wiring". `proxy.ts` derives that value
+with `new URL(request.url).search.replace(/^\?/, "")` — **non-global**, so it strips one `?` of
+two — and `proxy()` has no `try`/`catch` around the call. Measured end to end against a served
+build, first at `d109845` and again in the fix wave by restoring the throw on top of the fix
+(mutant 8, below):
+
+| request | with the throw | now |
+|---|---|---|
+| `/watch?x=1` | 307 `no-store` → `/watch` | 307 `no-store` → `/watch` |
+| `/watch??x=1` | **500** | 307 `no-store` → `/watch` |
+| `/watch???` | **500** | 307 `no-store` → `/watch` |
+| `/route/JFK-LAX??cachebust=99` | **500** | 307 `no-store` → `/route/JFK-LAX` |
+| `/airport/ORD??y=2019` | **500** | 307 `no-store` → `/airport/ORD?y=2019` |
+| `/sitemap.xml??x=1` | **500** | 307 `no-store` → `/sitemap.xml` |
+
+Reachable on all twelve matcher paths — `/`, `/sitemap.xml` and every entity page included — by any
+client, with no auth and no unusual encoding, and `?x=1…N` behind a doubled `?` is itself an
+unbounded family of origin-hitting 500s: the exact cost shape this branch exists to close, minted
+by the branch itself. At `4aa8087`, before the gate existed, the same URL was an ordinary
+long-cached 200 — *derived, not re-measured*: no branch there read the query string at all, so
+`/watch??x=1` took the identical path to `/watch`, which that commit's own row above records as
+200 `s-maxage=3600`. The fix is that the module is **total**: rule 0 drops the whole leading run
+of `?`s (the whole run, so `/watch??x=1` and `/watch???x=1` land on the same URL rather than
+forming a chain) and byte-equality then produces the redirect. `canonicalQuery.test.ts` asserts
+totality over a corpus of hostile inputs, and asserts that every `strip` location is itself clean —
+the proxy 307s to it, so a location that would strip again is a redirect loop. No check in
+`app/smoke.sh` used a doubled `?`, which is why neither `make app-smoke` nor `make image-smoke`
+saw a 500 on every gated path; the section-15 loop carries three of them now.
+
+### `/api/pivot` closes its own — `exempt` means the proxy does not redirect, not that the rules are off
+
+`canonicalQuery.ts` declared `/api/pivot` exempt, justified by "the handler owns its own Response:
+400 + `no-store` on an unknown key". True, and irrelevant to the keyless axis. `urlstate.ts`'s
+`splitPairs` does `if (!chunk) continue`, so `/api/pivot?<valid permalink>&`, `&&`, `&&&`… all
+decode cleanly and the handler returned **200 under `public, s-maxage=2592000`** — 30 days, ten
+times longer than any HTML page the proxy's gate protects, each entry a full pivot render, on the
+one path this section had declared closed. Measured by disabling the gate on top of the fix: a
+trailing `&`, `&&`, `&&&` and a *leading* `&` all returned 200 under
+`public, s-maxage=2592000, stale-while-revalidate=86400`. Key *order* is a separate axis, open on
+this path exactly as on `/explore` and not closed by any of this.
+
+So `exempt` now means only **"the proxy does not redirect this path"**. The rules apply to every
+row: `queryVerdict()` evaluates them for all twelve, and `canonicalize()` — the proxy's entry point
+and only that — answers `clean` for an exempt row. `app/api/pivot/route.ts` calls `queryVerdict()`
+itself and answers **400 + `no-store`**, the same as it already does for an unknown key. It does
+not 307: a redirect is a worse answer to an XHR than a named error, and that ruling is unchanged.
+Neither side restates a rule — a second copy of the key table is what the module exists to prevent.
+
+Two consequences worth stating plainly:
+
+- **A behaviour change on a public endpoint**: `/api/pivot?<valid>&&` went from 200 to 400.
+  Deliberate. `/api/pivot`'s row also had to stop lying — it read `keys: NO_KEYS`, harmless only
+  while nothing evaluated it, and would have 400ed every real API query the moment something did.
+  It now carries `ALLOWED_KEYS` and repeatable `f`, the same as `/explore`, because both entry
+  points hand the identical raw string to the same `decode()`.
+- **`/search` is untouched.** It is `no-store` unconditionally and must never redirect, so nothing
+  consumes its verdict. Its row states its real key (`q`) anyway, because a row that lies is one
+  wiring change away from acting on the lie.
+
+### What this does not close
+
+Written in the same idiom as § The gap, and for the same reason: a permanent doc that reads as if
+`/explore` were finished is worse than one that names what is left.
+
+**The value axis is open, and it is much larger than the key axis this branch closed.** `decode()`
+validates *identifiers* against the catalog via `renderPivot`; it does not validate *values*.
+Reading `urlstate.ts`: `parseFilter` accepts any non-empty value list, so
+`f=origin_state:<arbitrary string>` decodes; `t` is checked only against `MONTH_RE`
+(`/^\d{4}-(0[1-9]|1[0-2])$/`, `urlstate.ts:14`), which admits 10,000 × 12 = 1.2×10⁵ valid values per
+side, and nothing requires `from ≤ to` — `normalizeQuery` (`types.ts:31-33`) only touches
+`sortDesc`, and `decode` range-checks neither bound — so `t` alone admits (1.2×10⁵)² ≈ 1.4×10¹⁰
+combinations that all decode; `n` is any Python-shaped integer. Every one of those is a distinct 200
+under `HTML_CACHE` on the most expensive page on the site. `/airport/:code`'s `y` is the
+counter-example that shows the shape of a fix: a closed set, validated by `parseYear`, so an
+out-of-range year declines the cache instead of minting an entry.
+
+A key table cannot express any of that. `QUERY_ROWS` maps a path to the *names* it reads; deciding
+whether a *value* is one of finitely many legitimate ones needs the catalog, the dataset's own
+month range, and a policy for `n` — i.e. it belongs with `decode()`, not with a pure, database-free
+proxy-path module. **`decode()` validating values is not a check that exists**, and no rule in this
+section should be read as implying it does. Deliberately out of scope for epic #3.
+
+Smaller, and also open: a bare trailing `?`. WHATWG URL parsing gives
+`new URL("http://h/watch?").search === ""` — byte-identical to what the query-less request
+produces — so `proxy.ts` cannot distinguish `/watch?` from `/watch` at all, and no rule here can.
+Whether a CDN keys the two separately is the CDN's business, not measured here; the point is only
+that this gate structurally cannot answer it. At most one extra entry per path either way, unlike
+everything above.
+
+**`f` is declared repeatable.** `encode()` emits one `f=` per filter and `decode()` skips its own
+duplicate check for `f`, so a multi-filter permalink — the product's core shareable artifact — is
+a repeated key by construction. A blanket duplicate rule would have made every one of them
+uncacheable. No fixture in `app/smoke.sh` covered a repeated key before M8; one does now.
+
+**The redirect's `Location` is built absolute — `new URL(canonical.location,
+request.nextUrl.origin).toString()` — never the bare relative string `canonical.location` alone.**
+A relative `Location` 500s every redirect on a served build: `next/dist/server/web/adapter.js`
+reads `Location` off the response `proxy()` returns and calls `new NextURL(redirect,
+{ forceLocale: false, ... })` with no base argument, which throws `ERR_INVALID_URL` for any
+relative string — true of any response carrying a `Location` header, not a
+`NextResponse.redirect()`-specific behavior (that factory's own `validateURL()` forces its
+argument absolute for the identical reason). It comes back relative on the wire regardless:
+`next/dist/server/lib/router-utils/resolve-routes.js` calls `getRelativeURL(value, initUrl)`
+unconditionally, for any redirect status including 307, on the header this function returns.
+`initUrl` is built from the server's own bind config (or the bare incoming `req.url`) and reads
+the request's `Host` header at all only when `experimental.trustHostHeader` is set — unset here —
+so a differing `Host` cannot produce an absolute `Location` to a spoofed origin: both
+`request.nextUrl.origin` (used to build the absolute value above) and `initUrl` (used to
+relativize it back down) derive from the same server-resolved request, and the two can never
+disagree. Measured directly, not merely traced: spoofing the incoming request's `Host`, and
+separately its `X-Forwarded-Host`, to a domain this server was never configured with still
+produced a bare relative `location: /watch` in all three cases.
+
+Routing the canonical query back through a URL serializer is the one thing this file avoids
+everywhere else, so **that it survives is now pinned, not assumed**. Measured against Node's own
+URL for the `RESERVED` permalink (`app/smoke.sh` §2 — every reserved character this format has to
+survive, in one filter value): `new URL("/explore?" + RESERVED, origin).toString()` is
+byte-identical to `origin + "/explore?" + RESERVED`. It holds because the URL query
+percent-encode set is only C0 controls, space, `"`, `#`, `<` and `>` — none of `: , % + -`. Every
+other `Location` assertion on this branch used an escape-free URL and would have passed against a
+serializer that mangled escapes; `app/smoke.sh` §15 now asserts the wire bytes of
+`/explore?<RESERVED>&bogus=1` → `/explore?<RESERVED>`, which is also the only served-build check
+that `/explore` — the one row with a non-empty `keys` set — 307s a junk key at all.
+
+`new URL(loc, origin)` is an **open-redirect shape** — `new URL("//evil.com", origin)` is
+`http://evil.com/` — and it is unreachable for two independent reasons, both now asserted rather
+than left to luck. No `QUERY_ROWS` predicate can claim a `//`-leading pathname (each is an exact
+`p === "/literal"` or an `entitySlugFromPath` prefix test anchored at position 0), so
+`canonicalize("//evil.com", …)` is `clean` and mints no `Location` at all —
+`canonicalQuery.test.ts`. And Next answers `GET //evil.com` with its own 308 to `/evil.com` before
+`proxy()` runs — `app/smoke.sh` §15, on a served build.
+
+**A request carrying the `RSC` header never reaches this gate — it is answered `no-store`
+unconditionally, before `canonicalize()` runs.** `skipProxyUrlNormalize` (above) is what lets the
+gate see `_rsc`, Next's own cache-busting query param appended to every RSC fetch
+(`fetch-server-response.js`) — no row's `keys` lists it, so the gate used to 307 it away to the
+bare URL, and Next's own RSC hash check (`experimental.validateRSCRequestHeaders`, default
+`true`) then 307ed straight back with the correct hash: the two redirects alternated forever.
+Measured on a served build: `/`, `/explore`, `/route/JFK-LAX`, `/carrier/DL`, `/airport/ORD`,
+`/watch`, `/watch/gauge` and `/aircraft/737-800` all hit the redirect cap and never settled, while
+`/search`, exempt from this gate entirely, settled in its one legitimate hop regardless. The fix
+gates on the **header**, not the query key: adding `_rsc` to a row's `keys` is the wrong fix,
+because `_rsc` is attacker-choosable and Next validates it only when the `RSC` header is
+present — a plain `GET /watch?_rsc=1…N`, no header, would sail through clean and long-cached,
+reopening the exact unbounded-cache-key family this gate exists to close. Accepted cost: every
+client-side navigation and prefetch (Next appends both `_rsc` and `RSC: 1` to each) always reaches
+the origin instead of a CDN. Side benefit, not the reason for the fix: a shared CDN that ignores
+`Vary` (Cloudflare, by default, honors only `Accept-Encoding`) can no longer serve a stored RSC
+payload to a plain document request.
+
+**`/explore` needs one more input than a key table can express:** junk *values* ride legitimate
+keys, and `ExploreView` renders its "permalink can't be read" page as a **200**, so `?d=junk1…N`
+was an unbounded family of cacheable error pages. Its cacheability now requires `decode()` to
+succeed. Bare `/explore` is therefore `no-store` — `decode("")` throws `missing required key 'v'`
+and that URL has always been the error page, and nothing links it: `TopBar` links `/` and
+`/watch`, the front door links the full sample permalink, and `app/sitemap.ts` has no `/explore`
+entry. `/api/pivot` and `/search` are declared exempt: the first answers 400 + `no-store` in its
+own handler, and the second is `no-store` unconditionally, so neither has a cache entry to
+pollute.
+
 ### The gap: a **5xx** still gets a long-cached header — M5 Task 7 narrowed it, didn't close it
 
 CLAUDE.md's rule is *"404s get `no-store`"* and that is deliberately narrow. **A 500 does
@@ -1289,8 +1520,12 @@ airports 39.0 ms, carriers 10.2 ms, aircraft 43.6 ms (the four run concurrently,
 close to the slowest one, not the sum). The CDN cache key includes the query string, so
 `/sitemap.xml?x=N` is an unbounded family of origin hits regardless of the `Cache-Control` value
 on the canonical path — the identical reasoning that earned `/search` its unconditional
-`no-store` rather than a per-outcome header (see the table above). Nothing currently guards
-against that family; it is recorded as the same class of exposure, not yet closed.
+`no-store` rather than a per-outcome header (see the table above). M8's canonical-query gate
+closes this one (§ One canonical key set per cacheable URL, above): `/sitemap.xml?x=1` is now a
+307 to `/sitemap.xml` under `no-store`, so the family costs a ~200-byte redirect each instead of a
+2.4 MB document and ~45 ms of DuckDB. The `q`-shaped exposure `/search` carries is unchanged and
+unclosable by this mechanism, which is why that route is `no-store` unconditionally rather than
+canonicalised.
 
 **What the fallback actually buys, honestly stated:** the exposure window for a 5xx shrinks from
 up to 30 days to up to 1 hour — origin load stays near zero because `stale-while-revalidate`

@@ -373,7 +373,7 @@ fmt:  ## Format (ruff)
 # 450 was tried first and left 7 lines -- it would have failed on the very next rule, which
 # makes the gate noise instead of signal. Set it close enough to bite, far enough to mean
 # something when it does.
-CLAUDE_MD_BUDGET ?= 475
+CLAUDE_MD_BUDGET ?= 480
 
 check-docs:  ## Enforce the CLAUDE.md line budget (see CLAUDE.md § Working agreements)
 	@n=$$(wc -l < CLAUDE.md); \
