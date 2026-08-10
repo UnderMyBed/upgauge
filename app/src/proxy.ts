@@ -9,7 +9,7 @@ import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
 import { presetSlugFromPath, presetBySlug } from "@/lib/watch";
 import { parseYear } from "@/lib/year";
-import { loadAllowlist } from "@/lib/db";
+import { dataAsOf, loadAllowlist } from "@/lib/db";
 
 // `proxy`, not `middleware`: Next 16 deprecated and renamed the convention
 // (node_modules/next/dist/docs/01-app/02-guides/upgrading/version-16.md, "middleware to
@@ -94,6 +94,16 @@ export async function proxy(request: NextRequest) {
   //
   // M4d generalized that from one route to four: see ENTITY_ROUTES below.
   //
+  // M8 Task 1 (#13). `/` was the one page route absent from the matcher below, so it served
+  // Next's own force-dynamic fallback -- measured on a served build at 4aa8087:
+  // `private, no-cache, no-store, max-age=0, must-revalidate`, which forbids caching everywhere
+  // including the CDN, on the front door, which queries DuckDB to render DATA AS OF. CLAUDE.md
+  // already stated the rule this violated: a new page route must be added to this matcher or it
+  // ships uncached and without the raw-query and pathname headers.
+  if (pathname === "/") {
+    response.headers.set("Cache-Control", (await isFreshnessReadable()) ? HTML_CACHE : NO_STORE);
+    return response;
+  }
   // M5 Task 7, Part A: `/explore` has no slug to resolve, so unlike every ENTITY_ROUTES row it
   // ran NO database query at all -- this branch used to set the long cache unconditionally.
   // That is the exact gap docs/architecture/hosting.md § "The gap" measured: a served build
@@ -242,6 +252,33 @@ export async function proxy(request: NextRequest) {
 async function isDataLayerHealthy(): Promise<boolean> {
   try {
     await loadAllowlist();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** `/`'s fail-safe probe, and deliberately NOT `isDataLayerHealthy()`.
+ *
+ * The two probes read different objects, and only this one reads what the front door depends on:
+ * `isDataLayerHealthy()` calls `loadAllowlist()`, which reads the pivot catalog views, while
+ * `app/src/app/page.tsx` calls `dataAsOf()`, which reads `fct_segment_month` -- a view over
+ * `data/parquet/`. A deployment holding `upgauge.duckdb` but not its Parquet tree (`make
+ * portability` negative 1, already reproducible) leaves `loadAllowlist()` succeeding while
+ * `dataAsOf()` throws, so a `loadAllowlist`-shaped probe here would stamp `HTML_CACHE` on a `/`
+ * that is about to 500. That is M6 Task 8's measured bug (§ "The gap", hosting.md) with a
+ * different table name: `loadAllowlist()` never opens a Parquet file at all -- it reads only the
+ * pivot catalog views -- which is exactly why it cannot stand in for this probe.
+ *
+ * Costs one extra `data_as_of` per request -- 4.8-5.5 ms measured against the real warehouse --
+ * on top of the page's own call. That is the "SECOND resolution for the request" trade
+ * `isCacheable`'s doc comment already documents and accepts.
+ *
+ * Errors are swallowed to `false`, same reasoning as `isDataLayerHealthy()` and `isCacheable()`:
+ * declining the cache costs a cache miss, and the page still surfaces the real failure loudly. */
+async function isFreshnessReadable(): Promise<boolean> {
+  try {
+    await dataAsOf();
     return true;
   } catch {
     return false;
@@ -466,8 +503,14 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 //
 // STILL eleven at M7 Task 9 -- `/airport/:code` was already here; only its `ENTITY_ROUTES` row
 // moved into its own branch above (see that branch's doc comment, and `ENTITY_ROUTES`'s own).
+//
+// TWELVE as of M8 Task 1 (#13) -- `/` added here, an exact-path entry like `/search`,
+// `/sitemap.xml`, `/robots.txt` and `/watch`. It is the only entry whose branch probes
+// `dataAsOf()` rather than `isDataLayerHealthy()`; see `isFreshnessReadable`'s doc comment for
+// why those two are not interchangeable.
 export const config = {
   matcher: [
+    "/",
     "/explore",
     "/api/pivot",
     "/route/:pair",

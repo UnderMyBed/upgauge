@@ -434,6 +434,21 @@ check     "home: renders our own front door"        "$BODY" 'Is this route healt
 check     "home: DATA AS OF is present"             "$BODY" 'DATA AS OF'
 check_not "home: no create-next-app boilerplate"    "$BODY" 'vercel.com/new'
 
+# M8 Task 1 (#13): the header, not just the content. `/` was absent from proxy.ts's matcher
+# (eleven entries through M7 Task 9), so it served Next's own force-dynamic fallback --
+# `private, no-cache, no-store, max-age=0, must-revalidate` -- which forbids caching at the CDN
+# too, on the most-requested URL of the site. Only THIS gate can see it: proxy.test.ts calls
+# proxy() directly and never crosses Next's routing layer, so a missing matcher entry leaves
+# every one of its tests green.
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/")
+check     "home: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+# Not decoration, and not redundant with the check above. Next's own fallback string CONTAINS
+# the substring "no-store", so a positive HTML_CACHE check paired with a negative "no-store"
+# check would BOTH stay green under a "remove / from the matcher" mutant. `must-revalidate` is
+# the one token present in Next's fallback and absent from every header proxy.ts sets -- the
+# same discriminator the /search block and the /explore gap check already use.
+check_not "home: is not Next's own force-dynamic fallback (proves proxy.ts ran)" "$HDRS" "must-revalidate"
+
 # 7. Resolution: the reader must see codes, never the catalog's ids.
 BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op")
 check     "explore: renders a carrier code"        "$BODY" '>DL<'

@@ -7,14 +7,18 @@ import { describe, expect, it, vi } from "vitest";
 // for that (route.test.ts, page.test.tsx) is a partial mock, not a fake in-memory database.
 vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
-  return { ...actual, loadAllowlist: vi.fn(actual.loadAllowlist) };
+  return {
+    ...actual,
+    loadAllowlist: vi.fn(actual.loadAllowlist),
+    dataAsOf: vi.fn(actual.dataAsOf),
+  };
 });
 
 import { NextRequest } from "next/server";
 import { proxy } from "@/proxy";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { RAW_PATH_HEADER } from "@/lib/rawPath";
-import { loadAllowlist } from "@/lib/db";
+import { dataAsOf, loadAllowlist } from "@/lib/db";
 
 // M5 Task 7, Part B fallback: /explore and every entity page get the shorter HTML_CACHE value
 // (proxy.ts's own constant, renamed and re-documented there), not CLAUDE.md's project-wide
@@ -168,9 +172,9 @@ describe("proxy", () => {
 
   // The prefix readers must not net each other, or a request would be resolved by the wrong
   // entity's lookup -- and `/aircraft/...` sits under a prefix that shares its first four
-  // characters with nothing else here only by luck of naming.
+  // characters with nothing else here only by luck of naming. `/` itself moved out of this list
+  // in M8 Task 1 (#13): it now has its own branch above and is no longer "not an entity page".
   it.each([
-    ["/", null],
     ["/routes/JFK-LAX", null],
     ["/airports/SEA", null],
     ["/carrierz/DL", null],
@@ -363,6 +367,40 @@ describe("proxy", () => {
     expect(config.matcher).not.toContain("/api/health");
     // Anti-vacuity: prove this test is reading the real matcher.
     expect(config.matcher).toContain("/api/pivot");
+  });
+
+  // M8 Task 1 (#13). `/` was the one page route missing from config.matcher, so it fell through
+  // to Next's own force-dynamic fallback: measured on a served build at 4aa8087:
+  // `private, no-cache, no-store, max-age=0, must-revalidate` -- which forbids caching
+  // EVERYWHERE including the CDN, on the front door, which queries DuckDB for DATA AS OF.
+  it("sets the project's Cache-Control on /", async () => {
+    const res = await proxy(new NextRequest("http://localhost/"));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  // The bug this catches: giving `/` the isDataLayerHealthy() probe every other branch uses.
+  // That probe calls loadAllowlist(), which reads the pivot catalog views; `/`'s page reads
+  // dataAsOf(), which reads fct_segment_month -- a view over data/parquet/. A deployment holding
+  // upgauge.duckdb but not its Parquet tree (`make portability` negative 1) leaves loadAllowlist()
+  // succeeding while dataAsOf() throws, so the wrong probe stamps HTML_CACHE on a 500. That is
+  // M6 Task 8's measured bug with a different table name.
+  it("does not long-cache / when dataAsOf throws", async () => {
+    vi.mocked(dataAsOf).mockRejectedValueOnce(
+      new Error("duckdb: IO Error: No files found that match the pattern data/parquet/..."),
+    );
+    const res = await proxy(new NextRequest("http://localhost/"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // The other half of the same pair, and the reason it is a PAIR: a wrong probe passes every
+  // test where both probes agree, so only an input where they DISAGREE can tell them apart.
+  // `/` must not consult the pivot catalog at all. Asserted as "was never called" rather than
+  // by rejecting loadAllowlist, because a queued mockRejectedValueOnce that `/` never consumes
+  // would leak into whichever later test calls loadAllowlist first.
+  it("never asks the pivot catalog about /", async () => {
+    vi.mocked(loadAllowlist).mockClear();
+    await proxy(new NextRequest("http://localhost/"));
+    expect(vi.mocked(loadAllowlist)).not.toHaveBeenCalled();
   });
 });
 
