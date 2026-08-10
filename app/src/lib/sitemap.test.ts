@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { dedupeAircraftBySlug, parseLastmod, sitemapEntries } from "@/lib/sitemap";
 import { dataAsOf } from "@/lib/db";
 import robots from "@/app/robots";
+import sitemap from "@/app/sitemap";
 
 // No mocks: every case below runs the real sitemap_*.sql files against the real
 // upgauge.duckdb, exactly as routePair.test.ts / carrier.test.ts do.
@@ -127,6 +128,43 @@ describe("sitemapEntries", () => {
     for (const entry of watch) {
       expect(entry.lastModified.toISOString()).toBe(expected);
     }
+  });
+});
+
+// Task 3's original draft test called `sitemapEntries()` with no argument and read each
+// entry's `.path` -- neither compiles (`sitemapEntries` requires a `SitemapKind`; entries carry
+// `.url`, not `.path`), and no `SitemapKind` can ever emit an `/api/` path in the first place,
+// so a `not.toContain("/api/health")` there could never fail under the bug it names -- exactly
+// the vacuous-test failure CLAUDE.md's "run the mutant" rule exists to catch. This asserts an
+// ALLOW-list instead, over the ASSEMBLED sitemap (`app/sitemap.ts`'s default export -- the
+// artifact actually served at `/sitemap.xml`, not the per-kind builder underneath it): every
+// URL must match one of the known page-route shapes. Same discipline `proxy.ts`'s own
+// `isCacheable()` uses (CLAUDE.md: `kind === "ok" || kind === "redirect"`, never
+// `!== "notFound"`) -- a negation of one bad shape lets every OTHER bad shape through; an
+// allow-list of good shapes lets nothing else through.
+describe("sitemap (assembled, app/sitemap.ts)", () => {
+  it("emits only the known page-route shapes -- /route, /airport, /carrier, /aircraft, /watch", async () => {
+    const entries = await sitemap();
+    const paths = entries.map((e) => new URL(e.url).pathname);
+    const KNOWN_SHAPE = /^\/(route\/[^/]+|airport\/[^/]+|carrier\/[^/]+|aircraft\/[^/]+|watch(\/[^/]+)?)$/;
+    const unrecognized = paths.filter((p) => !KNOWN_SHAPE.test(p));
+    // If this ever fails, `unrecognized` (not just a count) is what should be read first --
+    // an `/api/health` entry smuggled into one kind's rows would show up here by name.
+    expect(unrecognized).toEqual([]);
+
+    // Anti-vacuity: prove the allow-list is actually exercised by a non-trivial, multi-shape
+    // list, so a `sitemap()` that regressed to returning `[]` could not pass this test by
+    // having nothing left to check.
+    expect(paths.length).toBeGreaterThan(20000);
+    expect(paths.some((p) => p.startsWith("/route/"))).toBe(true);
+    expect(paths.some((p) => p.startsWith("/airport/"))).toBe(true);
+    expect(paths.some((p) => p.startsWith("/carrier/"))).toBe(true);
+    expect(paths.some((p) => p.startsWith("/aircraft/"))).toBe(true);
+    expect(paths).toContain("/watch");
+
+    // The specific claim Task 3 exists to pin, restated as its own assertion rather than left
+    // to be an implication of the allow-list above.
+    expect(paths).not.toContain("/api/health");
   });
 });
 

@@ -169,9 +169,10 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           warehouse-tag: ${{ needs.resolve.outputs.tag }}
-      # 349 of these 781 fail without a built upgauge.duckdb, and 16 of 50 test files open
-      # the real database and assert real measured values. The setup action's presence
-      # assertion is what stops that becoming a confusing mass failure.
+      # Without a built upgauge.duckdb, 352 of these 805 tests fail across 29 of the 52 test
+      # files (measured 2026-08-09) -- they open the real database and assert real measured
+      # values. The setup action's presence assertion is what stops that becoming a confusing
+      # mass failure.
       - run: make app-check
 
   goldens:

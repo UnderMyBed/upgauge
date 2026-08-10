@@ -3,4 +3,12 @@
 -- hand-set value can disagree with what is actually being served.
 --
 -- No Python caller yet; it exists so the server has no excuse to inline one.
+--
+-- DOUBLE DUTY, and the second one is invisible from here: fct_segment_month is a view over
+-- data/parquet/, so this is the ONLY query /api/health runs that touches a Parquet file. Its
+-- other probe (health_catalog.sql) answers out of duckdb_columns() and never opens one. That
+-- makes this query -- not the catalog manifest -- the thing that turns "the data volume is not
+-- mounted" into a 503 instead of a healthy-looking container serving 500s (app/src/lib/db.ts
+-- dataAsOf(), app/src/lib/health.ts, `make portability` negative 1). Do not memoize the caller,
+-- and do not narrow this to something cheaper that skips the Parquet read.
 SELECT max(year_month) AS data_as_of FROM fct_segment_month

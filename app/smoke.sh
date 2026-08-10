@@ -20,6 +20,118 @@ set -uo pipefail
 
 PORT="${SMOKE_PORT:-3199}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# The gate must serve from the PINNED next, not whatever `npx` resolves. Running `next start
+# app` via npx from $ROOT cannot resolve app/node_modules (no root node_modules, no root
+# package.json) -- traced 2026-08-09, it resolved ~/.npm/_npx/8b377f6eec906bc4/node_modules/next,
+# a cached download that happened to match the pin. On a cold cache npx fetches next@latest. A
+# gate serving a different Next than the build under test certifies nothing.
+NEXT_BIN="${ROOT}/app/node_modules/.bin/next"
+if [ ! -x "$NEXT_BIN" ]; then
+  echo "  FAIL ${NEXT_BIN} is missing or not executable. Run 'make install' first."
+  exit 1
+fi
+# Through `mise exec --`, like every other runtime call in this file -- a bare `node` is not
+# guaranteed on $PATH (a fresh clone before `mise activate`, a cron shell, `make app-smoke`'s
+# own invocation below, which calls this script directly rather than through `$(MISE)`).
+#
+# Fix round 1: the first version of this guard called bare `node -p ...` with `set -uo
+# pipefail` (no `-e`), and command substitution never propagates a child's exit status into
+# `$?` for an `if`, only its stdout. If `node` is unresolvable, BOTH substitutions silently
+# yield "" and "" != "" is false -- the mismatch check never fires, `==> next  ()` prints, and
+# the whole suite runs "certified" having verified nothing. Reproduced:
+#   $ bash -c 'set -uo pipefail; X=$(nonexistent -p a); Y=$(nonexistent -p b); [ "$X" != "$Y" ] && echo MISMATCH || echo EQUAL-PASSES-SILENTLY'
+#   EQUAL-PASSES-SILENTLY
+# So an explicit non-empty check on EACH value, before the comparison, is not optional --
+# routing through `mise exec --` narrows WHEN node is missing, it does not stop the silent-pass
+# shape if it still is.
+PINNED_NEXT=$(mise exec -- node -p "require('${ROOT}/app/node_modules/next/package.json').version")
+DECLARED_NEXT=$(mise exec -- node -p "require('${ROOT}/app/package.json').dependencies.next")
+if [ -z "$PINNED_NEXT" ] || [ -z "$DECLARED_NEXT" ]; then
+  echo "  FAIL could not determine the next version (installed='${PINNED_NEXT}' declared='${DECLARED_NEXT}')."
+  echo "       node/mise is unresolvable or a package.json is unreadable -- the guard could NOT"
+  echo "       run, this is not a report that the versions matched."
+  exit 1
+fi
+if [ "$PINNED_NEXT" != "$DECLARED_NEXT" ]; then
+  echo "  FAIL installed next ${PINNED_NEXT} != declared ${DECLARED_NEXT} in app/package.json."
+  echo "       Every check below would run against a Next this repo does not pin."
+  exit 1
+fi
+echo "==> next ${PINNED_NEXT} (${NEXT_BIN})"
+
+# One serve path for all four servers this script starts, so the pinned binary cannot be
+# reintroduced as npx in one site and missed in the others.
+#
+# `cap` (below) is a SHELL FUNCTION, not a binary, so it cannot follow `env` -- `env NAME=val
+# cap ...` execs "cap" via PATH lookup and fails (`env: 'cap': No such file or directory`,
+# verified). `env`'s VAR=value args go inside cap's OWN forwarded command instead, immediately
+# before `mise` (a real binary): `cap 2G env "$@" mise exec -- ...`. The plain assignment form
+# the four call sites used before this (`UPGAUGE_DB="$BROKEN_DB" cap 2G mise exec -- ...`)
+# cannot be reused as-is here either -- that form is parsed at PARSE TIME as a prefix on the
+# literal word `cap`, but this function receives its assignments as already-expanded strings in
+# "$@", and bash does not re-parse an expanded string as an assignment prefix (verified: `set --
+# FOO=bar; "$@" printenv FOO` fails with "FOO=bar: command not found", not a set variable) --
+# only the real `env` binary can turn a runtime string into a child's environment.
+serve_next() { # serve_next <port> <logfile> [VAR=value ...]
+  local port="$1" log="$2"; shift 2
+  cap 2G env "$@" mise exec -- "$NEXT_BIN" start app -p "$port" >"$log" 2>&1 &
+}
+
+SMOKE_MODE="${SMOKE_MODE:-host}"
+SMOKE_IMAGE="${SMOKE_IMAGE:-upgauge:local}"
+
+# Container mode keeps port_free_or_die AND adds what it cannot express. The guard proves
+# "I started this server"; the identity assertion proves "it is the build under test". Two
+# independent guards, because the orphan incident (kill_port's own comment, below) got through
+# the only one that existed, and in container mode a container is SUPPOSED to hold the port --
+# so the guard alone would be watching for exactly the thing that is now correct.
+start_container() { # start_container <port>
+  port_free_or_die "$1"
+  # `|| exit` is not belt-and-braces: `set -e` is off, so an unchecked `docker run` failure falls
+  # straight through to the readiness loop, which burns 90 s and then dumps `docker logs
+  # upgauge-smoke` -- from the container that ALREADY held that name, i.e. it points the diagnosis
+  # at the previous run's build. The name collision is the case the port guard cannot see: a stale
+  # container not publishing $1 leaves the port free, so port_free_or_die passes. All three
+  # `docker run`s in `make portability` carry this guard; this one was the omission.
+  docker run -d --rm --name upgauge-smoke --read-only \
+    -p "127.0.0.1:${1}:3000" "$SMOKE_IMAGE" >/dev/null || {
+    echo "  FAIL docker run could not start upgauge-smoke -- NOTHING is under test."
+    echo "       Most likely a container of that name already exists (\`docker rm -f"
+    echo "       upgauge-smoke\`), the image ${SMOKE_IMAGE} is missing, or the daemon is down."
+    exit 1
+  }
+}
+
+assert_identity() { # assert_identity <base-url>
+  local body sha tag
+  body=$(curl -s --max-time 10 "${1}/api/health")
+  # `mise exec -- node`, never bare `node`: this script is invoked as ./app/smoke.sh and does
+  # NOT go through $(MISE), so nothing guarantees a mise-activated shell. And the empty checks
+  # below are not belt-and-braces -- `set -e` is off and command substitution never propagates
+  # the child's status, so an absent node yields "" for both values. Task 1 shipped this exact
+  # bug: `"" != ""` is false, so the guard printed a blank version and certified the whole suite
+  # having verified nothing. A guard whose failure mode is silently-green is the one thing this
+  # file cannot contain.
+  sha=$(printf '%s' "$body" | mise exec -- node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).build.sha")
+  tag=$(printf '%s' "$body" | mise exec -- node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).build.warehouse")
+  if [ -z "$sha" ] || [ -z "$tag" ]; then
+    echo "  FAIL could not read build identity from ${1}/api/health -- the assertion did not run."
+    echo "       Body was: ${body:-<empty>}"
+    exit 1
+  fi
+  if [ -n "${SMOKE_EXPECT_SHA:-}" ] && [ "$sha" != "$SMOKE_EXPECT_SHA" ]; then
+    echo "  FAIL the server on this port reports build ${sha}, expected ${SMOKE_EXPECT_SHA}."
+    echo "       Every check below would pass against a build that is not under test."
+    exit 1
+  fi
+  if [ -n "${SMOKE_EXPECT_WAREHOUSE:-}" ] && [ "$tag" != "$SMOKE_EXPECT_WAREHOUSE" ]; then
+    echo "  FAIL the server reports warehouse ${tag}, expected ${SMOKE_EXPECT_WAREHOUSE}."
+    exit 1
+  fi
+  echo "==> serving build ${sha}, warehouse ${tag}"
+}
+
 BASE="http://127.0.0.1:${PORT}"
 CACHE_EXPECTED="public, s-maxage=2592000, stale-while-revalidate=86400"
 # M5 Task 7, Part B split proxy.ts's one 30-day CACHE constant into two: /api/pivot (its own
@@ -174,6 +286,10 @@ port_free_or_die() {
 }
 
 cleanup() {
+  # Container teardown first: `docker rm -f` tears down the port mapping cleanly, so
+  # `kill_port "$PORT"` below is a harmless no-op in container mode rather than a fallback
+  # that kills docker-proxy and leaves the container itself running, unreachable and leaked.
+  [ "$SMOKE_MODE" = "container" ] && docker rm -f upgauge-smoke >/dev/null 2>&1
   [ -n "${SERVER_PID:-}" ] && kill "$SERVER_PID" 2>/dev/null
   kill_port "$PORT"
   [ -n "${GAP_PID:-}" ] && kill "$GAP_PID" 2>/dev/null
@@ -194,15 +310,70 @@ cleanup() {
 trap cleanup EXIT
 
 cd "$ROOT"
-echo "==> build"
-cap 4G mise exec -- npm --prefix app run build >/dev/null 2>&1 || { echo "  FAIL build"; exit 1; }
+if [ "$SMOKE_MODE" = "container" ]; then
+  echo "==> container ${SMOKE_IMAGE} on :${PORT}"
+  start_container "$PORT"
+else
+  echo "==> build"
+  cap 4G mise exec -- npm --prefix app run build >/dev/null 2>&1 || { echo "  FAIL build"; exit 1; }
+  echo "==> serve on :${PORT}"
+  port_free_or_die "$PORT"
+  serve_next "$PORT" /tmp/upgauge-smoke.log
+  SERVER_PID=$!
+fi
+# Readiness probes /api/health, not "/": it is the one route that reports WHY it is not ready.
+for _ in $(seq 1 90); do curl -sf -o /dev/null --max-time 2 "${BASE}/api/health" && break; sleep 1; done
+# `curl -sf` treats the 503 this endpoint returns for a broken data layer as "not up", so the loop
+# above cannot distinguish "nothing is listening" from "a server is answering, and telling us
+# why". Reporting the second as "server never came up" throws away the one diagnostic the
+# readiness probe was pointed at /api/health to get -- so re-probe without -f and print what it
+# said. %{http_code} is 000 exactly when there was no HTTP response at all.
+#
+# THIS GUARD *IS* THE SERVED-BUILD 200 ASSERTION for /api/health -- there is deliberately no
+# `check` for the status code below it. One was added and removed in the same review round: a
+# `check "$READY_CODE" '200'` placed AFTER this `exit 1` can only ever run when READY_CODE is
+# already exactly 200, so it could never be red, and it inflated both published counts by one.
+# CLAUDE.md: a test that has never been red proves nothing. This form is the stronger one anyway --
+# it aborts instead of continuing, so a degraded server cannot spend five minutes reporting a mass
+# of consequential failures whose single cause is the line printed here. (No count is quoted for
+# that: it is a property of one broken build, in the same way this repo declines to quote the
+# `.Size` delta of one pair of Docker builds. The point is the ratio of noise to cause, not a
+# number.) Twice proven red, by name, as an abort: HTTP 000 (stale container holding the name,
+# nothing listening) and HTTP 503 (data/parquet emptied) -- see task-6-report.md's mutants I and J.
+# Note that assert_identity below would NOT stop such a run: it reads build.sha/build.warehouse,
+# which a degraded 503 body still carries. Identity and health are separate questions, correctly.
+READY_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "${BASE}/api/health")
+if [ "$READY_CODE" != "200" ]; then
+  echo "  FAIL server not serving a healthy /api/health: HTTP ${READY_CODE} (000 = nothing listening)"
+  echo "       Body: $(curl -s --max-time 5 "${BASE}/api/health" | head -c 500)"
+  [ "$SMOKE_MODE" = "container" ] && docker logs upgauge-smoke 2>&1 | tail -30 \
+                                  || cat /tmp/upgauge-smoke.log
+  exit 1
+fi
+assert_identity "$BASE"
 
-echo "==> serve on :${PORT}"
-port_free_or_die "$PORT"
-cap 2G mise exec -- npx next start app -p "$PORT" >/tmp/upgauge-smoke.log 2>&1 &
-SERVER_PID=$!
-for _ in $(seq 1 60); do curl -sf -o /dev/null --max-time 2 "${BASE}/" && break; sleep 1; done
-curl -sf -o /dev/null --max-time 2 "${BASE}/" || { echo "  FAIL server never came up"; cat /tmp/upgauge-smoke.log; exit 1; }
+# /api/health's OWN served-build HEADER contract. Its status code is owned by the readiness guard
+# above (see the note there); these two checks are what nothing asserted on a served build at all,
+# in either mode -- the guard reads only whether it answered 200, and assert_identity reads only
+# build.sha/build.warehouse out of the body.
+#
+# `no-store` is this route's defining property and the reason it is the ONE route deliberately
+# absent from proxy.ts's matcher (route.ts's header comment). proxy.test.ts pins that absence in
+# the matcher ARRAY; the vitest at api/health/route.test.ts calls GET() directly. Neither crosses
+# a served response, so a Next upgrade -- or an "add every route to the matcher" sweep -- could
+# ship the project's 30-day s-maxage on this endpoint with all 805 app tests and both smoke gates
+# green, and a shared CDN would pin `{"status":"ok"}` for a month in front of a degraded container.
+HDRS=$(curl -s -o /dev/null -D - --max-time 10 "${BASE}/api/health")
+# The needle is the header LINE, not the bare value: Next's own fallback for a route that set no
+# header at all is `private, no-cache, no-store, max-age=0, must-revalidate`, which contains the
+# substring `no-store` -- route.test.ts asserts the exact value for that same reason.
+check "health: is never cached" "$HDRS" 'cache-control: no-store'
+# And the negative is not redundant with it. A response carrying TWO Cache-Control values (a proxy
+# appending to a header the handler already set, comma-joined or as a second line) still contains
+# `cache-control: no-store` while being cacheable for 30 days -- the positive check alone would
+# print ok. This one names the value that must never appear on this route, so a red also says
+# which of the two failures happened.
+check_not "health: never gets the project cache" "$HDRS" 's-maxage=2592000'
 
 echo "==> checks"
 
@@ -1011,11 +1182,35 @@ check "robots: sets the project Cache-Control"  "$HDRS" "$CACHE_EXPECTED"
 # stays at 1 after it). Reads /proc, so this needs Linux -- the deploy target and CI both are;
 # it fails loudly rather than skipping if that ever stops being true, because a skipped guard
 # is a dark guard.
-descendants() { printf '%s\n' "$1"; local c; for c in $(pgrep -P "$1" 2>/dev/null); do descendants "$c"; done; }
-HANDLES=0
-for p in $(descendants "$SERVER_PID"); do
-  HANDLES=$(( HANDLES + $(ls -l "/proc/${p}/fd" 2>/dev/null | grep -c 'upgauge\.duckdb') ))
-done
+# Host mode walks the LOCAL process tree via pgrep and reads /proc/<pid>/fd directly -- this
+# script and `next start` share a PID namespace, so that is straightforward. Container mode
+# cannot do the same from the HOST side: `docker inspect --format '{{.State.Pid}}'` reports a
+# PID in the DAEMON's own PID namespace, which is a DIFFERENT namespace from wherever this
+# script runs under Docker Desktop -- measured: that PID does not exist in this host's /proc at
+# all (Docker Desktop's own Linux VM, "Operating System: Docker Desktop" in `docker info`), not
+# a permission problem but a namespace one, and not specific to this one machine -- any Docker
+# Desktop install (macOS, Windows/WSL2) puts the daemon in its own VM the same way. `docker exec`
+# sidesteps it entirely: it always runs a new process INSIDE the target container's own
+# namespaces regardless of daemon topology, so scanning /proc from there sees exactly (and only)
+# this container's own tree. No `pgrep` needed either -- PID-namespace isolation already limits
+# /proc to this container alone, and node:*-slim ships no procps -- so this is plain `sh`, not
+# the `descendants` helper host mode needs.
+if [ "$SMOKE_MODE" = "container" ]; then
+  HANDLES=$(docker exec upgauge-smoke sh -c '
+    n=0
+    for d in /proc/[0-9]*; do
+      n=$(( n + $(ls -l "$d/fd" 2>/dev/null | grep -c "upgauge\.duckdb") ))
+    done
+    echo "$n"
+  ' 2>/dev/null)
+  HANDLES="${HANDLES:-0}"
+else
+  descendants() { printf '%s\n' "$1"; local c; for c in $(pgrep -P "$1" 2>/dev/null); do descendants "$c"; done; }
+  HANDLES=0
+  for p in $(descendants "$SERVER_PID"); do
+    HANDLES=$(( HANDLES + $(ls -l "/proc/${p}/fd" 2>/dev/null | grep -c 'upgauge\.duckdb') ))
+  done
+fi
 check_re "db: proxy, page and API share ONE DuckDBInstance (open handles = 1)" "$HANDLES" '^1$'
 
 # ---------------------------------------------------------------------------------------------
@@ -1227,6 +1422,14 @@ check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize 
 # primary server is killed first -- an 8GB box with zram-only swap does not run two `next start`
 # processes at once (this repo's own working agreement) -- so this section runs LAST and nothing
 # after it needs $SERVER_PID alive.
+# Container mode: skipped. This section starts its OWN short-lived `next start` against a
+# broken database COPY -- it tests page and proxy behaviour against a broken catalog, nothing
+# the container contributes, and containerising it would triple image runs for no new coverage.
+# The skip is PRINTED (see the tally at the end of this file), never silent -- a smaller check
+# count reported as though it were the same count is exactly the "266 ok against the wrong
+# build" shape this file exists to refuse, one level up (a truncated total instead of a stale
+# one).
+if [ "$SMOKE_MODE" != "container" ]; then
 echo "==> gap check: /explore against a database missing its pivot catalog (M5 Task 7 Part A)"
 kill "$SERVER_PID" 2>/dev/null; wait "$SERVER_PID" 2>/dev/null; SERVER_PID=
 
@@ -1249,8 +1452,7 @@ else
   GAP_PORT="${SMOKE_GAP_PORT:-3198}"
   GAP_BASE="http://127.0.0.1:${GAP_PORT}"
   port_free_or_die "$GAP_PORT"
-  UPGAUGE_DB="$BROKEN_DB" cap 2G mise exec -- npx next start app -p "$GAP_PORT" \
-    >/tmp/upgauge-smoke-gap.log 2>&1 &
+  serve_next "$GAP_PORT" /tmp/upgauge-smoke-gap.log UPGAUGE_DB="$BROKEN_DB"
   GAP_PID=$!
   # "/" reads ONLY dataAsOf() (fct_segment_month directly), never meta_pivot_dimensions, so it
   # stays healthy on the broken copy and is a valid readiness probe -- unlike /explore itself,
@@ -1285,6 +1487,7 @@ else
   kill_port "$GAP_PORT"
 fi
 rm -f "$BROKEN_DB"; BROKEN_DB=
+fi
 
 # ---------------------------------------------------------------------------------------------
 # 16. M6 Task 8's own gap check -- /watch/gauge against a database missing `mart_route_health`,
@@ -1318,6 +1521,9 @@ rm -f "$BROKEN_DB"; BROKEN_DB=
 #     a `mart_route_health`-specific probe of its own, which is exactly the kind of DB round trip
 #     `/route`'s own gap ("The gap", docs/architecture/hosting.md) was left open rather than pay
 #     on every request.
+# Container mode: skipped, for the same reason as the gap check above -- own broken-database
+# COPY, own short-lived `next start`, no container-specific coverage. Printed, not silent.
+if [ "$SMOKE_MODE" != "container" ]; then
 echo "==> gap check: /watch/gauge against a database missing mart_route_health (M6 Task 8)"
 
 BROKEN_DB2="$(mktemp -u "${TMPDIR:-/tmp}/upgauge-smoke-broken2-XXXXXX.duckdb")"
@@ -1337,8 +1543,7 @@ else
   GAP_PORT2="${SMOKE_GAP_PORT2:-3195}"
   GAP_BASE2="http://127.0.0.1:${GAP_PORT2}"
   port_free_or_die "$GAP_PORT2"
-  UPGAUGE_DB="$BROKEN_DB2" cap 2G mise exec -- npx next start app -p "$GAP_PORT2" \
-    >/tmp/upgauge-smoke-gap2.log 2>&1 &
+  serve_next "$GAP_PORT2" /tmp/upgauge-smoke-gap2.log UPGAUGE_DB="$BROKEN_DB2"
   GAP_PID2=$!
   UP=0
   for _ in $(seq 1 60); do
@@ -1362,6 +1567,7 @@ else
   kill_port "$GAP_PORT2"
 fi
 rm -f "$BROKEN_DB2"; BROKEN_DB2=
+fi
 
 # ---------------------------------------------------------------------------------------------
 # 17. M7 Task 10's own gap check -- /airport/ORD against a database whose dim_airport view is
@@ -1396,6 +1602,10 @@ rm -f "$BROKEN_DB2"; BROKEN_DB2=
 #     codes through dim_airport (via resolve.ts) but never reads lat/lon, so it must stay a
 #     healthy 200 under this exact break -- if it didn't, the break would be wider than claimed
 #     and this section would be measuring the wrong thing.
+# Container mode: skipped, for the same reason as the two gap checks above -- own broken-
+# database COPY, own short-lived `next start`, no container-specific coverage. Printed, not
+# silent.
+if [ "$SMOKE_MODE" != "container" ]; then
 echo "==> gap check: /airport/ORD against a database missing dim_airport's lat/lon columns (M7 Task 10)"
 
 BROKEN_DB3="$(mktemp -u "${TMPDIR:-/tmp}/upgauge-smoke-broken3-XXXXXX.duckdb")"
@@ -1412,8 +1622,7 @@ else
   GAP_PORT3="${SMOKE_GAP_PORT3:-3196}"
   GAP_BASE3="http://127.0.0.1:${GAP_PORT3}"
   port_free_or_die "$GAP_PORT3"
-  UPGAUGE_DB="$BROKEN_DB3" cap 2G mise exec -- npx next start app -p "$GAP_PORT3" \
-    >/tmp/upgauge-smoke-gap3.log 2>&1 &
+  serve_next "$GAP_PORT3" /tmp/upgauge-smoke-gap3.log UPGAUGE_DB="$BROKEN_DB3"
   GAP_PID3=$!
   UP=0
   for _ in $(seq 1 60); do
@@ -1440,6 +1649,19 @@ else
   kill_port "$GAP_PORT3"
 fi
 rm -f "$BROKEN_DB3"; BROKEN_DB3=
+fi
+
+# This DELIBERATELY narrows criterion 1 in the M5/M6/M7 tasks above, which each ask for the
+# full suite -- container coverage is the served-build checks only. Silent truncation reads as
+# "covered everything" when it did not, so the narrowing is printed rather than left for someone
+# to notice by diffing an ok-count against host mode.
+if [ "$SMOKE_MODE" = "container" ]; then
+  echo "==> host-only sections NOT run in container mode (3):"
+  echo "    - /explore against a database missing meta_pivot_dimensions (M5 Task 7 Part A)"
+  echo "    - /watch/gauge against a database missing mart_route_health (M6 Task 8)"
+  echo "    - /airport map against dim_airport missing lat/lon (M7 Task 10)"
+  echo "    container coverage is the served-build checks only -- NOT the full suite."
+fi
 
 echo
 if [ "$FAILED" -eq 0 ]; then echo "smoke: all checks passed"; else echo "smoke: FAILURES above"; fi

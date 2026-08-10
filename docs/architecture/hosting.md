@@ -177,14 +177,11 @@ With Cloudflare's free tier in front, near-zero repeat traffic touches the box r
 `.duckdb` file alone.** As built, the catalog is views over
 *relative* Parquet paths — it carries almost no data itself — so it behaves identically
 under `docker run` only if `data/parquet/` is co-located with it and `WORKDIR` is the
-directory containing `data/`. Get that wrong and the container still starts and the file
-still opens; every query then fails with a "no files found" read error. Full detail,
-including a confirmed repro of that exact failure: [pipeline.md § Views cannot take bound
-parameters](pipeline.md#views-cannot-take-bound-parameters--so-cwd-is-load-bearing).
+directory containing `data/`. **`make portability` proves that by breaking it** — three ways,
+each asserting its own signature ([§ below](#the-test-itself--run-2026-08-09-m8-task-6)).
 
-`docker run` it locally against the same `.duckdb` file + `data/parquet/` and it must
-behave identically. Everything is Docker + Parquet + env vars. R2 is S3-compatible. **Do
-not build on provider-specific runtimes** (Workers, D1, KV). This must stay a normal app.
+Everything is Docker + Parquet + env vars. R2 is S3-compatible. **Do not build on
+provider-specific runtimes** (Workers, D1, KV). This must stay a normal app.
 
 **That artifact is published, not just described.** `warehouse.yml` publishes
 `warehouse-YYYY.MM.tar.zst` (`upgauge.duckdb` + `data/parquet/`) and `raw-YYYY.MM.tar.zst`
@@ -194,6 +191,342 @@ one producer for CI, the image, and the portability test.
 
 > This constraint earned its keep: swapping the original Fly pick for Hetzner was a one-line
 > change precisely because nothing depended on the provider.
+
+### The Dockerfile — built, measured (M8 Task 4)
+
+Four stages: `warehouse` (fetches and unpacks the published release asset), `deps` (full
+`npm ci`, for the build only), `build` (`next build`; touches no `data/` and no `sql/`, so it
+runs concurrently with `warehouse`), `runtime` (`npm ci --omit=dev` plus the warehouse output
+copied in). `runtime` runs as `USER node` — confirmed: `docker run --rm upgauge:local id` →
+`uid=1000(node) gid=1000(node) groups=1000(node)`. No `output: "standalone"` (§ above).
+
+**The WORKDIR contract above is asserted at BUILD time, not left for the first query to
+discover.** `warehouse`'s extraction is followed by three `test` assertions — `upgauge.duckdb`
+at the tarball root, `data/parquet` a directory at the tarball root, `data/raw` absent — so a
+future change to `warehouse.yml`'s packing step fails the image build instead of shipping a
+container that starts cleanly and then fails every query. **Confirmed by mutation**: changing
+the extraction to `mkdir -p x && tar --zstd -xf w.tar.zst -C x` (landing `upgauge.duckdb` one
+directory down) fails the BUILD at `RUN test -f upgauge.duckdb …` with exit code 1 — it never
+reaches `docker run`, and never reaches a query.
+
+**`--read-only` works with no tmpfs mount.** Every DB-touching route in this app already carries
+`export const dynamic = "force-dynamic"`, so there is no ISR page cache and no on-demand
+revalidation write to `.next/cache` at request time, and `db.ts` opens the database
+`access_mode: "READ_ONLY"` always — no candidate write path survives from either direction.
+Measured: `docker run --read-only` served `/`, `/explore`, all four entity pages, `/watch`,
+`/sitemap.xml` and `/api/health` at 200 with an empty, error-free log. No tmpfs mount is added;
+if a future page ever needs one (most likely `/srv/upgauge/app/.next/cache`), add
+`--mount type=tmpfs,destination=/srv/upgauge/app/.next/cache` to the run command rather than
+dropping `--read-only`.
+
+**The base image is TAG-pinned, not digest-pinned, and that bounds every size figure in this
+section.** `node:24.19.0-slim` is a moving target: Debian security rebuilds re-push the same tag, so
+two `make image` runs from an identical tree can produce different images — the opposite of the
+reproducibility argument the Makefile makes for `WAREHOUSE_TAG` a few lines from it, and it
+invalidates the `.Size` and layer counts below whenever it happens. Accepted deliberately: a digest
+pin freezes out those same security rebuilds until someone bumps it by hand, which is a patching
+policy decision, not a Dockerfile tidy-up. Keep `ARG NODE_VERSION` equal to `mise.toml`'s `node`
+(24.19.0 today) so the container runs the Node the gates ran against. **Open follow-up**, not a
+finding: if this ever ships behind an SLA, decide digest-pin-plus-renovation versus tag-pin
+explicitly.
+
+**The build context must contain only tracked files, or the image depends on what this host has
+run.** `app/tsconfig.tsbuildinfo` and `app/next-env.d.ts` are generated, gitignored and untracked;
+both are regenerated inside the `build` stage, so neither belongs in the context. Left in, they
+were load-bearing by accident: one `make app-check` rewrites `tsconfig.tsbuildinfo`, which
+invalidates `COPY app ./app`, which re-runs `next build`, which mints a fresh build id — so the
+next `make image` produced a *different image from an unchanged tree*. Confirmed by mutation, both
+directions: with the `.dockerignore` entries in place, appending a byte to
+`app/tsconfig.tsbuildinfo` leaves `COPY app ./app` `CACHED` and `.Size` byte-identical; with them
+removed, the same append re-runs the stage and changes `.Size`. **No delta is quoted for that
+second half on purpose** — it is whatever two `next build` runs happened to differ by, so it is a
+property of one pair of builds and re-measuring it yields a different number, not a broken rule.
+
+**`app/smoke.sh` is `.dockerignore`d too, and it is TRACKED — the second reason a file leaves the
+context is that the build does not need it.** The gate script runs on the *host* in both modes
+(container mode drives the container from outside; the image never contains it) and `next build`
+never reads it, but it lives under `app/`, so every edit to it invalidated `COPY app ./app`, re-ran
+`next build` and minted a fresh build id. That is how the `.Size` figure below went stale one commit
+after being measured — by a **comment-only** edit to `app/smoke.sh`, which is as small as a change
+to this file gets.
+
+Confirmed by mutation, both directions, **with `BUILD_SHA` pinned to the same value in all three
+builds** so the only variable is the ignore entry: with it in place, appending a comment to
+`app/smoke.sh` leaves `.Size` byte-identical *and* the `RootFS.Layers` digest list identical; with it
+removed, the same append changes the layer list and moves `.Size`. No delta is quoted for that
+second half, for the same reason as the paragraph above. Anything else under `app/` that only the
+host or CI reads belongs here too.
+
+**Pinning `BUILD_SHA` for that mutant was not optional, and the reason is worth keeping:** `make
+image` derives it from `git describe --always --dirty`, so *any* uncommitted edit — including one to
+a file this very entry excludes — lengthens the identity string from 7 characters to 13 and moves
+`.Size` by **18 bytes** with byte-identical layers. Unpinned, that 18 bytes would have read as the
+ignore entry failing. Overriding it (`make image IMAGE_SHA=…`) is a measurement tool, never a build
+step: the whole point of `--dirty` is that nobody can label a modified tree as the commit.
+
+**`ARG BUILD_SHA` and its `ENV` go LAST in the `runtime` stage, below every `RUN` and `COPY`.** An
+`ARG` is consumed where its `ENV` sits, and `BUILD_SHA` changes on every commit — declared at the
+top of the stage it invalidated `npm ci --omit=dev` and all five `COPY`s beneath it, so a one-line
+identity change re-installed the production deps and re-materialised the 96 MB `data/parquet`
+layer. Measured before the move: `npm ci --omit=dev` re-ran (13.9 s), every subsequent `COPY`
+re-ran, and `.Size` shifted 2,098 bytes between two commits with an identical tree. After: both
+are `CACHED` across a `BUILD_SHA` change and `.Size` moves by **3 bytes** — the config blob alone,
+with byte-identical layers. This is a deploy cost, not only a build one: a registry pulls the data
+layer again for every commit whose layers did not actually change.
+
+**Measured image size: ≈413 MB / 394 MiB** — `docker inspect upgauge:local --format='{{.Size}}'`
+reports 412,715,491 bytes, cross-checked against `docker save upgauge:local | wc -c`
+(412,738,560 bytes; the ~23 KB difference is tar-format overhead) and against the 13 layers in
+`docker inspect --format '{{len .RootFS.Layers}}'`. Both figures come from **two consecutive builds
+of the same commit that agreed exactly**, every step `CACHED` — a number that moves on a second
+identical build is not worth writing down. **Quote ≈413 MB, not the byte count.** Every
+run of the `build` stage mints a new `next build` id, so any real source change moves `.Size` by
+kilobytes, and the baked identity moves it by the 3 bytes above; the exact figure is a property of
+one build, not of this project, and is not a fixture. **It is also not what
+`docker images --format '{{.Size}}' upgauge:local` reports** — that
+printed `1.5GB` for the identical tag on the same host (Docker 29.6.2, containerd snapshotter),
+and `docker history`'s per-instruction sizes for the same image sum to ~1.09 GB.
+
+**Neither inflated figure is multi-stage discarding, and the proof is an image with nothing to
+discard.** A plain, unmodified `node:24.19.0-slim` — no multi-stage build, no `COPY --from`, no
+stage to throw away — shows the identical pattern: `docker inspect --format='{{.Size}}'` reports
+**80,463,700 bytes** and `docker save node:24.19.0-slim | wc -c` reports **83,079,680 bytes** (the
+two agree, exactly as `upgauge:local`'s own pair does), while `docker history --format
+'{{.Size}}'` summed over its 5 layers reports **247,710,100 bytes — a ~3.08× inflation** and
+`docker images` reports `331MB`. It is a general over-count in that accounting layer on this
+containerd-snapshotter Docker (29.6.2), not a symptom of anything this Dockerfile does. **Use
+`docker inspect`'s `.Size` or `docker save | wc -c` for any image's real size on this host; never
+`docker images` or `docker history`.**
+
+### Container smoke mode — built, measured (M8 Task 5)
+
+`make image-smoke` runs `app/smoke.sh`'s served-build checks against the container `make image`
+produces (`--read-only`, no tmpfs, per the finding just above), instead of against a `next
+start` the script forked itself. `port_free_or_die` (`app/smoke.sh`'s own header, unchanged)
+proves *"I started this server"*; it cannot prove *"this is the build under test,"* and in
+container mode a container is **supposed** to hold the port — deleting the guard for this mode
+would reopen the exact hole `port_free_or_die`/`kill_port` exist to close (an orphaned server
+held `:3199` for 34 minutes across two runs; both reported `266 ok` against a build that was not
+the one under test). So container mode keeps the guard **and** adds `assert_identity()`, the
+positive check the guard never had: it reads `/api/health`'s `build.sha`/`build.warehouse` and
+aborts *before any content check runs* if either disagrees with `SMOKE_EXPECT_SHA`/
+`SMOKE_EXPECT_WAREHOUSE` — the two values `image-smoke` passes as the working tree's own short
+SHA and `WAREHOUSE_TAG`. `assert_identity` reads through `mise exec -- node -p …`, never bare
+`node`, with an explicit non-empty check on both values before the comparison — the same
+silently-green failure shape this file's `next`-version guard fixed once already (`set -e` is
+off and command substitution never propagates a child's exit status, so an absent `node` yields
+`""` for both sides and `"" != ""` passes).
+
+**Confirmed by mutation, both halves — against `app/smoke.sh` directly, not through `make
+image-smoke`, and that "not through" is itself a finding.** `image-smoke`'s own recipe (above)
+assigns `SMOKE_EXPECT_SHA="$(git rev-parse --short HEAD)"` as a shell prefix on the `./app/
+smoke.sh` invocation, and a prefix assignment always wins over an inherited exported variable of
+the same name for that one command — ordinary POSIX shell precedence, reproduced in isolation
+with a two-line Makefile before trusting it against this one. So `SMOKE_MODE=container
+SMOKE_EXPECT_SHA=deadbee make -s image-smoke` cannot inject a wrong expectation at all: the
+recipe recomputes the real SHA and passes *that*, the comparison matches, and the run reports
+`smoke: all checks passed` — silently proving nothing about `assert_identity`. That is a
+property of the wrapper, not a bug in it: `make image-smoke` deliberately computes its own
+ground truth rather than trusting a caller-supplied expectation, which is the correct shape for
+the real use case (nobody should be able to launder a stale image past this gate by also
+supplying the wrong expectation). The mutant therefore has to exercise `assert_identity` at the
+layer that actually owns the comparison:
+
+```
+$ SMOKE_MODE=container SMOKE_IMAGE=upgauge:local SMOKE_EXPECT_SHA=deadbee ./app/smoke.sh
+  FAIL the server on this port reports build 4170ac5, expected deadbee.
+       Every check below would pass against a build that is not under test.
+$ echo "exit=$?"
+exit=1
+```
+
+Aborted before `==> checks` ever printed — no served-build check ran. Then, with the
+`assert_identity "$BASE"` call itself deleted and the identical command re-run: `smoke: all
+checks passed` — every served-build check green — against the same server whose identity
+(`deadbee` expected, `4170ac5` actual) was never read at all — the defect the assertion exists to make impossible. Restored
+immediately after; `git diff app/smoke.sh` empty against the committed version before
+re-verifying `make image-smoke` clean.
+
+**`WAREHOUSE_TAG` and `app/smoke.sh`'s dataset needles are ONE fixture — bump the pin in the same
+commit that re-measures the needles.** The Makefile pins the tag for reproducibility, but
+`make image-smoke` then runs dataset-month-specific checks against that pinned asset: the two
+chart-window needles (`2015-01 → 2026-04`, on `/route` and `/carrier`), the current-year asterisk
+(`>2026*<` on `/airport`), `2026 is a partial year — filed through April 2026 only.` and `this
+dataset covers 2015–2026`. When BTS publishes 2026-05, `make ingest && make build` moves the local
+database, those needles get re-measured, and **`make app-smoke` goes green while `make image-smoke`
+goes red with no defect present** — it is still building from `warehouse-2026.04`. Whoever meets
+that red beside a green host gate will reach for the needles, which is the wrong end. Same rule as
+CLAUDE.md's "when a renamed value was the fixture for a transform, MOVE the fixture", applied to
+this coupling; stated at the pin itself (`Makefile`, `WAREHOUSE_TAG`) as well as here.
+
+**`/api/health` carries its own served-build checks, in both modes** — exactly
+`cache-control: no-store`, and no `s-maxage=2592000`. It was the readiness probe and the identity
+source and had no check of its own: the probe reads only *whether* it answered, `assert_identity`
+reads only `build.sha`/`build.warehouse` out of the body. **Its status code is asserted by the
+readiness guard, not by a `check`** — a third check (`health: 200 on a healthy build`) was added
+alongside these two and removed in the same review round, because it sat *after* a guard that
+already `exit 1`s unless the code is exactly 200: it could never be red, and it inflated both
+published counts by one. The guard is the stronger form regardless — it aborts rather than letting a
+degraded server report a mass of consequential failures with one cause (**no count is quoted for
+that**: it is a property of one broken build, exactly like the `.Size` delta two sections above, and
+the argument is the ratio of noise to cause) — and it has been red by name twice, at HTTP 000 and
+HTTP 503. `assert_identity` would not stop such a run either: it reads `build.sha`/`build.warehouse`,
+which a degraded 503 body still carries — identity and health are separate questions, and that is
+correct. `no-store` is the property that justifies
+this route being the one deliberate omission from `proxy.ts`'s matcher, and nothing verified it on
+a served response — `proxy.test.ts` pins the absence from the matcher *array*, and
+`api/health/route.test.ts` calls `GET()` directly. Both would stay green if a Next upgrade or an
+"add every route to the matcher" sweep put the project's 30-day `s-maxage` on this endpoint, which
+would pin `{"status":"ok"}` in a shared CDN for a month in front of a degraded container. The
+negative check is not redundant with the positive one: a response carrying *two* `Cache-Control`
+values still contains `cache-control: no-store`.
+
+**Three sections of `app/smoke.sh` are skipped under `SMOKE_MODE=container`** — the M5/M6/M7 gap
+checks, each of which starts its own short-lived `next start` against a deliberately-broken
+*copy* of the database. They test page and proxy behaviour against a broken catalog, nothing the
+container contributes, and containerising them would triple image builds for zero new coverage.
+The skip is **printed**, immediately before the pass/fail tally, never silent — reporting a
+narrower count as though it were the full one is the same dishonesty as a stale build passing
+every check, one level up. `make app-smoke` (host mode) still runs all three and reports the
+documented 269 checks; `make image-smoke` reports the served-build subset alone.
+
+**One existing check needed a container-specific path, not a skip: the "ONE `DuckDBInstance`"
+handle count** (§ "One `DuckDBInstance` per process", below). Its host-mode form walks the local process tree with
+`pgrep` and reads `/proc/<pid>/fd` directly — valid because `smoke.sh` and `next start` share a
+PID namespace on the host. That does not hold for a container under **Docker Desktop**:
+`docker inspect --format '{{.State.Pid}}'` reports a PID in the *daemon's* own PID namespace,
+which measurably does not exist in the host's `/proc` at all (`docker info` reports
+`Operating System: Docker Desktop` — its own Linux VM, not this host) — a namespace mismatch,
+not a permission error, and true of Docker Desktop on any platform, not this one machine.
+`docker exec upgauge-smoke sh -c '…'` sidesteps it: it always runs inside the *container's own*
+namespaces regardless of daemon topology, and PID-namespace isolation alone limits `/proc` there
+to this container's own processes, so no `pgrep` is needed either (`node:*-slim` ships no
+`procps`).
+
+### The test itself — run 2026-08-09 (M8 Task 6)
+
+`make portability` is the **negative** half: it breaks the WORKDIR/data-colocation contract three
+ways and asserts the *distinct* signature each break produces. The **positive** half is
+`make image-smoke` — 259 served-build checks against the real container, `--read-only`, no tmpfs
+(§ above) — against 269 in host mode, the difference being exactly the 10 checks inside the three
+host-only gap sections.
+
+**The contract is defended at four layers, and the failures are not interchangeable.** One shared
+"it 500s" assertion would pass for all of them and therefore prove none:
+
+| break | layer it fails at | observed |
+|---|---|---|
+| a mis-packed warehouse tarball | image build | `docker build` exits 1 at the `warehouse` stage's `test` assertions (§ The Dockerfile) — never reaches `docker run` |
+| `data/parquet/` shadowed, database present | Parquet read | server listens, `/api/health` **503**, every route **500** |
+| wrong `WORKDIR`, image `CMD` | `exec` | container **exits 1** in under a second; nothing ever listens |
+| wrong `WORKDIR`, absolute entrypoint | database open | server listens, `/api/health` **503**, every route **500** |
+
+**Negative 1 — `--mount type=tmpfs,destination=/srv/upgauge/data/parquet`.** The catalog opens
+(it is views over relative paths and carries almost no data of its own); every query then fails:
+
+```
+/api/health status=503
+/api/health body={"status":"degraded","build":{…},"data":{"asOf":null,"missing":[],
+                  "error":"IO Error: No files found that match the pattern \"data/parquet/t100_segment/**/*.parquet\""}}
+/explore    status=500
+⨯ [Error: IO Error: No files found that match the pattern "data/parquet/t100_segment/**/*.parquet"]
+```
+(`data` wrapped across two lines for width; it is one object in the response.)
+
+(`build` is elided in both bodies above and below: it carries the working tree's own short SHA, so
+quoting it here would go stale on the next commit. `image-smoke`'s `assert_identity` is what checks
+that field, against a value it computes rather than one written down.)
+
+All eight paths the healthy container serves at 200 return **500** here — `/`, `/explore`, the
+four entity pages, `/watch`, `/sitemap.xml` — so not even a "looks alive" surface survives. Why
+cwd is what decides this: [pipeline.md § Views cannot take bound
+parameters](pipeline.md#views-cannot-take-bound-parameters--so-cwd-is-load-bearing).
+
+**`missing` is `[]`, and that is the finding.** The healthcheck's `(object, column)` manifest is
+**blind** to this break by construction — `duckdb_columns()` answers out of the catalog and never
+reads a Parquet file, so every required object and column is genuinely present. The 503 comes from
+the `asOf` clause alone. Confirmed by mutation: with `stamp !== null` dropped from
+`healthReport()`'s status expression and the image rebuilt, negative 1 returns
+**`200 {"status":"ok"}` while `/explore` still returns 500** — a container Docker's `HEALTHCHECK`
+and any load balancer would keep sending traffic to. So `portability` asserts the 503, the
+`asOf:null` **and** the `missing:[]`; the last of those pins *which* clause is load-bearing rather
+than detecting the break, and if the manifest ever does see this break, that is an improvement and
+this section and the assertion move in the same commit.
+
+**`data.error` names the cause, and this is the break that needs it most.** `asOf: null` with an
+empty `missing[]` says *that* the data layer is unreadable without saying *what happened* — and an
+unmounted data volume is both the most likely container break and the one this whole section is
+about. The freshness probe's own message is therefore carried verbatim in `data.error` (it was
+swallowed by a bare `catch {}` until this review), which is exactly the trip to `docker logs` the
+endpoint exists to remove. It is a **separate field from `missing`, deliberately**: the catalog
+probe's message goes in `missing` (negative 3 below), so the two breaks — catalog unopenable vs.
+Parquet unreadable — stay distinguishable from the health body alone. `portability` asserts
+`"error":"IO Error` here; mutant, measured: restore the bare `catch {}`, rebuild the image, and that
+assertion is the **only** one of negative 1's six that goes red (the 503, the `asOf:null`, the
+`missing:[]`, `/explore`'s 500 and the log line all stay green — none of them can see the
+difference).
+
+**Negative 2 — `docker run -w /tmp`.** The `CMD` is a **relative** path
+(`app/node_modules/.bin/next`), so a wrong working directory stops the container before it can
+listen instead of bringing up a server that answers every request from the wrong place:
+
+```
+exit code   =1
+/explore    status=000
+Error: Cannot find module '/tmp/app/node_modules/.bin/next'
+```
+
+**Keep `CMD` relative.** Rewriting it to an absolute path turns this hard start failure into a
+running server serving 500s off a wrong cwd — strictly worse, and precisely why negative 3 has to
+override the entrypoint to reproduce that shape at all.
+
+The mechanism runs through the base image, worth knowing before editing either end of it:
+`node:24.19.0-slim` sets `ENTRYPOINT ["docker-entrypoint.sh"]`, and that script falls back to
+`exec node "$@"` whenever `command -v "$1"` finds nothing — which is what a relative path from the
+wrong cwd is. The error therefore arrives from node's module resolver, not from `execve`. Give
+`--entrypoint` that same relative path and it fails one step earlier, in `runc`:
+`exec: "app/node_modules/.bin/next": stat app/node_modules/.bin/next: no such file or directory`.
+
+This case is also the one that must run **without `--rm`**: the container is gone within a second,
+and `docker logs` against an `--rm` container that has already exited reports `No such container`
+— the evidence deletes itself, which is why the first attempt at this case observed nothing at
+all. Keep it, then `timeout 30 docker wait`: a `docker wait` that *times out* **is** the failure
+(a server came up), where a bare `docker wait` would hang forever in exactly that case.
+
+**Negative 3 — `-w /tmp` plus `--entrypoint /srv/upgauge/app/node_modules/.bin/next`.** An
+absolute entrypoint leaves `process.cwd()` at `/tmp`, so `db.ts`'s `ROOT` resolves there and the
+failure lands *earlier* than negative 1's — at the open, before any query:
+
+```
+/api/health status=503
+/api/health body={"status":"degraded",…,"data":{"asOf":null,"missing":["catalog probe failed: IO Error: Cannot open database \"/tmp/upgauge.duckdb\" in read-only mode: database does not exist"]}}
+/explore    status=500
+```
+
+`missing` names this cause and `error` names negative 1's, which is what keeps the two breaks
+distinguishable in production from the health body alone — the reason `healthReport()` reports each
+probe's own error text instead of a boolean, in the field belonging to that probe. `missing` here
+is a one-element list holding a *message*, not an object name: that is how a catalog probe that
+could not even open the database reports, and it is why negative 1 must not push its message there
+too.
+
+**Mutants run — each break removed, the named assertions confirmed red, `make` exit 2:**
+
+| mutant | result |
+|---|---|
+| negative 1's tmpfs mount removed | health **200 `ok`**, `/explore` **200**, no log line — 4 of its 5 assertions red (measured when negative 1 had five; `data.error` is the sixth, added later and mutant-checked in its own row below) |
+| negative 2's `-w /tmp` corrected | container still up at 30 s, `/explore` **200** — all 4 assertions red |
+| negative 3's `-w /tmp` removed | health **200 `ok`**, `/explore` **200** — all 3 assertions red |
+| `healthReport()`'s `stamp !== null` dropped, image rebuilt | negative 1's *status* assertion red (**200** while `/explore` returned 500); its `asOf:null` body assertion stayed **green**, because the body still carried the null — the **status mapping** is what that first assertion owns, and only it |
+| `healthReport()`'s `asOf` catch reduced to a bare `catch {}`, image rebuilt | negative 1's **`data.error` assertion red, and nothing else** — body `{"asOf":null,"missing":[]}`, still 503, `/explore` still 500, log line still present. A 503 that names no cause is invisible to every other assertion in the case |
+
+`missing:[]` stayed green under the first mutant, as it must: it is equally true of a healthy
+container. That is the difference between pinning a mechanism and detecting a break, and its FAIL
+text says which it is.
+
+Nothing here runs `--read-only`, deliberately: each negative isolates exactly one variable, and a
+second difference would leave a red ambiguous between the break under test and the read-only root.
+`--read-only`'s own proof is `image-smoke`'s, where every check runs under it.
 
 ## What `proxy.ts` owns
 
@@ -767,6 +1100,26 @@ test can, because a test has one module graph by construction. If a future Next 
 proxy into its own realm, this degrades to exactly the old behaviour (one memo per realm)
 rather than breaking, and that smoke check is what would say so.
 
+### `app/smoke.sh` served its checks through npx's cache, not the pinned `next`
+
+**The gate that exists to catch production-only bugs was serving its checks under a Next this
+repo does not pin.** `app/smoke.sh` started every server with `next start app -p "$PORT"` via
+`npx`, run from `$ROOT` — but there is no root `node_modules` and no root `package.json`, so npx
+cannot resolve `app/node_modules` and falls back to its own cache instead. Traced 2026-08-09: it
+resolved `~/.npm/_npx/8b377f6eec906bc4/node_modules/next`, a cached download that happened to be
+`16.3.0`, the exact version `app/package.json` pins (`"next": "16.3.0"`, not a range). On a cold
+npx cache — a fresh clone, a fresh CI runner, a cleared `~/.npm` — npx fetches `next@latest`
+instead, serving the gate's checks under a Next this repo never pinned, tested, or shipped. CI
+runs `make app-smoke` through this same code path, so the exposure was not local-only.
+
+**Fix:** `app/smoke.sh` resolves `NEXT_BIN="${ROOT}/app/node_modules/.bin/next"` directly, fails
+loudly if it is missing (`make install` not run), and asserts the installed
+`next/package.json` version equals `app/package.json`'s declared `"next"` pin — a plain string
+equality, since the pin is exact — before starting anything. One `serve_next <port> <logfile>
+[VAR=value...]` function wraps all four servers this script starts (the primary server and the
+three gap-check servers), so the pinned binary cannot be reintroduced as `npx` at one call site
+and missed at the others.
+
 ### The gap: a **5xx** still gets a long-cached header — M5 Task 7 narrowed it, didn't close it
 
 CLAUDE.md's rule is *"404s get `no-store`"* and that is deliberately narrow. **A 500 does
@@ -1111,14 +1464,19 @@ The server (`app/src/lib/db.ts`) reads two, and a third — read through the one
 `app/src/lib/siteUrl.ts` module, not re-declared per call site — backs both M5's sitemap
 (`app/src/app/sitemap.ts`, `app/src/app/robots.ts`) and the four entity pages' canonical
 `<link>` tags (`app/src/app/route/[pair]/page.tsx` and its `/airport`, `/carrier`, `/aircraft`
-siblings). All three are optional — production sets none and gets the defaults below, which
-are what the Portability test and the WORKDIR contract assume.
+siblings). Two more, read by `app/src/lib/health.ts`'s `identity()`, carry no functional
+behaviour at all — they only label `/api/health`'s `build` field with which image and which
+warehouse asset produced it. All five are optional — production sets none and gets the
+defaults below, which are what the Portability test and the WORKDIR contract assume for the
+first three, and what a local `next start` reports unchanged for the last two.
 
 | Var | Default | What it's for | What breaks if it's wrong |
 |---|---|---|---|
 | `UPGAUGE_ROOT` | `process.cwd()` | The directory containing `data/` and `sql/` — anchors both `upgauge.duckdb`'s default location and every `.sql` file read (`sql/03_queries/*.sql`). Also passed to DuckDB as `file_search_path`, so the catalog's relative Parquet globs (`read_parquet('data/parquet/...')`) resolve against it regardless of the process's actual OS working directory. | Set to the wrong directory: every `.sql` file read fails with ENOENT, and every query against a Parquet-backed view fails with `IO Error: No files found that match the pattern "data/parquet/..."` — the exact failure the Portability test section above describes, just triggered by a bad env var instead of a bad `WORKDIR`. |
 | `UPGAUGE_DB` | `${UPGAUGE_ROOT}/upgauge.duckdb` | Overrides the `.duckdb` file path directly, independent of `UPGAUGE_ROOT` — for a deploy that keeps the database file somewhere other than the repo-root default (e.g. a mounted volume). | Set to a path that doesn't exist or isn't a valid DuckDB file: `DuckDBInstance.create()` rejects and every route handler 500s. Note this does NOT relocate `data/parquet/` — that's still resolved via `UPGAUGE_ROOT`'s `file_search_path`, so pointing `UPGAUGE_DB` at a database file whose Parquet tree lives elsewhere still needs `UPGAUGE_ROOT` set to match. |
 | `UPGAUGE_BASE_URL` | `http://localhost:3000` | The scheme+host every fully-qualified URL this app emits is prefixed with: every `<loc>` in `/sitemap.xml`, the `Sitemap:` line in `/robots.txt`, **and** (M5 Task 2) every entity page's self-referential `<link rel="canonical">`. The sitemap protocol requires a fully-qualified URL, `sitemapEntries()` (`app/src/lib/sitemap.ts`) and the entity resolvers alike only ever return a site-relative path or a bare code, on purpose (CLAUDE.md's portability rule: no hardcoded hostname, Docker + env vars only) — a hardcoded `https://upgauge.shipman.dev` was Task 2's fix-round-1 Critical finding. | Left at the default in a real deploy: the sitemap validates and crawls fine locally, and every entity page still renders, but every submitted `<loc>` and every canonical `<link>` points at `localhost`, so a crawler resolves none of them and every canonical tag is wrong for wherever this is actually served. |
+| `UPGAUGE_BUILD_SHA` | `dev` | The git SHA the image was built from — `git describe --always --dirty --abbrev=7`, so an image built from a modified tree is labelled `a2020f0-dirty` and cannot pass itself off as the commit (`git rev-parse --short HEAD` reported the clean SHA regardless, and `image-smoke` compared against the same expression, so identity passed for an image whose contents were not that commit). One `IMAGE_SHA` variable in the Makefile feeds both the build arg and the expectation. Baked in as a Docker build arg and read by `app/src/lib/health.ts`'s `identity()`, reported verbatim in `/api/health`'s `build.sha` field. `dev` is also what a plain `next start` reports, unchanged, so local runs and the unit tests (`route.test.ts`'s `{ sha: "dev", warehouse: "dev" }` assertion) keep working without setting anything. | Left unset or wrong on a real deploy: `/api/health` still returns 200/`ok` — this var carries no correctness signal for the health check itself — but `make image-smoke`'s identity assertion (#15) now passes against a container that is not the build under test, which is the exact failure that gate exists to catch. A stale or blank SHA reported as healthy is indistinguishable from the right one until someone diffs it by hand. |
+| `UPGAUGE_WAREHOUSE_TAG` | `dev` | The release tag (`warehouse-YYYY.MM`) whose `warehouse-YYYY.MM.tar.zst` asset (`upgauge.duckdb` + `data/parquet/`) is baked into this image, read the same way as `UPGAUGE_BUILD_SHA` and reported in `/api/health`'s `build.warehouse` field. | Wrong on a real deploy: `/api/health` reports a dataset provenance the image does not actually carry — a container built from `warehouse-2026.03` claiming `warehouse-2026.04` looks fresh to anyone reading the healthcheck, even though `DATA AS OF` on the served pages (read from the data itself, never this var) tells the truth regardless. This var is a label on the artifact, not a source of freshness — CLAUDE.md's freshness alert (#2) still has to read `max(year_month)`, not this string. |
 
 Neither of the first two is a substitute for the WORKDIR contract — they exist so the default
 (WORKDIR == repo root, both vars unset) needs no configuration, while still giving an operator

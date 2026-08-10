@@ -76,18 +76,21 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 served HTML, visible with JS off** — no client-side chart or map library anywhere in the render
 path. `data/raw/` holds the full 2015–2026 window.
 
-**Built, but never released.** There is no Dockerfile. CI runs every gate
-(`.github/workflows/`), and `warehouse.yml` polls BTS and publishes the dataset as a release
-asset — but nothing is deployed. That is the remaining content of M8.
+**Built and containerized, not yet deployed.** CI runs every gate (`.github/workflows/`),
+`warehouse.yml` polls BTS and publishes the dataset as a release asset, `make image` builds the
+deployable container from that asset, and `make portability` proves its WORKDIR/data contract by
+breaking it. Nothing is served from a public host. That is the rest of M8.
 
-Current gates, measured 2026-08-08 (these are the only counts kept here; per-milestone history
-lives in git and `docs/architecture/pipeline.md`):
+Current gates (`verify` and `goldens` measured 2026-08-08, the rest 2026-08-09; these are the only
+counts kept here — per-milestone history lives in git and `docs/architecture/pipeline.md`):
 
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 49 skip without `data/` |
-| `make app-check` | 781 app tests · needs a built `upgauge.duckdb` or 349 fail |
-| `make app-smoke` | 267 served-build checks |
+| `make app-check` | 805 app tests · without a built `upgauge.duckdb`, 352 of them fail |
+| `make app-smoke` | 269 served-build checks |
+| `make image-smoke` | **hand-run, no workflow invokes it** · 259 served-build checks against the container (the 10 host-only gap checks print as skipped) |
+| `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
 | `make goldens` | byte-identical |
 
@@ -115,19 +118,17 @@ three files and drifts independently: the either-endpoint filter was described a
 **four** places for a full milestone after it shipped, two of them on served pages. A doc says
 what is TRUE about the system; the tracker says what is PLANNED.
 
-**M8 is the launch milestone, and its content is the gap between "built" and "reachable":** a
-deploy artifact and the never-executed portability test (#1), the monthly ingest and the
-freshness alert this file has required as a hard rule since M1 (#2), cache correctness before a
-CDN goes in front (#3), and launch configuration (#4). Everything in M9 is a surface the product
-works without.
+**M8 is the launch milestone, and its content is the gap between "built" and "reachable":** the
+deploy artifact and the portability test (#1 — landed), the monthly ingest and the freshness
+alert this file has required as a hard rule since M1 (#2), cache correctness before a CDN goes in
+front (#3), and launch configuration (#4). Everything in M9 is a surface the product works
+without.
 
 Two findings worth keeping here rather than only in the tracker, because both are rules:
 
-- **The deploy fell off the roadmap silently.** `docs/architecture/pipeline.md`'s milestone
-  table still reads "M6 — Deploy + Cloudflare cache + edge rate limit + monthly cron +
-  freshness alert". Actual M6 shipped Gauge Watch, M7 shipped maps, and shipping was never
-  rescheduled. Seven milestones of building, none of releasing. When a milestone is repurposed,
-  say where its original content went.
+- **When a milestone is repurposed, say where its original content went.** M6's deploy content was
+  never rescheduled and seven milestones passed before anyone noticed, because nothing forced
+  `docs/architecture/pipeline.md`'s milestone table to record the move. It does now.
 - **`make app-smoke` could certify a build it never ran** (fixed — see the `kill_port` /
   `port_free_or_die` commit and the § above). The gate leaked a server holding its own port, so
   the next run's checks were answered by the previous run's build. Measured: two consecutive
@@ -177,6 +178,7 @@ versions.** `make` shells through `mise exec`, so the commands below work withou
 | `make app-check` | Typecheck + lint + test the app (`app/`) | ✅ |
 | `make app-build` | Production build of the app | ✅ |
 | **`make app-smoke`** | **Build, serve, curl. The only gate that catches production-only bugs.** | ✅ |
+| `make image` / `image-smoke` / **`portability`** | Build the deployable container · run the served-build checks against it, build identity asserted · **prove the WORKDIR/data contract by breaking it three ways** | ✅ |
 
 ## Hard rules
 
