@@ -81,15 +81,15 @@ path. `data/raw/` holds the full 2015–2026 window.
 deployable container from that asset, and `make portability` proves its WORKDIR/data contract by
 breaking it. Nothing is served from a public host. That is the rest of M8.
 
-Current gates (`verify` and `goldens` measured 2026-08-08, the rest 2026-08-09; these are the only
-counts kept here — per-milestone history lives in git and `docs/architecture/pipeline.md`):
+Current gates (`verify` and `goldens` measured 2026-08-08, `portability` 2026-08-09, the rest
+2026-08-10; these are the only counts kept here — per-milestone history lives in git and `docs/architecture/pipeline.md`):
 
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 49 skip without `data/` |
-| `make app-check` | 805 app tests · without a built `upgauge.duckdb`, 352 of them fail |
-| `make app-smoke` | 269 served-build checks |
-| `make image-smoke` | **hand-run, no workflow invokes it** · 259 served-build checks against the container (the 10 host-only gap checks print as skipped) |
+| `make app-check` | 850 app tests · without a built `upgauge.duckdb`, 353 of them fail |
+| `make app-smoke` | 312 served-build checks |
+| `make image-smoke` | **hand-run, no workflow invokes it** · 302 served-build checks against the container (the 10 host-only gap checks print as skipped) |
 | `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
 | `make goldens` | byte-identical |
