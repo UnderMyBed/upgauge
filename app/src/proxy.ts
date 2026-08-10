@@ -380,9 +380,8 @@ export async function proxy(request: NextRequest) {
  * only from an env var. So `/robots.txt` is gated on a probe it cannot fail: this branch answers
  * both pathnames with one `if` and one `Cache-Control` expression, and `/robots.txt` inherits the
  * probe as a side effect of that sharing, not because anyone reasoned about its own risk and
- * decided it needed one. Cost is negligible either way (`loadAllowlist()` is memoized on
- * `globalThis`, `lib/db.ts`) -- flagged here as a pointless-but-harmless gate, not fixed, since
- * changing it is outside this task.
+ * decided it needed one. Flagged here as a pointless gate, not fixed, since changing it is
+ * outside this task.
  *
  * What this does NOT cover, and cannot from here: a throw AFTER this probe succeeds, from a
  * query this bare check never touches. Measured for `/sitemap.xml`, the one caller this
