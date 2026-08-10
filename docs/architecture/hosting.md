@@ -161,7 +161,14 @@ constant, bounding that exposure to an hour instead of a month rather than closi
 
 With Cloudflare's free tier in front, near-zero repeat traffic touches the box regardless —
 `stale-while-revalidate` keeps serving from the edge while either value revalidates.
-**Precompute all leaderboards as static JSON at build time.**
+
+**Leaderboard precompute was specified for three milestones and is retired, not deferred**
+(M8, #14). Measured against the real warehouse rather than argued: `mart_route_health` is 8,080
+rows, and the four `/watch` preset queries cost **2.2-5.0 ms** each (median of seven warm runs,
+fresh read-only connection per preset). End-to-end TTFB on a served production build puts
+`/watch/gauge` at **43-46 ms** — against `/route/JFK-LAX` at 63-69 ms and `/airport/ORD` at
+85-104 ms, neither of which anyone proposes precomputing. Precompute would have optimised the
+third-cheapest page on the site and left the two most expensive per-request.
 
 ## Avoid
 
@@ -1120,6 +1127,89 @@ equality, since the pin is exact — before starting anything. One `serve_next <
 three gap-check servers), so the pinned binary cannot be reintroduced as `npx` at one call site
 and missed at the others.
 
+### One canonical spelling per cacheable URL — M8, epic #3
+
+Cloudflare's default cache key includes the full query string, so an unknown query key is not
+cosmetic: it is a distinct cache entry, and `?x=1…N` is an unbounded family of them, each a
+guaranteed origin miss. Measured on a served build at `4aa8087`, before the gate:
+
+| request | status | `Cache-Control` |
+|---|---|---|
+| `/watch?x=1` | 200 | `s-maxage=3600` |
+| `/airport/ORD?y=2019&junk=1` | 200 | `s-maxage=3600` |
+| `/carrier/DL?utm_source=x` | 200 | `s-maxage=3600` |
+| `/route/JFK-LAX?cachebust=99` | 200 | `s-maxage=3600` |
+| `/explore?…&bogus=1` | 200 | `s-maxage=3600` |
+| `/sitemap.xml?x=1` | 200 | `s-maxage=2592000` — 2.4 MB, ~45 ms of DuckDB, 30 days |
+| `/robots.txt?x=1` | 200 | `s-maxage=2592000` |
+| `/api/pivot?…&bogus=1` | 400 | `no-store` — already closed, in the handler |
+| `/search?q=DL&x=1` | 307 | `no-store` — never cacheable |
+
+`app/src/lib/canonicalQuery.ts` declares the legitimate query keys per matcher path — the third
+list that must agree with `config.matcher` and `ENTITY_ROUTES`, asserted by its own test. An
+unknown key gets a **307 to the canonical URL under `no-store`**, answered before any database
+probe: origin cost is ~0 instead of a full render, the CDN stores nothing, and a visitor arriving
+with a tracking param still lands on the page. A duplicated key gets `no-store` with **no**
+redirect — there is no canonical form, because choosing one occurrence renders a different query
+than the URL encodes, which is `decode()`'s own reason for erroring on duplicates.
+
+**The predicate is byte-equality against the canonical string, not "were any unknown keys
+present".** `?&`, `?&&`, `?&&&…` carry no key to reject and were each a distinct cacheable entry;
+byte-equality closes that axis and a trailing `&` with it. Key *order* survives, so a
+reordered-but-valid permalink stays canonical — a bounded family the app emits itself.
+
+**`f` is declared repeatable.** `encode()` emits one `f=` per filter and `decode()` skips its own
+duplicate check for `f`, so a multi-filter permalink — the product's core shareable artifact — is
+a repeated key by construction. A blanket duplicate rule would have made every one of them
+uncacheable. No fixture in `app/smoke.sh` covered a repeated key before M8; one does now.
+
+**The redirect's `Location` is built absolute — `new URL(canonical.location,
+request.nextUrl.origin).toString()` — never the bare relative string `canonical.location` alone.**
+A relative `Location` 500s every redirect on a served build: `next/dist/server/web/adapter.js`
+reads `Location` off the response `proxy()` returns and calls `new NextURL(redirect,
+{ forceLocale: false, ... })` with no base argument, which throws `ERR_INVALID_URL` for any
+relative string — true of any response carrying a `Location` header, not a
+`NextResponse.redirect()`-specific behavior (that factory's own `validateURL()` forces its
+argument absolute for the identical reason). It comes back relative on the wire regardless:
+`next/dist/server/lib/router-utils/resolve-routes.js` calls `getRelativeURL(value, initUrl)`
+unconditionally, for any redirect status including 307, on the header this function returns.
+`initUrl` is built from the server's own bind config (or the bare incoming `req.url`) and reads
+the request's `Host` header at all only when `experimental.trustHostHeader` is set — unset here —
+so a differing `Host` cannot produce an absolute `Location` to a spoofed origin: both
+`request.nextUrl.origin` (used to build the absolute value above) and `initUrl` (used to
+relativize it back down) derive from the same server-resolved request, and the two can never
+disagree. Measured directly, not merely traced: spoofing the incoming request's `Host`, and
+separately its `X-Forwarded-Host`, to a domain this server was never configured with still
+produced a bare relative `location: /watch` in all three cases.
+
+**A request carrying the `RSC` header never reaches this gate — it is answered `no-store`
+unconditionally, before `canonicalize()` runs.** `skipProxyUrlNormalize` (above) is what lets the
+gate see `_rsc`, Next's own cache-busting query param appended to every RSC fetch
+(`fetch-server-response.js`) — no row's `keys` lists it, so the gate used to 307 it away to the
+bare URL, and Next's own RSC hash check (`experimental.validateRSCRequestHeaders`, default
+`true`) then 307ed straight back with the correct hash: the two redirects alternated forever.
+Measured on a served build: `/`, `/explore`, `/route/JFK-LAX`, `/carrier/DL`, `/airport/ORD`,
+`/watch`, `/watch/gauge` and `/aircraft/737-800` all hit the redirect cap and never settled, while
+`/search`, exempt from this gate entirely, settled in its one legitimate hop regardless. The fix
+gates on the **header**, not the query key: adding `_rsc` to a row's `keys` is the wrong fix,
+because `_rsc` is attacker-choosable and Next validates it only when the `RSC` header is
+present — a plain `GET /watch?_rsc=1…N`, no header, would sail through clean and long-cached,
+reopening the exact unbounded-cache-key family this gate exists to close. Accepted cost: every
+client-side navigation and prefetch (Next appends both `_rsc` and `RSC: 1` to each) always reaches
+the origin instead of a CDN. Side benefit, not the reason for the fix: a shared CDN that ignores
+`Vary` (Cloudflare, by default, honors only `Accept-Encoding`) can no longer serve a stored RSC
+payload to a plain document request.
+
+**`/explore` needs one more input than a key table can express:** junk *values* ride legitimate
+keys, and `ExploreView` renders its "permalink can't be read" page as a **200**, so `?d=junk1…N`
+was an unbounded family of cacheable error pages. Its cacheability now requires `decode()` to
+succeed. Bare `/explore` is therefore `no-store` — `decode("")` throws `missing required key 'v'`
+and that URL has always been the error page, and nothing links it: `TopBar` links `/` and
+`/watch`, the front door links the full sample permalink, and `app/sitemap.ts` has no `/explore`
+entry. `/api/pivot` and `/search` are declared exempt: the first answers 400 + `no-store` in its
+own handler, and the second is `no-store` unconditionally, so neither has a cache entry to
+pollute.
+
 ### The gap: a **5xx** still gets a long-cached header — M5 Task 7 narrowed it, didn't close it
 
 CLAUDE.md's rule is *"404s get `no-store`"* and that is deliberately narrow. **A 500 does
@@ -1289,8 +1379,12 @@ airports 39.0 ms, carriers 10.2 ms, aircraft 43.6 ms (the four run concurrently,
 close to the slowest one, not the sum). The CDN cache key includes the query string, so
 `/sitemap.xml?x=N` is an unbounded family of origin hits regardless of the `Cache-Control` value
 on the canonical path — the identical reasoning that earned `/search` its unconditional
-`no-store` rather than a per-outcome header (see the table above). Nothing currently guards
-against that family; it is recorded as the same class of exposure, not yet closed.
+`no-store` rather than a per-outcome header (see the table above). M8's canonical-query gate
+closes this one (§ One canonical spelling per cacheable URL, above): `/sitemap.xml?x=1` is now a
+307 to `/sitemap.xml` under `no-store`, so the family costs a ~200-byte redirect each instead of a
+2.4 MB document and ~45 ms of DuckDB. The `q`-shaped exposure `/search` carries is unchanged and
+unclosable by this mechanism, which is why that route is `no-store` unconditionally rather than
+canonicalised.
 
 **What the fallback actually buys, honestly stated:** the exposure window for a 5xx shrinks from
 up to 30 days to up to 1 hour — origin load stays near zero because `stale-while-revalidate`

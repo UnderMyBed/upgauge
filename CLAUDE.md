@@ -427,8 +427,7 @@ signature element; it does not own these.
   stale-while-revalidate=86400`. `/explore` and the four entity pages get the shorter
   `HTML_CACHE` instead, `public, s-maxage=3600, stale-while-revalidate=86400` (M5 Task 7 — see
   below for why). `/search` gets `no-store` unconditionally, regardless of outcome (`q` is an
-  unbounded, attacker-chosen cache key). Precompute leaderboards as static JSON at build time —
-  the caching is the cost control, not the hosting tier. **404s get `no-store`**: the dataset is
+  unbounded, attacker-chosen cache key). **404s get `no-store`**: the dataset is
   rebuilt monthly, so a 404 pinned in a shared cache outlives the condition that caused it.
   `/api/pivot` does this in its handler; a page cannot, and a proxy cannot see the
   downstream status — so **`proxy.ts` caches on "is this a well-formed, known entity",
@@ -451,6 +450,11 @@ signature element; it does not own these.
   commits to a cache header before, so `isDataLayerHealthy()` gates it exactly like `/explore`
   and `/sitemap.xml`/`robots.txt` do, even though the slug set alone never needs the database.
   Full detail: `docs/architecture/hosting.md`.
+- **Every matcher path declares its legitimate query keys (`lib/canonicalQuery.ts`), and an unknown
+  key is a 307 to the canonical URL under `no-store`, never a cached 200.** Cloudflare's cache key
+  includes the query string, so `?x=1…N` was an unbounded family of CDN entries on all ten cacheable
+  paths — `/sitemap.xml?x=1` at 30 days and 2.4 MB. The test is byte-equality against the canonical
+  string, not "unknown key present": `?&&` has none. `f` is repeatable — `encode()` emits one per filter.
 - Build the **aircraft-type-mix chart before the load-factor chart**. Everyone does load
   factor; the gauge story is the differentiator.
 - **The `/watch` presets are NOT saved instances of a generic Top-N builder**, and the opposite
