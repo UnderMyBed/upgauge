@@ -418,10 +418,14 @@ describe("proxy", () => {
   // for any relative string, for a `new NextResponse` exactly as much as for
   // `NextResponse.redirect()` (that factory only forces its OWN argument absolute; it does not
   // change what the adapter does to the header afterward). So every `Location` value below is
-  // built ABSOLUTE, scoped to `request.nextUrl.origin` -- and that SAME adapter code then strips
-  // the scheme+host back off before the response reaches the wire, because the host it built
-  // always matches the request's own (`redirectURL.host === requestURL.host`). `proxy()` alone
-  // can only see the pre-adapter (absolute) value, which is what every assertion below pins;
+  // built ABSOLUTE, scoped to `request.nextUrl.origin`. What relativizes it back down before the
+  // wire is NOT that same adapter code (whole-branch review round 2, Finding 3: that
+  // relativization branch is dead-code eliminated by `skipProxyUrlNormalize` in this build) --
+  // it is `next/dist/server/lib/router-utils/resolve-routes.js`'s unconditional
+  // `getRelativeURL(location, initUrl)`, where `initUrl` is THIS SERVER'S OWN bind config, not
+  // the client's `Host` header (proxy.ts's own doc comment on this gate has the full citation
+  // and the Host-spoofing measurement that confirms it). `proxy()` alone can only see the
+  // pre-relativization (absolute) value, which is what every assertion below pins;
   // `app/smoke.sh`'s canonical-query section is what asserts the actual wire bytes are relative.
   it("307s an unknown query key to the canonical URL, uncached", async () => {
     const res = await proxy(new NextRequest("http://localhost/watch?x=1"));
@@ -478,6 +482,40 @@ describe("proxy", () => {
     const res = await proxy(new NextRequest("http://localhost/search?q=DL&x=1"));
     expect(res.headers.get("Location")).toBeNull();
     expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // CRITICAL 1 (whole-branch review round 2). Every RSC request to a gated path used to be an
+  // infinite redirect loop: Next's own client appends a `_rsc=<hash>` cache-busting query param
+  // to every RSC fetch and sets the `RSC: 1` header; `_rsc` is in no row's `keys`, so the gate
+  // above 307d it away, and Next's OWN server then 307d BACK to the URL WITH the correct hash
+  // (`experimental.validateRSCRequestHeaders`, default true) -- the two alternated forever.
+  // Measured on a served build: `/`, `/explore`, every entity page, `/watch`, `/watch/gauge` all
+  // hit the redirect cap and never settled (see this task's fix report for the exact curl
+  // output). The fix: an RSC request never reaches `canonicalize()` -- see proxy.ts's own doc
+  // comment on this branch for why gating on the HEADER, not adding `_rsc` to `keys`, is what
+  // closes the hole rather than reopening it (a plain `GET ?_rsc=1..N` with no `RSC` header
+  // would otherwise become clean-and-cacheable).
+  //
+  // This unit test cannot see the loop itself -- `proxy()` never crosses Next's own server-side
+  // RSC validation, so it can only pin what THIS file does: does not redirect, does carry
+  // `no-store`. `app/smoke.sh`'s "RSC requests never loop" section is what proves the loop is
+  // actually gone against a served build.
+  it("never redirects an RSC request, and answers it no-store instead", async () => {
+    const res = await proxy(
+      new NextRequest("http://localhost/watch?x=1", { headers: { RSC: "1" } }),
+    );
+    expect(res.status).not.toBe(307);
+    expect(res.headers.get("Location")).toBeNull();
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // The control this pair needs to mean anything: the IDENTICAL URL, minus the RSC header,
+  // must still 307 exactly as every other non-canonical-query test in this file does. Without
+  // this, the test above would pass just as well against a gate that had been deleted entirely
+  // -- it is the pair, not either half alone, that proves the bypass fires ONLY on RSC.
+  it("...and the control: the identical URL without the RSC header still 307s", async () => {
+    const res = await proxy(new NextRequest("http://localhost/watch?x=1"));
+    expect(res.status).toBe(307);
   });
 });
 

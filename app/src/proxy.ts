@@ -47,6 +47,46 @@ export async function proxy(request: NextRequest) {
   headers.set(RAW_PATH_HEADER, pathname);
   const response = NextResponse.next({ request: { headers } });
 
+  // CRITICAL FIX (whole-branch review round 2, Finding 1 -- this is the milestone controller's
+  // ruling, not a design choice made here). An RSC request must never be redirected by ANYTHING
+  // in this file, and must never be cached. Next's own client appends a `_rsc=<hash>`
+  // cache-busting query param to every RSC fetch (`set-cache-busting-search-param.js`) and sets
+  // the `RSC: 1` request header (`fetch-server-response.js`); `skipProxyUrlNormalize` (above)
+  // is what lets that raw query reach `canonicalize()` unstripped, and `_rsc` is not in ANY
+  // row's `keys` -- so the gate below used to 307 it away. Next's OWN server then sees an RSC
+  // request whose `_rsc` is missing or wrong (`experimental.validateRSCRequestHeaders`, default
+  // `true`, `base-server.js`) and 307s BACK to the same URL WITH the correct hash. The two
+  // redirects alternate forever -- Next's own source names this exact hazard ("It only affects
+  // redirects that occur in a middleware or a third-party proxy",
+  // `fetch-server-response.js`). Measured on a served build: `/`, `/explore`,
+  // `/route/JFK-LAX`, `/carrier/DL`, `/airport/ORD`, `/watch`, `/watch/gauge`,
+  // `/aircraft/737-800` all hit the redirect cap and never settle. This is reachable from a real
+  // browser, not only curl: the client bundle ships the cache-buster on every RSC fetch, and
+  // `TopBar.tsx` puts a dozen `next/link`s on every page with prefetch on by default in
+  // production, so every prefetch and every client-side navigation hits this.
+  //
+  // Fix: an RSC request never reaches `canonicalize()` at all -- it is answered `no-store`,
+  // unconditionally, before any branch (including the gate below) runs. That closes the loop
+  // (this file never redirects an RSC request, so there is nothing left to alternate with
+  // Next's own redirect) without reopening the hole the obvious fix would: adding `_rsc` to
+  // every row's `keys` would make a PLAIN `GET /watch?_rsc=1..N` -- no `RSC` header, so Next's
+  // own hash check never runs at all -- clean and long-cached, the exact unbounded-cache-key
+  // family this gate exists to close, reopened by an attacker who simply never sends the
+  // header. Gating on the HEADER rather than the query key closes both variants: a genuine RSC
+  // request never redirects and is never cached, and a request that merely SETS `RSC` to probe
+  // for a bypass gets `no-store` regardless of what `_rsc` says, so there is no cache entry for
+  // either shape to fill. It also closes a hazard that predates this branch: a shared CDN that
+  // ignores `Vary` (Cloudflare ignores everything but `Accept-Encoding` by default) could
+  // otherwise serve a stored RSC payload to a plain document request.
+  //
+  // The cost, accepted deliberately: client-side navigations and prefetches are never served
+  // from a CDN and always reach the origin -- an uncached hit is a 40-100 ms DuckDB query on an
+  // always-on box, and correctness ahead of a CDN is this milestone's entire purpose.
+  if (request.headers.get("RSC") !== null) {
+    response.headers.set("Cache-Control", NO_STORE);
+    return response;
+  }
+
   // M8 Task 3 (epic #3). The canonical-query gate, ahead of every branch below because its
   // answer depends on none of them, and because a `strip` must not pay for a database probe it
   // is about to redirect away from. `lib/canonicalQuery.ts` carries the measurements and the
@@ -70,16 +110,35 @@ export async function proxy(request: NextRequest) {
   // ()`'s re-serialisation) is still the reason a raw `new NextResponse` is used instead of that
   // factory; it does not mean the Location value itself can stay relative.
   //
-  // The CDN-facing property survives anyway: `adapter.js`'s SAME code, immediately after
-  // constructing that `NextURL`, checks `redirectURL.host === requestURL.host` and -- when it
-  // matches, which it always does here, since `request.nextUrl.origin` IS the request's own host
-  // -- OVERWRITES `Location` with `getRelativeURL(redirectURL, requestURL)`, i.e. strips the
-  // scheme and host back off before the response leaves this process. Measured on a served build
-  // (see this task's report for the literal header bytes): the wire-level `Location` is relative,
-  // exactly as designed, even though the value constructed here is absolute. `proxy.test.ts`
-  // cannot see this -- it calls `proxy()` directly and never crosses `adapter.js` -- so its
-  // "sends a RELATIVE Location" test necessarily asserts the pre-adapter (absolute) value; only
-  // `app/smoke.sh`'s canonical-query section asserts the actual wire bytes.
+  // The CDN-facing property survives anyway, but NOT via that same `adapter.js` code -- whole-
+  // branch review round 2 (Finding 3) found that half of the citation wrong. The
+  // `redirectURL.host === requestURL.host` / `getRelativeURL` branch quoted above is itself
+  // gated on `!process.env.__NEXT_NO_MIDDLEWARE_URL_NORMALIZE`, and `skipProxyUrlNormalize`
+  // (next.config.ts) sets that env var TRUE -- so that whole branch is dead-code eliminated
+  // from THIS build: confirmed absent from `app/.next/server/chunks/`, and `getRelativeURL`
+  // appears nowhere under `.next/server/`. Only the CONSTRUCTOR call two paragraphs up (the one
+  // that throws) survives elimination; the relativization above never runs in this file's
+  // compiled output at all.
+  //
+  // What actually relativizes it: `next/dist/server/lib/router-utils/resolve-routes.js` --
+  // Next's own router/server process, which calls the compiled proxy bundle above rather than
+  // being part of it -- reads the raw `location` header this function returns and, for any
+  // allowed redirect status (307 included), calls `getRelativeURL(value, initUrl)`
+  // UNCONDITIONALLY (~line 492 there; no env-var gate on this call site). `initUrl` (~lines
+  // 117-118 of the same file) is built from THIS SERVER'S OWN `opts.hostname`/`opts.port` bind
+  // config, or the bare already-relative `req.url` -- it only reads the incoming request's
+  // `Host` header at all when `experimental.trustHostHeader` is set, which this repo's
+  // `next.config.ts` does not set. `request.nextUrl.origin`, which this function uses to build
+  // `Location` above, is resolved from that SAME request Next's server already parsed -- so the
+  // two origins `getRelativeURL` compares cannot disagree, and the relativization always fires
+  // regardless of what a CLIENT claims its `Host` is. Measured directly, not merely inferred:
+  // spoofing the incoming request's `Host` header, and separately its `X-Forwarded-Host`, to a
+  // domain this server was never configured with still produced a bare relative
+  // `location: /watch` -- never absolute, never the spoofed host (this task's fix report has
+  // the exact curl output). `proxy.test.ts` cannot see any of this -- it calls `proxy()`
+  // directly and never crosses `resolve-routes.js` -- so its `Location` assertions necessarily
+  // pin the pre-relativization (absolute) value; only `app/smoke.sh`'s canonical-query section,
+  // against a served build, asserts the actual wire bytes.
   //
   // 307, never 308: CLAUDE.md's rule for `/search` generalises to every redirect this project
   // mints. A 308 is cached by the requesting browser permanently, so if this gate's key table

@@ -1432,14 +1432,19 @@ check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize 
 # '/airport/ORD?y=2019' is satisfied by 'location: /airport/ORD?y=2019&junk=1', which is the
 # failure being tested for. Every Location check below is `check_re` with a `$`-anchored regex.
 #
-# The origin prefix is optional in those regexes, and measurement (not assumption) is why: a bare
-# relative Location 500s here -- next/dist/server/web/adapter.js reads Location off whatever
-# proxy() returns and resolves it with no base URL, which throws on anything relative -- so
-# proxy.ts builds an ABSOLUTE Location from request.nextUrl.origin, and proxy.test.ts pins that
-# pre-adapter absolute value (it calls proxy() directly and never crosses adapter.js). That SAME
-# adapter code then strips the scheme+host back off before the response reaches the wire, because
-# the host it built always matches the request's own -- this section is what proves THAT, against
-# the real server, hence the optional prefix below rather than a bare assumption either way.
+# These Location regexes are anchored to the MEASURED wire form, not an alternation that would
+# also accept the unmeasured one -- whole-branch review round 2 (Finding 2) is why: a bare
+# relative Location 500s in this Next version (next/dist/server/web/adapter.js's NextURL
+# constructor throws on a relative string with no base), so proxy.ts builds an ABSOLUTE Location
+# from request.nextUrl.origin -- but what actually reaches the wire is relative, because
+# next/dist/server/lib/router-utils/resolve-routes.js relativizes it against `initUrl` (THIS
+# server's own bind config, not the client's Host header) before the response leaves the process
+# (proxy.ts's own doc comment on the gate has the full citation). proxy.test.ts, which calls
+# proxy() directly and never crosses that relativization, necessarily pins the pre-relativization
+# ABSOLUTE value -- this section is what proves the WIRE form, and an optional origin prefix here
+# would make the regex pass for either form, silently accepting the regression (an absolute
+# Location reaching a real client) this section exists to catch. Anchored to the relative form
+# only, per the measurement.
 echo "==> canonical query gate"
 for U in "/?utm_source=twitter|/" \
          "/watch?x=1|/watch" \
@@ -1452,7 +1457,7 @@ for U in "/?utm_source=twitter|/" \
   HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}${REQ}")
   LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
   check     "canonical: ${REQ} is a 307"            "$CODE" '307'
-  check_re  "canonical: ${REQ} points at ${WANT}"   "$LOC"  "^[Ll]ocation: (http://127\.0\.0\.1:[0-9]+)?${WANT}$"
+  check_re  "canonical: ${REQ} points at ${WANT}"   "$LOC"  "^[Ll]ocation: ${WANT}$"
   check     "canonical: ${REQ} is never cached"     "$HDRS" 'no-store'
   check_not "canonical: ${REQ} is never long-cached" "$HDRS" 's-maxage'
 done
@@ -1464,7 +1469,7 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/ORD?y=2019&junk=
 LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
 check    "canonical: a junk key beside y=2019 is a 307" "$CODE" '307'
 check_re "canonical: ...and y=2019 survives it exactly" "$LOC" \
-  "^[Ll]ocation: (http://127\.0\.0\.1:[0-9]+)?/airport/ORD\?y=2019$"
+  "^[Ll]ocation: /airport/ORD\?y=2019$"
 
 # The keyless family. `?&&` has no key to reject, so a key-presence rule serves it as a
 # cacheable 200 -- which is why the predicate is byte-equality against the canonical string.
@@ -1493,9 +1498,36 @@ check "canonical: ...and keeps the project Cache-Control"          "$HDRS" "$HTM
 # unknown key; a 307 on a JSON endpoint would be a worse answer than the 400 it gives.
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?v=1&bogus=1")
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/api/pivot?v=1&bogus=1")
-check     "canonical: /api/pivot keeps its own 400" "$CODE" '400'
-check     "canonical: ...under no-store"            "$HDRS" 'no-store'
-check_not "canonical: ...and is not redirected"     "$HDRS" 'location:'
+check        "canonical: /api/pivot keeps its own 400" "$CODE" '400'
+check        "canonical: ...under no-store"            "$HDRS" 'no-store'
+# MINOR-ELEVATED 4 (whole-branch review round 2): this was `check_not ... 'location:'`, a
+# case-sensitive grep -F, unlike every sibling Location assertion in this file (which all use
+# `[Ll]ocation`). It passed only because Next happens to emit lowercase here -- a `Location:`
+# (capital L) response would report a silent ok. `check_not_re` with `[Ll]ocation:` is the fix.
+check_not_re "canonical: ...and is not redirected"     "$HDRS" '[Ll]ocation:'
+
+# CRITICAL 1 (whole-branch review round 2). An RSC request to a GATED path used to be an
+# infinite redirect loop: this gate's canonicalize() saw Next's own `_rsc` cache-busting query
+# param as an unknown key (not in any row's `keys`) and 307d it away; Next's OWN server then saw
+# an RSC request with no `_rsc` (experimental.validateRSCRequestHeaders, default true) and 307d
+# BACK to the URL WITH it -- the two alternated forever. Measured before the fix: the request
+# below hit `--max-redirs 5` without ever reaching 200 (num_redirects pinned at 5, code stayed
+# 307 the whole way). The fix answers an RSC request `no-store`, unconditionally, before
+# canonicalize() ever runs, so the only redirect left on a gated path is Next's OWN single,
+# legitimate hash-mismatch hop -- exactly the one hop `/search` (exempt from canonicalize
+# entirely, never broken by this gate in the first place) has always taken, kept below as the
+# control that discriminates "the bypass fixed a real interaction" from "nothing was ever wrong
+# here": deleting the bypass must move the FIRST pair and leave this SECOND pair untouched.
+echo "==> RSC requests never loop"
+RSC_CODE=$(curl -s  -o /dev/null -w '%{http_code}'      -L --max-redirs 5 --max-time 15 -H 'RSC: 1' "${BASE}/watch?x=1")
+RSC_HOPS=$(curl -s  -o /dev/null -w '%{num_redirects}'  -L --max-redirs 5 --max-time 15 -H 'RSC: 1' "${BASE}/watch?x=1")
+check    "rsc: a gated path with an RSC header settles at 200, not a loop" "$RSC_CODE" '200'
+check_re "rsc: ...in exactly Next's own one legitimate hop"                "$RSC_HOPS" '^1$'
+
+SEARCH_RSC_CODE=$(curl -s -o /dev/null -w '%{http_code}'     -L --max-redirs 5 --max-time 15 -H 'RSC: 1' "${BASE}/search?q=DL")
+SEARCH_RSC_HOPS=$(curl -s -o /dev/null -w '%{num_redirects}' -L --max-redirs 5 --max-time 15 -H 'RSC: 1' "${BASE}/search?q=DL")
+check    "rsc: the control, /search (exempt from this gate), also settles at 200" "$SEARCH_RSC_CODE" '200'
+check_re "rsc: ...in the SAME one hop -- unaffected by this fix either way"        "$SEARCH_RSC_HOPS" '^1$'
 
 # ---------------------------------------------------------------------------------------------
 # 16. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.
