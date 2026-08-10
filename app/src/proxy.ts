@@ -10,6 +10,7 @@ import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
 import { presetSlugFromPath, presetBySlug } from "@/lib/watch";
 import { parseYear } from "@/lib/year";
+import { decode } from "@/lib/pivot/urlstate";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
 
 // `proxy`, not `middleware`: Next 16 deprecated and renamed the convention
@@ -236,11 +237,15 @@ export async function proxy(request: NextRequest) {
   // That is the exact gap docs/architecture/hosting.md § "The gap" measured: a served build
   // pointed at a database missing a catalog view 500s on /explore, and the response still
   // carried the project's then-30-day header because nothing on this path had asked the
-  // database anything before committing to it. isDataLayerHealthy() is /explore's equivalent
-  // of an entity row's resolve() -- the proxy's own probe, run and caught BEFORE the header is
-  // chosen, never after.
+  // database anything before committing to it. isExploreCacheable() (below) is /explore's
+  // equivalent of an entity row's resolve() -- the proxy's own probe, run and caught BEFORE the
+  // header is chosen, never after. M8 Task 4 widened that probe from a bare data-layer health
+  // check to include the permalink's own validity; see that function's own doc comment.
   if (pathname === "/explore") {
-    response.headers.set("Cache-Control", (await isDataLayerHealthy()) ? HTML_CACHE : NO_STORE);
+    response.headers.set(
+      "Cache-Control",
+      (await isExploreCacheable(rawQuery)) ? HTML_CACHE : NO_STORE,
+    );
     return response;
   }
   // M5 Task 8. `/search` runs no proxy-side resolution at all -- unlike every branch above and
@@ -379,6 +384,33 @@ export async function proxy(request: NextRequest) {
 async function isDataLayerHealthy(): Promise<boolean> {
   try {
     await loadAllowlist();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** `/explore`'s predicate: the data-layer probe AND the permalink's own validity, in one call.
+ *
+ * M8 Task 4. The canonical-query gate above rejects unknown query KEYS, but junk VALUES ride
+ * legitimate ones: `ExploreView` catches `UrlStateError`/`PivotError` and renders "This permalink
+ * can't be read" as a **200** (`app/src/app/explore/page.tsx`), which the proxy long-cached --
+ * measured at 4aa8087, `?d=junk1..N` was an unbounded family of cacheable error pages that no
+ * key-level rule can see. `decode()` is exactly what `ExploreView` calls next, on the same raw
+ * string, and it ends by running `renderPivot()` to validate identifiers -- so this costs no
+ * extra database query beyond the `loadAllowlist()` this branch already made as its probe.
+ *
+ * Consequence, accepted deliberately rather than discovered later: **bare `/explore` is
+ * `no-store`**, because `decode("")` throws `missing required key 'v'` and that page has always
+ * rendered the error state for it. Nothing links it -- `TopBar` links `/` and `/watch`, the front
+ * door links the full sample permalink, and `app/sitemap.ts` has no `/explore` entry.
+ *
+ * NOT extended to `runPivot()` throwing after `decode()` has succeeded: that is the residual gap
+ * `docs/architecture/hosting.md` § "The gap" documents, and this task does not change it. */
+async function isExploreCacheable(rawQuery: string): Promise<boolean> {
+  try {
+    const allowlist = await loadAllowlist();
+    decode(rawQuery, allowlist);
     return true;
   } catch {
     return false;

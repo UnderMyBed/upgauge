@@ -1529,6 +1529,15 @@ SEARCH_RSC_HOPS=$(curl -s -o /dev/null -w '%{num_redirects}' -L --max-redirs 5 -
 check    "rsc: the control, /search (exempt from this gate), also settles at 200" "$SEARCH_RSC_CODE" '200'
 check_re "rsc: ...in the SAME one hop -- unaffected by this fix either way"        "$SEARCH_RSC_HOPS" '^1$'
 
+# Junk VALUES ride legitimate keys, so the key gate above cannot see them: /explore renders
+# "This permalink can" plus a right single quote plus "t be read" as a 200, and that 200 was
+# long-cached at 4aa8087 -- an unbounded family via ?d=junk1..N. Needle is the header, not the
+# copy: the page's own sentence contains an apostrophe React emits as raw U+2019, which is
+# exactly the shape of smoke.sh self-defect #2.
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore?v=1&k=seg&d=junk&m=seats&t=2025-05:2026-04")
+check     "canonical: an undecodable /explore permalink is never cached" "$HDRS" 'no-store'
+check_not "canonical: ...and never long-cached"                          "$HDRS" 's-maxage'
+
 # ---------------------------------------------------------------------------------------------
 # 16. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.
 #

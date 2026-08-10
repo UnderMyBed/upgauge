@@ -54,7 +54,14 @@ describe("proxy", () => {
   });
 
   it("sets the project's Cache-Control on /explore", async () => {
-    const res = await proxy(new NextRequest("http://localhost/explore?v=1"));
+    // A permalink that actually DECODES. This test used `?v=1` until M8 Task 4, which was
+    // missing four required keys -- fine while the branch only probed the data layer, wrong once
+    // cacheability includes the permalink's own validity.
+    const res = await proxy(
+      new NextRequest(
+        "http://localhost/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op",
+      ),
+    );
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
 
@@ -69,7 +76,15 @@ describe("proxy", () => {
     vi.mocked(loadAllowlist).mockRejectedValueOnce(
       new Error("duckdb: Catalog Error: Table with name meta_pivot_dimensions does not exist"),
     );
-    const res = await proxy(new NextRequest("http://localhost/explore?v=1"));
+    // Same decoding permalink as the healthy-case test above, added M8 Task 4: with `?v=1` this
+    // would pass for two reasons at once once cacheability includes decode() -- the mocked
+    // rejection AND the permalink's own failure to decode -- which makes it vacuous as a probe
+    // test. The mocked loadAllowlist() rejection is the only reason this can go red now.
+    const res = await proxy(
+      new NextRequest(
+        "http://localhost/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op",
+      ),
+    );
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
@@ -77,6 +92,27 @@ describe("proxy", () => {
   // database) proves the SAME code path returns CACHE when loadAllowlist() is not made to
   // fail, so the assertion above is actually discriminating on the probe's outcome rather than
   // the branch never being reachable at all.
+
+  // M8 Task 4. The canonical-query gate rejects unknown query KEYS; junk VALUES ride legitimate
+  // ones. ExploreView catches UrlStateError/PivotError and renders "This permalink can't be read"
+  // as a 200 (app/src/app/explore/page.tsx), and the proxy long-cached it -- so at 4aa8087
+  // `?d=junk1..N` was an unbounded family of cacheable error pages. `d=junk` reaches decode()'s
+  // renderPivot() call, which raises "unknown dimension 'junk'".
+  it("does not long-cache /explore when the permalink does not decode", async () => {
+    const res = await proxy(
+      new NextRequest("http://localhost/explore?v=1&k=seg&d=junk&m=seats&t=2025-05:2026-04"),
+    );
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not long-cache a bare /explore, which has always been the error page", async () => {
+    // decode("") throws `missing required key 'v'`, so bare /explore renders the error state and
+    // is not a cacheable answer. Accepted consequence, and nothing links it: TopBar links / and
+    // /watch, the front door links the full sample permalink, and app/sitemap.ts has no
+    // /explore entry.
+    const res = await proxy(new NextRequest("http://localhost/explore"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
 
   it("sets the project's Cache-Control on a real /route/<pair>", async () => {
     // Critical fix, final whole-branch review: the matcher used to omit /route/<pair>
