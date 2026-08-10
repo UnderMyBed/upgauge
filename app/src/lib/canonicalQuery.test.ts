@@ -18,6 +18,22 @@ describe("canonicalize", () => {
     expect(canonicalize("/airport/ORD", "y=2019")).toEqual({ kind: "clean" });
   });
 
+  it("throws on a rawQuery that still carries the leading '?'", () => {
+    // rawQuery's contract is proxy.ts:40's output -- `.search.replace(/^\?/, "")` -- never
+    // `.search` itself. A caller that hands this function the raw `.search` value would have
+    // its first chunk's key parse as "?y", which is absent from every row's `keys`, silently
+    // dropping a legitimate key and reporting `strip` instead of `clean`. Throwing turns that
+    // wiring bug into a failure at the first request instead of a permalink silently mangled.
+    expect(() => canonicalize("/airport/ORD", "?y=2019")).toThrow(/leading '\?'/);
+  });
+
+  it("the identical query WITHOUT the '?' is clean -- the guard fires on the spelling, not on the query", () => {
+    // Paired with the throw test above: this is what distinguishes "the guard rejects the wrong
+    // spelling" from "the guard rejects everything". Same path, same key, same value -- only the
+    // leading '?' differs.
+    expect(canonicalize("/airport/ORD", "y=2019")).toEqual({ kind: "clean" });
+  });
+
   it("leaves a full permalink alone, reserved characters and all", () => {
     expect(canonicalize("/explore", RESERVED)).toEqual({ kind: "clean" });
   });

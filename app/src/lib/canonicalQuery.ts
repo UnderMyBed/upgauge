@@ -23,11 +23,15 @@ import { presetSlugFromPath } from "@/lib/watch";
  * four. `QUERY_ROWS` is the THIRD list that must agree with `config.matcher` (canonicalQuery.test
  * .ts asserts it), alongside `ENTITY_ROUTES`.
  *
- * Pure: no database, no Next imports, no I/O, and it cannot throw. `entitySlugFromPath` already
- * catches `decodeURIComponent`'s throw on a malformed escape (`%zz`) and falls back to the raw
- * text, so every `matches` predicate below is total -- which matters because this runs on the
- * proxy path, where an uncaught throw is a 500 on a request that was only ever going to be a
- * redirect. */
+ * Pure: no database, no Next imports, no I/O. It cannot throw on any REQUEST -- `entitySlugFromPath`
+ * already catches `decodeURIComponent`'s throw on a malformed escape (`%zz`) and falls back to
+ * the raw text, so every `matches` predicate below is total, which matters because this runs on
+ * the proxy path, where an uncaught throw is a 500 on a request that was only ever going to be a
+ * redirect. The one throw `canonicalize` has is not request-shaped: a leading `?` on `rawQuery`
+ * means a caller passed `new URL(...).search` UNSTRIPPED, rather than `proxy.ts:40`'s already-
+ * stripped value (see that function's own doc comment) -- a wiring mistake, not something a real
+ * request can trigger through correct wiring, so it exists purely to fail loudly at the first
+ * request if a future call site gets that backwards. */
 const NO_KEYS: ReadonlySet<string> = new Set();
 const NONE_REPEATABLE: ReadonlySet<string> = new Set();
 /** `encode()` emits one `f=` per filter (urlstate.ts:113-114) and `decode()` `continue`s past its
@@ -132,6 +136,14 @@ export type Canonical =
  * `clean` -- yes, or this path is not ours to police. `reject` -- no, and there is no canonical
  * form to send the caller to. `strip` -- no, and `location` is where they should go instead.
  *
+ * `rawQuery` excludes the leading `?`, exactly as `proxy.ts:40` produces it
+ * (`new URL(request.url).search.replace(/^\?/, "")`) -- a caller that passes the `?`-prefixed
+ * `.search` value directly gets a thrown `Error`, not a silently wrong answer: the first chunk's
+ * key would parse as `"?y"` rather than `"y"`, which is absent from every row's `keys`, so a
+ * legitimate key would be dropped and reported as `strip` instead of `clean` -- on `/explore`
+ * that strips `v=1` off the front of every permalink and redirects to a query `decode()` then
+ * rejects, silently.
+ *
  * Rules, in order:
  *
  * 1. No matching row, or an `exempt` row: `clean`. An unmatched pathname defaults to doing
@@ -151,6 +163,15 @@ export type Canonical =
  *    free. Key ORDER survives, so a reordered-but-valid permalink stays `clean`: that is a
  *    bounded family the app emits itself, not an attacker-chosen one. */
 export function canonicalize(pathname: string, rawQuery: string): Canonical {
+  if (rawQuery.startsWith("?")) {
+    throw new Error(
+      "canonicalize(): rawQuery must not include the leading '?' -- proxy.ts:40 already " +
+        "strips it (`new URL(request.url).search.replace(/^\\?/, \"\")`) before calling this " +
+        "function. A '?'-prefixed rawQuery is a wiring bug, not a request to handle: the first " +
+        "chunk's key would parse as '?<key>', which is absent from every row's `keys`, so a " +
+        "legitimate key would be silently dropped and reported as `strip` instead of `clean`.",
+    );
+  }
   const row = QUERY_ROWS.find((r) => r.matches(pathname));
   if (row === undefined || row.exempt !== undefined) return { kind: "clean" };
 
