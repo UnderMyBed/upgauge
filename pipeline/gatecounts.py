@@ -47,6 +47,28 @@ REPO = Path(__file__).parents[1]
 
 _COLLECTED = re.compile(r"^(\d+) tests? collected", re.MULTILINE)
 
+# pytest colourises the summary line whenever `FORCE_COLOR` is set -- which Claude Code does --
+# emitting `\x1b[32m\x1b[32m510 tests collected\x1b[0m...`. The match above is anchored, so an
+# unstripped line does not start with a digit and the parse fails. Strip rather than pass
+# `--color=no`: an environment variable set by a tool this repo does not control must not be
+# able to decide whether a gate can read its own input.
+_ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def collected_count(stdout: str) -> int:
+    """Parse the test total out of `pytest --collect-only`'s output."""
+    stdout = _ANSI.sub("", stdout)
+    match = _COLLECTED.search(stdout)
+    if not match:
+        raise RuntimeError(
+            "no 'N tests collected' line in pytest output -- the reporter format changed, and "
+            f"a silent 0 here would gate nothing:\n{stdout[-2000:]}"
+        )
+    count = int(match.group(1))
+    if count <= 0:
+        raise RuntimeError(f"collected {count} tests -- refusing to pin a vacuous count")
+    return count
+
 
 def python_test_count() -> int:
     """Total tests pytest collects. Collection only — nothing is executed.
@@ -62,16 +84,7 @@ def python_test_count() -> int:
     )
     if result.returncode != 0:
         raise RuntimeError(f"collection failed:\n{result.stdout}\n{result.stderr}")
-    match = _COLLECTED.search(result.stdout)
-    if not match:
-        raise RuntimeError(
-            "no 'N tests collected' line in pytest output -- the reporter format changed, and "
-            f"a silent 0 here would gate nothing:\n{result.stdout[-2000:]}"
-        )
-    count = int(match.group(1))
-    if count <= 0:
-        raise RuntimeError(f"collected {count} tests -- refusing to pin a vacuous count")
-    return count
+    return collected_count(result.stdout)
 
 
 def collect() -> dict[str, int]:

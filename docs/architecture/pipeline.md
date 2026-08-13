@@ -630,6 +630,17 @@ carry the same obligation as before: re-measure before quoting.
 > test added without regenerating, and the committed number hand-edited to `999`. Both passed.
 > The target now refuses to run at all unless `git ls-files` can see the artifact.
 
+> **A gate that parses another tool's output strips ANSI before matching.** pytest colourises
+> its summary line whenever `FORCE_COLOR` is set — Claude Code sets `FORCE_COLOR=3` — emitting
+> `\x1b[32m\x1b[32m510 tests collected\x1b[0m\x1b[32m in 0.10s\x1b[0m\x1b[0m`, which the
+> anchored `^(\d+) tests? collected` cannot match. `make check` was therefore red in every agent
+> shell and green in CI, where runners do not set it. It also misdiagnosed itself twice over:
+> the raised message blamed a changed reporter format while the count sat two lines above it in
+> the same dump, and the visible failure was `check-gate-counts`, whose documented meaning is
+> *"a test was added without regenerating"*. Strip inside the parser rather than passing
+> `--color=no` at the call site — an environment variable set by a tool this repo does not
+> control must not decide whether a gate can read its own input.
+
 ### BTS revisions: corrections ship with the next month, by decision
 
 A BTS revision to an already-published month rebuilds a **corrected** warehouse under an
