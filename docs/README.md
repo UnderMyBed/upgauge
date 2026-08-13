@@ -19,7 +19,7 @@ bite you.
 | [data/invariants.md](data/invariants.md) | The rules that gate the pipeline, each with its evidence |
 | [data/carrier-model.md](data/carrier-model.md) | Operating-carrier grain, the date-ranged mainline map |
 | [architecture/hosting.md](architecture/hosting.md) | Deployment shape, cost, the hosting survey, portability test |
-| [architecture/pipeline.md](architecture/pipeline.md) | Repo layout, the milestone record, the ingest/query layer, **the M2 marts layer and the load-bearing CWD constraint** |
+| [architecture/pipeline.md](architecture/pipeline.md) | Repo layout, ingest, **the warehouse catalog and the load-bearing CWD constraint**, the pivot contract, entity resolution, the toolchain |
 | [design/system.md](design/system.md) | **The design system: tokens, components, chart and map encodings, states** |
 | [design/brief.md](design/brief.md) | The design problem statement — brief, constraints, anti-goals, and the direction that was rejected (answered by `system.md`) |
 | [../LICENSE](../LICENSE) | MIT, covering all code in this repository. The upstream BTS data is US federal public domain (17 U.S.C. § 105) and imposes nothing on reuse of our code |
@@ -68,6 +68,13 @@ how a doc ends up narrating the history of its own numbers:
 reader two passes and dates instantly — `> ⚠️ **Y, and the direction is easy to invert**` is the
 same knowledge as a rule. If a mistake's only lesson is "check this by meaning, not by string",
 that lesson is already a rule in `CLAUDE.md` § Workflow; do not re-record it per site.
+
+**No doc here is organised by milestone, and none carries a milestone tag.** These files say
+what is TRUE about the system, in the present tense. Which milestone built a thing, which task
+number fixed it, and what a page did "through M6" are git's business — `git log -S` finds them
+faster than prose can carry them, and prose that carries them goes stale the moment the next
+milestone lands. A rule that only makes sense as a story about the past is a rule that has not
+been written yet.
 
 This is not licence to strip evidence. **A measurement whose rule is still live stays, in
 full** — that is what stops the rule being re-litigated. The 2026-08 pass removed 17 dual

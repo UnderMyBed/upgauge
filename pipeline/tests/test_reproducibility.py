@@ -240,7 +240,8 @@ REAL_EXTRACT = next(iter(sorted(Path("data/raw").glob("t100d_segment_us_*_*.zip"
 
 
 def test_database_is_reproducible(tmp_path):
-    """The M2 gate. Every object is exported through the threads=1 writer and hashed --
+    """The database half of `make verify`. Every object is exported through the threads=1
+    writer and hashed --
     reusing a writer already proven byte-stable rather than inventing new hashing."""
     from pipeline.marts import verify_database
     from pipeline.tests.test_marts import _warehouse

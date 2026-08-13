@@ -94,9 +94,9 @@ function Stat({ label, value, derived }: { label: string; value: string; derived
  * query returns 53,373,806 seats for SEA over 2025-05..2026-04, the same figure the stat strip
  * prints, not the 26,710,000 an origin-only (or dest-only) half would show.
  *
- * Through M6 the Explorer had no either-endpoint dimension and this page offered two half
- * permalinks instead, each labelled as a half -- see endpoints.ts's header for the mechanism
- * and docs/architecture/pipeline.md § M7 for the history. */
+ * Without an either-endpoint dimension this page can only offer two half permalinks, each
+ * labelled as a half -- see endpoints.ts's header for the mechanism and
+ * docs/architecture/pipeline.md § Composite and either-endpoint dimensions. */
 function endpointQuery(airportId: number, timeFrom: string, timeTo: string): PivotQuery {
   return {
     grain: "segment",

@@ -1,6 +1,6 @@
 # Data invariants
 
-**Write these as tests FIRST.** They gate M1.
+**Write these as tests FIRST.** They gate the pipeline.
 
 Each rule carries the evidence that justifies it. That is deliberate — a rule without its
 evidence gets re-litigated, or "simplified" by someone who doesn't know why it exists.
@@ -207,14 +207,14 @@ JFK–LAX over 2025-05 → 2026-04:
 
 The gap — 33 same-airport rows (2 JFK→JFK, 31 LAX→LAX) — inflates this one route by **18,895
 seats** under a `DATA AS OF` badge. The composite-dimension filter built by
-`app/src/lib/pivot/render.ts` and `pipeline/pivot.py` (M4b, in lockstep — `sql/03_queries/
+`app/src/lib/pivot/render.ts` and `pipeline/pivot.py` (in lockstep — `sql/03_queries/
 pivot_route.sql` itself carries only the `{{FILTERS}}` token these two renderers fill in,
 not the filter logic) instead binds `least(route_key_low, route_key_high) = $lo AND
 greatest(...) = $hi` per requested route, which cannot match a same-airport row.
 
 **Those same-airport rows are excluded from route identity, and they are NOT excluded from
 `fct_segment_month`.** The distinction only becomes load-bearing when a page asks about an
-airport rather than about a route (M4d's `/airport/<code>`), where the query is
+airport rather than about a route (`/airport/<code>`), where the query is
 `origin_airport_id = X OR dest_airport_id = X` and a same-airport filing satisfies **both**
 halves.
 
@@ -232,21 +232,19 @@ it is a number the next milestone will pin an acceptance criterion to. Measured 
 
 The bolded rows are the ones quoted elsewhere in this repo, because the question everywhere else
 is *which rows a filter matches* — quarantine changes what a row **contributes**, never whether
-it is **matched**. The M4d design spec quoted the trailing-12 excluding-quarantined triple
-(3,182 / 358 / 601,565) and labelled it only "in-window", which is how the same claim came to
-have two spellings; it is labelled there now.
+it is **matched**. Quoting the trailing-12 excluding-quarantined triple (3,182 / 358 /
+601,565) and labelling it only "in-window" is how one claim comes to have two spellings.
 
 At SEA the trailing-12 overlap is 18 rows carrying 12,646 seats and 172 departures, enough to
-move its seat total from 53,373,806 to 53,386,452 if the two halves are simply added. Through
-M6, `/airport` computed `origin + dest − (origin ∧ dest)` arithmetically, with the third term
-its own pivot, because the pivot vocabulary had no way to express `origin = X OR dest = X`
-directly. **M7 gave it a first-class `endpoint_airport_id` filter** (`filter_mode = 'either'`,
-`app/src/lib/pivot/render.ts` / `pipeline/pivot.py`, Tasks 1-2) that compiles to exactly that
-OR, so as of M7 Task 3 `/airport` runs it as ONE pivot per grain
-(`app/src/app/airport/[code]/endpoints.ts`): SQL's own `GROUP BY` counts a same-airport row
-once, the same way the old third term's subtraction did, without a separate query or an
-arithmetic identity applied to it after the fact. The M4d design spec's claim that a segment
-with one airport at both ends "does not exist" is true of route identity above and false here.
+move its seat total from 53,373,806 to 53,386,452 if the two halves are simply added.
+**`endpoint_airport_id` is a first-class filter for exactly this** (`filter_mode = 'either'`,
+`app/src/lib/pivot/render.ts` / `pipeline/pivot.py`), compiling to `origin = X OR dest = X`, so
+`/airport` runs ONE pivot per grain (`app/src/app/airport/[code]/endpoints.ts`): SQL's own
+`GROUP BY` counts a same-airport row once, without a separate overlap query or an arithmetic
+identity applied after the fact. The alternative — `origin + dest − (origin ∧ dest)`, the third
+term its own pivot — is what a pivot vocabulary without that filter forces. A claim that a
+segment with one airport at both ends "does not exist" is true of route identity above and
+false here.
 
 **A count of an airport's distinct destinations includes the airport itself unless it is
 explicitly excluded, and the two answers are both defensible — so an unlabelled one is not
@@ -295,7 +293,7 @@ Scanning Files                (not reported)         1/3
 File Filters                  (none)                 (year = 2017)
 ```
 
-Fixed in M2 fix wave 1 by moving `year`, `quarter`, `month` out of `any_value()` and into
+The fix is moving `year`, `quarter`, `month` out of `any_value()` and into
 both the `SELECT` list and the `GROUP BY` — each is a pure function of `year_month` (0 of
 494,508 route-month groups — distinct `(year_month, op_airline_id, origin_airport_id,
 dest_airport_id)` combos, not the 36 distinct `year_month` values themselves — have more
@@ -383,12 +381,12 @@ because writing it would poison the tree.
 
 **Resolution rule: latest `download_date` wins per `(year_month, grain key)`; prior
 partitions are audit-only and never feed a mart.** Without this the marts are
-non-deterministic across rebuilds, which breaks the M2 reproducibility guarantee.
+non-deterministic across rebuilds, which breaks the reproducibility guarantee.
 
 ## Builds are byte-reproducible
 
 `make verify` builds the whole warehouse twice from identical raw inputs and compares every
-artifact by sha256. It is the M1 exit criterion.
+artifact by sha256.
 
 > **DuckDB's parallel Parquet writer is not byte-stable.** At the default 12 threads, two
 > runs over the same 282k-row input produced files differing by a few hundred bytes — and
@@ -420,8 +418,7 @@ artifact by sha256. It is the M1 exit criterion.
 > per-connection creation counter or similar metadata in the DuckDB storage header); not needed
 > to act on the finding.
 >
-> **Consequence for M2 (Task 8): `make verify`'s gate must never sha256 the `.duckdb` file
-> itself.** The gate has to be content-based — compare query results / table checksums issued
+> **Consequence: `make verify`'s gate must never sha256 the `.duckdb` file itself.** The gate has to be content-based — compare query results / table checksums issued
 > against the built catalog, the same way the Parquet gate compares row content rather than
 > raw bytes.
 >
@@ -433,7 +430,7 @@ artifact by sha256. It is the M1 exit criterion.
 > then sha256s that export and compares across the two builds. The catalog file's own
 > non-determinism is real and permanent, but it is invisible to the gate because the gate
 > never looks at the catalog file's bytes, only at what querying each object produces. The
-> object count lives in [../architecture/pipeline.md](../architecture/pipeline.md) § The M2 gate.
+> object count lives in [../architecture/pipeline.md](../architecture/pipeline.md#reproducibility).
 
 ## Column count assertion
 
@@ -492,7 +489,7 @@ Reasons, in precedence order:
 
 ---
 
-## Entity resolution (M4a)
+## Entity resolution
 
 Measured 2026-07-30 against the full 2015–2026 window. Tests:
 `pipeline/tests/test_resolution_invariants.py`.
@@ -507,8 +504,8 @@ unfiltered join fans out and multiplies result rows — a wrong total rendered u
 a dimension row. An unresolvable id still degrades to the raw id rather than `—`: absence
 of a *name* is not absence of *data*.
 
-**Code collisions were flagged in M4a as an M4b concern, and M4b's reverse lookup
-(`/route/<pair>`, `sql/03_queries/lookup_airport_by_code.sql`) is what actually hit one.**
+**Code collisions only ever bite the reverse lookup** (`/route/<pair>`,
+`sql/03_queries/lookup_airport_by_code.sql`).
 `carrier_code` is reused — **112 codes map to more than one `airline_id`** across
 `dim_carrier`, and 60 airport codes collide table-wide (distinct `(airport_id, code)` pairs
 across **all** of `dim_airport`'s history, not just the current `is_latest` row). Scoped to
@@ -516,9 +513,9 @@ what actually flew in-window, **both are 0** (114 carriers, i.e. distinct `op_ai
 values in `fct_segment_month`). `id → code` is a function, so collisions cannot affect
 *display*; they only ever break the *reverse* lookup, code → id.
 
-These are three different populations, and it matters which one a given count describes —
-the M4a figures above measure the two extremes (all history vs. in-window-only); M4b found a
-third, in between, that neither extreme covers:
+These are three different populations, and it matters which one a given count describes. The
+figures above measure the two extremes (all history vs. in-window-only); the reverse lookup
+lands on a third, in between, that neither extreme covers:
 
 | Population | Colliding airport codes |
 |---|---|
@@ -531,8 +528,7 @@ seq chain, not per code, so two *different* `airport_id`s that happen to share a
 each carry their own `is_latest = TRUE` row at the same time: 36 codes do. `AUS` is one —
 `airport_id` 10423 "Austin - Bergstrom International" (69,132 traffic rows) **and**
 `airport_id` 16440 "Robert Mueller Municipal" (closed since 1999, 0 traffic rows) both come
-back `is_latest = TRUE`. Fix round 1 on M4b Task 4 caught this after ship: without a
-fact-presence filter, whichever row the driver returns last wins the reverse-lookup map in
+back `is_latest = TRUE`. Without a fact-presence filter, whichever row the driver returns last wins the reverse-lookup map in
 `app/src/lib/resolve.ts` silently — Robert Mueller today, for a page that says `DATA AS OF`
 this month. Restricting to `airport_id`s that actually appear in `fct_segment_month`
 (`lookup_airport_by_code.sql`'s fact-presence clause) is what takes colliding codes from 36
@@ -601,7 +597,7 @@ reason — the fallback branch catches whatever the two explicit tests miss:
   the east and **EYW (Key West, 24.56°)** in the south. Every one of them is therefore east of
   every airport in the lower 48 — by up to 3.34° — *and* 6.86° south of the southernmost.
 
-### The other two reverse lookups (M4d)
+### The other two reverse lookups
 
 `/carrier/<code>` and `/aircraft/<short_name>` need the same code → id direction, via
 `sql/03_queries/lookup_carrier_by_code.sql` and `lookup_aircraft_by_name.sql`. Both are
@@ -623,8 +619,8 @@ one `airline_id`; scoped to the 114 airlines that actually filed a T-100 Segment
 `VX` is the `AUS` shape exactly — `airline_id` 21171 "Virgin America" (real in-window traffic)
 and 19995 "Aces Airlines" (a defunct Colombian carrier, 0 filed rows). `CP` fans out to three.
 
-**What the filter therefore makes a 404, and what `/carrier/<code>` may honestly say about it
-(M4d, split by M5 Task 6).** The filter is not a tie-breaker between near-equals — it removes
+**What the filter therefore makes a 404, and what `/carrier/<code>` may honestly say about
+it.** The filter is not a tie-breaker between near-equals — it removes
 the overwhelming majority of the table. **1,543 of `dim_carrier`'s 1,657 distinct codes have no
 fact-present holder at all** — 1,657 is the count of DISTINCT `carrier_code`s; 1,776 is the
 table's row count, one per `airline_id`, and 1,657 − 114 fact-present carriers = 1,543 exactly.
@@ -633,12 +629,11 @@ window is the **common** carrier 404, not the exotic one: `PA` (Pan American Wor
 `airline_id` 20384 and 20386, plus 20389 "Florida Coastal Airlines") reaches it by exactly the
 same path as `ZZ`, which is in `dim_carrier` not at all.
 
-M4d had no carrier analogue of `lookup_airport_code_exists.sql` to tell the two apart, so the
-page stated the thing true of both — *nothing has filed under this code* — rather than calling
-Pan Am unknown, and this section said the airport-style split needed that second lookup first.
-**M5 Task 6 is that lookup** (`sql/03_queries/lookup_carrier_code_exists.sql`, mirroring the
-airport file's existence-only shape but returning `id`/`name` as well as `code`), and
-`/carrier/<code>` now makes the same two-way split `/route/<pair>` always has: `ZZ` 404s
+**Telling those two apart needs its own lookup** — `sql/03_queries/lookup_carrier_code_exists.sql`,
+mirroring the airport file's existence-only shape but returning `id`/`name` as well as `code`.
+Without it the page can only state the thing true of both (*nothing has filed under this code*)
+rather than calling Pan Am unknown. With it, `/carrier/<code>` makes the same two-way split
+`/route/<pair>` has: `ZZ` 404s
 "unknown carrier code"; `PA` 404s "recognized by BTS ... none of which has filed a T-100
 Segment row", naming every holder.
 
@@ -670,7 +665,7 @@ fact-presence takes that to **1**, not to 0:
 
 Both really flew, so **no scoping resolves this and neither code is the right answer**.
 Restricting to the trailing 12 months makes the collision vanish *today* — only `031` filed in
-the current window, which is why the M4d brief records in-window collisions as 0 — and brings
+the current window — which is why an in-window-scoped count records 0 collisions — and brings
 it back the first month both types file. That would be the worst available failure shape: a
 production error on a URL that worked last month, arriving as data rather than as a code
 change. The scope stays all-time.
@@ -701,8 +696,8 @@ The alarm for a *new* collision is
 `test_aircraft_reverse_lookup_collides_on_exactly_the_known_CE_180_pair`, which pins the
 colliding set **exactly** — `[("CE-180", ["030", "031"])]` — rather than asserting `<= 1` or
 excluding `CE-180`. A second ambiguous short name would pass any weaker assertion in silence
-and then surface as a 500 nobody signed off on. This is the M4a lesson applied deliberately:
-that milestone's collision test could not see the `AUS` pair because of how it was scoped.
+and then surface as a 500 nobody signed off on. An in-window-scoped collision test cannot see
+the `AUS` pair at all, which is exactly how this class of test goes blind.
 
 **One gap is recorded rather than closed.** The column-side `upper()` in both new lookups is
 inert against today's data — 0 lower-case `carrier_code`s, and the single lower-case
@@ -751,7 +746,7 @@ The separator-count distribution shifted exactly as that one rename predicts: **
 none, 64 carry one, 10 carry two** (was 36/65/10). Max is still 2, so `MAX_SLUG_SEPARATORS = 4`
 keeps its headroom.
 
-**M4d adopted it, and re-pins the measurement from the app side too.** `slugFor()` in
+**The app side re-pins the same measurement.** `slugFor()` in
 `app/src/lib/aircraftSlug.ts` is that transform; `aircraftSlug.test.ts` enumerates every
 fact-present type through the ordinary pivot and asserts **112 codes → 111 distinct slugs, with
 `CE-180` the only repeat and that repeat being the short name colliding with itself** rather than
@@ -759,7 +754,7 @@ two names flattened together. The distinction matters: a future BTS refresh coul
 *distinct* names (the transform maps two characters onto one that already occurs in `B737-8`), and
 that would be a new failure, not this one. The separator count is pinned in the same test — **max
 2 across all 111 slugs** — because resolving a slug expands it back into `3^n` candidate short
-names, which is capped at 4 separators (`docs/architecture/pipeline.md` § M4d).
+names, which is capped at 4 separators.
 
 ---
 

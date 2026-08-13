@@ -700,7 +700,8 @@ check     "airport: DATA AS OF is present"   "$BODY" 'DATA AS OF'
 # `origin OR dest` at SEA over 2025-05..2026-04 is 53,373,806 seats; an origin-only page renders
 # every stat, row and band in the right shape and reads 26,710,000. Carrier and aircraft-type
 # COUNTS are identical either way (13 and 25), so they are not discriminators -- see
-# pipeline.md § M4d. Dropping the inclusion-exclusion overlap term instead reads 53,386,452.
+# docs/data/invariants.md § Route identity. Dropping the inclusion-exclusion overlap term
+# instead reads 53,386,452.
 check     "airport: counts BOTH endpoints, not just departures" "$BODY" '53,373,806'
 check     "airport: says so in words"        "$BODY" 'at <b>both</b> endpoints'
 # `>14747<`, not a bare `14747`: SEA's airport_id legitimately appears in this page's Explorer
@@ -804,13 +805,12 @@ check     "airport?y=nonsense: malformed input is the same named error, not a 50
 # 10c. M7 Tasks 4-8: the airport network map, in the served HTML. ORD, not SEA -- it is the
 # database's own worst case (measured 267 destinations after the same-airport row is excluded,
 # vs. SEA's much smaller network), so this is the section that would first show a truncation or
-# a rendering blow-up if one existed. Same five-part discipline the M4d comment above states for
+# a rendering blow-up if one existed. Same five-part discipline the comment above states for
 # every entity page (renders, Cache-Control, real-vs-bare id, chart/map svg, 404/308 caching),
 # applied to the map specifically since nothing above this line has curled it at all: the map
-# reached 718+ app tests green (docs/architecture/pipeline.md § M7 Task 8) and a clean `next
-# build` while being reachable from no served route this file ever checked -- exactly M4c's
-# "the component reached 262 green unit tests while mounted on no route at all" shape, now on
-# the map.
+# reached 718+ app tests green and a clean `next build` while being reachable from no served
+# route this file ever checked -- the same "green unit tests, mounted on no route at all"
+# shape the mix chart hit before it.
 #
 # The `<svg ... role="img"` needle is anchored on `viewBox="0 0 960 500"` (this map's own fixed
 # WIDTH/HEIGHT, networkMap.ts), not the bare `<svg role="img"` M4c's chart check uses -- that

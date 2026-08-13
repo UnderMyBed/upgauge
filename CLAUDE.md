@@ -82,7 +82,7 @@ deployable container from that asset, and `make portability` proves its WORKDIR/
 breaking it. Nothing is served from a public host. That is the rest of M8.
 
 Current gates (`verify` and `goldens` measured 2026-08-08, `portability` 2026-08-09, the rest
-2026-08-10; these are the only counts kept here — per-milestone history lives in git and `docs/architecture/pipeline.md`):
+2026-08-10; these are the only counts kept here — per-milestone history lives in git):
 
 | gate | result |
 |---|---|
@@ -124,11 +124,8 @@ alert this file has required as a hard rule since M1 (#2), cache correctness bef
 front (#3), and launch configuration (#4). Everything in M9 is a surface the product works
 without.
 
-Two findings worth keeping here rather than only in the tracker, because both are rules:
+One finding worth keeping here rather than only in the tracker, because it is a rule:
 
-- **When a milestone is repurposed, say where its original content went.** M6's deploy content was
-  never rescheduled and seven milestones passed before anyone noticed, because nothing forced
-  `docs/architecture/pipeline.md`'s milestone table to record the move. It does now.
 - **`make app-smoke` could certify a build it never ran** (fixed — see the `kill_port` /
   `port_free_or_die` commit and the § above). The gate leaked a server holding its own port, so
   the next run's checks were answered by the previous run's build. Measured: two consecutive

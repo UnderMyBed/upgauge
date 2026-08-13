@@ -151,7 +151,7 @@ freight, mail, air_time, ramp_to_ramp_time
 **Derived (compute at query time):** load_factor, asm, rpm, completion_factor, avg_gauge
 (seats/departure), block_hours, avg_stage_length, frequency
 
-### The exact query-time forms (M3 pivot contract)
+### The exact query-time forms
 
 ```sql
 SUM(passengers)::DOUBLE / NULLIF(SUM(seats), 0)               -- load_factor
@@ -166,7 +166,7 @@ SUM(passengers * distance)                                    -- rpm
 > within a single route and is silently wrong across any pivot that groups more than one — which
 > is most of them.
 >
-> This is a trap M2 set up. `distance` is *almost* constant per (origin, dest) per month — 37 of
+> The trap is set by the catalog layer. `distance` is *almost* constant per (origin, dest) per month — 37 of
 > 1,082,147 route-months vary, measured over the full **2015–2026** window (see "`distance` is
 > not additive" below) — which licenses `max(distance)` as a *representative filed value* on
 > `fct_route_month`, not a literal invariant. It does **not** license `distance` as an ASM
@@ -221,9 +221,9 @@ directions — a `'segment'`-grain dimension must be absent from `fct_route_mont
 `'both'`-grain dimension must be present on it. A renamed or dropped fact column fails that
 test loudly instead of silently dropping a dimension from the Explorer at request time.
 
-**M7 Task 1 adds two columns and a fifteenth dimension row, `endpoint_airport_id`**, without
-changing anything the two renderers emit — the vocabulary grows; SQL generation does not
-(Task 2 wires the emission). `filter_only` (`BOOLEAN`) marks a dimension as accepted in a
+**Two columns and a fifteenth dimension row, `endpoint_airport_id`**, extend the vocabulary
+without changing anything the two renderers emit for the other fourteen. `filter_only`
+(`BOOLEAN`) marks a dimension as accepted in a
 FILTER and rejected as a grouping dimension; today exactly one row sets it. `filter_mode`
 (`'pair' | 'either' | NULL`) says how a filter over that dimension's `column_expr` compiles:
 `NULL` is the ordinary single-column `col IN (...)`; `'pair'` is `route`'s two columns
@@ -239,7 +239,7 @@ the aggregate — structurally the same failure as T-100's `CLASS` rollup codes 
 metadata (`dim_airport`/`airport_id`), same as `route` — these are two SEPARATE facts about
 the row, not one.
 
-**Join metadata** (`join_dim`/`join_key` non-NULL) is which dimensions M4a's resolver can turn
+**Join metadata** (`join_dim`/`join_key` non-NULL) is which dimensions the resolver can turn
 into a display code: exactly eight — `route`, `endpoint_airport_id`, `op_airline_id`,
 `origin_airport_id`, `dest_airport_id`, `origin_city_market_id`, `dest_city_market_id`, and
 `aircraft_type`. Every other dimension carries `join_dim = NULL, join_key = NULL` — there is

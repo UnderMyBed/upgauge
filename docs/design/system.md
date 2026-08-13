@@ -110,7 +110,7 @@ Counts are integers with thousands separators.
 
 ### The top bar
 
-The wordmark, the `DATA AS OF` badge, and — as of M5 — a site-wide search field, extracted
+The wordmark, the `DATA AS OF` badge, and a site-wide search field, extracted
 into one shared component (`app/src/components/TopBar.tsx`) so the search box has exactly one
 home instead of drifting across every page that renders it. `UPGAUGE` in `.mark`, `UP` in
 `--ink` and `GAUGE` in `--signal`; the badge in `--signal` (first-class per `DATA AS OF`'s own
@@ -163,7 +163,7 @@ present-day code (`docs/data/invariants.md`'s "Entity resolution" section) — s
 rail states this on every view rather than letting a resolved code masquerade as a
 historical fact.
 
-**Every dimension cell that resolves to a page links to it (M5).** `DataTable`'s
+**Every dimension cell that resolves to a page links to it.** `DataTable`'s
 `DimensionCell` is the one chokepoint all five surfaces — `/explore` and the four entity
 pages — render their columns through, since they all build `dimKey` the same way
 (`allowlist.dims.get(c)?.joinDim ? c : undefined`). Wrapping the cell there in `<a href={
@@ -179,8 +179,8 @@ it is the only place a keyboard user reaches the expansion, linked cell or not.
 same airport does not link.** `fct_segment_month` carries 530 such pairs with real traffic
 (ORD alone is 73,082 seats over the trailing 12), but `/route/ORD-ORD` is a 404 by design —
 `resolveRoutePair` answers *"'ORD' to itself is not a route between two airports"*, and
-`sitemap_routes.sql` excludes them for the same reason. The link path was the last place that
-did not know, and shipped a link to a guaranteed 404 until M5's final review. The guard lives
+`sitemap_routes.sql` excludes them for the same reason. The link path is the easiest place to
+forget it, and forgetting it ships a link to a guaranteed 404. The guard lives
 in `/explore`'s `routeHref`, beside the alphabetical-by-code sort, because the composite route
 cell is the one cell `entityHref` does not own.
 
@@ -202,7 +202,7 @@ the same component, calls per row for any non-dimension identifier column that s
 **The href is the code-alphabetical pair, never the displayed (airport-id) order**: `/explore`
 renders `route_key_low, route_key_high` — airport-id order — and `routeHrefFromCodes` re-sorts
 alphabetically by code before building `/route/<pair>`, because the two orderings disagree for
-154 of 22,420 pairs (measured; `CLAUDE.md`, M4b). Reusing the displayed order would be wrong
+154 of 22,420 pairs (measured; `CLAUDE.md`). Reusing the displayed order would be wrong
 for every one of those 154 — IFP/IAH is one of them: airport-id order displays `IFP–IAH`, but
 the canonical `/route/` URL is `/route/IAH-IFP`, the reverse. A fixture built on an
 order-agreeing pair like JFK–LAX (22,266 of 22,420) cannot catch that class of bug — both
@@ -253,7 +253,7 @@ no separate "how to read this" page to go stale.
 
 **Each group is opt-in per view — the rail describes the encodings the page in front of you
 actually uses, and no others.** `/explore` gets no arc group because it has no map, and got no
-fleet-shading group until M4c put a chart on `/route`. A rail that explains a monochrome gauge
+fleet-shading group, which only a page carrying a chart gets. A rail that explains a monochrome gauge
 ramp on a page with no ramp is exactly the stale "how to read this" this element exists to
 replace, and it costs the reader trust in the groups that *are* relevant.
 
@@ -290,7 +290,7 @@ Observable Plot under the hood. These are encoding rules, not library configurat
 
 **Axis numerics obey the same rule as every other numeric here: monospaced and
 tabular-figure.** Plot's root style hardcodes `font-family: system-ui, sans-serif`, and
-`font-variant-numeric` alone does not override it — M4c shipped with the y ticks ("1.2M"), the
+`font-variant-numeric` alone does not override it. The trap is shipping with the y ticks ("1.2M"), the
 year ticks and the annotation's year in the sans face while every other numeric on the page was
 Plex Mono. Every chart passes `style: { fontFamily: "var(--font-mono)", fontVariantNumeric:
 "tabular-nums" }`; the token, not a literal family, so `globals.css` stays the single source
@@ -298,8 +298,8 @@ the way it already is for the `--g*` ramp. The mockups do this with a dedicated 
 
 ### Aircraft-type mix — build this before the load-factor chart
 
-**Shipped M4c** on `/route/<pair>`; `/airport`, `/carrier` and `/aircraft` reuse the same
-component in M4d. What follows is the encoding rule plus what implementing it taught.
+All four entity pages share one component. What follows is the encoding rule plus the traps
+in implementing it.
 
 Stacked area, monthly. The six-category problem collides with "hue is reserved", and the
 resolution is that **these categories are ordered**: shade the bands along one ramp sorted
@@ -337,7 +337,7 @@ bands: **how many types Other aggregates and its share of seats are stated on th
 itself**, not in the legend rail. That number is per-subject — it differs for every route — and
 the rail is static; putting it in both places is how two copies of one measurement drift.
 
-#### The same chart, stacked by something else (M4d)
+#### The same chart, stacked by something else
 
 **The stacking dimension is a parameter, and the words that describe the ramp travel with it.**
 `/aircraft/<slug>` is a page that *is* one aircraft type, so the type stack is degenerate there:
@@ -388,8 +388,7 @@ title and a legend that both say "aircraft type".
 exact *reverses* — Southwest flies the most of them **and** the densest cabin (593.6 M seats,
 175.0 seats/departure), Alaska the fewest and the least dense (104.2 M, 159.8) — so a single sort
 mislabels all five swatches rather than four of five. That is the fixture the implementation is
-pinned against, precisely because M4c's own version of this test had the two orders coincide and
-a single sort passed it.
+pinned against, precisely because a fixture whose two orders coincide lets a single sort pass.
 
 ### Multi-series lines
 
@@ -398,14 +397,13 @@ a single sort passed it.
 map arcs. Legend rail carries the key.
 
 Rolling-12 is the default view; Month is the toggle. Gaps are gaps — see the standing rule
-below, which M4c promoted out of this section because it turned out to bind every time-series
-mark, not only lines.
+below — it binds every time-series mark, not only lines.
 
 ### Three standing rules
 
 - **COVID is drawn, not hidden.** A `--panel-2` band across 2020-03 → 2021-06, labelled
   *"COVID — in window on purpose."* The window includes it deliberately; the chart should
-  say so. Implementing it (M4c) settled two details: the band's edges land **on** the 2020-03
+  say so. Two details matter: the band's edges land **on** the 2020-03
   and 2021-06 samples rather than bracketing them — every month is plotted at its first day, so
   a band stopping at 2021-05-31 visibly falls short of the month it names — and it is clamped
   to the chart's own window and **dropped entirely** when the two are disjoint, so a chart
@@ -424,17 +422,16 @@ mark, not only lines.
   Y" drawn from two zeroes is a claim about nothing); and **a year with no leader is skipped,
   not treated as a wall** — A, then a tied year, then B is a genuine crossover, it is what one
   looks like mid-transition, and it is reported against the later year. Full derivation:
-  [`../architecture/pipeline.md` § M4c](../architecture/pipeline.md).
+  [`../architecture/pipeline.md`](../architecture/pipeline.md).
 - **Gaps are gaps.** A subject that stops filing **breaks** the mark rather than interpolating
   across the absence — and **zero-filling is not the alternative**: a month with no filing is
   *unknown*, not zero. T-100 is a filing, so "no row" means "nobody filed", which is neither
   "nobody flew" nor "0 seats flew". Drawing either invents data, and the two inventions are
   equally confident-looking under a `DATA AS OF` badge.
 
-  This was written for multi-series lines and M4c shipped violating it on a stacked area,
-  which is why it is now stated here. The shipped chart built its x domain from the months
-  **present in the query result**, so a month the subject never filed was not on the axis at
-  all and Plot joined the two surrounding samples with a straight edge. `HNL–LAS` (7.07 M
+  It binds stacked areas as hard as lines, and the way to violate it is subtle: building the
+  x domain from the months **present in the query result** leaves a month the subject never
+  filed off the axis entirely, and Plot joins the two surrounding samples with a straight edge. `HNL–LAS` (7.07 M
   seats) filed nothing for **2020-04 … 2020-09** and the chart drew one edge from 37,441 seats
   down to 6,804 across all six — inside the `--panel-2` band the same chart labels *"COVID —
   in window on purpose."* The one feature whose stated purpose is refusing to smooth COVID
@@ -476,12 +473,11 @@ mark, not only lines.
 
 ## The map
 
-**Not deck.gl, not MapLibre.** This section's own spec (and, through M7's first cut, this
-line) called for deck.gl's `GreatCircleLayer` over a MapLibre basemap. What shipped (M7 Tasks
-4-8) is a from-scratch, dependency-free, server-rendered SVG engine (`app/src/lib/map/
-{albers,greatCircle,arcs,networkMap,basemap}.ts`, composed by `app/src/components/
-NetworkMap.tsx`) — the same "in the served HTML, visible with JS off" property `Aircraft
-MixChart.tsx` established for M4c's chart, extended to a map: no client charting/mapping
+**Not deck.gl, not MapLibre**, though a `GreatCircleLayer` over a MapLibre basemap is the
+obvious reach. The map is a from-scratch, dependency-free, server-rendered SVG engine
+(`app/src/lib/map/{albers,greatCircle,arcs,networkMap,basemap}.ts`, composed by
+`app/src/components/NetworkMap.tsx`) — the same "in the served HTML, visible with JS off"
+property `AircraftMixChart.tsx` has, extended to a map: no client charting/mapping
 library ever touches the render path, so the map works with JavaScript off and needs no tile
 budget at all, not merely an untiled one. A great-circle arc over a projected coastline —
 **Natural Earth GeoJSON**, still true — no tiled basemap, ever. (The committed mockup
@@ -524,9 +520,7 @@ merely *present* does not catch this; only their relative screen order does.
 
 **An arc crossing a panel boundary cannot be a great circle**, so `PDX–ANC` and `PDX–HNL` are
 drawn as straight lines into their inset, and the page says so — in the legend rail's
-"Arc rendering" group (`LegendRail`'s `map` prop, final whole-branch review: this group did not
-exist through M7 Task 8, so this sentence was aspirational rather than true for one review
-cycle) and in the map's own `aria-label`, which names the exact count of straight-line
+"Arc rendering" group (`LegendRail`'s `map` prop) and in the map's own `aria-label`, which names the exact count of straight-line
 destinations rather than calling every one a great-circle arc (`networkMap.ts`'s
 `describeMap`). Every US map makes this compromise; this one admits it, twice over — once for
 a sighted reader, once for a screen reader.
@@ -535,13 +529,13 @@ a sighted reader, once for a screen reader.
 
 The committed basemap (`app/geo/ne_110m_us.json` → `app/scripts/build-basemap.mjs` → `app/
 src/lib/map/basemapPaths.generated.ts`) is Natural Earth **1:110m**, which has no polygon at
-all for Guam/CNMI/American Samoa/Midway (`pac`) or Puerto Rico/the USVI (`car`) — both insets
-shipped empty through M7 Task 8. Measured against the real warehouse (trailing 12 months): 74
+all for Guam/CNMI/American Samoa/Midway (`pac`) or Puerto Rico/the USVI (`car`), which on its
+own leaves both insets empty. Measured against the real warehouse (trailing 12 months): 74
 of 1,045 fact-present airports reach `car`, 6 reach `pac` — `/airport/SJU` alone drew 65 arcs
 inside a labelled Caribbean frame with no landmass under it, and San Juan is a major airport,
 not an edge case.
 
-**M7 Task 7b fetched a second, finer input for `car` only** (`app/geo/ne_50m_car.json`,
+**A second, finer input is fetched for `car` only** (`app/geo/ne_50m_car.json`,
 Natural Earth 1:50m Admin-0 Countries, `SOVEREIGNT == 'United States of America'` AND `NAME
 in ('Puerto Rico', 'U.S. Virgin Is.')` — 2 features). 1:110m's own Admin-0-countries file
 does carry a lone 9-point "Puerto Rico" polygon, but no separate USVI feature at any
@@ -619,7 +613,7 @@ server-rendered SVG,
 composed the same way the aircraft-mix chart is (`app/src/components/NetworkMap.tsx`,
 `app/src/lib/map/`) — no client charting or mapping library in the render path — so animating
 between years means shipping every year's geometry in one response rather than one page's
-worth. Measured: ORD's arcs alone are ~64,287 bytes of polyline for **one** year (M7 Task 8);
+worth. Measured: ORD's arcs alone are ~64,287 bytes of polyline for **one** year;
 twelve years would be roughly a megabyte, doubled again because this project's charts ship
 twice per response — body **and** RSC payload (`docs/architecture/hosting.md` § "The SVG is
 emitted twice per response").
@@ -637,8 +631,8 @@ off, like every other view in this app.
 blanket `no-store` — full reasoning in `docs/architecture/hosting.md` § "`y` on `/airport/:code`
 — a closed set, so validate it rather than blanket `no-store`". The current year's tick is
 marked partial when `dataAsOf()` falls short of December — presenting a four-month year
-identically to a twelve-month one is the same class of false claim as M6's "First appearance
-since 2015" (CLAUDE.md); the track states which months the partial year actually covers rather
+identically to a twelve-month one is the same class of false claim as a "first appearance
+since 2015" that is nothing of the kind (CLAUDE.md); the track states which months the partial year actually covers rather
 than leaving the asterisk to speak for itself.
 
 ---
@@ -664,11 +658,11 @@ catalog appears without a front-end change.
 > **Open, deliberately.** Under `grouping="mainline"` a carrier filter still targets the raw
 > `op_airline_id`, so a rolled-up row can show more seats than the filter returns. The
 > mockup shows **Operating** and takes no position. Current behaviour is pinned by the
-> `mainline_grouped_with_carrier_filter` golden; M3b must decide it rather than inherit it.
+> `mainline_grouped_with_carrier_filter` golden; it is a decision to make, not one to inherit.
 
 ---
 
-## Entity pages — all four shipped: `/route` (M4b + M4c), `/airport` · `/carrier` · `/aircraft` (M4d)
+## Entity pages
 
 The first entity page, and the shape the other three follow — the differences are tabulated at
 the end of this section.
@@ -701,7 +695,7 @@ JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
   the same rule the data table itself follows, applied to a page total. If the carrier count
   ever reaches the page's limit, a disclosure line states the totals cover the listed
   carriers only, rather than silently under-reporting.
-- **Chart** (M4c). The aircraft-type mix, above the table, over the **full** window — not the
+- **Chart.** The aircraft-type mix, above the table, over the **full** window — not the
   table's trailing 12. The two windows differ because a twelve-point fleet-mix stack shows
   nothing, and **the page states both**: a decade drawn under a line reading "Trailing 12
   months" claims a window it is not showing. It is drawn whenever the *full* window has
@@ -720,12 +714,12 @@ JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
 
 Canonical-URL handling (redirect, 404, en-dash rendering) is a routing concern, not a design
 one — full contract in
-[`../architecture/pipeline.md` § M4b](../architecture/pipeline.md#m4b--the-route-page). As of
-M5, all four entity pages export a `<link rel="canonical">` at that same resolved value — never
+[`../architecture/pipeline.md` § Route slugs](../architecture/pipeline.md#route-slugs-two-orderings-that-are-not-the-same-thing).
+All four entity pages export a `<link rel="canonical">` at that same resolved value — never
 the requested spelling, so `/airport/sea` declares `/airport/SEA` rather than itself, exactly
 the same resolver call the redirect above already makes.
 
-### The other three, shipped M4d — what each one changes and what it must not
+### The other three — what each one changes and what it must not
 
 `/airport/<code>`, `/carrier/<code>` and `/aircraft/<slug>` are the layout above with the
 subject swapped, deliberately: four entity pages that read as one system is worth more than four
@@ -742,14 +736,12 @@ lines, same empty state, same rail. What differs is only what the subject forces
 Three design consequences worth pinning, because each is somewhere a page could quietly stop
 being honest:
 
-- **`/airport`'s Explorer link is ONE link, as of M7 Task 3.** Through M6 the pivot could not
-  express `origin OR dest` and the page offered `departures from SEA` and `arrivals into SEA`
-  as halves, saying so. `endpoint_airport_id` (filter-only, `filter_mode='either'`) now
-  compiles that OR directly, so the page filters on it and links to the identical query — that
-  link reproduces the page's own 53,373,806-seat SEA figure, not a half of it. A prior revision
-  of this bullet described the two-half shape as current after M7 shipped; it wasn't — the
-  reason to note it here is that "every insight row is one click from the raw rows" now holds
-  without qualification on this page, which it did not through M6.
+- **`/airport`'s Explorer link is ONE link.** `endpoint_airport_id` (filter-only,
+  `filter_mode='either'`) compiles `origin OR dest` directly, so the page filters on it and
+  links to the identical query — that link reproduces the page's own 53,373,806-seat SEA
+  figure, not a half of it. Without that dimension the page can only offer `departures from
+  SEA` and `arrivals into SEA` as two halves, and "every insight row is one click from the raw
+  rows" holds only with a qualification.
 - **`/carrier`'s two caveats render whether or not there is a table.** They qualify the
   *subject*, not the rows, and 39% of carriers have no rows in the trailing 12. They also sit in
   the content column, not the rail: the rail already carries a generic version on every data
@@ -831,8 +823,7 @@ rule and the rest of the evidence.
 
 **Every filter a preset applies is stated on the preset's own page**, in a `.foot` note, or the
 page cannot be reproduced from what it says. Empty Planes has two (`gauge_t12 >= 50` and
-`t12_departures_performed >= 360`, the latter the more restrictive) and disclosed only the
-first through M6.
+`t12_departures_performed >= 360`, the latter the more restrictive) and both are stated.
 
 **`health_score` renders in a left-aligned `td.id`, not a `.num` cell** — a deliberate,
 declared exception to "all numerics right-aligned, tabular-figure". The cell's value is
@@ -843,9 +834,8 @@ column, not per cell. It keeps its monospace; it gives up the right edge. See th
 
 The editorial frame is `.frame`: a left hairline in `--signal`, `--ink` text at 14px, no box.
 The preset index is `.watch-list`: hairline-separated rows, no bullets, the linked title
-carrying the weight and its frame muted to `--ink-2`. Both shipped in M6 with **no CSS rule at
-all**, which left the one voiced line on the site rendering as plain body text beneath its own
-disclosures.
+carrying the weight and its frame muted to `--ink-2`. Both need a real CSS rule: without one
+the site's only voiced line renders as plain body text beneath its own disclosures.
 
 ### OG / social card
 
@@ -868,9 +858,8 @@ Unannounced, non-negotiable.
 
 - **Focus** is a 2px `--signal` outline at 1px offset, on every interactive element. Never
   removed.
-- **Reduced motion**: N/A for the year track as shipped — M7 Task 9 superseded the animated
-  slider the mockup shows with plain, cacheable `?y=<year>` links (see § The map), which carry
-  no motion to begin with, reduced or otherwise. Nothing on the site currently animates.
+- **Reduced motion**: N/A for the year track — plain, cacheable `?y=<year>` links (see § The
+  map) rather than the animated slider the mockup shows, so there is no motion to reduce. Nothing on the site currently animates.
 - **Responsive**: the legend rail collapses below 920px and moves beneath the content.
   Tables scroll horizontally within their own container — the page body never does.
 - **Contrast**: every text token measured above. Non-text UI boundaries ≥ 3:1.

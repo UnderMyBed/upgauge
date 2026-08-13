@@ -10,8 +10,8 @@ upgauge/
 │   ├── btscodec.py             the two TranStats ROT13 variants (data/sources.md)
 │   ├── fetch.py                DL_SelectFields POST loop + cache → data/raw/
 │   ├── normalize.py            raw → data/parquet/t100_segment/year=YYYY/
-│   ├── build.py                facts + dims from data/raw/ (M1); also `make verify`
-│   ├── marts.py                runs sql/02_marts/ in order → upgauge.duckdb (M2)
+│   ├── build.py                facts + dims from data/raw/; also `make verify`
+│   ├── marts.py                runs sql/02_marts/ in order → upgauge.duckdb
 │   └── tests/                  the data invariants. These gate the pipeline.
 ├── sql/
 │   ├── 01_staging/             shared by pipeline AND server. Never inline SQL.
@@ -26,60 +26,27 @@ upgauge/
 ```
 
 **Charts:** Observable Plot (better than Recharts for dense multi-series time series).
-**Maps:** **not** deck.gl/MapLibre (the original spec) — a from-scratch, dependency-free,
-server-rendered SVG engine (`app/src/lib/map/`, M7 Tasks 4-8), fed by committed, pre-projected
-Natural Earth GeoJSON. Superseded on measurement: the map needed the same "in the served HTML,
-visible with JS off" property the charts already had, which a client-side library cannot give
-for free.
+**Maps:** **not** deck.gl/MapLibre — a from-scratch, dependency-free, server-rendered SVG
+engine (`app/src/lib/map/`), fed by committed, pre-projected Natural Earth GeoJSON. The map
+needs the same "in the served HTML, visible with JS off" property the charts have, which a
+client-side library cannot give for free.
 
 ---
 
-## Milestones
+## What this file owns
 
-**This file owns the ingest and query layers, not the product surfaces.** Pages, charts and
-maps are owned by [`../product/features.md`](../product/features.md) and
+**The ingest and query layers, not the product surfaces.** Pages, charts and maps are owned by
+[`../product/features.md`](../product/features.md) and
 [`../design/system.md`](../design/system.md); routing and caching by [`hosting.md`](hosting.md);
 data rules by [`../data/invariants.md`](../data/invariants.md) and
 [`../data/model.md`](../data/model.md).
 
-**Per-task narrative does not belong here.** Git history and commit messages are the home for
-"what happened on this branch." Milestone sections below record what a milestone WAS and point
-at the doc that owns each rule.
+Outstanding work lives in [GitHub Issues](https://github.com/UnderMyBed/upguage/issues), not
+here.
 
-**What was planned, and what actually shipped.** The plan drifted by roughly two milestones and
-the terminal one was lost; both columns are kept because the drift is the lesson.
+## Ingest
 
-| | planned | actually shipped |
-|---|---|---|
-| **M1** | Ingest: `DL_SelectFields` POST loop → raw → Parquet, 2015→present, invariant tests passing | ✅ as planned |
-| **M2** | Marts built by SQL, reproducible from scratch via `make` | ✅ as planned — [§ M2](#m2--the-marts-layer) |
-| **M3** | Explorer: pivot query + URL state + table | ✅ as planned, split M3a/M3b — [§ M3](#m3--the-explorer-split-into-m3a-and-m3b) |
-| **M4** | Entity pages, charts, design system applied | ✅ as planned, split M4a–M4d |
-| **M5** | Maps (airport + carrier + aircraft), then `/watch` presets | ❌ **neither.** Shipped the link graph: cell links, `/search`, `/sitemap.xml` — [§ M5](#m5--connecting-the-graph) |
-| **M6** | **Deploy + Cloudflare cache + edge rate limit + monthly cron + freshness alert** | ❌ **none of it** — every item moved to **M8**, the row below. Shipped `/watch` and the health score — [§ M6](#m6--gauge-watch-and-the-top-n-builder) |
-| **M7** | *(unplanned)* | The airport network map + the either-endpoint filter — M5's map item, two milestones late — [§ M7](#m7--maps-and-the-either-endpoint-filter-they-need-first) |
-| **M8** | — | **Deploy** — M6's original content, rescheduled here. Shipped so far: the container, `/api/health`, and the portability test M2 specified and nothing could run until the container existed ([hosting.md § Portability test](hosting.md#portability-test)); then cache correctness — `/` in the matcher at last, one canonical key set per cacheable URL, and leaderboard precompute retired against measurement rather than deferred again ([hosting.md § One canonical key set per cacheable URL](hosting.md#one-canonical-key-set-per-cacheable-url--m8-epic-3)). Not yet: a public host, the CDN, the edge rate limit, the monthly cron, the freshness alert. |
-
-**Seven milestones of building, none of releasing.** Nothing was dropped deliberately — M5's
-maps slid to M7, M6's deploy simply fell off the end, and no one noticed because this table was
-never updated. **When a milestone is repurposed, say where its original content went.**
-
-Outstanding work now lives in
-[GitHub Issues](https://github.com/UnderMyBed/upguage/issues), not in this table.
-
-### M1 — ingest
-
-Endpoint spike, scaffold, `fetch.py`, invariant tests, `normalize.py`, the five dims, and the
-reproducibility gate. Two sequencing rules came out of it and still bind:
-
-- **Prove the acquisition path before building on it.** The spike ran first because the
-  endpoint was the one part of the spec that turned out *not* to be as documented — see
-  [../data/sources.md](../data/sources.md).
-- **Resolve invariants against a real extract before writing them as tests.** Tests landed
-  after the fetcher and before normalize for exactly that reason: writing an invariant from
-  assumption is how you get a green suite that is confidently wrong.
-
-### Fetcher design notes
+### The fetcher
 
 - **Cache key is `(table, year)`**, never the served filename — BTS regenerates that per
   request, so using it would re-download every year forever.
@@ -94,10 +61,14 @@ reproducibility gate. Two sequencing rules came out of it and still bind:
 - `--start` below 2015 is rejected: widening the window is a product decision, not a flag.
 
 **Verified live 2026-07-29** against the real endpoint — 11,730,135 bytes / 367,360 rows /
-45 columns for 2015, byte-identical to the phase-0 manual download, and a cached re-run
-completing in 0.01 s with no network.
+45 columns for 2015, byte-identical to a manual download, and a cached re-run completing in
+0.01 s with no network.
 
-### Normalize design notes
+**Prove the acquisition path before building on it.** The endpoint spike ran before anything
+else because the endpoint was the one part of the spec that turned out *not* to be as
+documented — see [../data/sources.md](../data/sources.md).
+
+### Normalize
 
 - **The transform is SQL, in `sql/01_staging/normalize_t100_segment.sql`**, with bound
   parameters rather than interpolation. That is what lets the server reuse the definition.
@@ -117,24 +88,13 @@ completing in 0.01 s with no network.
 12 months, only `CLASS='F'` and configs 1/3/4, **16 quarantined (0.006%)**, zero route-key
 ordering violations, 8.6 MB Parquet from a 101,182,581-byte CSV.
 
-### Reproducibility
+**Resolve invariants against a real extract before writing them as tests.** Writing an
+invariant from assumption is how you get a green suite that is confidently wrong.
 
-`make verify` is the M1 exit criterion: `build_all` twice from identical raw inputs, sha256
-every artifact, report any that differ by name. It reports rather than raises, so a drifting
-build names the offending file.
-
-Two things make it hold:
-
-- **`data/raw/` is append-only.** Filenames carry the download date, so a re-fetch adds a
-  file instead of overwriting the one that produced published numbers. `latest_raw` feeds the
-  build; superseded downloads are audit-only and never read.
-- **Parquet writes are pinned to `threads = 1`.** DuckDB's parallel writer is not byte-stable
-  (see [../data/invariants.md](../data/invariants.md)). ~8 s cost across the window.
-
-## M2 — the marts layer
+## The warehouse catalog
 
 `upgauge.duckdb` is a **hybrid**: facts and dims are views over the Parquet tree, and
-`mart_route_health` is the only materialized table. Views keep M1's byte-identical Parquet gate
+`mart_route_health` is the only materialized table. Views keep the byte-identical Parquet gate
 covering everything derived-free, and the mart materializes because trailing-12 windowing over
 the full window is the one genuinely expensive thing in the layer.
 
@@ -144,28 +104,11 @@ leaderboards mart**, and nothing should reintroduce one: `/watch`'s four presets
 — no pivot measure expresses a delta between two windows — and share nothing across them
 except `DataTable`'s rank column.
 
-### The runner
+### The views
 
-✅ **Built.** `pipeline/marts.py` executes `sql/02_marts/*.sql` in filename order — `make
-build` un-stubbed, 21 tests in `pipeline/tests/test_marts.py`. Each file declares its own
-materialization in a header directive, so the runner needs no separate manifest to drift:
-
-```sql
--- upgauge: view          (or: table)
--- object: fct_route_month
-SELECT ...
-```
-
-The runner wraps the body in `CREATE OR REPLACE VIEW <object> AS <body>` or
-`CREATE TABLE <object> AS <body>`. That DDL wrapper is the only SQL in Python, and it is the
-same shape as `normalize.py`'s already-accepted `COPY (<sql file>) TO ...` — the hard rule is
-about *query logic*, which stays in `.sql`.
-
-### The catalog views
-
-✅ **Built.** `sql/02_marts/010_fct_segment_month.sql` and the five
-`02x_dim_*.sql` / `024_map_mainline_group.sql` files turn the Parquet tree into `make build`'s
-six database objects — `fct_segment_month`, `dim_airport`, `dim_city_market`, `dim_carrier`,
+`sql/02_marts/010_fct_segment_month.sql` and the five `02x_dim_*.sql` /
+`024_map_mainline_group.sql` files turn the Parquet tree into `make build`'s six database
+objects — `fct_segment_month`, `dim_airport`, `dim_city_market`, `dim_carrier`,
 `dim_aircraft_type`, `map_mainline_group`. All six are plain `SELECT * FROM read_parquet(...)`
 views, nothing materialized: the fact view adds `hive_partitioning = true`, and every dim view
 is a single-file read. No derived measure column
@@ -185,10 +128,27 @@ partition dirs whose content `year` column deliberately disagreed with the direc
 showed DuckDB does not error or duplicate the column when the two conflict: there is still
 exactly one `year` column, and the partition-derived value silently wins over the file's own
 content value. Real builds never hit this — the partition directory name and the content
-column are written from the same `year` argument in `normalize_year` — but it is a real,
-previously-undocumented property of this view.
+column are written from the same `year` argument in `normalize_year` — but it is a real
+property of this view.
 
-### Views cannot take bound parameters — so CWD is load-bearing
+### The mart runner
+
+`pipeline/marts.py` executes `sql/02_marts/*.sql` in filename order — 21 tests in
+`pipeline/tests/test_marts.py`. Each file declares its own materialization in a header
+directive, so the runner needs no separate manifest to drift:
+
+```sql
+-- upgauge: view          (or: table)
+-- object: fct_route_month
+SELECT ...
+```
+
+The runner wraps the body in `CREATE OR REPLACE VIEW <object> AS <body>` or
+`CREATE TABLE <object> AS <body>`. That DDL wrapper is the only SQL in Python, and it is the
+same shape as `normalize.py`'s already-accepted `COPY (<sql file>) TO ...` — the hard rule is
+about *query logic*, which stays in `.sql`.
+
+## Views cannot take bound parameters — so CWD is load-bearing
 
 `CREATE VIEW` captures literal SQL text, so the Parquet root cannot be a `$param` the way every
 other path in the pipeline is; it is interpolated at build time. DuckDB resolves relative paths
@@ -220,12 +180,12 @@ deploy.
 > and it never emits the pattern error at all. The read failure needs the *opposite* pairing: a
 > **correct** cwd with the Parquet tree absent. Both are measured against the real container as
 > `make portability`'s negatives 3 and 1 respectively
-> ([hosting.md § The test itself](hosting.md#the-test-itself--run-2026-08-09-m8-task-6)). A
+> ([hosting.md § The portability test itself](hosting.md#the-portability-test-itself)). A
 > healthcheck planned around the read path alone would miss the `WORKDIR` break entirely.
 
-### The M2 gate
+## Reproducibility
 
-✅ **Built.** `make verify` runs three checks in sequence and fails if any fails:
+`make verify` runs three checks in sequence and fails if any fails:
 
 1. **Parquet reproducibility:** `build_all` twice into throwaway temp
    dirs from identical raw inputs, sha256 every artifact. **17 artifacts on the full
@@ -254,7 +214,7 @@ deploy.
 Both counts are measured, not asserted from the file layout — **the counts `make verify`
 prints are what to trust over this paragraph.**
 
-**The `.duckdb` file itself is never hashed.** Measured before this gate was written (see
+**The `.duckdb` file itself is never hashed.** Measured (see
 [../data/invariants.md](../data/invariants.md)): three identical builds of the same content
 produced three different `.duckdb` digests, reproducibly. So `verify_database` compares
 *exported content*, the same way the Parquet gate compares row content rather than raw
@@ -266,6 +226,14 @@ sanctioned exception to "all Parquet writes go through `_writer_connection()`", 
 that `SET` is ever dropped the gate starts reporting false failures rather than silently
 passing.
 
+Two things make the guarantee hold at all:
+
+- **`data/raw/` is append-only.** Filenames carry the download date, so a re-fetch adds a
+  file instead of overwriting the one that produced published numbers. `latest_raw` feeds the
+  build; superseded downloads are audit-only and never read.
+- **Parquet writes are pinned to `threads = 1`.** DuckDB's parallel writer is not byte-stable
+  (see [../data/invariants.md](../data/invariants.md)). ~8 s cost across the window.
+
 Real run, full 2015–2026 warehouse:
 
 ```
@@ -276,96 +244,55 @@ parquet: data/parquet matches a fresh build from data/raw (17 artifacts)
 database: 10 objects identical across two builds
 ```
 
-**M2 complete.** `make build` produces `upgauge.duckdb` from `sql/02_marts/`, and
-`make verify` proves both the Parquet artifacts and every database object byte-identical
-across two from-scratch builds.
+## The pivot contract
 
-## M3 — the Explorer, split into M3a and M3b
+`/explore`'s query layer is a **contract plus golden fixtures**, not a shared implementation,
+and the reason is that `pipeline/` never runs in prod. The Explorer's validator runs **per
+request, in the server** — TypeScript. So the validator cannot live in Python, or there would
+be two of them, drifting, one of them security-relevant.
 
-M3 split into three parts with different blockers: **M3a**, the pivot query contract (templates,
-the allowlist, the URL codec, golden fixtures); the **design session**
-([../design/brief.md](../design/brief.md), answered by
-[../design/system.md](../design/system.md) with mockups in
-[../design/mockups/](../design/mockups/)); and **M3b**, the Next.js app.
-
-**Why the design session sits in the middle.** The data table is the product
-([../design/brief.md](../design/brief.md)), so building it means deciding the visual system
-whether or not that is planned for. Building against invented styling and retrofitting real
-tokens later is the expensive kind of rework, and the brief's constraints — mono tabular
-numerals, density over whitespace, the `DATA AS OF` badge — are structural, not cosmetic.
-
-### `pipeline/` is CI-only, which dictates M3a's shape
-
-The Explorer's validator runs **per request, in the server** — TypeScript. `pipeline/` never
-runs in prod. So M3a must not write the validator in Python: M3b would reimplement a
-security-relevant validator in TS and we would have two, drifting.
-
-M3a therefore ships a **contract plus golden fixtures**, not a query layer:
-
-| Artifact | Purpose | |
-|---|---|---|
-| `sql/03_queries/pivot_segment.sql`, `pivot_route.sql` | The templates. `{{TOKENS}}` for identifiers, `$params` for values. | ✅ Task 3 |
-| `sql/02_marts/300_meta_pivot_dimensions.sql`, `301_meta_pivot_measures.sql` | The allowlist, **as catalog objects** — the server already opens the database, so there is no extra artifact to ship and `make build` regenerates it. | ✅ Task 2 |
-| `sql/03_queries/catalog_dimensions.sql`, `catalog_measures.sql`, `data_as_of.sql` | The reads of those catalog objects (and the freshness stamp), **as `.sql` files** rather than string literals in `load_allowlist` — `pipeline/pivot.py:132,140` inlined `SELECT * FROM meta_pivot_…` until M3b prep Task 1 extracted them, so the server's TypeScript can read the identical files instead of copying the inline violation into a second language. `data_as_of.sql` has no Python caller yet; it exists so M3b has no excuse to inline one either. | ✅ M3b prep Task 1 |
-| `sql/03_queries/goldens/pivot.json` | Golden fixtures: query state → expected SQL/params. M3b's TypeScript must reproduce them byte-for-byte. One validator semantics, two runtimes, proven to agree. | ✅ Task 7 |
-| `sql/03_queries/goldens/urlstate.json` | Golden fixtures: URL round-trips. The permalink contract, settled before any component reads state. Task 1 of M3b prep added an eighth case, `filter_value_encodeuricomponent_divergence`, pinning that Python's `quote(v, safe="")` percent-encodes `! * ' ( )` while JS's `encodeURIComponent` does not — a naive TS port using the JS default would have passed all seven prior goldens and still diverged (119 `unique_carrier_code` values carry BTS's `(1)` suffix; 163 airport names carry an apostrophe). | ✅ Task 7, extended M3b prep Task 1 |
-| Python reference implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`) | Legitimately in `pipeline/`: it *generates and verifies* the goldens in CI and never serves a request. | ✅ Tasks 3, 6 |
+| Artifact | Purpose |
+|---|---|
+| `sql/03_queries/pivot_segment.sql`, `pivot_route.sql` | The templates. `{{TOKENS}}` for identifiers, `$params` for values. |
+| `sql/02_marts/300_meta_pivot_dimensions.sql`, `301_meta_pivot_measures.sql` | The allowlist, **as catalog objects** — the server already opens the database, so there is no extra artifact to ship and `make build` regenerates it. |
+| `sql/03_queries/catalog_dimensions.sql`, `catalog_measures.sql`, `data_as_of.sql` | The reads of those catalog objects (and the freshness stamp), **as `.sql` files** rather than string literals, so the server's TypeScript reads the identical files. |
+| `sql/03_queries/goldens/pivot.json` | Golden fixtures: query state → expected SQL/params. The TypeScript renderer must reproduce them byte-for-byte. One validator semantics, two runtimes, proven to agree. |
+| `sql/03_queries/goldens/urlstate.json` | Golden fixtures: URL round-trips — the permalink contract. Includes `filter_value_encodeuricomponent_divergence`, pinning that Python's `quote(v, safe="")` percent-encodes `! * ' ( )` while JS's `encodeURIComponent` does not: a naive TS port using the JS default passes every other golden and still diverges (119 `unique_carrier_code` values carry BTS's `(1)` suffix; 163 airport names carry an apostrophe). |
+| Python reference implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`) | Legitimately in `pipeline/`: it *generates and verifies* the goldens in CI and never serves a request. |
 
 The allowlist is **curated, not introspected** — which dimensions we offer is a product
 decision, not a schema fact. A test cross-checks it against `duckdb_columns()` so a renamed
 column fails loudly instead of silently dropping a dimension.
 
-Consequence to accept knowingly: `make verify` now covers a product decision (the Explorer's
+Consequence to accept knowingly: `make verify` covers a product decision (the Explorer's
 vocabulary), not only data. That is the price of the allowlist being un-driftable.
 
 ### Only identifiers are substituted, and only after allowlist validation
 
 Values are always bound `$params`. Identifiers — the dimension list, the `GROUP BY`, the sort
 column — are substituted, and only ever from the validated allowlist, never from request input.
-Same shape as M2's `{{PARQUET_ROOT}}`.
+Same shape as the catalog views' `{{PARQUET_ROOT}}`.
 
 The alternative considered and rejected was a fully static template with no substitution at
 all, `CASE WHEN $by_carrier THEN op_airline_id END` per dimension. It makes injection
 structurally impossible and needs no allowlist, which is philosophically closer to "can't
-average what doesn't exist" — but it defeats the partition pruning M2 fought to restore, and
-dynamic sort and Top-N each need their own contortion. Rejected on those grounds, not on
-readability.
+average what doesn't exist" — but it defeats the partition pruning the catalog layer fought to
+restore, and dynamic sort and Top-N each need their own contortion. Rejected on those grounds,
+not on readability.
 
-### Every guard gets its breaking change observed
+## Entity resolution
 
-**The single most common review finding in this project is a test that passed for a reason
-other than the one it named.** Six real instances, all from the marts layer:
-
-- `test_distance_is_not_summed` stayed green when `max(distance)` was swapped to `sum(distance)`
-  — no fixture route-month had two aircraft types.
-- The partition test stayed green with `hive_partitioning` disabled — `year` was already a
-  Parquet content column, so the flag was never what exposed it.
-- A tiebreak test was guarded by `if row is not None` against a fixture missing that row.
-- A guard-rail assertion was unreachable: `parse_mart_file` raised before the assert ran.
-- The `make verify` mismatch test used a global counter, so both builds drifted identically and
-  the drift it existed to detect was masked.
-- All 12 real-data invariant tests had never executed since M1 — the module looked for an
-  undated filename the append-only scheme makes impossible.
-
-Every one was found by mutating production code and watching what stayed green. **None was
-visible from reading the diff.** So this is a required step, not an aspiration: for each guard,
-make the change it exists to catch, observe the failure, revert, and record the output. A guard
-never observed failing is not a guard.
-
-## M4a — entity resolution
-
-`/explore` rendered raw catalog ids (`19790`, `14747`, `612`) through all of M3b — a
-documented, known gap (see the M3b entry above). M4a closes it: `DL`, `SEA`, `B737-7`.
+The pivot returns raw catalog ids (`19790`, `14747`, `612`). Resolution turns them into `DL`,
+`SEA`, `B737-7` at render time.
 
 ### Why resolution runs after the pivot, not inside the templates
 
-`meta_pivot_dimensions`' `join_dim`/`join_key` columns existed since M3a for exactly this
-join, and joining `dim_carrier`/`dim_airport` straight into `pivot_segment.sql` /
-`pivot_route.sql` was the design that was rejected. Doing so would change what the pivot
-templates emit, which reopens the M3a contract: all 17 goldens regenerate, and
-`pipeline/pivot.py` and the TypeScript renderer have to change in lockstep or silently
-drift — two milestones were spent making that contract verifiable in two languages, and
-resolution is a display concern, not a reason to reopen it.
+`meta_pivot_dimensions`' `join_dim`/`join_key` columns exist for exactly this join, and joining
+`dim_carrier`/`dim_airport` straight into `pivot_segment.sql` / `pivot_route.sql` is the design
+that was rejected. Doing so would change what the pivot templates emit, which reopens the
+contract above: all 17 goldens regenerate, and `pipeline/pivot.py` and the TypeScript renderer
+have to change in lockstep or silently drift. Resolution is a display concern, not a reason to
+reopen a contract that is verifiable in two languages.
 
 Instead, resolution is a separate query stage that runs **after** `runPivot()` returns, keyed
 on the ids actually present in the returned page (at most `n` rows). `app/src/lib/resolve.ts`
@@ -373,9 +300,10 @@ collects the distinct ids per resolvable column (`collectIds`), issues one bound
 dimension **present in the result** — not one per dimension in the catalog — and returns a
 `Map<resolutionKey, {code, name}>` that the page merges in at render time. The pivot SQL, the
 codec, and every golden are untouched; the id stays on the row for sorting, filtering and the
-permalink exactly as before. Cost: one extra small indexed lookup per dimension present,
-against an in-process DuckDB with no network hop — accepted for keeping the M3a contract
-frozen.
+permalink. Cost: one extra small indexed lookup per dimension present, against an in-process
+DuckDB with no network hop — accepted for keeping the contract frozen.
+
+`make goldens` reproduces all 17 goldens byte-identical, and that is the proof that matters.
 
 ### Four resolver files, one per dimension shape
 
@@ -396,8 +324,8 @@ Per CLAUDE.md's "all query logic lives in `.sql`" rule, each resolver is its own
 - `resolve_aircraft_type.sql` — `aircraft_type` → `dim_aircraft_type.short_name` + `name`.
   This one inverts the usual direction: the fact table already stores the join key (a
   zero-padded string code like `'612'`), and what's missing is a human-readable value.
-  Returning `dim_aircraft_type.code` would just re-render `'612'` — the exact thing this
-  milestone removes — so `code` in the resolver's output is actually `short_name`
+  Returning `dim_aircraft_type.code` would just re-render `'612'` — the exact thing resolution
+  exists to remove — so `code` in the resolver's output is actually `short_name`
   (`B737-7`), not the BTS code, playing the role `carrier_code` plays for carriers. `id`
   stays `VARCHAR`: CLAUDE.md's zero-padded-code rule applies to the join key here too.
 
@@ -405,10 +333,9 @@ Per CLAUDE.md's "all query logic lives in `.sql`" rule, each resolver is its own
 name, and it is keyed on the catalog's own `join_dim` string (`dim_carrier`, `dim_airport`,
 …) — never on a dimension's name (`op_airline_id` vs `origin_airport_id` vs
 `route_key_low`/`high` all resolve through the same `dim_airport` entry without a
-name-based branch anywhere in `collectIds` or `resolveRows`). `route` itself had no
-`join_dim`/`join_key` in `meta_pivot_dimensions` before M4a — its `column_expr` names two
-airport-id columns but the catalog couldn't describe how to resolve them. The fix was to
-the metadata (both keys now name `dim_airport`), not a special case in the resolver.
+name-based branch anywhere in `collectIds` or `resolveRows`). `route` carries `dim_airport`
+in **both** its `join_dim`/`join_key` slots: its `column_expr` names two airport-id columns,
+and describing how to resolve them is the metadata's job, not a special case in the resolver.
 `RESOLVER_FILE` is exported and `resolve.test.ts` asserts it has an entry for every distinct
 non-null `join_dim` the live catalog carries — an unmapped `join_dim` would otherwise be a
 silent-degradation path: `collectIds` just `continue`s past it and the affected dimension
@@ -425,52 +352,46 @@ token appeared a second time anywhere in the file — including inside a comment
 `WHERE` clause would end up still holding the literal token, and DuckDB would reject it as a
 parse error at execution rather than failing at substitution time where the mistake is
 obvious. `substituteIds` throws loudly if the count isn't exactly 1, which is why every
-resolver file's header comment above describes the placeholder in prose instead of writing
-it out.
+resolver file's header comment describes the placeholder in prose instead of writing it out.
 
-Resolution shipped without moving the M3a contract: `make goldens` reproduces all 17 goldens
-byte-identical, which is the proof that matters here.
+## Composite and either-endpoint dimensions
 
-## M4b — the route page
+Two dimensions do not name a single column, and each needs its own compilation rule.
 
-`/route/<pair>` is the first entity page: `/route/JFK-LAX` is a saved pivot query (segment
-grain, grouped by operating carrier, filtered to one undirected route) composed on top of the
-same pivot layer M3/M4a already built, deliberately reusing `DataTable` / `LegendRail` and
-the resolution layer rather than writing bespoke SQL. That reuse is also what makes the
-Explorer link free: the page's query *is* a `PivotQuery`, so `encode()` yields the permalink
-directly. No chart in M4b and no new dependency — the aircraft-type-mix chart was mounted on
-this page in M4c (§ M4c, below), which is where the Plot dependency and the second, wider
-query arrived.
+### `route` — a pair, filtered as a pair
 
-### Composite-dimension filtering, added in lockstep
-
-The pivot had no way to filter on `route` — a dimension whose `column_expr` names two
-columns (`route_key_low`, `route_key_high`) rather than one. The obvious workaround —
-`origin_airport_id IN (a,b) AND dest_airport_id IN (a,b)` — is not equivalent to "the route
-between a and b": it also matches same-airport filings (`a→a`, `b→b`), which are not a
-curiosity — 12,738 of them exist across 530 airports (full window 2015-01 → 2026-04,
-quarantined rows included; `docs/data/invariants.md` § Route identity tabulates all four
-window × quarantine answers). On JFK–LAX that workaround inflates
-seats by 18,895 under a `DATA AS OF` badge. Full measurement:
+The obvious workaround for "filter to the route between a and b" —
+`origin_airport_id IN (a,b) AND dest_airport_id IN (a,b)` — is not equivalent: it also matches
+same-airport filings (`a→a`, `b→b`), which are not a curiosity. 12,738 of them exist across 530
+airports (full window 2015-01 → 2026-04, quarantined rows included;
+`docs/data/invariants.md` § Route identity tabulates all four window × quarantine answers). On
+JFK–LAX that workaround inflates seats by 18,895 under a `DATA AS OF` badge. Full measurement:
 [`docs/data/invariants.md` § Route identity](../data/invariants.md#route-identity).
 
-Real support was added instead, to `app/src/lib/pivot/render.ts` and `pipeline/pivot.py` **in
-the same commit** (`2c3939b`/`0e78317`/`08ee485`) — a change to one renderer without the
-other is exactly the drift the goldens exist to catch. One filter value encodes one whole
-route as `"<low-id>-<high-id>"` (`f=route:12478-12892`), and multiple values still OR
-together exactly like every other dimension's IN-list — a positional two-values-make-one-pair
-convention was rejected because it would make `f=route:a,b,c` ambiguous. The emitted SQL uses
-`least`/`greatest` on the pair, never trusting stored column order:
+Real support lives in `app/src/lib/pivot/render.ts` and `pipeline/pivot.py`, which must always
+change **in the same commit** — a change to one renderer without the other is exactly the drift
+the goldens exist to catch. One filter value encodes one whole route as `"<low-id>-<high-id>"`
+(`f=route:12478-12892`), and multiple values still OR together exactly like every other
+dimension's IN-list — a positional two-values-make-one-pair convention was rejected because it
+would make `f=route:a,b,c` ambiguous. The emitted SQL uses `least`/`greatest` on the pair, never
+trusting stored column order:
 
 ```sql
 (least(route_key_low, route_key_high) = $f0_0a AND greatest(route_key_low, route_key_high) = $f0_0b)
 ```
 
 Both operands are bound, never interpolated — same discipline as every other filter value.
-The existing 17 goldens stayed byte-identical; this only added cases (new golden entries
-pin the emitted SQL identical between the two languages).
 
-### URL resolution: two orderings that are not the same thing
+### `endpoint_airport_id` — filter-only, `filter_mode = 'either'`
+
+Compiles to an OR across both airport columns, which is what lets `/airport/<code>` run **one
+pivot per grain** instead of three pivots plus inclusion-exclusion arithmetic. It is
+`filter_only`: it can narrow a query to one fixed airport, but it is rejected as a grouping
+dimension, because grouping by it would double-count a row into both its origin's and its
+dest's group. The catalog row and its two columns are owned by
+[`../data/model.md`](../data/model.md).
+
+## Route slugs: two orderings that are not the same thing
 
 ```
 /route/JFK-LAX  ->  parse two codes  ->  reverse-lookup to ids  ->  order by id  ->  canonical check
@@ -506,40 +427,39 @@ reason server-side. The 200 and the 308 are long-cached, both 404s are `no-store
 rationale and the served-build measurements in
 [`hosting.md` § What `proxy.ts` owns](hosting.md#what-proxyts-owns).
 
-### The reverse lookup surfaced an `is_latest` gap M4a's own invariant didn't cover
+## Reverse lookups: slug to id
 
-`app/src/lib/resolve.ts`'s `lookupAirportsByCode` (code → `airport_id`, the direction M4a
-never needed) is served by `sql/03_queries/lookup_airport_by_code.sql`. `WHERE is_latest`
-alone is **not** sufficient to make a code unique: it is scoped per `airport_id`'s own seq
-chain, not per code, so two different `airport_id`s sharing a code can each carry their own
-`is_latest = TRUE` row. Measured: 36 codes do (`AUS` returns both the real
-Austin-Bergstrom and Robert Mueller Municipal, closed since 1999). Task 4's fix round 1
-added a fact-presence clause, which takes colliding codes from 36 to 0 — full accounting,
-including why M4a's own in-window invariant test didn't already catch this:
-[`docs/data/invariants.md` § Code collisions](../data/invariants.md#entity-resolution-m4a).
+`app/src/lib/resolve.ts`'s `lookupAirportsByCode` (code → `airport_id`) is served by
+`sql/03_queries/lookup_airport_by_code.sql`. `WHERE is_latest` alone is **not** sufficient to
+make a code unique: it is scoped per `airport_id`'s own seq chain, not per code, so two
+different `airport_id`s sharing a code can each carry their own `is_latest = TRUE` row.
+Measured: 36 codes do (`AUS` returns both the real Austin-Bergstrom and Robert Mueller
+Municipal, closed since 1999). A fact-presence clause takes colliding codes from 36 to 0 — full
+accounting in
+[`docs/data/invariants.md` § Entity resolution](../data/invariants.md#entity-resolution).
 
-That clause was a correlated `EXISTS` and is now a hash semi-join (43–51 ms → 8 ms), because
-`proxy.ts` runs it on every `/route/*` request to decide cacheability. The equivalence is
-pinned by `test_reverse_lookup_selects_exactly_the_fact_present_current_airports`, which
-diffs the shipped file against the `EXISTS` form over every `is_latest` code — the timings,
-the rejected variants and the mutation that fails it are in
+That clause is a hash semi-join, not the correlated `EXISTS` it reads as (43–51 ms → 8 ms),
+because `proxy.ts` runs it on every `/route/*` request to decide cacheability. The equivalence
+is pinned by `test_reverse_lookup_selects_exactly_the_fact_present_current_airports`, which
+diffs the shipped file against the `EXISTS` form over every `is_latest` code — the timings, the
+rejected variants and the mutation that fails it are in
 [`invariants.md` § Entity resolution](../data/invariants.md) and
 [`hosting.md` § What the proxy's query actually costs](hosting.md#what-the-proxys-query-actually-costs).
 
-**M4d added the other two reverse lookups — and the aircraft one does not land where this one
-did.** `lookup_carrier_by_code.sql` behaves identically to the airport file: the fact-presence
-clause is what makes the slug a key (112 colliding `carrier_code`s unscoped, 0 among the 114
-airlines that filed). `lookup_aircraft_by_name.sql` does not: fact-presence takes colliding
-`short_name`s from 12 to **1**, not to 0, because `CE-180` names two BTS codes that *both*
-really flew. So for aircraft the fail-loud guard is the entire defence rather than a
-belt-and-braces backstop, and a colliding slug throws `AmbiguousCodeError` carrying every
-candidate id — `/aircraft/CE-180` is a reachable URL whose page must name both airframes, not
-pick one. Why no scoping fixes it, why narrowing to the trailing 12 months would be the worst
-available "fix", the two surviving mutants recorded rather than papered over, and the 16
-short names that are not URL path segments:
-[`invariants.md` § The other two reverse lookups](../data/invariants.md#entity-resolution-m4a).
+**The aircraft lookup does not land where the other two do.** `lookup_carrier_by_code.sql`
+behaves identically to the airport file: the fact-presence clause is what makes the slug a key
+(112 colliding `carrier_code`s unscoped, 0 among the 114 airlines that filed).
+`lookup_aircraft_by_name.sql` does not: fact-presence takes colliding `short_name`s from 12 to
+**1**, not to 0, because `CE-180` names two BTS codes that *both* really flew. So for aircraft
+the fail-loud guard is the entire defence rather than a belt-and-braces backstop, and a
+colliding slug throws `AmbiguousCodeError` carrying every candidate id — `/aircraft/CE-180` is a
+reachable URL whose page must name both airframes, not pick one. Why no scoping fixes it, why
+narrowing to the trailing 12 months would be the worst available "fix", the two surviving
+mutants recorded rather than papered over, and the 16 short names that are not URL path
+segments:
+[`invariants.md` § The other two reverse lookups](../data/invariants.md#the-other-two-reverse-lookups).
 
-### Page composition and truncation
+## Page composition and truncation
 
 The stat strip's `LOAD FACTOR` and `AVG GAUGE` are computed in TypeScript from the summed
 additive measures the same query already returns (`Σ passengers / Σ seats`, `Σ seats / Σ
@@ -549,48 +469,26 @@ carries 16 distinct operating carriers over a trailing 12 months, 99th percentil
 page checks whether the result hit the limit and discloses truncation rather than silently
 under-reporting a route's totals if a future refresh ever exceeds it.
 
-Composite filtering is identical in both languages (goldens unmoved), the reverse lookup
-resolves to 0 collisions among in-window airports, and `make app-smoke` curls a real served
-page for the redirect and both 404 shapes.
+## Every guard gets its breaking change observed
 
-## M4c — the aircraft-type-mix chart
+**The single most common review finding in this project is a test that passed for a reason
+other than the one it named.** Six real instances, all from the marts layer:
 
-Server-rendered stacked area of monthly seats by aircraft type on `/route/<pair>`, drawn by
-Observable Plot into a jsdom document and injected as serialized SVG — in the served HTML,
-visible with JS off. Encoding rules and the two traps that matter (membership vs shade as two
-different orderings; gaps are unknown, not zero) are owned by
-[`../design/system.md` § Charts](../design/system.md).
+- `test_distance_is_not_summed` stayed green when `max(distance)` was swapped to `sum(distance)`
+  — no fixture route-month had two aircraft types.
+- The partition test stayed green with `hive_partitioning` disabled — `year` was already a
+  Parquet content column, so the flag was never what exposed it.
+- A tiebreak test was guarded by `if row is not None` against a fixture missing that row.
+- A guard-rail assertion was unreachable: `parse_mart_file` raised before the assert ran.
+- The `make verify` mismatch test used a global counter, so both builds drifted identically and
+  the drift it existed to detect was masked.
+- All 12 real-data invariant tests had never executed — the module looked for an undated
+  filename the append-only scheme makes impossible.
 
-## M4d — `/airport`, `/carrier`, `/aircraft`
-
-Three more entity pages on the composition M4b established. Each page's contract is owned by
-[`../product/features.md`](../product/features.md); the routing and cacheability tier they
-share — `proxy.ts`'s matcher, `ENTITY_ROUTES`, and the allow-list cacheability predicate — by
-[`hosting.md`](hosting.md).
-
-## M5 — connecting the graph
-
-M3/M4 built four islands, each reachable only by typing a URL. M5 is the edges between them:
-cross-links on every resolved dimension cell, the `/search` omnibox, `/sitemap.xml` and
-`/robots.txt`. Entity resolution rules are owned by
-[`../data/invariants.md`](../data/invariants.md); the cache split and the residual 5xx gap by
-[`hosting.md`](hosting.md).
-
-## M6 — Gauge Watch and the Top-N builder
-
-A fifth surface, `/watch`, plus the `health_score` composite its presets rank on. The score's
-four-axis definition, the `capacity_delta` identity that excludes it, and the NULL-guard rules
-are owned by [`../data/model.md`](../data/model.md).
-
-## M7 — maps, and the either-endpoint filter they needed first
-
-Tasks 1-3 added a filter-only `endpoint_airport_id` dimension (`filter_mode = 'either'`,
-compiling to an OR across both airport columns) and used it to collapse `/airport/<code>` from
-three pivots plus inclusion-exclusion arithmetic down to **one pivot per grain**. Tasks 4-9
-built the airport network map on a from-scratch, dependency-free, server-rendered SVG engine
-(`app/src/lib/map/`) rather than the deck.gl + MapLibre the spec originally called for. The
-projection, panel and arc encodings are owned by
-[`../design/system.md` § The map](../design/system.md).
+Every one was found by mutating production code and watching what stayed green. **None was
+visible from reading the diff.** So this is a required step, not an aspiration: for each guard,
+make the change it exists to catch, observe the failure, revert, and record the output. A guard
+never observed failing is not a guard.
 
 ## Toolchain
 
@@ -601,7 +499,7 @@ non-zero rather than succeeding silently, so a half-built pipeline can't look fi
 
 **The pins are exact, not floating** — `python = "3.12.12"`, `node = "24.13.0"`,
 `uv = "0.12.0"`. A floating `"3.12"` moves to 3.12.13 the day it ships and silently
-invalidates the `make verify` proof below, which is only as good as the interpreter that
+invalidates the `make verify` proof above, which is only as good as the interpreter that
 produced it. Bumping is a deliberate commit that re-runs `make verify`.
 
 **`UV_PYTHON_PREFERENCE = "only-system"` is load-bearing.** mise owns the interpreter, so uv
@@ -611,7 +509,7 @@ what mise put on `PATH` and fail loudly when it is absent, rather than helpfully
 **Every `make` target runs through `mise exec`** (`MISE ?= mise exec --`), so the documented
 commands work in a shell that has never run `mise activate` — a fresh clone, a cron, an
 editor's task runner. Set `MISE=` to bypass it where the tools are already on `PATH`, which
-is what the Docker image will do.
+is what the Docker image does.
 
 > **One pinning mechanism, not two.** `mise.toml` replaced `.python-version` and made a
 > `.nvmrc` unnecessary — two mechanisms for two runtimes is one too many. Changing the
@@ -766,9 +664,8 @@ nightly in `verify.yml`, which restores raw and runs `make check` alongside `mak
 machine.**
 
 **15 is the durable figure here; the pass count is not, so it is not written down.** The total
-lives in `pipeline/reference/gates.generated.json` and moves whenever a test is added — it moved
-four times while this paragraph was being written, and each time the "N of M" phrasing that used
-to sit here went stale. Per-PR passes are that generated total minus 15.
+lives in `pipeline/reference/gates.generated.json` and moves whenever a test is added. Per-PR
+passes are that generated total minus 15.
 
 The 15 is measured from a real CI `check` job, not derived from a local run, and the two do not
 decompose the same way. With **no** `data/` at all only **14** skips name a `data/raw` reason;

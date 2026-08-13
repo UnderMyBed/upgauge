@@ -29,8 +29,8 @@ import type { Resolved } from "@/lib/resolve";
  * only `origin_airport_id` and `dest_airport_id` as separate (AND-ed) dimensions and the one
  * composite dimension (`route`) filters on a whole route PAIR, not a single endpoint. That
  * assembly (`inclusionExclusion`/`unionSides`/`unionMix`, plus the `partial` flag threaded
- * through every call of it) is gone; a first-class endpoint filter was M5's deferred call,
- * picked up here. Recorded in docs/architecture/pipeline.md § M4d and § M7.
+ * through every call of it) is gone, replaced by a first-class endpoint filter. Recorded in
+ * docs/architecture/pipeline.md § Composite and either-endpoint dimensions.
  *
  * The rows a single `endpoint_airport_id` query returns still span BOTH directions of every
  * route (an SEA->PDX row and a PDX->SEA row are different `(origin, dest)` groups) and same-
