@@ -109,14 +109,40 @@ jobs:
       # fails outright on an unknown label, which would turn the alert into a failed run whose
       # only symptom is a red tick nobody is watching for. `critical` matches the severity
       # convention warehouse.yml's drift issue already uses.
+      # FILING AN ISSUE IS NOT ALERTING A HUMAN, and this repo learned the difference by
+      # shipping the gap. Measured 2026-08-17, right after the alert was demonstrated firing:
+      # UnderMyBed/upguage was absent from the owner's six watched repositories,
+      # `repos/.../subscription` returned 404, and the issue the demonstration filed (#64) was
+      # authored by github-actions[bot] with ZERO assignees and no `@` anywhere in its body. An
+      # issue opened by a bot, in an unwatched repo, that neither assigns nor mentions anyone,
+      # notifies NOBODY. The alert worked perfectly and reached no one, which is the dark-guard
+      # failure one level up from the one this workflow exists to prevent.
+      #
+      # The mention and the assignment both notify regardless of watch state, and both live HERE
+      # rather than in account settings -- watching is correct today, silently revocable, and
+      # invisible to every gate in this repo, the same objection hosting.md raises about
+      # correctness that lives only in a provider's dashboard.
+      #
+      # OWNER goes through `env:` like every other expression in this file; see the `as_of`
+      # comment above for why that is not judged per value.
       - name: File the freshness alert
         if: steps.check.outputs.file_issue == '1' && steps.existing.outputs.count == '0'
         env:
           GH_TOKEN: ${{ github.token }}
           ISSUE_BODY: ${{ steps.check.outputs.issue_body }}
+          OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
-          gh issue create --repo "$GITHUB_REPOSITORY" \
+          body=$(printf '%s\n\n%s' "@$OWNER" "$ISSUE_BODY")
+          url=$(gh issue create --repo "$GITHUB_REPOSITORY" \
             --title "Data is stale: max(year_month) has not advanced" \
             --label critical --label stale-data \
-            --body "$ISSUE_BODY"
+            --body "$body")
+          echo "::notice::filed $url"
+          # Assignment is delivery polish ON TOP of an issue that already exists and already
+          # mentions the owner -- so it is deliberately NOT `--assignee` on the create above. A
+          # permissions or API hiccup there would fail the CREATE and lose the alert entirely,
+          # which is strictly worse than the unassigned issue this replaces. Create first, assign
+          # second, and let the assign fail loudly without taking the alert with it.
+          gh issue edit "$url" --add-assignee "$OWNER" \
+            || echo "::warning::could not assign $OWNER -- the @mention in the body is the fallback"

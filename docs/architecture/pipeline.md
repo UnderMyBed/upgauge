@@ -667,6 +667,27 @@ comparison and the run would prove only that the workflow executes.
 The fourth row was not staged. It is the strongest of the four precisely because nobody arranged
 it: the guard's own failure mode arrived unprompted, three minutes after it shipped.
 
+**Filing an issue is not alerting a human, and the gap shipped.** Measured 2026-08-17, minutes
+after the table above was written: `UnderMyBed/upguage` was absent from the owner's **six** watched
+repositories, `repos/UnderMyBed/upguage/subscription` returned **404**, and the issue the
+demonstration filed (#64) was authored by `github-actions[bot]` with **zero assignees** and no `@`
+anywhere in its body. An issue opened by a bot, in an unwatched repo, that neither assigns nor
+mentions anyone, notifies **nobody** — so every branch above fired correctly and reached no one.
+That is the dark-guard failure one level up from the one this workflow exists to prevent, and the
+demonstration could not see it because it only ever asserted that the issue *existed*.
+
+The alert therefore **`@`-mentions the owner in the body and assigns the issue to them**, both of
+which notify regardless of watch state. Both live in `freshness.yml` where a gate can assert them;
+the repo is also watched now, but watching is account configuration — correct today, silently
+revocable, and invisible to every gate here, which is the same objection
+[hosting.md](hosting.md) raises about correctness that exists only in a provider's dashboard.
+
+**Assignment is a second step, never `--assignee` on the create.** The issue *is* the alert;
+assignment is delivery polish on top of one that already exists and already mentions the owner. A
+permissions or API hiccup on `gh issue create --assignee` fails the **create** and loses the alert
+entirely — strictly worse than the unassigned issue it replaces. Create first, assign second, and
+let the assign fail loudly without taking the alert with it.
+
 **Known limitation, not closable inside Actions:** GitHub disables scheduled workflows on public
 repositories after 60 days of repository inactivity. That would disable `freshness.yml` and
 `warehouse.yml` **together** — the watcher and the watched share this one fate. An external
