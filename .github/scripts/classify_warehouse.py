@@ -23,9 +23,10 @@ from __future__ import annotations
 
 import json
 import os
-import secrets
 import sys
 from dataclasses import dataclass, field
+
+from gha import write_multiline_output
 
 # Scalars whose movement is a shape change, not a data change. A dim gaining rows means the
 # upstream vocabulary moved, which is what breaks slug fixtures and join assumptions.
@@ -134,23 +135,6 @@ def _issue_body(c: Classification) -> str:
     return "\n".join(lines)
 
 
-def _write_multiline_output(fh, name: str, value: str) -> None:
-    """Append a `name<<DELIM ... DELIM` block to an open $GITHUB_OUTPUT handle.
-
-    The delimiter is randomized, per GitHub's own guidance for output values built from
-    unpredictable upstream text: a static delimiter (e.g. a fixed `EOF`) that happens to
-    appear verbatim on its own line inside `value` would truncate the value silently instead
-    of failing loudly. Not reachable today -- the only free-text fields in `_issue_body()` are
-    rendered through `!r` -- but the cost of generating one is a function call, and the
-    alternative is a delimiter collision nobody would notice until an issue body went missing
-    its tail.
-    """
-    delim = secrets.token_hex(16)
-    while delim in value:
-        delim = secrets.token_hex(16)
-    fh.write(f"{name}<<{delim}\n{value}\n{delim}\n")
-
-
 def main() -> int:
     # The only caller (warehouse.yml's `classify` step) invokes this with exactly two
     # positional args, and only when a previous warehouse exists to compare against -- a run
@@ -190,7 +174,7 @@ def main() -> int:
         if out:
             with open(out, "a") as fh:
                 fh.write("file_issue=1\n")
-                _write_multiline_output(fh, "issue_body", _issue_body(c))
+                write_multiline_output(fh, "issue_body", _issue_body(c))
     return 0
 
 

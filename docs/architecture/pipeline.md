@@ -598,6 +598,51 @@ exited **0 — every day, forever, with nothing to notice it.** See
 [../data/sources.md § Rules](../data/sources.md#rules) for the fetch contract and why *two*
 years (BTS revises closed months) plus every support table (a rename is otherwise invisible).
 
+### The freshness alert — the thing that notices "exited 0, forever"
+
+The paragraph above ends at a publisher that could rebuild an identical warehouse and exit 0
+every day with nothing to notice it. `freshness.yml` is what notices. It is CLAUDE.md's hard
+rule made real: alert when `max(year_month)` has not advanced in ~45 days.
+
+**It measures the data's movement, never a job's exit code.** A run that exits 0 while the data
+does not advance is the actual failure mode, and an exit-code check cannot see it by
+construction.
+
+**There is no state file, because the release history already is one.** `warehouse.yml`
+publishes only when the month advances — its "Stop if this month is already published" guard
+skips the publish otherwise — so `publishedAt` of the newest well-formed `warehouse-YYYY.MM`
+release **is** the timestamp of the last advance. That is a coupling, not a coincidence: make
+the publisher publish on an unchanged month and this derivation degrades silently into "when did
+we last run", which reports healthy forever. Both files carry a comment saying so.
+
+Tag selection reuses the three resolver rules above verbatim — `publishedAt` never `createdAt`,
+the anchored `^warehouse-[0-9]{4}\.[0-9]{2}$` shape rather than a prefix check, ascending order
+taking `last` rather than `reverse` then first — for the reasons measured there.
+
+**It is a separate workflow, not a step in `warehouse.yml`.** A check inside the thing it watches
+cannot see that thing failing before the check runs, being disabled, or being deleted; and
+`make ingest` exiting non-zero aborts that job several steps before any freshness step would be
+reached. It runs daily rather than monthly: with a 45-day threshold, a monthly check can call a
+44-day-old stall healthy and then not look again for 30 more days.
+
+**45 days is a movement threshold, not a recency one.** BTS publishes with a 2–6 month lag by
+nature, so `max(year_month)` is *supposed* to trail today by months — an absolute-recency check
+would fire constantly and be muted inside a week. 45 is the ~30-day healthy cadence plus two
+weeks of slack. Measured 2026-08-17: `warehouse-2026.05`, published 2026-08-14, is 3 days old
+against a `DATA AS OF` of 2026-05 — a 3-month lag, and healthy.
+
+**The alert dedupes.** Staleness is a condition, not an event: it stays true every day until
+someone fixes it, so a three-month stall would file ninety issues without the open-issue check
+that gates the filing. The dedupe key is the `stale-data` label, which must exist on the
+repository — `gh issue create` fails outright on an unknown label, which would turn the alert
+into a failed run whose only symptom is a red tick nobody watches for.
+
+**Known limitation, not closable inside Actions:** GitHub disables scheduled workflows on public
+repositories after 60 days of repository inactivity. That would disable `freshness.yml` and
+`warehouse.yml` **together** — the watcher and the watched share this one fate. An external
+uptime check on `/api/health` is the only thing that would cover it, and that belongs with the
+launch-monitoring work, not here.
+
 ### Generated figures, and the boundary around them
 
 Two committed artifacts hold measured numbers so they cannot rot in prose, both in the shape
