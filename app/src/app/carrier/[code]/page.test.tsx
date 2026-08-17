@@ -7,26 +7,26 @@ import { dataAsOf, loadAllowlist } from "@/lib/db";
 import { resolveCarrier } from "@/lib/carrier";
 
 /** Every figure asserted below was measured against the built warehouse for
- * op_airline_id 19790 over 2025-05..2026-04 (the trailing 12 months this page shows):
+ * op_airline_id 19790 over 2025-06..2026-05 (the trailing 12 months this page shows):
  *
- *   17 aircraft types · seats 167,718,257 · passengers 138,932,990 · departures 1,024,444
- *   load factor  138,932,990 / 167,718,257 = 82.84%   (mean of the 17 rows: 83.34%)
- *   avg gauge    167,718,257 /   1,024,444 = 163.7    (mean of the 17 rows: 194.8)
+ *   17 aircraft types · seats 167,780,538 · passengers 139,046,982 · departures 1,025,515
+ *   load factor  139,046,982 / 167,780,538 = 82.87%   (mean of the 17 rows: 83.33%)
+ *   avg gauge    167,780,538 /   1,025,515 = 163.6    (mean of the 17 rows: 194.7)
  *
  * The two means are the point. CLAUDE.md calls averaging a derived measure "the #1 bug in
  * every homemade T-100 tool", and both wrong answers are within a plausible range -- 83.34% is
- * not obviously wrong next to 82.84%. Asserting the exact figure is what tells them apart;
- * asserting "a percentage renders" would not. The gauge pair (163.7 vs 194.8) is the same test
+ * not obviously wrong next to 82.87%. Asserting the exact figure is what tells them apart;
+ * asserting "a percentage renders" would not. The gauge pair (163.6 vs 194.7) is the same test
  * with a much wider gap, so a rounding change cannot make it accidentally pass. */
 const DL = {
   id: 19790,
   name: "Delta Air Lines Inc.",
   types: 17,
-  seats: "167,718,257",
-  passengers: "138,932,990",
-  departures: "1,024,444",
-  loadFactor: "82.84%",
-  avgGauge: "163.7",
+  seats: "167,780,538",
+  passengers: "139,046,982",
+  departures: "1,025,515",
+  loadFactor: "82.87%",
+  avgGauge: "163.6",
 } as const;
 
 /** `permanentRedirect`/`notFound` throw rather than return -- same helper, same reasoning, as
@@ -96,8 +96,8 @@ describe("/carrier/<code>", () => {
     expect(stats).toContain(DL.avgGauge);
     // The wrong answers, named explicitly. A mean-of-rows implementation renders these
     // instead, and both look entirely reasonable on screen.
-    expect(stats).not.toContain("83.34%");
-    expect(stats).not.toContain("194.8");
+    expect(stats).not.toContain("83.33%");
+    expect(stats).not.toContain("194.7");
   });
 
   it("shows the additive totals and the type count", async () => {

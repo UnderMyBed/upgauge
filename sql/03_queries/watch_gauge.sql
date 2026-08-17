@@ -7,9 +7,9 @@
 -- ORDER BY. This is the one preset whose direction varies; the other three watch_*.sql files
 -- hardcode their ORDER BY because each of them only ever renders one table.
 --
--- gauge_delta IS NOT NULL excludes the 688 routes with no prior-window data
+-- gauge_delta IS NOT NULL excludes the 606 routes with no prior-window data
 -- (p12_months_present = 0, measured: gauge_delta IS NULL count matches it exactly). That is a
--- SINGLE cause, not health_score's three-reason union (813 -- docs/product/features.md) --
+-- SINGLE cause, not health_score's three-reason union (733 -- docs/product/features.md) --
 -- gauge_delta only depends on gauge_t12/gauge_p12, and gauge_t12 is never NULL for any row
 -- that reaches mart_route_health at all (the >= 30 t12-departures floor in
 -- 200_mart_route_health.sql's `derived` CTE guarantees that). A route with no gauge_delta has

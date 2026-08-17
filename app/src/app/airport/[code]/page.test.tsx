@@ -72,17 +72,17 @@ const MONTH_NAMES = [
 ];
 
 // EVERY figure below is measured against upgauge.duckdb for SEA (airport_id 14747) over the
-// trailing 12 months 2025-05..2026-04, and every one of them is a figure an ORIGIN-ONLY page
+// trailing 12 months 2025-06..2026-05, and every one of them is a figure an ORIGIN-ONLY page
 // gets wrong. That is the point: carriers (13) and aircraft types (25) are IDENTICAL either
 // way, so a suite built on those two would pass against the bug this page exists to exclude.
 //
-//   seats          origin OR dest 53,373,806   origin only 26,710,000
-//   passengers     origin OR dest 43,896,637   origin only 21,941,241
-//   destinations   origin OR dest        143   origin only         140
-//   AS's seats     origin OR dest 26,091,482   origin only 13,061,110
+//   seats          origin OR dest 53,372,100   origin only 26,708,918
+//   passengers     origin OR dest 43,888,228   origin only 21,922,669
+//   destinations   origin OR dest        143   origin only         139
+//   AS's seats     origin OR dest 26,089,404   origin only 13,059,688
 //
-// And the third term, which is not a formality: 18 same-airport (origin = dest) filings at
-// SEA carry 12,646 seats, so a naive origin + dest reads 53,386,452 rather than 53,373,806.
+// And the third term, which is not a formality: 17 same-airport (origin = dest) filings at
+// SEA carry 12,207 seats, so a naive origin + dest reads 53,384,307 rather than 53,372,100.
 describe("/airport/<code>", () => {
   it("renders the airport's code and name, never the bare AIRPORT_ID", async () => {
     const { container } = render(await renderSEA());
@@ -99,28 +99,28 @@ describe("/airport/<code>", () => {
   });
 
   it("counts BOTH endpoints, not departures alone", async () => {
-    // The one test this task exists for. 53,373,806 fails for an origin-only page
-    // (26,710,000) AND for a page that forgets the overlap term (53,386,452).
+    // The one test this task exists for. 53,372,100 fails for an origin-only page
+    // (26,708,918) AND for a page that forgets the overlap term (53,384,307).
     const { container } = render(await renderSEA());
     const stats = container.querySelector(".stats")?.textContent ?? "";
-    expect(stats).toContain("53,373,806");
-    expect(stats).not.toContain("26,710,000");
-    expect(stats).not.toContain("53,386,452");
+    expect(stats).toContain("53,372,100");
+    expect(stats).not.toContain("26,708,918");
+    expect(stats).not.toContain("53,384,307");
   });
 
   it("counts arrivals in passengers and destinations too, not only in seats", async () => {
     // A page that fixed the seat total alone -- by, say, doubling the origin figure -- would
     // pass the test above. Passengers and destinations are separately wrong under origin-only
-    // (21,941,241 and 140), and the destination count cannot be reached by scaling anything.
+    // (21,922,669 and 139), and the destination count cannot be reached by scaling anything.
     const { container } = render(await renderSEA());
     const stats = container.querySelector(".stats")?.textContent ?? "";
-    expect(stats).toContain("43,896,637");
-    expect(stats).not.toContain("21,941,241");
+    expect(stats).toContain("43,888,228");
+    expect(stats).not.toContain("21,922,669");
     // SCOPED to the Destinations stat's own value node. `toContain("143")` over the whole strip
     // was a three-digit substring match: it happens to be unambiguous against today's other
     // stats, but 143 is a substring of any figure containing it, so the assertion could pass for
     // a reason other than the destination count being right. The whole point of this figure is
-    // that origin-only reads 140 and nothing can scale its way there.
+    // that origin-only reads 139 and nothing can scale its way there.
     const destinations = [...container.querySelectorAll(".stats .stat")].find(
       (s) => s.querySelector(".k")?.textContent === "Destinations",
     );
@@ -128,25 +128,25 @@ describe("/airport/<code>", () => {
   });
 
   it("computes load factor and avg gauge from summed parts, never by averaging carriers", async () => {
-    // Ratio of sums: 43,896,637 / 53,373,806 = 82.24%, and 53,373,806 / 366,350 = 145.7.
-    // The mean of the 13 carrier load factors is 83.79% and the mean of their gauges is
-    // 164.0 -- both plausible, both wrong, both what AVG(load_factor) produces.
+    // Ratio of sums: 43,888,228 / 53,372,100 = 82.23%, and 53,372,100 / 366,174 = 145.8.
+    // The mean of the 13 carrier load factors is 83.84% and the mean of their gauges is
+    // 164.9 -- both plausible, both wrong, both what AVG(load_factor) produces.
     const { container } = render(await renderSEA());
     const stats = container.querySelector(".stats")?.textContent ?? "";
-    expect(stats).toContain("82.24%");
-    expect(stats).toContain("145.7");
-    expect(stats).not.toContain("83.79%");
-    expect(stats).not.toContain("164.0");
+    expect(stats).toContain("82.23%");
+    expect(stats).toContain("145.8");
+    expect(stats).not.toContain("83.84%");
+    expect(stats).not.toContain("164.9");
   });
 
   it("lists the carriers at the airport by code, biggest first, counting both directions", async () => {
     const { container } = render(await renderSEA());
     const first = container.querySelector("tbody tr");
     const cells = [...(first?.querySelectorAll("td") ?? [])].map((c) => c.textContent);
-    // Alaska, by a distance, at SEA. 26,091,482 seats over both endpoints; 13,061,110
+    // Alaska, by a distance, at SEA. 26,089,404 seats over both endpoints; 13,059,688
     // departing only -- so this row alone distinguishes the two implementations.
     expect(cells[1]).toBe("AS");
-    expect(cells.join(" ")).toContain("26,091,482");
+    expect(cells.join(" ")).toContain("26,089,404");
     const codes = [...container.querySelectorAll("tbody td.id")].map((c) => c.textContent);
     expect(codes.length).toBe(13);
     expect(codes.every((c) => /^[A-Z0-9]{2}$/.test(c ?? ""))).toBe(true);

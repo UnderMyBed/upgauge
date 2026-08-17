@@ -1,7 +1,8 @@
 -- Every airport that appears as an ORIGIN OR a DEST in a filed segment row, for
 -- /sitemap.xml. Counting one endpoint only is the exact silent-halving bug
 -- docs/architecture/hosting.md's prerender table and pipeline.md's M4d section both measure
--- on /airport/SEA -- origin-only would emit 741 URLs instead of the 1,045 that actually 200.
+-- on /airport/SEA -- origin-only would emit 997 URLs instead of the 1,047 that actually 200
+-- (counted the same way this query does: DISTINCT is_latest code over the endpoint set).
 --
 -- QUARANTINE IS NOT FILTERED -- see sitemap_routes.sql's header for why the fact-presence
 -- shape here carries no quarantine clause on purpose: a quarantined row is still a real

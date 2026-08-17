@@ -103,12 +103,25 @@ describe("the traffic query", () => {
 });
 
 // fetchAirportMix is ONE `endpoint_airport_id`-filtered pivot as of M7 Task 3 (no union), and
-// nothing about the rendered chart can see a 35,088-seat error in a 545-million-seat total. So
+// nothing about the rendered chart can see a 35,754-seat error in a 550-million-seat total. So
 // it is checked here, against the warehouse, where the exact figure is available. Measured for
-// SEA (14747) over 2015-01..2026-04:
+// SEA (14747) over 2015-01..2026-05:
 //
-//   seats   origin OR dest 545,623,424   origin only 272,924,959   naive origin + dest 545,658,512
-//   cells   2,886 distinct (month, aircraft type) groups
+//   seats   origin OR dest 550,395,521   origin only 275,312,624   naive origin + dest 550,431,275
+//   cells   2,910 distinct (month, aircraft type) groups
+//
+// THE MEASURES ARE QUARANTINE-FILTERED AND THE GROUPING IS NOT, and the two must not be
+// conflated: every meta_pivot_measures expression carries `FILTER (WHERE NOT is_quarantined)`,
+// while the GROUP BY sees every row -- so a (month, type) pair that exists only in quarantined
+// rows is still a returned row, contributing nothing to any total. That is the fact view's
+// "retain the row, flag it" rule reaching the pivot, not an inconsistency.
+//
+// At SEA it is measurable in both directions: 13 quarantined rows carry 16 departures and ZERO
+// seats, so the departures total is 3,949,177 rather than the raw 3,949,193 while seats are
+// identical either way, and the cell count is 2,910 rather than the 2,904 a quarantine-filtered
+// grouping would give. A re-derivation that applies the filter to both, or to neither, agrees
+// with this fixture on seats and disagrees on one of the other two. ORD (4,150) and ATL (3,619)
+// are identical under both filters, so only a SEA fixture can catch it.
 //
 // These figures are unmoved from the M4d-era three-pivot union: the (month, aircraft type)
 // grain never carried a direction, so collapsing three pivots into one changes nothing about
@@ -118,14 +131,14 @@ describe("the chart's mix, against the warehouse", () => {
   it("totals both endpoints, with same-airport filings counted once", async () => {
     const asOf = await dataAsOf();
     const mix = await fetchAirportMix(14747, "2015-01", asOf);
-    expect(mix.rows.reduce((a, r) => a + r.seats, 0)).toBe(545623424);
-    expect(mix.rows.reduce((a, r) => a + r.departures, 0)).toBe(3916501);
-    expect(mix.rows.length).toBe(2886);
+    expect(mix.rows.reduce((a, r) => a + r.seats, 0)).toBe(550395521);
+    expect(mix.rows.reduce((a, r) => a + r.departures, 0)).toBe(3949177);
+    expect(mix.rows.length).toBe(2910);
     expect(mix.truncated).toBe(false);
   });
 
   it("survives a truncated result rather than 500ing under a 30-day cache", async () => {
-    // The real limit is 10,000 and the measured worst case is 4,118 (ORD, below), so this
+    // The real limit is 10,000 and the measured worst case is 4,150 (ORD, below), so this
     // branch is unreachable from production data -- which is exactly why the limit is an
     // argument.
     const asOf = await dataAsOf();
@@ -137,13 +150,13 @@ describe("the chart's mix, against the warehouse", () => {
   it("leaves the WORST case in the database inside the row limit", async () => {
     // The headroom assertion, so a BTS refresh that approaches the bound fails a TEST rather
     // than degrading a page -- the treatment MAX_SLUG_SEPARATORS already gets. ORD (13930), not
-    // ATL: measured (month, aircraft type) group count over 2015-01..2026-04 is 4,118 at ORD,
-    // against ATL's 3,592 and SEA's 2,886 -- checked against the 25 busiest airports by
+    // ATL: measured (month, aircraft type) group count over 2015-01..2026-05 is 4,150 at ORD,
+    // against ATL's 3,619 and SEA's 2,910 -- checked against the 25 busiest airports by
     // trailing-12 segment-row count (M7 Task 3), not assumed from ORD alone.
     const asOf = await dataAsOf();
     const mix = await fetchAirportMix(13930, "2015-01", asOf);
     expect(mix.truncated).toBe(false);
-    expect(mix.rows.length).toBe(4118);
+    expect(mix.rows.length).toBe(4150);
   });
 });
 

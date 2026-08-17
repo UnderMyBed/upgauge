@@ -255,25 +255,25 @@ by any reader who tries to reproduce Gauge Watch in `/explore` and cannot.
   `p12_months_present = 0` and nothing else; `mart_route_health` carries **no lookback past the
   prior 12 months**, so the query cannot distinguish a brand-new route from a resumed one.
 
-  Measured on the 2026-04 warehouse: **334 of the 688 qualifying rows (48.5%) filed in at least
-  one month before the p12 window**, including **17 of the 25 the page renders**. Worst case
-  `MQ AZO–ORD` — **93 distinct months filed, first filed 2015-01** — was presented as brand-new
-  service. Also `9E DTW–MDW` (55 months), `9E AUS–RDU` (53), `OH DAY–ORD` (38), `F9 LAX–ORD`
-  (31). The old reasoning here ("a route flown in 2014 and resumed in 2019 looks new") had the
+  Measured on the 2026-05 warehouse: **303 of the 606 qualifying rows (50.0%) filed in at least
+  one month before the p12 window**, including **19 of the 25 the page renders**. Worst case
+  `QX BLI–SEA` — **99 distinct months filed, first filed 2015-01** — was presented as brand-new
+  service. Also `B6 AUS–FLL` (99 months), `OO ORD–PAH` (96), `MQ AZO–ORD` (93), `MQ BPT–DFW`
+  (92). The old reasoning here ("a route flown in 2014 and resumed in 2019 looks new") had the
   right failure mode and stopped one rung too high: a route flown in **2023** and resumed in
-  2025 looks new too, and that is 48% of the rows. The mirror-image limitation is unchanged — a
+  2025 looks new too, and that is half the rows. The mirror-image limitation is unchanged — a
   route that stopped and resumed *within* the p12/t12 windows has some p12 presence and never
   appears here at all.
 
   **And the grain is the pair, not the route — so "nobody flew it last year" is false too.**
   `mart_route_health` is one row per **(op_airline_id, undirected route)**, which is why this
   bullet says "carrier × O&D pair". `p12_months_present = 0` is therefore silent about every
-  *other* carrier on the same airport pair. Measured: **521 of the 688 qualifying rows (75.7%),
+  *other* carrier on the same airport pair. Measured: **466 of the 606 qualifying rows (76.9%),
   and 25 of the 25 the page renders**, had a different carrier flying that pair inside the p12
   window. The page's own #1 row, `AS HNL–ITO`, ranks first while HA, UA and WN filed
-  **1,787,347 seats** on that pair in the prior window — **4.9×** the subject's own trailing 12.
-  `AS DEN–SAN` had **eight** other operators and 1.88M seats; `F9 JFK–LAX` four and 3.19M, 25×
-  its own. This one is worth recording as a process finding, not just a data one: it was
+  **1,786,963 seats** on that pair in the prior window — **3.7×** the subject's own trailing 12.
+  `AS DEN–SAN` had **seven** other operators and 1.88M seats, 14× its own; `AA FLL–LGA` three
+  and 1.52M, 10.8×. This one is worth recording as a process finding, not just a data one: it was
   **introduced by the fix wave that corrected the "since 2015" claim** — "new service nobody
   flew last year" read as the *accurate* half of the old sentence and was carried over
   unexamined, so a wave fixing one false claim shipped another of the same class. Any sentence
@@ -313,7 +313,7 @@ that. Excludes routes with **<30 departures *performed*** (not scheduled) in the
 
 **A route with no prior-12mo data gets `NULL` deltas and a `NULL` score, never an enormous
 "improvement."** It still appears as a row — that row is the Route Birth Tracker's input.
-Measured over the full 2015–2026 window: 688 of 8,080 routes are new in exactly this sense
+Measured over the full 2015–2026 window: 606 of 8,065 routes are new in exactly this sense
 (`p12_months_present = 0`).
 
 **Show the components in the UI, not just the score.** The components are the insight; the
@@ -321,18 +321,18 @@ score is a sort key. Label it plainly as a heuristic. Do not over-engineer this.
 
 ### `health_score` is `NULL` for three reasons — a route unrankable for lack of a filed schedule must not render as unhealthy
 
-Measured over the full 2015–2026 window (`t12 = 2025-05..2026-04`, `p12 = 2024-05..2025-04`):
-**813 of 8,080 routes** have `health_score IS NULL`, for three distinct reasons — which
-**overlap by 55 routes, so never sum them.** Full SQL-level accounting:
+Measured over the full 2015–2026 window (`t12 = 2025-06..2026-05`, `p12 = 2024-06..2025-05`):
+**733 of 8,065 routes** have `health_score IS NULL`, for three distinct reasons — which
+**overlap by 50 routes, so never sum them.** Full SQL-level accounting:
 [../data/model.md § Window rule, floor, and the NULL-prior-window trap](../data/model.md#window-rule-floor-and-the-null-prior-window-trap).
 
-1. **No prior window — 688, the largest group.** A
+1. **No prior window — 606, the largest group.** A
    genuinely new route (`p12_months_present = 0`). Correctly has no deltas to show.
 2. **Zero-measure prior window — 0 today.** The prior window is
    technically "present" but filed zero seats and zero departures, so the ratio is undefined
    the same way division by zero is. Empty in the current window — a property of which 24
    months happen to be the trailing window right now, not a structural absence of the case.
-3. **Zero scheduled departures — 180.** `completion_factor` is
+3. **Zero scheduled departures — 177.** `completion_factor` is
    undefined when `t12_departures_scheduled = 0`, which BTS allows for on-demand/
    charter-style operators that file real performed flights against no filed schedule at
    all. Unlike the other two, this route usually has known `lf_delta`, `gauge_delta`,
@@ -342,7 +342,7 @@ Measured over the full 2015–2026 window (`t12 = 2025-05..2026-04`, `p12 = 2024
 **UI requirement: a `NULL` `health_score` must never render as "unhealthy."** All three
 groups are `NULL` for a data-availability reason, not a low-score reason — sorting or
 filtering that silently treats `NULL` as the bottom of the range would misrepresent up to
-688 routes (the largest of the three groups today — "no prior window," not "zero scheduled
+606 routes (the largest of the three groups today — "no prior window," not "zero scheduled
 departures," which was largest only in the smaller 2015–2017 measurement) as failing on
 completion when the real story is "no schedule was ever filed to complete" or "this route
 didn't exist yet." Render these rows with an explicit "insufficient data" state,

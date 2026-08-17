@@ -288,7 +288,7 @@ would leave a wrong permanent redirect no server-side fix could reach. `/search`
 `no-store` **unconditionally** — `q` is an unbounded, attacker-chosen cache key.
 
 **The route cell displays in airport-ID order and links in code-alphabetical order, and the two
-disagree.** 154 of 22,420 pairs. `IFP–IAH` displays that way and must link to `/route/IAH-IFP`.
+disagree.** 215 of 22,509 pairs. `IFP–IAH` displays that way and must link to `/route/IAH-IFP`.
 A `JFK–LAX`-shaped fixture cannot fail this way, so any test for it needs a disagreeing pair.
 
 **`entityLink`'s map is keyed on the dimension's own key, never `join_dim`.** `route`,

@@ -221,7 +221,7 @@ describe("route's column_expr stays in sync with the catalog", () => {
 
 // M5 "connect the graph", Step 1(c): the route cell's href must be the CODE-alphabetical
 // pair, not the displayed (airport-id) order -- the milestone's sharpest trap, per the task
-// brief. IFP (airport_id 10590) / IAH (airport_id 12266) is one of the 154 of 22,420 pairs
+// brief. IFP (airport_id 10590) / IAH (airport_id 12266) is one of the 215 of 22,509 pairs
 // (measured via the brief's own SQL, run against upgauge.duckdb) where the two orderings
 // disagree: IFP's airport_id is lower, so route_key_low/route_key_high -- and therefore the
 // DISPLAYED "IFP–IAH" -- carry it first, but "IAH" < "IFP" alphabetically, so the canonical
@@ -229,7 +229,7 @@ describe("route's column_expr stays in sync with the catalog", () => {
 // 2015-01..2016-04 (measured), hence the widened time window.
 //
 // A fixture built on JFK-LAX (12478/12892) cannot fail here: their airport-id order and code
-// order agree, as they do for 22,266 of 22,420 pairs, so a buggy implementation that builds
+// order agree, as they do for 22,294 of 22,509 pairs, so a buggy implementation that builds
 // the href by splitting the DISPLAYED string would produce the identical, coincidentally
 // correct answer. The second test below pins that explicitly -- it must stay green under a
 // mutant that the first test catches, which is what proves the IFP-IAH fixture choice is

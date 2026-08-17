@@ -54,7 +54,7 @@ async function routesEntries(): Promise<SitemapEntry[]> {
     const loCode = String(r.lo_code);
     const hiCode = String(r.hi_code);
     // sitemap_routes.sql returns the pair in AIRPORT-ID order, which disagrees with the
-    // alphabetical URL order for 154 of 22,420 pairs (its own header; HPN/BNH is the
+    // alphabetical URL order for 215 of 22,509 pairs (its own header; HPN/BNH is the
     // measured example). routeHrefFromCodes -- the same function /explore's route cells link
     // through -- is what re-sorts; reusing the SQL's own id order here would silently mint
     // 154 sitemap URLs that /route/<pair> itself 308s away from.

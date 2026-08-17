@@ -13,7 +13,7 @@ import type { Resolved } from "@/lib/resolve";
  * Every figure on /airport/<code> must match `origin_airport_id = X OR dest_airport_id = X`.
  * An origin-only page is not obviously broken -- it renders every stat, every carrier row and
  * every chart band in exactly the right shape, and is silently about half the airport.
- * Measured at SEA (14747) over 2025-05..2026-04: 53,373,806 seats both ways against
+ * Measured at SEA (14747) over 2025-06..2026-05: 53,372,100 seats both ways against
  * 26,710,000 departing only, and 143 destinations against 140.
  *
  * THE MECHANISM, as of M7 Task 3: `endpoint_airport_id`, a first-class `meta_pivot_dimensions`
@@ -34,13 +34,13 @@ import type { Resolved } from "@/lib/resolve";
  *
  * The rows a single `endpoint_airport_id` query returns still span BOTH directions of every
  * route (an SEA->PDX row and a PDX->SEA row are different `(origin, dest)` groups) and same-
- * airport rows still exist -- `origin = dest` rows: 3,187 of them over the TRAILING 12 MONTHS
- * (2025-05..2026-04) across 359 airports, 601,573 seats, QUARANTINED ROWS INCLUDED -- 3,182 /
- * 358 / 601,565 without them, and 12,738 / 530 / 1,887,424 (12,696 / 530 / 1,887,193 without)
- * over the full 2015-01..2026-04 window. The window and the quarantine qualifier are both
+ * airport rows still exist -- `origin = dest` rows: 3,177 of them over the TRAILING 12 MONTHS
+ * (2025-06..2026-05) across 356 airports, 598,829 seats, QUARANTINED ROWS INCLUDED -- 3,173 /
+ * 355 / 598,829 without them, and 12,995 / 532 / 1,933,052 (12,953 / 532 / 1,932,821 without)
+ * over the full 2015-01..2026-05 window. The window and the quarantine qualifier are both
  * load-bearing: the four answers differ by 4x, and this file's own window is the trailing 12
  * for the table and the FULL window for the chart. docs/data/invariants.md § Route identity
- * tabulates all four. At SEA: 18 rows carrying 12,646 seats and 172 departures -- real activity
+ * tabulates all four. At SEA: 17 rows carrying 12,207 seats and 166 departures -- real activity
  * that `fct_segment_month` carries (the M4d design spec's "do not exist" is true only of route
  * IDENTITY, docs/data/invariants.md § Route identity, which excludes them as non-routes).
  * `toEndpointRows` below folds both directions and the same-airport case down to one

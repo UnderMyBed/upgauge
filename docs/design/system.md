@@ -177,7 +177,7 @@ it is the only place a keyboard user reaches the expansion, linked cell or not.
 
 **A fourth case, and it is not a dimension property: a `route` cell whose two halves are the
 same airport does not link.** `fct_segment_month` carries 530 such pairs with real traffic
-(ORD alone is 73,082 seats over the trailing 12), but `/route/ORD-ORD` is a 404 by design —
+(ORD alone is 76,236 seats over the trailing 12), but `/route/ORD-ORD` is a 404 by design —
 `resolveRoutePair` answers *"'ORD' to itself is not a route between two airports"*, and
 `sitemap_routes.sql` excludes them for the same reason. The link path is the easiest place to
 forget it, and forgetting it ships a link to a guaranteed 404. The guard lives
@@ -585,7 +585,7 @@ Never hue. Thin arcs draw first so heavy ones sit on top. Destination nodes are 
 **A same-airport row is never an arc, on any page, standing rule.** `fct_segment_month`
 really carries rows whose origin and destination are the same airport — 359 of 1,045
 fact-present airports have at least one over the trailing 12 months; ORD alone is 53 rows,
-73,082 seats. Such a row's great circle has zero angular length, and `greatCircle`'s own
+76,236 seats. Such a row's great circle has zero angular length, and `greatCircle`'s own
 degenerate-endpoint branch (`om < 1e-9`) would emit `steps + 1` identical points — several
 hundred bytes of polyline drawing an invisible mark directly on top of the origin disc. So
 the drawn arc set always excludes any row whose code equals the origin's (`app/src/lib/map/

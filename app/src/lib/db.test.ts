@@ -149,7 +149,7 @@ describe("runPivot resolves display values without altering the result shape", (
     // would just overwrite silently in a Map, which nothing here would observe.
     // toBe, not toBeLessThanOrEqual: the pivot SQL already carries LIMIT 5, so "<= 5" holds
     // for any row set including zero rows and can never fail. 70 distinct op_airline_id
-    // operated in THIS query's window (2025-05..2026-04), measured directly -- so the result
+    // operated in THIS query's window (2025-06..2026-05), measured directly -- so the result
     // is genuinely truncated at 5 and toBe(5) catches a truncation regression the old bound
     // could not. Do NOT cite invariants.md's 114 here: that figure is the full 2015-2026
     // window (invariants.md says so explicitly), not this 12-month slice.
@@ -160,8 +160,8 @@ describe("runPivot resolves display values without altering the result shape", (
   it("leaves origin_airport_id's row set alone too, despite airports carrying multi-seq history", async () => {
     // Same caveat as above: this is a non-regression check on runPivot's own rows, not proof
     // that resolve_airport.sql's `WHERE is_latest` is intact. See resolve.test.ts for that.
-    // toBe, not toBeLessThanOrEqual, for the same reason as above -- 742 distinct
-    // origin_airport_id appear in this query's window (2025-05..2026-04), measured directly,
+    // toBe, not toBeLessThanOrEqual, for the same reason as above -- 745 distinct
+    // origin_airport_id appear in this query's window (2025-06..2026-05), measured directly,
     // so LIMIT 10 truly truncates and toBe(10) is a real assertion.
     const r = await runPivot({
       ...CARRIER_QUERY, dimensions: ["origin_airport_id"], limit: 10,
