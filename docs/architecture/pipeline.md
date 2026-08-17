@@ -648,6 +648,25 @@ first live run, which is how it was found. Note the other three resolvers (`ci.y
 `verify.yml`'s `pick`, `warehouse.yml`'s `previous`) still have no retry, and a failed `resolve`
 **skips every downstream gate** rather than reddening one.
 
+**All four branches were demonstrated live on 2026-08-17, against the real release history.** An
+alert that has never fired is a dark guard, and this repo has caught four tests that could not go
+red for the reason they claimed:
+
+| branch | how | result |
+|---|---|---|
+| fresh | real clock | `Freshness — ok`, `warehouse-2026.05` 3 days old, **no issue filed** ([run](https://github.com/UnderMyBed/upguage/actions/runs/32051287013)) |
+| stale | `as_of=2027-01-01T00:00:00Z` | `STALE`, 139 days, **filed #64** ([run](https://github.com/UnderMyBed/upguage/actions/runs/32051371258)) |
+| dedupe | same, with #64 still open | `a stale-data alert is already open; not filing another`, still exactly one issue ([run](https://github.com/UnderMyBed/upguage/actions/runs/32051669526)) |
+| listing fails | unplanned — GitHub 503ed 5× in a row | all five retries fired, then **refused to evaluate**, exit 1, **no false alert** ([run](https://github.com/UnderMyBed/upguage/actions/runs/32051503754)) |
+
+Only the clock is varied in the stale case; the release history, the comparison and the issue are
+real. `test_main_honours_an_injected_now` is what makes that substitution meaningful rather than a
+demonstration of a path production never takes — without it, `as_of` could fail to reach the
+comparison and the run would prove only that the workflow executes.
+
+The fourth row was not staged. It is the strongest of the four precisely because nobody arranged
+it: the guard's own failure mode arrived unprompted, three minutes after it shipped.
+
 **Known limitation, not closable inside Actions:** GitHub disables scheduled workflows on public
 repositories after 60 days of repository inactivity. That would disable `freshness.yml` and
 `warehouse.yml` **together** — the watcher and the watched share this one fate. An external
