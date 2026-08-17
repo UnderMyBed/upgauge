@@ -137,6 +137,12 @@ jobs:
             echo "raw_name=raw-$dotted"
           } >> "$GITHUB_OUTPUT"
 
+      # LOAD-BEARING FOR THE FRESHNESS ALERT, which is in another file and cannot say so itself.
+      # Because this guard skips the publish unless `max(year_month)` advanced, the newest
+      # release's `publishedAt` IS the timestamp of the last advance -- which is the whole reason
+      # freshness.yml needs no state file. Make this publish on an unchanged month and that
+      # derivation quietly degrades into "when did we last run", i.e. healthy forever.
+      # See .github/scripts/freshness.py's module docstring.
       - name: Stop if this month is already published
         env:
           GH_TOKEN: ${{ github.token }}

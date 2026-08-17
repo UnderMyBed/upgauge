@@ -1,0 +1,98 @@
+name: Freshness
+
+# CLAUDE.md's hard rule: "The cron must fail loudly. A broken ingest doesn't error -- the site
+# keeps serving and DATA AS OF silently stops advancing. Alert when max(year_month) hasn't moved
+# in ~45 days."
+#
+# SEPARATE FROM warehouse.yml ON PURPOSE. A check bolted onto that workflow cannot see it
+# failing before the check runs, being disabled for repository inactivity, or being deleted --
+# and `make ingest` exiting non-zero aborts that job several steps before any freshness step
+# would be reached. An alert that shares a fate with the thing it watches is not an alert.
+#
+# Daily, not monthly: the threshold is 45 days, so a monthly check could report a 44-day-old
+# stall as healthy and then not look again for another 30. Daily is free on a public repo, and
+# the whole job is one API call plus a stdlib script.
+on:
+  schedule:
+    - cron: "17 7 * * *"
+  workflow_dispatch:
+    inputs:
+      as_of:
+        description: >-
+          Override "now" (ISO 8601, e.g. 2027-01-01T00:00:00Z). Blank uses the real clock.
+          This is how the alert is demonstrated firing: the release history, the comparison and
+          the issue are all real, and only the clock is varied.
+        required: false
+        default: ""
+
+permissions:
+  contents: read   # gh release list
+  issues: write    # file the alert
+
+concurrency:
+  group: freshness
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # No `uv sync`: freshness.py is deliberately stdlib-only, so this needs an interpreter and
+      # nothing else. mise rather than the runner's system python3 keeps it on the same 3.12.12
+      # the tests pinned it against.
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          cache: true
+
+      # `--exclude-drafts` is belt; the script's own publishedAt filter is braces (a draft
+      # carries publishedAt=null). Same doubling as warehouse.yml's tag resolver, and for the
+      # same reason: this consumer must not depend on a flag staying passed.
+      #
+      # `$releases` and `$FRESHNESS_NOW` reach the script as quoted variable expansions, never
+      # spliced through `${{ }}` into the script text -- the rule warehouse.yml's PREVIOUS_TAG
+      # and ISSUE_BODY comments spell out. `as_of` is dispatch-supplied text in a job holding
+      # issues:write, so it goes through `env:` like every other untrusted value here.
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FRESHNESS_NOW: ${{ inputs.as_of }}
+        run: |
+          set -euo pipefail
+          releases=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+                       --exclude-drafts --exclude-pre-releases \
+                       --json tagName,publishedAt)
+          mise exec -- python .github/scripts/freshness.py "$releases"
+
+      # Staleness is a CONDITION, not an event: it stays true every day until someone fixes it.
+      # Without this check a three-month stall files ninety issues, and an alert that buries its
+      # own repeat is an alert that gets muted.
+      - id: existing
+        if: steps.check.outputs.file_issue == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                   --label stale-data --json number --jq 'length')
+          echo "count=$open" >> "$GITHUB_OUTPUT"
+          [ "$open" = "0" ] || echo "::notice::a stale-data alert is already open; not filing another"
+
+      # `stale-data` is the dedupe key and must exist on the repository -- `gh issue create`
+      # fails outright on an unknown label, which would turn the alert into a failed run whose
+      # only symptom is a red tick nobody is watching for. `critical` matches the severity
+      # convention warehouse.yml's drift issue already uses.
+      - name: File the freshness alert
+        if: steps.check.outputs.file_issue == '1' && steps.existing.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_BODY: ${{ steps.check.outputs.issue_body }}
+        run: |
+          set -euo pipefail
+          gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "Data is stale: max(year_month) has not advanced" \
+            --label critical --label stale-data \
+            --body "$ISSUE_BODY"
