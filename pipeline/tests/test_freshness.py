@@ -262,6 +262,65 @@ def test_the_workflow_retries_the_release_listing_and_never_passes_it_through_em
     )
 
 
+def test_the_alert_assigns_and_mentions_the_repository_owner():
+    """#2's criterion is an alert that reaches a HUMAN, and filing an issue is not that.
+
+    Measured 2026-08-17, after the alert was demonstrated firing: UnderMyBed/upguage was absent
+    from the owner's 6 watched repositories, `repos/.../subscription` returned 404, and issue #64
+    was authored by github-actions[bot] with ZERO assignees and no `@` in its body. An issue
+    opened by a bot, in an unwatched repo, that neither assigns nor mentions anyone, notifies
+    nobody -- so the alert fired perfectly and reached no one.
+
+    Assignment and mention both notify regardless of watch state, and both live in this file
+    where a gate can see them. Watch settings are account configuration: correct today, silently
+    revocable, and invisible to every gate in this repo -- the same objection hosting.md makes
+    about correctness that exists only in a provider's dashboard."""
+    yaml_text = _freshness_workflow()
+    # Scoped to the COMMAND, not the file: the comment above that command says the word
+    # "--assignee" while explaining why it is not used there, so a file-wide substring check
+    # passes on prose after the command is gone. Measured -- that exact mutant survived.
+    edit = [ln for ln in yaml_text.splitlines() if "gh issue edit" in ln]
+    assert edit and "--add-assignee" in edit[0], "the alert assigns nobody"
+    assert '"@$OWNER' in yaml_text, "the issue body carries no @mention of the owner"
+
+
+def test_the_owner_reaches_the_shell_through_env_never_spliced():
+    """Same rule as `as_of` and warehouse.yml's PREVIOUS_TAG: Actions substitutes `${{ }}` into a
+    run: scalar BEFORE bash parses it. `github.repository_owner` is a constrained string today,
+    but the rule exists so nobody has to re-derive that per value."""
+    yaml_text = _freshness_workflow()
+    # BOTH halves, because the placement check alone passes VACUOUSLY when the value is absent
+    # entirely -- measured: deleting the env line left nothing for the loop to inspect and the
+    # test stayed green.
+    assert "OWNER: ${{ github.repository_owner }}" in yaml_text, (
+        "OWNER is not defined from the repository owner at all"
+    )
+    for line in yaml_text.splitlines():
+        if "github.repository_owner" in line:
+            assert line.strip().startswith("OWNER:"), (
+                f"repository_owner must only appear as an env: value, found: {line.strip()}"
+            )
+
+
+def test_a_failed_assignment_cannot_cost_us_the_issue():
+    """The issue is the alert; assignment is delivery polish on top of it. Passing --assignee to
+    `gh issue create` makes a failed assignment fail the CREATE, so a permissions or API hiccup
+    would lose the alert entirely -- strictly worse than the unassigned issue we have today.
+
+    So: create first, assign second, and let the assign fail loudly without taking the alert
+    with it. The @mention is already in the body by then, so the notification does not depend on
+    the assign step succeeding at all."""
+    yaml_text = _freshness_workflow()
+    create_at = yaml_text.index("gh issue create")
+    assign_at = yaml_text.index("--add-assignee")
+    assert create_at < assign_at, "assignment must come after the issue exists"
+    assign_line = [ln for ln in yaml_text.splitlines() if "--add-assignee" in ln][0]
+    tail = yaml_text[assign_at : assign_at + 400]
+    assert "||" in assign_line or "||" in tail, (
+        "a failed assignment must not fail the step that already filed the alert"
+    )
+
+
 def test_main_falls_back_to_the_real_clock_when_no_now_is_injected(monkeypatch, tmp_path):
     """An empty `as_of` input arrives as an empty STRING, not an unset variable -- Actions sets
     every declared env key. Treating "" as a date would raise and take the whole alert down on
