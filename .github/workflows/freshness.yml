@@ -62,9 +62,33 @@ jobs:
           FRESHNESS_NOW: ${{ inputs.as_of }}
         run: |
           set -euo pipefail
-          releases=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
-                       --exclude-drafts --exclude-pre-releases \
-                       --json tagName,publishedAt)
+          # RETRIED, because the watcher must not go quiet on someone else's outage. Measured
+          # 2026-08-17: `gh release list` returned 503 five times inside one hour -- twice from a
+          # workstation, twice in ci.yml's `resolve` (which skips every downstream gate when it
+          # fails), and once in this workflow's own first live run, which is how this was found.
+          #
+          # An unretried failure costs a day of coverage, and a failed scheduled run is exactly
+          # the signal nobody watches (#61) -- the watcher failing the way it exists to detect.
+          releases=""
+          for attempt in 1 2 3 4 5; do
+            if releases=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+                            --exclude-drafts --exclude-pre-releases \
+                            --json tagName,publishedAt); then
+              break
+            fi
+            echo "::warning::gh release list failed (attempt $attempt of 5); retrying"
+            releases=""
+            sleep $((attempt * 5))
+          done
+          # NEVER let a failed listing through as empty. `assess([])` is a STALE verdict with its
+          # own cause, so an empty string here files a FALSE critical alert -- a watcher that
+          # cries wolf over an API wobble is one that gets muted before the real event. `[]` is a
+          # different thing entirely (a repo with no releases yet, a legitimate answer) and still
+          # reaches the script; only an outright failure stops here.
+          [ -n "$releases" ] || {
+            echo "::error::could not list releases after 5 attempts -- refusing to evaluate freshness against no data"
+            exit 1
+          }
           mise exec -- python .github/scripts/freshness.py "$releases"
 
       # Staleness is a CONDITION, not an event: it stays true every day until someone fixes it.
