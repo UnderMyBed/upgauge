@@ -23,7 +23,7 @@ describe("search -- unique exact match redirects (step 1a)", () => {
 
   it("resolves a route pair to the code-alphabetical URL, not the typed order", async () => {
     // Measured: 'A' < 'P', so the alphabetical canonical is AUS-PDX even though PDX was typed
-    // first -- the same disagreement CLAUDE.md documents for 154 of 22,420 pairs.
+    // first -- the same disagreement CLAUDE.md documents for 215 of 22,509 pairs.
     const r = await search("PDX-AUS");
     expect(r).toEqual({ kind: "redirect", to: "/route/AUS-PDX" });
   });

@@ -145,10 +145,10 @@ describe("/watch/<preset>", () => {
     expect(container.querySelector('a[href^="/route/"]')).not.toBeNull();
   });
 
-  it("states the same-airport exclusion (71 of 8,080) on every preset", async () => {
+  it("states the same-airport exclusion (68 of 8,065) on every preset", async () => {
     for (const slug of PRESETS) {
       const { container } = await renderPreset(slug);
-      expect(content(container)).toContain("71 of 8,080");
+      expect(content(container)).toContain("68 of 8,065");
     }
   });
 
@@ -185,7 +185,7 @@ describe("/watch/<preset>", () => {
 
   it("states that unscored routes are excluded from Death Watch, not silently ranked worst", async () => {
     const { container } = await renderPreset("death-watch");
-    expect(content(container)).toContain("813 of 8,080");
+    expect(content(container)).toContain("733 of 8,065");
   });
 
   // Final whole-branch review (M6), CRITICAL. This test previously read:
@@ -198,8 +198,8 @@ describe("/watch/<preset>", () => {
   // reason it names: it asserted a phrase, not a fact, and the phrase was wrong.
   // watch_new_routes.sql selects `p12_months_present = 0` -- nothing filed in the PRIOR 12
   // months -- which is a re-entry, not a first appearance. Measured on the 2026-04 warehouse:
-  // 334 of 688 qualifying rows (48.5%) filed before that window, 17 of the 25 the page renders,
-  // worst case MQ AZO-ORD at 93 distinct months back to 2015-01.
+  // 303 of 606 qualifying rows (50.0%) filed before that window, 19 of the 25 the page renders,
+  // worst case QX BLI-SEA at 99 distinct months back to 2015-01.
   //
   // The replacement asserts the accurate claim AND the absence of the false one -- the pair is
   // the point. `toContain("...first appearance")` alone would still pass against the old
@@ -209,7 +209,7 @@ describe("/watch/<preset>", () => {
     const text = content(container);
     expect(text).toContain("not necessarily a first appearance");
     expect(text).toContain("Re-entry, not first appearance");
-    expect(text).toContain("334 of the 688");
+    expect(text).toContain("303 of the 606");
     expect(text).not.toContain("since 2015");
     expect(text).not.toContain("first ever");
   });
@@ -219,9 +219,9 @@ describe("/watch/<preset>", () => {
   // pair -- so `p12_months_present = 0` is silent about every OTHER carrier on the same airport
   // pair. Two strings described it at ROUTE grain: the frame's "nobody flew last year" (carried
   // over from the original sentence unexamined, because it read as its accurate half) and
-  // ReEntryNote's "A route qualifies by...". Measured: 521 of the 688 qualifying rows (75.7%),
+  // ReEntryNote's "A route qualifies by...". Measured: 466 of the 606 qualifying rows (76.9%),
   // and 25 of the 25 the page renders, had a different carrier flying that pair inside the p12
-  // window -- the #1 row AS HNL-ITO while HA, UA and WN filed 1,787,347 seats on it, 4.9x the
+  // window -- the #1 row AS HNL-ITO while HA, UA and WN filed 1,786,963 seats on it, 3.7x the
   // subject's own trailing 12. So the claim was false about EVERY row on the page.
   //
   // Both directions, as always: the carrier-grain phrasing present AND the two route-grain
@@ -232,7 +232,7 @@ describe("/watch/<preset>", () => {
     const text = content(container);
     expect(text).toContain("this carrier flew nothing on");
     expect(text).toContain("this carrier filed nothing at all on this route");
-    expect(text).toContain("521 of the 688");
+    expect(text).toContain("466 of the 606");
     expect(text).not.toContain("nobody flew");
     expect(text).not.toMatch(/\bA route qualifies\b/);
   });
@@ -292,7 +292,7 @@ describe("/watch/<preset>", () => {
 // hand a page a NULL score, so this is the only place the null branch is reachable at all.
 describe("formatHealthScore", () => {
   it("renders NULL as insufficient data, never an em-dash and never 'unhealthy'", () => {
-    // features.md's standing UI requirement: all 813 NULL routes are NULL for
+    // features.md's standing UI requirement: all 733 NULL routes are NULL for
     // data-availability reasons, not low-score reasons, and an em-dash in a column sorted
     // ascending reads as 'worst'.
     expect(formatHealthScore(null)).toBe("insufficient data");

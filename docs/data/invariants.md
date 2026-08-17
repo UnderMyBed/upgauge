@@ -194,8 +194,8 @@ Store both directional (`PDX→AUS`) and undirected (`AUS-PDX`) keys. The undire
 the two airport IDs sorted, so it is stable regardless of filing order.
 
 **A route filter must not become `origin IN (a,b) AND dest IN (a,b)`.** That form also
-matches same-airport filings (`a→a`, `b→b`), and those are not a curiosity: **12,738 of them
-exist across 530 airports** — full window (2015-01 → 2026-04), *including* quarantined rows,
+matches same-airport filings (`a→a`, `b→b`), and those are not a curiosity: **12,995 of them
+exist across 532 airports** — full window (2015-01 → 2026-05), *including* quarantined rows,
 which is the right pair of qualifiers here because a filter matches a row whether or not that
 row's measures are counted. See the table below for the other three answers. Measured on
 JFK–LAX over 2025-05 → 2026-04:
@@ -225,18 +225,18 @@ it is a number the next milestone will pin an acceptance criterion to. Measured 
 
 | Window | Quarantined | Rows | Airports | Seats |
 |---|---|---|---|---|
-| trailing 12 (2025-05 → 2026-04) | excluded | 3,182 | 358 | 601,565 |
-| trailing 12 (2025-05 → 2026-04) | **included** | **3,187** | **359** | **601,573** |
-| full window (2015-01 → 2026-04) | excluded | 12,696 | 530 | 1,887,193 |
-| full window (2015-01 → 2026-04) | **included** | **12,738** | **530** | **1,887,424** |
+| trailing 12 (2025-06 → 2026-05) | excluded | 3,173 | 355 | 598,829 |
+| trailing 12 (2025-06 → 2026-05) | **included** | **3,177** | **356** | **598,829** |
+| full window (2015-01 → 2026-05) | excluded | 12,953 | 532 | 1,932,821 |
+| full window (2015-01 → 2026-05) | **included** | **12,995** | **532** | **1,933,052** |
 
 The bolded rows are the ones quoted elsewhere in this repo, because the question everywhere else
 is *which rows a filter matches* — quarantine changes what a row **contributes**, never whether
-it is **matched**. Quoting the trailing-12 excluding-quarantined triple (3,182 / 358 /
-601,565) and labelling it only "in-window" is how one claim comes to have two spellings.
+it is **matched**. Quoting the trailing-12 excluding-quarantined triple (3,173 / 355 /
+598,829) and labelling it only "in-window" is how one claim comes to have two spellings.
 
-At SEA the trailing-12 overlap is 18 rows carrying 12,646 seats and 172 departures, enough to
-move its seat total from 53,373,806 to 53,386,452 if the two halves are simply added.
+At SEA the trailing-12 overlap is 17 rows carrying 12,207 seats and 166 departures, enough to
+move its seat total from 53,372,100 to 53,384,307 if the two halves are simply added.
 **`endpoint_airport_id` is a first-class filter for exactly this** (`filter_mode = 'either'`,
 `app/src/lib/pivot/render.ts` / `pipeline/pivot.py`), compiling to `origin = X OR dest = X`, so
 `/airport` runs ONE pivot per grain (`app/src/app/airport/[code]/endpoints.ts`): SQL's own
@@ -249,12 +249,12 @@ false here.
 **A count of an airport's distinct destinations includes the airport itself unless it is
 explicitly excluded, and the two answers are both defensible — so an unlabelled one is not
 evidence.** This is the same-airport rows above surfacing as an off-by-one in a *count* rather
-than in a sum. Measured over the trailing 12 (2025-05 → 2026-04), quarantined rows excluded:
+than in a sum. Measured over the trailing 12 (2025-06 → 2026-05), quarantined rows excluded:
 
 | Airport | Distinct far-endpoints | Excluding the airport itself | Its own same-airport rows |
 |---|---:|---:|---|
-| SEA | 144 | **143** | 18 rows / 12,646 seats |
-| ORD | 268 | **267** | 53 rows / 73,082 seats |
+| SEA | 144 | **143** | 17 rows / 12,207 seats |
+| ORD | 274 | **273** | 53 rows / 76,236 seats |
 
 The bolded column is what `endpoints.ts` commits for SEA (143) and what a map of the airport's
 network can draw, since a same-airport filing has no second endpoint to draw an arc *to*: its

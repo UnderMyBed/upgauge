@@ -61,16 +61,16 @@ describe("/aircraft/<slug>", () => {
   });
 
   it("computes the stat strip from summed parts, not by averaging the carrier rows", async () => {
-    // Measured over the trailing 12 months (2025-05..2026-04) for BTS type 614:
-    // seats 166,039,695 · passengers 130,153,460 · departures 971,746.
-    // Sum(pax)/Sum(seats) = 78.39%; Sum(seats)/Sum(dep) = 170.9. A mean of the seven carrier
+    // Measured over the trailing 12 months (2025-06..2026-05) for BTS type 614:
+    // seats 165,826,686 · passengers 129,838,662 · departures 970,584.
+    // Sum(pax)/Sum(seats) = 78.30%; Sum(seats)/Sum(dep) = 170.9. A mean of the seven carrier
     // rows gives different numbers for both, so these two assertions distinguish them --
     // CLAUDE.md's #1 bug in every homemade T-100 tool.
     const { container } = render(await page("B737-8"));
     const stats = container.querySelector(".stats")!.textContent ?? "";
-    expect(stats).toContain("166,039,695");
-    expect(stats).toContain("130,153,460");
-    expect(stats).toContain("78.39%");
+    expect(stats).toContain("165,826,686");
+    expect(stats).toContain("129,838,662");
+    expect(stats).toContain("78.30%");
     expect(stats).toContain("170.9");
     expect(stats).toContain("Carriers");
   });

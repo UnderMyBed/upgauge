@@ -48,9 +48,9 @@ function trailing12From(asOf: string): string {
 }
 
 /** Ratios of sums, never averages of the rows above -- CLAUDE.md's hard rule. Measured for
- * Delta over 2025-05..2026-04: the correct load factor is 82.84% and the mean of the 17
- * per-type load factors is 83.34%; the correct gauge is 163.7 and the mean of the rows is
- * 194.8. Both wrong answers look entirely plausible on screen, which is why page.test.tsx
+ * Delta over 2025-06..2026-05: the correct load factor is 82.87% and the mean of the 17
+ * per-type load factors is 83.33%; the correct gauge is 163.6 and the mean of the rows is
+ * 194.7. Both wrong answers look entirely plausible on screen, which is why page.test.tsx
  * asserts the right figures AND the absence of these two. */
 function carrierTotals(rows: Record<string, unknown>[]) {
   const sum = (k: string) => rows.reduce((a, r) => a + Number(r[k] ?? 0), 0);
@@ -315,7 +315,7 @@ export async function CarrierView({
   // ever be origin-only OR dest-only, never either-endpoint, until a groupable version of the
   // dimension exists -- not on any current backlog list. The heading below says "origin" and the
   // page states the real limitation in words -- the same failure shape as /airport's measured
-  // 26,710,000-vs-53,373,806 seats when a union term was dropped (CLAUDE.md), but a different
+  // 26,708,918-vs-53,372,100 seats when a union term was dropped (CLAUDE.md), but a different
   // cause from the one this comment used to name.
   const routesSpec: TopNSpec = {
     grain: "route",

@@ -93,7 +93,7 @@ deltas AS (
     FROM derived
 ),
 -- Four INDEPENDENT axes, equal 0.25. capacity_delta is deliberately NOT among them: in log
--- space it is exactly frequency + gauge (verified to 9.37e-16 over all 7,392 finite rows --
+-- space it is exactly frequency + gauge (verified to 2.66e-15 over all 7,459 finite rows --
 -- docs/data/model.md), so scoring it scores those two a second time. It keeps its column and
 -- stays on the page; it is the COMPOSITE it has no place in.
 --
@@ -128,7 +128,7 @@ axes AS (
         ln(nullif(t12_departures_performed, 0)
            / nullif(p12_departures_performed, 0))                          AS freq_log,
         -- CASE, not a bare least(): DuckDB's least() IGNORES NULLs, so least(NULL, 1.5)
-        -- returns 1.5 and fabricates a near-perfect completion rate for the 180 routes that
+        -- returns 1.5 and fabricates a near-perfect completion rate for the 177 routes that
         -- filed no schedule at all. See docs/data/model.md.
         CASE WHEN completion_factor IS NULL THEN NULL
              ELSE least(completion_factor, 1.5) END                        AS completion_capped
@@ -146,11 +146,11 @@ z AS (
 -- Clamped at +/-3 so no single axis can move the composite by more than 0.75. Uniform, with no
 -- per-component threshold to invent. Logging alone fixes capacity and frequency but BREAKS
 -- gauge: a three-seat change on a nine-seat aircraft is a huge log ratio, and VD CPX-VQS
--- reaches z_gauge = -17.28 unclamped. Touches 470 of the 7,267 scored rows.
+-- reaches z_gauge = -15.99 unclamped. Touches 466 of the 7,332 scored rows.
 --
 -- Every clamp is a CASE for the same reason the cap above is: greatest(least(NULL,3),-3)
 -- returns 3 (least(NULL,3) is 3, then greatest(3,-3) is 3), not NULL, which would score all
--- 8,080 rows and destroy the three-reason NULL contract (docs/product/features.md).
+-- 8,065 rows and destroy the three-reason NULL contract (docs/product/features.md).
 scored AS (
     SELECT
         * EXCLUDE (gauge_log, freq_log, completion_capped, z_lf, z_gauge, z_freq, z_completion),

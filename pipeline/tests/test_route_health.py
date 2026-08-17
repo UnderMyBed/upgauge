@@ -165,7 +165,7 @@ def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
     completion_factor NULL.
 
     The composite is FOUR axes, not five: M6 removed capacity_delta from the score, because
-    in log space it is exactly frequency + gauge (verified to 9.37e-16 over all 7,392 finite
+    in log space it is exactly frequency + gauge (verified to 2.66e-15 over all 7,459 finite
     rows -- docs/data/model.md), so scoring it scored those two a second time. It keeps its
     column and stays on the page; it is the composite it has no place in.
 
@@ -189,7 +189,7 @@ def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
 
 def test_health_score_is_bounded_by_the_clamp(con):
     """Each axis is clamped to +/-3 and weighted 0.25, so |health_score| <= 3.0 by
-    construction. Without the clamp a nine-seat aircraft's log gauge ratio reaches z = -17.28
+    construction. Without the clamp a nine-seat aircraft's log gauge ratio reaches z = -15.99
     on the real warehouse (VD CPX-VQS) and Death Watch fills with bush operators."""
     worst = con.execute(
         "SELECT max(abs(health_score)) FROM mart_route_health WHERE health_score IS NOT NULL"

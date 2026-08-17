@@ -78,14 +78,14 @@ const REGISTRY: ReadonlyMap<PresetSlug, Preset> = new Map([
       //
       // (1) NOT "first appearance since 2015". watch_new_routes.sql selects
       //     `p12_months_present = 0`: nothing filed in the PRIOR 12 months. That is a re-entry.
-      //     334 of the 688 qualifying rows (48.5%) filed before that window -- MQ AZO-ORD in 93
+      //     303 of the 606 qualifying rows (50.0%) filed before that window -- QX BLI-SEA in 99
       //     distinct months back to 2015-01.
       // (2) NOT "nobody flew last year". mart_route_health's grain is (op_airline_id, route) --
       //     a CARRIER-ROUTE PAIR, not a route -- so `p12_months_present = 0` says nothing
-      //     whatever about the other carriers on that airport pair. 521 of the 688 (75.7%), and
+      //     whatever about the other carriers on that airport pair. 466 of the 606 (76.9%), and
       //     ALL 25 rows the page renders, had another carrier flying the same pair inside the
-      //     prior window. The #1 row is AS HNL-ITO, where HA, UA and WN filed 1,787,347 seats
-      //     in that window -- 4.9x the subject's own trailing 12.
+      //     prior window. The #1 row is AS HNL-ITO, where HA, UA and WN filed 1,786,963 seats
+      //     in that window -- 3.7x the subject's own trailing 12.
       //
       // (2) survived the fix wave that caught (1), because "nobody flew last year" reads as the
       // accurate half of the old sentence and was carried over unexamined. The page's

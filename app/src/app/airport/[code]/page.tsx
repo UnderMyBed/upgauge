@@ -91,8 +91,8 @@ function Stat({ label, value, derived }: { label: string; value: string; derived
  * `endpoint_airport_id` (M7 Task 3, `filter_only`, `filter_mode='either'`) compiles to
  * `(origin_airport_id IN (...) OR dest_airport_id IN (...))`, so one filter on it reproduces
  * exactly what the carriers table above sums -- verified against the real warehouse: this
- * query returns 53,373,806 seats for SEA over 2025-05..2026-04, the same figure the stat strip
- * prints, not the 26,710,000 an origin-only (or dest-only) half would show.
+ * query returns 53,372,100 seats for SEA over 2025-06..2026-05, the same figure the stat strip
+ * prints, not the 26,708,918 an origin-only (or dest-only) half would show.
  *
  * Without an either-endpoint dimension this page can only offer two half permalinks, each
  * labelled as a half -- see endpoints.ts's header for the mechanism and

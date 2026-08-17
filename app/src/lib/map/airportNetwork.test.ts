@@ -65,8 +65,8 @@ describe("fetchAirportNetwork, against the warehouse", () => {
   });
 
   it("passes the same-airport seat total through rather than discarding it", async () => {
-    // Measured directly against fct_route_month: ORD's same-airport rows sum to 73,082 seats
-    // over 2025-05..2026-04 -- the identical figure docs/design/system.md's own arc-encoding
+    // Measured directly against fct_route_month: ORD's same-airport rows sum to 76,236 seats
+    // over 2025-06..2026-05 -- the identical figure docs/design/system.md's own arc-encoding
     // section states (53 segment-grain rows folding to this same total at route grain).
     const result = await fetchAirportNetwork(
       airport(ORD_ID, "ORD", "Chicago O'Hare Intl"),

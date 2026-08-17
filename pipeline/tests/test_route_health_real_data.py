@@ -100,10 +100,10 @@ def test_the_three_null_reasons_keep_their_measured_sizes(con):
                              AND p12_months_present <> 0 AND completion_factor IS NOT NULL)
         FROM mart_route_health
     """).fetchone()
-    assert (total, scored) == (8080, 7267)
-    assert (no_prior, no_schedule) == (688, 180)
+    assert (total, scored) == (8065, 7332)
+    assert (no_prior, no_schedule) == (606, 177)
     assert neither == 0  # every NULL has one of the two live reasons
-    assert no_prior + no_schedule - (total - scored) == 55  # the documented overlap
+    assert no_prior + no_schedule - (total - scored) == 50  # the documented overlap
 
 
 Z_COLUMNS = f"""
@@ -126,7 +126,7 @@ def test_the_clamp_binds_on_a_real_minority(con):
     it verifies the clamp THRESHOLD's effect on the data, not that the mart's SQL applies any
     clamp at all -- it passes unchanged even if the mart's clamp is deleted entirely (Task 2
     review finding; test_health_score_reconstructs_from_its_own_axes below is the one coupled
-    to the mart). 470 of 7,267 is the measured middle: a clamp that fires on zero rows would be
+    to the mart). 466 of 7,332 is the measured middle: a clamp that fires on zero rows would be
     decoration, one that fires on all of them would be a rank transform wearing a z-score's
     name."""
     clamped = con.execute(f"""
@@ -134,18 +134,18 @@ def test_the_clamp_binds_on_a_real_minority(con):
         WHERE health_score IS NOT NULL
           AND (abs(z_lf) > 3 OR abs(z_gauge) > 3 OR abs(z_freq) > 3 OR abs(z_completion) > 3)
     """).fetchone()[0]
-    assert clamped == 470
+    assert clamped == 466
 
 
 def test_no_axis_survives_the_clamp_unbounded(con):
-    """The observed maximum |health_score| is 2.31246 against a construction bound of 3.0
+    """The observed maximum |health_score| is 2.30880 against a construction bound of 3.0
     (four axes, each clamped to 3, weighted 0.25). Unclamped, VD CPX-VQS reaches z_gauge
-    -17.28 on this warehouse."""
+    -15.99 on this warehouse."""
     worst = con.execute(
         "SELECT max(abs(health_score)) FROM mart_route_health WHERE health_score IS NOT NULL"
     ).fetchone()[0]
     assert worst <= 3.0
-    assert worst == pytest.approx(2.31246, abs=1e-4)
+    assert worst == pytest.approx(2.30880, abs=1e-4)
 
 
 def test_health_score_reconstructs_from_its_own_axes(con):
@@ -155,7 +155,7 @@ def test_health_score_reconstructs_from_its_own_axes(con):
     sql/02_marts/200_mart_route_health.sql stops matching that formula, whether the break is in
     which columns feed an axis (e.g. reverting to raw capacity_delta/frequency_delta instead of
     the logged ratios) or in whether the clamp is applied at all. Measured max |residual|
-    1.47e-14 across all 7,267 scored rows -- floating-point noise, not a near-match."""
+    5.22e-15 across all 7,332 scored rows -- floating-point noise, not a near-match."""
     max_residual = con.execute(f"""
         SELECT max(abs(health_score - 0.25 * (
               greatest(least(z_lf,         3), -3)
@@ -214,9 +214,9 @@ def test_the_gauge_floor_excludes_the_bush_and_sightseeing_operators(con):
 
 
 def test_same_airport_rows_are_excluded_from_the_presets(con):
-    """71 of 8,080 mart rows are same-airport, and 60 of the 76 rows at lf_t12 = 0 are among
+    """68 of 8,065 mart rows are same-airport, and 59 of the 76 rows at lf_t12 = 0 are among
     them. The filings are real, but a ROUTE leaderboard listing ATW-ATW reads as a bug."""
     same = con.execute(
         "SELECT count(*) FROM mart_route_health WHERE route_key_low = route_key_high"
     ).fetchone()[0]
-    assert same == 71, "the exclusion in every watch_*.sql is what this count justifies"
+    assert same == 68, "the exclusion in every watch_*.sql is what this count justifies"

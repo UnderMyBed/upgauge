@@ -73,7 +73,7 @@ describe("/route/<pair>", () => {
     // Important 3, final whole-branch review: `routeTotals` already computed `passengers`
     // (it's the load-factor numerator) but nothing rendered it, though four docs -- CLAUDE.md,
     // features.md, system.md, and this spec's own mockup -- all listed it. Measured for this
-    // route and window (same query the page runs): seats=3,455,820 pax=2,998,796. Fails if
+    // route and window (same query the page runs): seats=3,464,803 pax=3,005,548. Fails if
     // the Passengers stat is removed, or if it's ever rendered from a different column
     // (e.g. seats again).
     const { container } = render(
@@ -83,15 +83,15 @@ describe("/route/<pair>", () => {
     // unscoped getByText would match twice and throw.
     const stats = container.querySelector(".stats");
     expect(stats?.textContent).toContain("Passengers");
-    expect(stats?.textContent).toContain("2,998,796");
+    expect(stats?.textContent).toContain("3,005,548");
   });
 
   it("computes totals from summed parts, not by averaging the carrier rows", async () => {
     // The whole point: Sum(pax)/Sum(seats), never mean(per-carrier lf). Measured for this
-    // route and window: seats 3,455,820, pax 2,998,796 -> 86.78%. A mean of the carrier
+    // route and window: seats 3,464,803, pax 3,005,548 -> 86.75%. A mean of the carrier
     // load factors gives a different number, so this assertion distinguishes them.
     render(await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }));
-    expect(screen.getByText("86.78%")).toBeDefined();
+    expect(screen.getByText("86.75%")).toBeDefined();
   });
 
   // Fix round 1 (task-6, pre-implementation falsifiability check): the brief's own version of

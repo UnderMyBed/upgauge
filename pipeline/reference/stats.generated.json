@@ -457,12 +457,12 @@
     },
     "city_markets": 6181,
     "dim_aircraft_type_rows": 450,
-    "dim_airport_current": 6902,
+    "dim_airport_current": 6903,
     "dim_carrier_rows": 1778,
     "fact_present_aircraft_codes": 112,
-    "fact_rows": 3359481,
-    "max_year_month": "2026-04",
-    "quarantined_rows": 1301,
+    "fact_rows": 3390521,
+    "max_year_month": "2026-05",
+    "quarantined_rows": 1316,
     "rows_by_year": [
       {
         "quarantined": 16,
@@ -520,8 +520,8 @@
         "year": 2025
       },
       {
-        "quarantined": 52,
-        "rows": 118650,
+        "quarantined": 67,
+        "rows": 149690,
         "year": 2026
       }
     ]

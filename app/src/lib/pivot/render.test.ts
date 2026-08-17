@@ -243,8 +243,8 @@ describe("composite-dimension filters", () => {
 describe("either-mode filters (endpoint_airport_id)", () => {
   it("compiles an either-mode filter to an OR across both columns", () => {
     // Catches: compiling `either` through the single-column branch (origin only), which is
-    // the SILENT half of an airport query -- SEA reads 26,710,000 seats instead of
-    // 53,373,806 and every row still renders perfectly.
+    // the SILENT half of an airport query -- SEA reads 26,708,918 seats instead of
+    // 53,372,100 and every row still renders perfectly.
     const { sql } = renderPivot(q({ filters: [["endpoint_airport_id", ["14747"]]] }), FIXTURE);
     expect(sql).toContain("(origin_airport_id IN ($f0_0) OR dest_airport_id IN ($f0_0))");
   });

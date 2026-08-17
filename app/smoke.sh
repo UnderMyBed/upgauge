@@ -650,8 +650,8 @@ check_re "chart: the band BREAKS at them, drawn as two paths (HNL-LAS)" "$(count
 # The OTHER branch of the window line, in the served bytes. ATL-CAK filed 67 months, 2015-01 ->
 # 2022-06, and nothing since; the chart is fetched over the full window but can only draw to
 # 2022-06. The line shipped naming the REQUESTED window, putting "the full window · 2015-01 →
-# 2026-04" above a chart that stops in 2022 -- the aria-label was already right, so only the
-# text a sighted reader sees was wrong. 12,062 of 22,950 pairs last filed before the current
+# 2026-05" above a chart that stops in 2022 -- the aria-label was already right, so only the
+# text a sighted reader sees was wrong. 12,115 of 23,041 pairs last filed before the current
 # trailing-12 window, so this branch is the majority case, not an edge.
 #
 # Checked HERE and not only in page.test.tsx because the fix's first form was `chart: {a} → {b}`
@@ -697,12 +697,12 @@ BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA")
 check     "airport: renders the code"        "$BODY" '>SEA<'
 check     "airport: DATA AS OF is present"   "$BODY" 'DATA AS OF'
 # The one figure that distinguishes this page's implementation from the plausible wrong one.
-# `origin OR dest` at SEA over 2025-05..2026-04 is 53,373,806 seats; an origin-only page renders
-# every stat, row and band in the right shape and reads 26,710,000. Carrier and aircraft-type
+# `origin OR dest` at SEA over 2025-06..2026-05 is 53,372,100 seats; an origin-only page renders
+# every stat, row and band in the right shape and reads 26,708,918. Carrier and aircraft-type
 # COUNTS are identical either way (13 and 25), so they are not discriminators -- see
 # docs/data/invariants.md § Route identity. Dropping the inclusion-exclusion overlap term
-# instead reads 53,386,452.
-check     "airport: counts BOTH endpoints, not just departures" "$BODY" '53,373,806'
+# instead reads 53,384,307.
+check     "airport: counts BOTH endpoints, not just departures" "$BODY" '53,372,100'
 check     "airport: says so in words"        "$BODY" 'at <b>both</b> endpoints'
 # `>14747<`, not a bare `14747`: SEA's airport_id legitimately appears in this page's Explorer
 # permalink (`f=endpoint_airport_id:14747` -- ONE link since M7, not the two origin/dest halves
@@ -769,7 +769,7 @@ BODY=$(curl -s --max-time 15 "${BASE}/airport/ZZZZ")
 check_re  "airport 404: the SENTENCE carries the requested code" "$BODY" 'We can.{1,3}t show .{1,12}ZZZZ'
 
 # 10b. M7 Task 9: /airport/<code>?y=<year>, and the cache-header split proxy.ts's matcher
-# section warns can only be seen by a served build. asOf is 2026-04 as measured (M4d's own
+# section warns can only be seen by a served build. asOf is 2026-05 as measured (M4d's own
 # convention of hardcoding the current measured asOf elsewhere in this file, e.g. the carrier
 # chart-window check below) -- 2015-2025 are complete calendar years and 2026 is partial.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA?y=2019")
@@ -779,7 +779,7 @@ check_not "airport?y: a complete prior year is not called partial"   "$BODY" 'ca
 
 BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA")
 check     "airport: the default view states the current year is partial" "$BODY" \
-  '2026 is a partial year — filed through April 2026 only.'
+  '2026 is a partial year — filed through May 2026 only.'
 check     "airport: the current year's own tick carries the asterisk"     "$BODY" '>2026*<'
 
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/airport/SEA?y=2019")
@@ -796,14 +796,14 @@ check_not "airport?y=1999: ...and is never long-cached"              "$HDRS" "s-
 BODY=$(curl -s --max-time 15 "${BASE}/airport/SEA?y=1999")
 check     "airport?y=1999: names the offending value and the covered range" "$BODY" \
   "unknown year '1999' — this dataset covers 2015–2026"
-check_not "airport?y=1999: does not silently fall back to the default view" "$BODY" '53,373,806'
+check_not "airport?y=1999: does not silently fall back to the default view" "$BODY" '53,372,100'
 
 BODY=$(curl -s --max-time 15 "${BASE}/airport/SEA?y=nonsense")
 check     "airport?y=nonsense: malformed input is the same named error, not a 500" "$BODY" \
   "unknown year 'nonsense'"
 
 # 10c. M7 Tasks 4-8: the airport network map, in the served HTML. ORD, not SEA -- it is the
-# database's own worst case (measured 267 destinations after the same-airport row is excluded,
+# database's own worst case (measured 273 destinations after the same-airport row is excluded,
 # vs. SEA's much smaller network), so this is the section that would first show a truncation or
 # a rendering blow-up if one existed. Same five-part discipline the comment above states for
 # every entity page (renders, Cache-Control, real-vs-bare id, chart/map svg, 404/308 caching),
@@ -821,24 +821,24 @@ check     "airport?y=nonsense: malformed input is the same named error, not a 50
 BODY=$(curl -s --max-time 30 "${BASE}/airport/ORD")
 check     "airport map: the network SVG is in the served HTML" "$BODY" \
   '<svg viewBox="0 0 960 500" width="960" height="500" role="img"'
-# EXACTLY 267, not "at least" and not 268. ORD carries a same-airport row (53 rows / 73,082
+# EXACTLY 273, not "at least" and not 274. ORD carries a same-airport row (53 rows / 76,236
 # seats over the trailing 12 -- networkMap.ts's own NetworkMapInput doc) that renderNetworkMap
 # deliberately excludes from the drawn set (a same-airport great circle has zero length and
 # would draw an invisible mark atop the origin disc) while keeping its seats in the STATED
-# total -- so 268 arcs worth of destinations produce 267 polylines, and a mutant that drew the
-# same-airport row anyway would produce 268 here without moving any other check in this file.
+# total -- so 274 arcs worth of destinations produce 273 polylines, and a mutant that drew the
+# same-airport row anyway would produce 274 here without moving any other check in this file.
 # `count`, not `has`: presence alone cannot distinguish "the exclusion runs" from "it doesn't."
 #
 # NOT doubled the way M4c's chart-path checks are (a normal JSX SVG ships once in the HTML body
 # and again, `<`-escaped to `<`, in the RSC flight payload) -- measured directly against
-# this same served build: `<polyline` occurs exactly 267 times in the WHOLE response, because
+# this same served build: `<polyline` occurs exactly 273 times in the WHOLE response, because
 # this SVG is a single pre-serialized string injected via `dangerouslySetInnerHTML`
 # (NetworkMap.tsx), and Next's RSC payload re-encodes that string's own `<` as `<` before
 # embedding it, so the literal 4-byte substring `<polyline` never appears a second time. A
 # doubled-count assumption carried over from the chart checks would have made this section
-# assert 534 and fail against the real build.
-check_re  "airport map: exactly 267 polylines (same-airport arc excluded)" \
-  "$(count "$BODY" '<polyline')" '^267$'
+# assert 546 and fail against the real build.
+check_re  "airport map: exactly 273 polylines (same-airport arc excluded)" \
+  "$(count "$BODY" '<polyline')" '^273$'
 # An inset label -- ORD's own network reaches ak/hi/car (measured against this served build;
 # see the `pac` absence below), each drawn as a labelled `<rect>`+`<text>` frame (INSETS,
 # networkMap.ts). Plain "ALASKA", not the bare `>ALASKA<` M5-style checks use elsewhere in this
@@ -914,7 +914,7 @@ check     "carrier: links an aircraft cell to /aircraft/B737-8" "$BODY" 'href="/
 check     "carrier: the chart SVG is in the served HTML" "$BODY" '<svg role="img"'
 check     "carrier: ramp tokens reach the area fills (lightest)" "$BODY" '<path fill="var(--g0)" d='
 check     "carrier: ramp tokens reach the area fills (darkest)"  "$BODY" '<path fill="var(--g5)" d='
-check     "carrier: the page states the chart's own window" "$BODY" 'chart: the full window · 2015-01 → 2026-04'
+check     "carrier: the page states the chart's own window" "$BODY" 'chart: the full window · 2015-01 → 2026-05'
 # Final whole-branch review, M11 (third of four canonical checks -- see /route's own comment).
 check     "carrier: carries a self-referential canonical link (Task 2)" "$BODY" \
   '<link rel="canonical" href="http://localhost:3000/carrier/DL"'
@@ -924,7 +924,7 @@ check     "carrier: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTE
 
 # The other branch of the window line, and the negative half of the pair. VX (Virgin America)
 # stopped filing in 2018-03; the chart is fetched over the full window and can only draw to
-# there, so naming the REQUESTED window would put "the full window · … → 2026-04" over a chart
+# there, so naming the REQUESTED window would put "the full window · … → 2026-05" over a chart
 # that ends in 2018 -- M4c's bug, one page over. Both caveats render here too, with no table.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX")
 check     "carrier: a carrier that stopped filing names ITS range" "$BODY" 'chart: 2015-01 → 2018-03'
@@ -1395,16 +1395,16 @@ check_not "watch/new-routes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
 # accurate claim present AND the false one gone. All-ASCII needles for the reason above; the
 # frame itself is a plain TS string literal (lib/watch.ts), not JSX, so it ships verbatim.
 check     "watch/new-routes: states re-entry, not first appearance" "$BODY" 'not necessarily a first appearance'
-check     "watch/new-routes: carries the measured count"            "$BODY" '334 of the 688'
+check     "watch/new-routes: carries the measured count"            "$BODY" '303 of the 606'
 check_not "watch/new-routes: no longer claims 'since 2015'"         "$BODY" 'since 2015'
 # The SECOND false claim on this page, found by the re-review of the wave that fixed the first:
 # mart_route_health's grain is (op_airline_id, route), so `p12_months_present = 0` says nothing
-# about the OTHER carriers on that airport pair -- 521 of 688 (75.7%) and 25 of the 25 rendered
+# about the OTHER carriers on that airport pair -- 466 of 606 (76.9%) and 25 of the 25 rendered
 # had one, the #1 row (AS HNL-ITO) while HA/UA/WN filed 1,787,347 seats on it. This page has now
 # shipped a false claim twice, so every one of them gets a served-byte guard, both directions.
 check     "watch/new-routes: names the carrier, not the route (frame)" "$BODY" 'A route this carrier flew nothing on last year'
 check     "watch/new-routes: names the carrier, not the route (note)"  "$BODY" 'this carrier filed nothing at all on this route'
-check     "watch/new-routes: carries the unserved-route measurement"   "$BODY" '521 of the 688'
+check     "watch/new-routes: carries the unserved-route measurement"   "$BODY" '466 of the 606'
 check_not "watch/new-routes: never claims nobody flew it"              "$BODY" 'nobody flew'
 check_re     "watch/new-routes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/new-routes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
