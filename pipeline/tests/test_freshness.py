@@ -238,6 +238,30 @@ def test_the_alert_is_gated_on_the_dedupe_count_as_well_as_on_staleness():
     assert "steps.check.outputs.file_issue == '1'" in condition[0]
 
 
+def test_the_workflow_retries_the_release_listing_and_never_passes_it_through_empty():
+    """A transient GitHub 503 is not hypothetical: `gh release list` 503ed FIVE times in one
+    hour on 2026-08-17 -- twice locally, twice in ci.yml's `resolve`, and once in this
+    workflow's own first live run, which is what surfaced this.
+
+    Two distinct failures follow, and the second is the dangerous one:
+
+      1. The alert does not run at all that day. A failed scheduled run is exactly the signal
+         nobody watches (#61), so the watcher goes quiet in the way it exists to prevent.
+      2. If an API error ever yields EMPTY output rather than a non-zero exit, that empty
+         string reaches assess() as zero releases -- which is a STALE verdict with its own
+         cause, and files a FALSE critical alert. A watcher that cries wolf on its own
+         infrastructure wobble gets muted, and then it is gone for the real event.
+
+    `[]` is a legitimate answer meaning "this repo has no releases" and must still reach the
+    script; only an actual failure is guarded here."""
+    yaml_text = _freshness_workflow()
+    assert "for attempt in" in yaml_text, "the release listing is not retried"
+    assert '[ -n "$releases" ]' in yaml_text, (
+        "nothing stops a failed listing reaching freshness.py as empty input, which reports "
+        "'no well-formed release' and files a false alert"
+    )
+
+
 def test_main_falls_back_to_the_real_clock_when_no_now_is_injected(monkeypatch, tmp_path):
     """An empty `as_of` input arrives as an empty STRING, not an unset variable -- Actions sets
     every declared env key. Treating "" as a date would raise and take the whole alert down on

@@ -637,6 +637,17 @@ that gates the filing. The dedupe key is the `stale-data` label, which must exis
 repository — `gh issue create` fails outright on an unknown label, which would turn the alert
 into a failed run whose only symptom is a red tick nobody watches for.
 
+**The release listing is retried, and a failed listing is never passed through as empty.** Both
+halves are load-bearing, and the second is the sharp one: `assess([])` is a *stale* verdict with
+its own cause, so an empty string reaching the script files a **false** critical alert — a watcher
+that cries wolf over an API wobble gets muted before the real event. `[]` is a different thing (a
+repo with no releases yet, a legitimate answer) and still reaches the script; only an outright
+failure stops the run. Measured 2026-08-17: `gh release list` returned 503 **five times inside one
+hour** — twice from a workstation, twice in `ci.yml`'s `resolve`, and once in this workflow's own
+first live run, which is how it was found. Note the other three resolvers (`ci.yml` and
+`verify.yml`'s `pick`, `warehouse.yml`'s `previous`) still have no retry, and a failed `resolve`
+**skips every downstream gate** rather than reddening one.
+
 **Known limitation, not closable inside Actions:** GitHub disables scheduled workflows on public
 repositories after 60 days of repository inactivity. That would disable `freshness.yml` and
 `warehouse.yml` **together** — the watcher and the watched share this one fate. An external
