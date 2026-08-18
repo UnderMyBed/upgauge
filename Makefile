@@ -156,7 +156,7 @@ app-smoke:  ## Build, serve, and curl real URLs. Catches production-only bugs no
 # needles, which is the wrong end. BUMP THIS TAG IN THE SAME COMMIT that re-measures those
 # needles; they are one fixture (the project's existing rule -- "when a renamed value was the
 # fixture for a transform, MOVE the fixture" -- applied to this coupling).
-WAREHOUSE_TAG ?= warehouse-2026.04
+WAREHOUSE_TAG ?= warehouse-2026.05
 IMAGE ?= upgauge:local
 
 # `git describe --always --dirty`, never `git rev-parse --short HEAD`: rev-parse ignores
