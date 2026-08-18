@@ -777,6 +777,32 @@ happened the day this was written — trains the reader to skip the log and is w
 a run fails for any other reason. It links the run and points at the data contract step as the
 cheapest thing to read first, which is an ordering, not a diagnosis.
 
+**Demonstrated firing, 2026-08-18, against real runs — only the pin was varied.** An alert
+that has never fired is a dark guard, and this one has a second dark layer the freshness alert
+did not: `workflow_run` only ever runs the copy on the default branch, so nothing about the
+delivery path is exercised until it is merged.
+
+Branch `demo/stale-pin-61` reverted `city_markets` from `6181` to `6177` — the value it
+genuinely held before the 2026-08-07 BTS refresh moved it — and `verify.yml` was dispatched
+against it. Every run below is real:
+
+| what | result |
+|---|---|
+| Dispatched nightly ([32106834513](https://github.com/UnderMyBed/upguage/actions/runs/32106834513)) | Data contract **failed** in ~4 minutes. `make check` and `make verify` **skipped** — the fail-fast ordering, an hour of runner time not spent |
+| Notifier ([32106884541](https://github.com/UnderMyBed/upguage/actions/runs/32106884541)) | Filed **#71**, titled per workflow, `@UnderMyBed` in the body and assigned |
+| A green `CodeQL` completion 16 s later ([32106903273](https://github.com/UnderMyBed/upguage/actions/runs/32106903273)) | **Skipped** by the allow-list prefilter |
+| A second identical failure ([32107043420](https://github.com/UnderMyBed/upguage/actions/runs/32107043420)) | Ran, filed **nothing** — *"an alert for this workflow is already open"*, File step skipped |
+
+Three of the four branches, live. The fourth — a `cancelled` run filing nothing — is covered by
+unit test only, because cancelling a run on cue is not something a gate can arrange.
+
+**The demonstration found a defect, which is what demonstrations are for.** `Summarise` carries
+`if: always()` and read `/tmp/verify.log` unguarded. With the data contract now running first,
+that file legitimately does not exist on a short-circuited run, so the step failed a second time
+for an unrelated reason (`tail: cannot open`) — turning one clear red into two, on the job whose
+entire value is an unambiguous red. It now reports that `make verify` never ran and points at the
+summary the failing gate already wrote.
+
 **`scheduled-red` must exist as a repository label.** `gh issue create` fails outright on an
 unknown label, which would turn this alert into a failed run whose only symptom is a red tick
 nobody is watching for — the exact failure it exists to prevent.

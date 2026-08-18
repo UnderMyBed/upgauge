@@ -387,6 +387,24 @@ def test_the_nightly_asserts_the_data_contract():
     assert "pipeline/reference/stats.generated.json" in text
 
 
+def test_the_nightly_summary_survives_an_earlier_gate_failing():
+    """`if: always()` means Summarise runs even when the data contract short-circuited the job,
+    and `/tmp/verify.log` legitimately does not exist on those runs -- `make verify` never ran.
+    Reading it unguarded made the step fail for a SECOND, misleading reason (`tail: cannot
+    open`), turning one clear red into two on a job whose whole value is an unambiguous red.
+
+    Measured on the #61 demonstration run 32106834513 (2026-08-18): the data contract failed as
+    intended and `Summarise` then failed too, for an unrelated reason."""
+    steps = yaml.safe_load((WORKFLOWS / "verify.yml").read_text())["jobs"]["verify"]["steps"]
+    summarise = next(step for step in steps if step.get("name") == "Summarise")
+    assert summarise["if"] == "always()"
+    assert "/tmp/verify.log" in summarise["run"]
+    assert "[ -f /tmp/verify.log ]" in summarise["run"], (
+        "Summarise reads the verify log without checking it exists; on any run where an "
+        "earlier gate failed first, that fails the step for a second, misleading reason"
+    )
+
+
 def test_the_data_contract_runs_before_the_expensive_proof():
     """An ordering, so it is asserted as an ordering -- CLAUDE.md's rule: when the property is
     a position, assert the position, never the set of things present. `make verify` rebuilds
