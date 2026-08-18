@@ -1,0 +1,137 @@
+name: Promote
+
+# The promote hop (D5). Nothing here reaches the box: this moves a tag in the registry, and
+# the box's own timer notices within 30s. That is what lets "no inbound ports" and "a human
+# decides when" hold at the same time -- and it makes ROLLBACK the same operation with an
+# older tag, so the emergency path is the one that gets exercised every deploy.
+#
+# What the box does with a new `:deploy` digest is itself a hazard this workflow exists to
+# catch, not just describe: `deploy/upgauge-deploy.service`'s `docker compose up -d --wait`
+# RECREATES the running container, stopping the old healthy one BEFORE the new one is confirmed
+# healthy. An image that pulls but fails its healthcheck therefore takes the site DOWN, and the
+# box's 30s timer just keeps retrying the same failing image forever -- it never reverts on its
+# own. That was accepted deliberately (every image is gated by `make image-smoke` before it can
+# reach the registry at all, and blue/green on a 4 GB box isn't worth it for ~12 deploys a
+# year), which is exactly what makes the "Wait for the box to be serving it" step below the
+# thing that DETECTS a bad promote, and re-dispatching this same workflow with the previous
+# known-good tag the REMEDY. See that step's failure message.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Immutable tag to promote, e.g. warehouse-2026.05-9a9511d"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # `.github/scripts/promote_check.py` and its `gha.py` helper must be present on the
+      # runner -- this job calls them below, unlike the pure re-tag steps, which need only
+      # `docker`.
+      - uses: actions/checkout@v7
+
+      # No `uv sync`: promote_check.py is deliberately stdlib-only (same reasoning as
+      # freshness.py), so this needs an interpreter pinned to the version this repo tests
+      # against and nothing else.
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          cache: true
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # imagetools re-tags by DIGEST without pulling 413 MB. The source tag must already
+      # exist; `image.yml` is what vouched for it.
+      #
+      # Both calls are registry network requests, retried for the same reason every `gh` call
+      # elsewhere in this repo is (freshness.yml's release listing 503'd five times in one hour
+      # on 2026-08-17): a transient failure here must not be read as "the tag does not exist",
+      # and must not silently abandon a promote that was otherwise fine.
+      - name: Point :deploy at the requested digest
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          src="ghcr.io/undermybed/upguage:${TAG}"
+
+          digest=""
+          for attempt in 1 2 3 4 5; do
+            if digest=$(docker buildx imagetools inspect "$src" --format '{{.Manifest.Digest}}' 2>/tmp/inspect.err); then
+              break
+            fi
+            digest=""
+            echo "::warning::imagetools inspect $src failed (attempt $attempt of 5); retrying"
+            sleep $((attempt * 5))
+          done
+          [ -n "$digest" ] || {
+            cat /tmp/inspect.err >&2
+            echo "::error::$src does not exist or could not be inspected after 5 attempts -- image.yml is what publishes it; confirm the tag"
+            exit 1
+          }
+
+          created=""
+          for attempt in 1 2 3 4 5; do
+            if docker buildx imagetools create -t ghcr.io/undermybed/upguage:deploy "$src"; then
+              created=1
+              break
+            fi
+            echo "::warning::imagetools create :deploy failed (attempt $attempt of 5); retrying"
+            sleep $((attempt * 5))
+          done
+          [ -n "$created" ] || {
+            echo "::error::could not point :deploy at $src after 5 attempts -- the source tag exists but the re-tag itself did not go through"
+            exit 1
+          }
+
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "::notice::promoted $src ($digest)"
+          echo "### Promoted \`$src\` ($digest)" >> "$GITHUB_STEP_SUMMARY"
+
+      # The deploy's own proof. Without this the workflow reports success for having moved a
+      # tag, which is not the thing anyone wanted done -- the box could be down, the timer
+      # stopped, or the image unable to start, and this would still be green.
+      #
+      # The tag-parsing half of the comparison lives in `.github/scripts/promote_check.py`, not
+      # here -- see that module's docstring for the bash last-dash-splitting bug it exists to
+      # avoid (breaks on a `-dirty` sha). `TAG` reaches the script only as an argv value under
+      # `env:`, never spliced through `${{ }}` into this script's text.
+      #
+      # A `curl` failure is folded into `{}` deliberately: this loop already retries every 10s
+      # for up to 5 minutes, so a single dropped connection must read as "not yet", not abort
+      # the whole workflow -- the SAME "never treat a failure as an empty answer" rule other
+      # workflows apply to `gh` calls means something different in a loop that is ALREADY the
+      # retry: it is the FINAL `::error` after every attempt is exhausted that must not be
+      # silently swallowed, and it isn't.
+      - name: Wait for the box to be serving it
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          body='{}'
+          for attempt in $(seq 1 30); do
+            body=$(curl -sS --max-time 10 https://upgauge.shipman.dev/api/health || echo '{}')
+            echo "attempt ${attempt}:"
+            if mise exec -- python .github/scripts/promote_check.py "$TAG" "$body"; then
+              printf '%s' "$body" | jq . >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::the box never reported the promoted build after 5 minutes. The tag moved; the deploy did not."
+          echo "::error::docker compose up -d --wait recreates the container before confirming health, so a bad image already took the site DOWN and the box's own timer will keep retrying it forever. ROLL BACK NOW: re-dispatch this workflow with the previous known-good tag."
+          printf '%s' "$body" | jq . >> "$GITHUB_STEP_SUMMARY" || true
+          exit 1
