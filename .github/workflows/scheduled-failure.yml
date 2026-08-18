@@ -1,0 +1,142 @@
+name: Scheduled failure alert
+
+# CLAUDE.md's hard rule, one level up from the data: "The cron must fail loudly." #17 made the
+# DATA fail loudly. This makes the GATES fail loudly, which is the opposite case and needs its
+# own watcher -- when the dataset advances correctly and the repo's pins do not follow, no
+# freshness check can ever see it, because the data moved exactly as it should have.
+#
+# Measured, and the reason this exists:
+#   2026-08-14 07:59Z  Warehouse publishes warehouse-2026.05
+#   2026-08-15 04:49Z  Verify (reproducibility) fails. FIRST RED
+#   2026-08-16 04:51Z  fails again
+#   2026-08-17 05:00Z  fails again
+#   2026-08-17 16:27Z  an unrelated PR opens and reddens four jobs -- the first human signal
+# verify.yml did its job on the very first night. Nothing carried that to anybody.
+#
+# SEPARATE FROM THE WORKFLOWS IT WATCHES, for the reason freshness.yml's header gives: an alert
+# that shares a fate with the thing it watches is not an alert. A notify step inside verify.yml
+# cannot report verify.yml being disabled for repository inactivity, being deleted, or failing
+# before the step is reached. It also keeps `issues: write` off every workflow that restores a
+# warehouse and runs `make`.
+#
+# `workflow_run` ALWAYS runs the copy on the default branch, whatever branch the watched run
+# used. That is what makes this reachable at all, and it is also why the end-to-end
+# demonstration can only happen after this merges.
+on:
+  workflow_run:
+    # Every workflow in this repo that runs on a schedule. Enforced as a RULE rather than kept
+    # as a snapshot: test_every_scheduled_workflow_in_the_repo_is_watched reddens when someone
+    # adds a scheduled workflow and forgets this list, which is the exact way verify.yml came
+    # to be red at nobody.
+    workflows:
+      - "Verify (reproducibility)"
+      - "Warehouse"
+      - "Freshness"
+      - "CodeQL"
+    types: [completed]
+
+permissions:
+  contents: read   # checkout
+  issues: write    # file the alert
+
+# Serialised per watched workflow, never cancelled. Two runs of the same workflow completing
+# close together would otherwise both read "no open alert" and both file one -- the dedupe is a
+# read-then-write, so it needs the runs not to interleave.
+concurrency:
+  group: scheduled-failure-${{ github.event.workflow_run.name }}
+  cancel-in-progress: false
+
+jobs:
+  alert:
+    # A cost control, NOT the decision -- `scheduled_failure.py` is the decision, and it also
+    # applies the event filter this cannot cheaply express. Kept honest by
+    # test_the_yaml_prefilter_and_the_script_agree, which fails if this list and
+    # ALERTING_CONCLUSIONS drift apart.
+    #
+    # An ALLOW-LIST, and never widen it to `!= 'success'`: CLAUDE.md holds the cacheability
+    # predicate to exactly this rule, and the reason generalises. The two forms differ only on
+    # a CANCELLED run, which is usually a human superseding one deliberately, and an alert that
+    # pages on deliberate cancellation is one that gets muted.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' ||
+      github.event.workflow_run.conclusion == 'timed_out'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # No `uv sync`: scheduled_failure.py is deliberately stdlib-only, so this needs an
+      # interpreter and nothing else. mise rather than the runner's system python3 keeps it on
+      # the same 3.12.12 the tests pinned it against. Same shape as freshness.yml.
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          cache: true
+
+      # Every `workflow_run` field reaches the script as a quoted variable expansion through
+      # `env:`, never spliced through `${{ }}` into the script text. `workflow_run.name` is
+      # whatever the watched workflow's `name:` says, and Actions substitutes into a `run:`
+      # scalar BEFORE bash parses it -- so a spliced value is source code, in a job holding
+      # issues:write. warehouse.yml's PREVIOUS_TAG comment is the same rule.
+      - id: assess
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_EVENT: ${{ github.event.workflow_run.event }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+          # RETRIED for the reason freshness.yml measured on 2026-08-17: `gh` returned 503 five
+          # times inside one hour. An unretried failure here is this alert failing the way it
+          # exists to detect -- a red scheduled run reaching nobody.
+          open=""
+          for attempt in 1 2 3 4 5; do
+            if open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                        --label scheduled-red --limit 100 --json title); then
+              break
+            fi
+            echo "::warning::gh issue list failed (attempt $attempt of 5); retrying"
+            open=""
+            sleep $((attempt * 5))
+          done
+          # NEVER let a failed listing through as empty. `[]` is a legitimate answer (no alert
+          # currently open) and must still reach the script; an empty STRING is an outage, and
+          # passing it on would defeat the dedupe and file a duplicate every night of a stall.
+          [ -n "$open" ] || {
+            echo "::error::could not list open alerts after 5 attempts -- refusing to dedupe against no data"
+            exit 1
+          }
+          mise exec -- python .github/scripts/scheduled_failure.py \
+            "$WORKFLOW_NAME" "$CONCLUSION" "$RUN_EVENT" "$RUN_URL" "$open"
+
+      # FILING AN ISSUE IS NOT ALERTING A HUMAN, and this repo shipped that gap once already.
+      # Measured 2026-08-17, right after #17's alert was demonstrated firing: the issue it filed
+      # was authored by github-actions[bot], in a repository the owner was not watching, with
+      # zero assignees and no `@` anywhere in its body. It notified nobody. The mention and the
+      # assignment both notify regardless of watch state, and both live HERE rather than in
+      # account settings, which are silently revocable and invisible to every gate in this repo.
+      #
+      # `scheduled-red` is the dedupe label and must EXIST on the repository -- `gh issue
+      # create` fails outright on an unknown label, which would turn this alert into a failed
+      # run whose only symptom is a red tick nobody is watching for.
+      - name: File the alert
+        if: steps.assess.outputs.file_issue == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_TITLE: ${{ steps.assess.outputs.issue_title }}
+          ISSUE_BODY: ${{ steps.assess.outputs.issue_body }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          body=$(printf '%s\n\n%s' "@$OWNER" "$ISSUE_BODY")
+          url=$(gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "$ISSUE_TITLE" \
+            --label critical --label scheduled-red \
+            --body "$body")
+          echo "::notice::filed $url"
+          # Assignment is delivery polish ON TOP of an issue that already exists and already
+          # mentions the owner, so it is deliberately not `--assignee` on the create above: a
+          # permissions hiccup there would fail the CREATE and lose the alert entirely.
+          gh issue edit "$url" --add-assignee "$OWNER" \
+            || echo "::warning::could not assign $OWNER -- the @mention in the body is the fallback"

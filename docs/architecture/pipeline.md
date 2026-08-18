@@ -536,6 +536,25 @@ and runs `data-contract`, `check`, `app-check`, `smoke` and `goldens`. `make ver
 (`verify.yml`) because it needs the 232 MB raw+parquet pair and rebuilds twice. The `actions`
 job is the exception that takes no `needs:` and no warehouse — see below.
 
+**The nightly asserts the data contract too, because `ci.yml` triggers only on human activity.**
+`data-contract` is the gate whose entire purpose is catching the upstream dataset moving, and the
+dataset moves on **BTS's** schedule, not on ours — so gating it behind `pull_request` and
+`push: main` means an advance is invisible until somebody opens a PR. Measured:
+`warehouse-2026.05` published 2026-08-14 and the first CI run to notice was an unrelated PR three
+days later. `verify.yml` already resolves the newest release and already restores the warehouse,
+so covering the same assertion there costs one `make stats`.
+
+> **Not a schedule on `ci.yml`, for a concrete reason.** Its concurrency group is
+> `ci-${{ github.ref }}` with `cancel-in-progress: true`, which a scheduled run on `main` would
+> **share with a push to `main`** — the two would cancel each other. That is a new failure mode
+> in the workflow whose reds are being made reliable.
+
+The nightly runs it **first**, before `make check` and `make verify`. An ordering, not a
+preference: `make verify` rebuilds the warehouse twice under a 60-minute timeout, and running it
+against reference values already known to be stale spends an hour to learn nothing. The tradeoff
+is deliberate and bounded — if the dataset moved *and* reproducibility broke, that night reports
+only the first, and the re-pin is a prerequisite for the second result meaning anything anyway.
+
 **The Actions expression layer sits above YAML, and needed its own gate.** `warehouse.yml`
 reached `main` unparseable — `HTTP 422: failed to parse workflow: (Line: 116, Col: 14): An
 expression was expected` — from an empty `${{ }}` inside a **bash comment in a `run:` block**.
@@ -699,6 +718,68 @@ repositories after 60 days of repository inactivity. That would disable `freshne
 `warehouse.yml` **together** — the watcher and the watched share this one fate. An external
 uptime check on `/api/health` is the only thing that would cover it, and that belongs with the
 launch-monitoring work, not here.
+
+### When a gate goes red at nobody
+
+The adjacent rule to the freshness alert's, and the opposite failure. That one fires when the
+data **stops** moving. This one fires when the data moved correctly and this repository's own
+pins did not follow — a case no freshness check can ever see, because `max(year_month)` advanced
+exactly as it should have.
+
+What it cost before it existed:
+
+| when | what |
+|---|---|
+| 2026-08-14 07:59Z | `Warehouse` publishes `warehouse-2026.05` |
+| 2026-08-15 04:49Z | `Verify (reproducibility)` fails. **First red** |
+| 2026-08-16 04:51Z | Fails again |
+| 2026-08-17 05:00Z | Fails again |
+| 2026-08-17 16:27Z | An unrelated PR opens and reddens four jobs — the first human signal |
+
+`verify.yml` did its job on the very first night. Nothing carried that to anybody.
+
+**`scheduled-failure.yml` watches on `workflow_run`, and is a separate workflow for the reason
+`freshness.yml` already establishes** — an alert that shares a fate with the thing it watches is
+not an alert. A notify step inside `verify.yml` cannot report `verify.yml` being disabled for
+repository inactivity, being deleted, or failing before the step is reached. It also keeps
+`issues: write` off every workflow that restores a warehouse and runs `make`.
+
+**The watch list is a rule, not a snapshot.** Every workflow in the repo that carries a
+`schedule:` trigger must appear in it, and
+`test_every_scheduled_workflow_in_the_repo_is_watched` derives the expected set by reading the
+workflow directory — so the next scheduled workflow somebody adds reddens a test instead of
+quietly joining `verify.yml` in going red at nobody.
+
+**The conclusion test is an ALLOW-LIST — `failure` or `timed_out`, never `!= 'success'`.** The
+same rule CLAUDE.md holds the cacheability predicate to, and it generalises for the same reason:
+the two forms differ only on a **cancelled** run, which is usually a human superseding one
+deliberately, and an alert that pages on deliberate cancellation is one that gets muted.
+`timed_out` is in the list because `verify.yml` carries `timeout-minutes: 60` and rebuilds the
+warehouse twice, so its slow-death mode never reports `failure` at all. The job-level `if:`
+repeats the allow-list as a cost control and `test_the_yaml_prefilter_and_the_script_agree` fails
+if the two drift, because a prefilter narrower than the script is an alert silently lost.
+
+**Dedupe is keyed on the WORKFLOW, never on the label alone.** A red stays red every night until
+someone fixes it, so an alert that files daily buries its own repeat — but the single-key shape
+`freshness.yml` can afford, having exactly one alert, would file the first workflow to go red and
+silently swallow every one after it. A dataset advance reddens more than one scheduled workflow,
+so that is the live case, not a hypothetical.
+
+**A dispatched run counts as unattended, deliberately.** `workflow_run` workflows only ever run
+the copy on the **default branch**, so a hand dispatch is the only way to exercise this path end
+to end — the same reasoning behind `freshness.yml`'s `as_of` input, where the run, the failure and
+the issue are all real and one variable moves. It also happens to be true: a nightly someone
+dispatched and walked away from is unwatched in exactly the way this alert is about.
+
+**The alert says what it knows and no more.** It knows a run went red; it does not know why. A
+body asserting a cause — "the dataset advanced" being the tempting one, since that is what
+happened the day this was written — trains the reader to skip the log and is wrong the first time
+a run fails for any other reason. It links the run and points at the data contract step as the
+cheapest thing to read first, which is an ordering, not a diagnosis.
+
+**`scheduled-red` must exist as a repository label.** `gh issue create` fails outright on an
+unknown label, which would turn this alert into a failed run whose only symptom is a red tick
+nobody is watching for — the exact failure it exists to prevent.
 
 ### Generated figures, and the boundary around them
 
