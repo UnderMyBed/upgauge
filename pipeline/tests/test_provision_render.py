@@ -28,11 +28,19 @@ task brief's own reference implementation literally:
 Both are caught by `test_render_produces_valid_cloud_config_yaml` alone. A third class -- valid
 YAML with WRONG content (e.g. two markers swapped to the wrong sibling file) -- parses fine and
 needs the round-trip test to catch it; see that test's docstring.
+
+A third real bug, found in review (not by the author of the above): the firewall attach lived
+only inside `server create`'s `--firewall` flag, so a re-run against an already-existing box
+never re-attached it -- and the box carries a public IPv6 address with sshd listening by
+default, so "not attached" silently means SSH reachable from the internet. The tests below in
+`TestFirewallAttachIsUnconditional` are static-structure checks over `provision.sh`'s own text
+(no `hcloud` invocation, no network) -- there is no live box to assert against.
 """
 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -147,3 +155,117 @@ def test_no_unresolved_marker_survives_outside_the_documentation_sentence(render
     for f in doc["write_files"]:
         for marker in ("__COMPOSE__", "__DEPLOY_SH__", "__SERVICE__", "__TIMER__"):
             assert marker not in f["content"], f"{f['path']} still contains {marker}"
+
+
+def _bash_body_lines(script_text: str) -> list[str]:
+    """`provision.sh`'s lines with the embedded Python heredoc (between `<<'PY'` and the `PY`
+    that closes it) excluded. The heredoc's own `if` statements are Python, not bash, and have
+    no matching `fi` -- scanning them corrupts any bash if/fi nesting check over the
+    surrounding script (confirmed: the naive version of this helper, without the exclusion,
+    measured the real `apply-to-resource` line at depth 1 because of the heredoc's
+    `if body_lines and body_lines[-1] == "":`, one indentation level that bash never closes)."""
+    out = []
+    in_heredoc = False
+    for line in script_text.splitlines():
+        if not in_heredoc and line.rstrip().endswith("<<'PY'"):
+            in_heredoc = True
+            continue
+        if in_heredoc:
+            if line == "PY":
+                in_heredoc = False
+            continue
+        out.append(line)
+    return out
+
+
+class TestFirewallAttachIsUnconditional:
+    """Static-structure checks over `provision.sh`'s own bash text. No `hcloud` command is run
+    here -- there is no live box to assert against, and this repo has no credentials to reach
+    one, so the only thing left to verify offline is that the SCRIPT ITSELF cannot regress into
+    the shape review caught: firewall attach living only inside the server-creation branch."""
+
+    SCRIPT = PROVISION_SH.read_text()
+    BASH_LINES = _bash_body_lines(SCRIPT)
+
+    def test_attach_call_is_not_nested_inside_the_server_creation_if_else(self):
+        """The bug this catches: a previous version attached the firewall only via
+        `--firewall upgauge-deny-inbound` passed to `hcloud server create`, itself inside the
+        `else` branch of `if <server exists>; then ... else <create> fi`. A re-run against an
+        already-existing box takes the `if` branch, never reaches `server create`, and so never
+        attaches anything -- the box then carries a public IPv6 address with sshd listening by
+        default and no firewall in front of it, silently.
+
+        `provision.sh` never nests one `if` inside another (every `if ... ; then ... fi` here
+        is a flat, sequential block), so a plain depth counter over `if `/`fi` tokens is enough
+        to prove the `apply-to-resource` call sits at depth 0 -- outside every such block, on a
+        path every run takes regardless of which branch the server-existence check followed.
+
+        Mutant run (by hand, reverted): moved the `if apply_out=$(hcloud firewall
+        apply-to-resource ...); then ... fi` block back inside the server-creation `else`
+        clause (2-space indented, alongside `hcloud server create`). This assertion went red
+        with depth 1; reverting restored green. `test_render_produces_valid_cloud_config_yaml`
+        and friends stayed green throughout, since that mutant never touches the heredoc --
+        confirming this test, not the render tests, is what catches this particular bug."""
+        depth = 0
+        checked_a_line = False
+        for line in self.BASH_LINES:
+            if "hcloud firewall apply-to-resource" in line:
+                assert depth == 0, (
+                    f"apply-to-resource found at if/fi nesting depth {depth}, expected 0 -- "
+                    "it must run on every invocation, not only inside one branch of the "
+                    "server-creation check"
+                )
+                checked_a_line = True
+            if line.lstrip().startswith("if "):
+                depth += 1
+            elif line.strip() == "fi":
+                depth -= 1
+        assert checked_a_line, "provision.sh no longer calls hcloud firewall apply-to-resource"
+        assert depth == 0, (
+            "unbalanced if/fi while scanning provision.sh -- the parser above "
+            "is naive and something in the script no longer matches its assumptions"
+        )
+
+    def test_existence_probes_do_not_redirect_stderr_to_dev_null(self):
+        """The bug this catches: `hcloud firewall describe upgauge-deny-inbound >/dev/null
+        2>&1` (and the equivalent for `server describe`) make a transient Hetzner API failure
+        indistinguishable from "does not exist yet" -- both come back as a non-zero exit with
+        the reason thrown away, and a script that then falls through to `create` risks either
+        a duplicate resource or, for the firewall specifically, treating an outage as
+        "already exists" and never attaching it. The fix uses `hcloud ... list` instead (whose
+        non-zero exit means ONLY "the API did not answer", mirroring `freshness.yml`'s `gh
+        release list` pattern) and never discards stderr. A mutant reverting to the
+        `describe ... >/dev/null 2>&1` form reintroduces exactly the swallowed-stderr pattern
+        this asserts against.
+
+        Checked over CODE lines only (comments excluded): the surrounding comment in
+        `provision.sh` legitimately quotes that exact anti-pattern to explain why it was
+        removed, and a test that can't tell prose from code would force that explanation out
+        of the file to stay green -- exactly the kind of test this project's own house rule
+        warns against (asserting a string's absence when the string's PRESENCE-as-code, not
+        as text, is the actual bug)."""
+        code_lines = [ln for ln in self.BASH_LINES if not ln.lstrip().startswith("#")]
+        assert not any(">/dev/null 2>&1" in ln for ln in code_lines)
+        assert "hcloud firewall list" in self.SCRIPT
+        assert "hcloud server list" in self.SCRIPT
+
+    def test_a_real_attach_failure_still_exits_nonzero(self):
+        """The bug this catches: handling the documented `firewall_already_applied` case by
+        swallowing ALL errors (`apply-to-resource ... || true`, or matching on the exit code
+        alone rather than the specific error) would silently continue past a REAL failure --
+        wrong credentials, a renamed firewall, an outage -- leaving the box created with no
+        firewall attached and no error anywhere. Only the one documented, stable error code is
+        allowed to not `exit 1`."""
+        assert "|| true" not in self.SCRIPT
+        assert "firewall_already_applied" in self.SCRIPT
+        match = re.search(
+            r"if apply_out=\$\(hcloud firewall apply-to-resource.*?\n(.*?\nfi\n)",
+            self.SCRIPT,
+            re.DOTALL,
+        )
+        assert match, "could not locate the apply-to-resource if/elif/else/fi block"
+        block = match.group(1)
+        assert "exit 1" in block, (
+            "the apply-to-resource block has no exit 1 -- a real failure (anything other than "
+            "the already-applied case) would fall through silently"
+        )
