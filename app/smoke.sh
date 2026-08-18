@@ -473,7 +473,7 @@ check "api: does not cache an error" "$HDRS" "no-store"
 # which nothing else in this app renders, and the DATA AS OF badge, which is what makes / a
 # data view rather than a static splash.
 BODY=$(curl -s --max-time 15 "${BASE}/")
-check     "home: renders our own front door"        "$BODY" 'Is this route healthy MUTANT'
+check     "home: renders our own front door"        "$BODY" 'Is this route healthy'
 check     "home: DATA AS OF is present"             "$BODY" 'DATA AS OF'
 check_not "home: no create-next-app boilerplate"    "$BODY" 'vercel.com/new'
 
