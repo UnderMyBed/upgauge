@@ -7,9 +7,13 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).parents[2] / ".github" / "scripts"))
 
 from live_check import assess  # noqa: E402
+
+LIVE_CHECK = Path(__file__).parents[2] / ".github" / "workflows" / "live-check.yml"
 
 HEALTHY = {
     "status": "ok",
@@ -85,3 +89,58 @@ def test_every_failure_reaches_the_issue_body():
     body = v.issue_body()
     for failure in v.failures:
         assert failure in body
+
+
+# --------------------------------------------------------------------------------------
+# Assertions about the workflow YAML, which no Python test above can reach
+# --------------------------------------------------------------------------------------
+
+
+def _run_scalars(path: Path) -> list[str]:
+    """Every `run:` string in the file."""
+    doc = yaml.safe_load(path.read_text())
+    return [
+        step["run"]
+        for job in (doc.get("jobs") or {}).values()
+        for step in (job.get("steps") or [])
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    ]
+
+
+def test_no_static_delimiter_output_write_of_remote_content():
+    """THE fix for the Important review finding. `sitemap` is remote content fetched from the
+    origin, in a job holding issues:write. A `name<<EOF ... EOF` heredoc write to
+    $GITHUB_OUTPUT truncates silently if the value ever contains a line reading exactly `EOF`
+    -- everything after it is then parsed as new key=value output pairs. `.github/scripts/
+    gha.py`'s `write_multiline_output` exists precisely to randomize this delimiter per call,
+    and its own module docstring calls a second, static-delimiter copy of the same mechanism
+    "two copies of a security property... plus a place for it to be wrong." The fix removes the
+    surface rather than patching it: `health`/`releases`/`sitemap` fetch and the
+    `live_check.py` call now live in ONE step, so those values never leave a bash variable and
+    never touch $GITHUB_OUTPUT at all. This pins both halves of that shape."""
+    text = LIVE_CHECK.read_text()
+    assert "<<EOF" not in text, (
+        "a static-delimiter heredoc write to $GITHUB_OUTPUT reappeared -- remote content (the "
+        "sitemap) can contain a line reading exactly the delimiter and truncate the value "
+        "silently, with everything after it parsed as new output pairs in a job holding "
+        "issues:write"
+    )
+    for name in ("health", "releases", "sitemap"):
+        assert f"outputs.{name}" not in text, (
+            f"{name} is read back via steps.*.outputs.{name} -- it crossed a step boundary "
+            "through $GITHUB_OUTPUT, which is exactly the surface the fix removed"
+        )
+
+
+def test_health_and_sitemap_are_fetched_before_the_rate_limit_burst():
+    """An ordering, asserted as an ordering -- CLAUDE.md's rule: when the property is a
+    position, assert the position, never the set of things present. The burst deliberately
+    trips a rate limit that blocks this runner's IP on /api/ for 60s, and /api/health is under
+    /api/ -- fetching health after the burst would block the check's own probe and report a
+    false failure. Merging the fetch and the decision into one bash script (the fix for the
+    static-delimiter finding above) makes an accidental reorder a one-line diff instead of a
+    cross-step change, which is exactly what this guards."""
+    run = next(r for r in _run_scalars(LIVE_CHECK) if "/api/health" in r)
+    health_at = run.index("/api/health")
+    burst_at = run.index("seq 1 80")
+    assert health_at < burst_at, "the health/sitemap fetch must run BEFORE the rate-limit burst"

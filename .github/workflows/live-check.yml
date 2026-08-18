@@ -33,7 +33,22 @@ jobs:
           install: true
           cache: true
 
-      - id: gather
+      # Fetch AND decide in one step, deliberately. `sitemap` is REMOTE CONTENT fetched from the
+      # origin, in a job holding issues:write. A separate "gather" step has nowhere to put
+      # `health`/`releases`/`sitemap` except $GITHUB_OUTPUT, and GitHub's own multiline-output
+      # convention is a `name<<DELIM ... DELIM` heredoc -- if that DELIM is a static string like
+      # `EOF` and the remote content ever contains a line reading exactly `EOF`, the value
+      # truncates silently and everything after it is parsed as new key=value output pairs. This
+      # repo already solved that for the outputs THIS script writes:
+      # `.github/scripts/gha.py`'s `write_multiline_output` randomizes the delimiter per call,
+      # and its own docstring names this exact risk. A second, static-delimiter copy of the same
+      # multiline-output mechanism in this file's bash would be "two copies of a security
+      # property... plus a place for it to be wrong" (gha.py's module docstring). So the fix
+      # removes the surface instead of patching it: `health`, `releases` and `sitemap` stay
+      # ordinary bash variables from fetch to the script call, in the SAME step, and never touch
+      # $GITHUB_OUTPUT at all. test_no_static_delimiter_output_write_of_remote_content pins this
+      # shape.
+      - id: check
         env:
           GH_TOKEN: ${{ github.token }}
           BASE: https://upgauge.shipman.dev
@@ -80,35 +95,21 @@ jobs:
             [ "$rl" = "429" ] && break
           done
 
-          {
-            echo "health<<EOF"; printf '%s\n' "$health"; echo "EOF"
-            echo "releases<<EOF"; printf '%s\n' "$releases"; echo "EOF"
-            echo "sitemap<<EOF"; printf '%s\n' "$sitemap"; echo "EOF"
-            echo "cf=$cf"
-            echo "rl=$rl"
-          } >> "$GITHUB_OUTPUT"
-
-      # Every value reaches the script as a quoted variable expansion through `env:`, never
-      # spliced through `${{ }}` into the script text. The sitemap is REMOTE CONTENT in a job
-      # holding issues:write -- splicing it would make whatever the origin served into source
-      # code. Same rule warehouse.yml's PREVIOUS_TAG comment spells out.
-      - id: assess
-        env:
-          HEALTH: ${{ steps.gather.outputs.health }}
-          RELEASES: ${{ steps.gather.outputs.releases }}
-          SITEMAP: ${{ steps.gather.outputs.sitemap }}
-          CF: ${{ steps.gather.outputs.cf }}
-          RL: ${{ steps.gather.outputs.rl }}
-        run: |
-          set -euo pipefail
+          # health/releases/sitemap are LOCAL SHELL VARIABLES, passed as quoted argv -- never
+          # written to $GITHUB_OUTPUT, and never substituted into this script's text via an
+          # Actions expression either (the rule warehouse.yml's PREVIOUS_TAG comment spells
+          # out, extended here to the output-file surface as well as the run: scalar surface).
+          # live_check.py's own outputs (file_issue, issue_body) DO cross a step boundary
+          # below, through gha.write_multiline_output's randomized delimiter, which is what
+          # makes that half safe without a matching fix.
           mise exec -- python .github/scripts/live_check.py \
-            "$HEALTH" "$RELEASES" "$SITEMAP" "$CF" "$RL"
+            "$health" "$releases" "$sitemap" "$cf" "$rl"
 
       # A failing live check is a CONDITION, not an event: it stays true every hour until
       # someone fixes it. Without this, one bad afternoon files a dozen issues and the alert
       # gets muted -- freshness.yml's own reasoning, at 24x the rate.
       - id: existing
-        if: steps.assess.outputs.file_issue == '1'
+        if: steps.check.outputs.file_issue == '1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -122,10 +123,10 @@ jobs:
       # unknown label, which turns the alert into a failed run whose only symptom is a red tick
       # nobody watches. Create it once (Step 6 of this task).
       - name: File the live-check alert
-        if: steps.assess.outputs.file_issue == '1' && steps.existing.outputs.count == '0'
+        if: steps.check.outputs.file_issue == '1' && steps.existing.outputs.count == '0'
         env:
           GH_TOKEN: ${{ github.token }}
-          ISSUE_BODY: ${{ steps.assess.outputs.issue_body }}
+          ISSUE_BODY: ${{ steps.check.outputs.issue_body }}
           OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
