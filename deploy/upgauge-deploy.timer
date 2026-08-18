@@ -1,0 +1,11 @@
+[Unit]
+Description=Poll the promoted Upgauge image every 30s
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=30s
+# systemd's default accuracy is 1 minute, which would swallow a 30s period whole.
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

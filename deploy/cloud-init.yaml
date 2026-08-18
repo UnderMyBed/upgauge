@@ -1,0 +1,42 @@
+#cloud-config
+# Provisioning is a committed file, not a console tour (D8). `make provision` passes this as
+# --user-data-from-file, so rebuilding the box is one command against this file.
+#
+# The __COMPOSE__ / __DEPLOY_SH__ / __SERVICE__ / __TIMER__ markers below are placeholders,
+# substituted at provision time (Task 5) from the sibling files in this directory -- so each
+# unit exists in exactly one place instead of being duplicated here. This file must still
+# parse as plain YAML with the markers in it (test_deploy_assets.py loads it as-is).
+package_update: true
+packages:
+  - docker.io
+  - docker-compose-v2
+
+write_files:
+  - path: /srv/upgauge/compose.yml
+    permissions: '0644'
+    content: |
+      __COMPOSE__
+  - path: /srv/upgauge/upgauge-deploy.sh
+    permissions: '0755'
+    content: |
+      __DEPLOY_SH__
+  - path: /etc/systemd/system/upgauge-deploy.service
+    permissions: '0644'
+    content: |
+      __SERVICE__
+  - path: /etc/systemd/system/upgauge-deploy.timer
+    permissions: '0644'
+    content: |
+      __TIMER__
+  # Root-only: this is the one credential on the box. Delivered from the operator's
+  # environment at provision time, never committed.
+  - path: /etc/upgauge/deploy.env
+    permissions: '0600'
+    owner: root:root
+    content: |
+      TUNNEL_TOKEN=${TUNNEL_TOKEN}
+
+runcmd:
+  - systemctl enable --now docker
+  - systemctl daemon-reload
+  - systemctl enable --now upgauge-deploy.timer
