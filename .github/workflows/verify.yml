@@ -120,11 +120,21 @@ jobs:
         env:
           TAG: ${{ steps.pick.outputs.tag }}
         run: |
+          # `if: always()`, so this runs even when an earlier gate short-circuited the job --
+          # and since the data contract now runs FIRST, /tmp/verify.log legitimately does not
+          # exist on those runs, because `make verify` never started. Reading it unguarded made
+          # this step fail for a SECOND, misleading reason (`tail: cannot open`), turning one
+          # clear red into two on the job whose whole value is an unambiguous red. Measured on
+          # the #61 demonstration run 32106834513, 2026-08-18.
           {
             echo "## make verify on \`$TAG\`"
             echo
-            echo "First cross-machine run of a proof that has only ever been produced locally."
-            echo '```'
-            grep -E 'artifacts|objects|basemap' /tmp/verify.log || tail -20 /tmp/verify.log
-            echo '```'
+            if [ -f /tmp/verify.log ]; then
+              echo '```'
+              grep -E 'artifacts|objects|basemap' /tmp/verify.log || tail -20 /tmp/verify.log
+              echo '```'
+            else
+              echo "\`make verify\` never ran: an earlier gate failed and wrote its own"
+              echo "summary above. That summary is the finding; this section is not."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
