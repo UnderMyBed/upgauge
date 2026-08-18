@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap dev app-check app-build app-smoke image image-smoke portability test lint lint-actions fmt check check-docs clean
+.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap dev app-check app-build app-smoke image image-smoke portability test lint lint-actions fmt fmt-check check check-docs clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -356,6 +356,22 @@ lint-actions:  ## Lint GitHub Actions workflows (expressions, `needs:`, `uses:` 
 fmt:  ## Format (ruff)
 	$(UV) run ruff format .
 
+# `check` ran `ruff check` and never `ruff format --check`, so format drift accumulated on main
+# invisibly: every gate stayed green while the tree drifted from what `ruff format` produces.
+# Measured before this gate landed: 10 of 67 files would be reformatted, 403 diff lines, 199 of
+# them in pipeline/pivot.py alone. The failure that costs is documented `make fmt` -> documented
+# `make check`: the first person to follow the command table lands ten files they never touched.
+#
+# The two tools do not fight. The longest line `ruff format` produces is
+# test_workflow_expressions.py:62 at exactly 100 characters against `line-length = 100`
+# (pyproject.toml); E501 fires ABOVE 100, so a format-clean tree is also `ruff check`-clean.
+fmt-check:  ## Fail if the tree is not `ruff format`-clean
+	@$(UV) run ruff format --check . \
+	  || { echo "  FAIL the tree is not format-clean. Run \`make fmt\` and commit the result"; \
+	       echo "       in the SAME commit -- reformatting only the files your change touched"; \
+	       echo "       smears this diff across every future commit instead of isolating it."; \
+	       exit 1; }
+
 # CLAUDE.md is loaded into context every session, so its size is a running cost paid on every
 # request -- not a tidiness preference. It reached 909 lines before anyone measured it, of which
 # 596 (66.7%) were milestone narrative duplicated in docs/architecture/pipeline.md. Milestone
@@ -386,7 +402,7 @@ check-docs:  ## Enforce the CLAUDE.md line budget (see CLAUDE.md § Working agre
 	fi; \
 	echo "  CLAUDE.md is $$n lines (budget $(CLAUDE_MD_BUDGET)) ... ok"
 
-check: lint lint-actions check-docs check-gate-counts test  ## Lint + test. Run this before every commit.
+check: fmt-check lint lint-actions check-docs check-gate-counts test  ## Format + lint + test. Run this before every commit.
 
 clean:  ## Remove build artifacts and caches (NOT data/raw — that's the audit trail)
 	rm -rf .pytest_cache .ruff_cache **/__pycache__ *.egg-info

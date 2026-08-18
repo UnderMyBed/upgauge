@@ -159,8 +159,8 @@ versions.** `make` shells through `mise exec`, so the commands below work withou
 | Command | Description | |
 |---------|-------------|---|
 | `make install` | `mise install` + `uv sync --extra dev` | ✅ |
-| `make check` | **Lint + test. Run before every commit.** | ✅ |
-| `make test` / `make lint` / `make fmt` | pytest / ruff check / ruff format | ✅ |
+| `make check` | **Format + lint + test. Run before every commit.** | ✅ |
+| `make test` / `make lint` / `make fmt` / `make fmt-check` | pytest / ruff check / ruff format / `ruff format --check`, which `check` runs FIRST — drift is red, never a surprise diff | ✅ |
 | `make fetch` | BTS T-100 zips → `data/raw/` (skips cached years) | ✅ |
 | `make fetch-reference` | BTS support tables → `data/raw/` | ✅ |
 | `make normalize` | Raw zips → `data/parquet/t100_segment/year=YYYY/` | ✅ |

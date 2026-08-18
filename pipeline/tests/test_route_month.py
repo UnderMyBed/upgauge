@@ -50,9 +50,9 @@ def test_quarantined_rows_are_excluded_from_measures_but_counted(con):
     aggregate. Both are wrong, so the count is carried separately."""
     cols = {r[0] for r in con.execute("DESCRIBE fct_route_month").fetchall()}
     assert "quarantined_rows" in cols
-    total_q = con.execute(
-        "SELECT count(*) FROM fct_segment_month WHERE is_quarantined"
-    ).fetchone()[0]
+    total_q = con.execute("SELECT count(*) FROM fct_segment_month WHERE is_quarantined").fetchone()[
+        0
+    ]
     carried = con.execute("SELECT sum(quarantined_rows) FROM fct_route_month").fetchone()[0]
     assert (carried or 0) == total_q
 

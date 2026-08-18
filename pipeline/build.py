@@ -177,8 +177,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if stale:
             log.error(
-                "NOT reproducible — %d Parquet artifact(s) at %s differ from a fresh "
-                "build of %s:",
+                "NOT reproducible — %d Parquet artifact(s) at %s differ from a fresh build of %s:",
                 len(stale),
                 args.out_dir,
                 args.raw_dir,
@@ -201,9 +200,7 @@ def main(argv: list[str] | None = None) -> int:
 
         db_report = verify_database(args.out_dir)
         if not db_report.reproducible:
-            log.error(
-                "NOT reproducible — %d database object(s) differ:", len(db_report.differing)
-            )
+            log.error("NOT reproducible — %d database object(s) differ:", len(db_report.differing))
             for name in db_report.differing:
                 log.error("    %s", name)
             return 1

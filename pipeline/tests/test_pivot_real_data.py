@@ -29,15 +29,26 @@ def con():
 
 
 def test_load_factor_matches_an_independent_recomputation(con):
-    sql, params = render_pivot(PivotQuery(
-        grain="segment", dimensions=("op_airline_id",), measures=("load_factor",),
-        time_from="2019-01", time_to="2019-12", limit=1000), con)
+    sql, params = render_pivot(
+        PivotQuery(
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("load_factor",),
+            time_from="2019-01",
+            time_to="2019-12",
+            limit=1000,
+        ),
+        con,
+    )
     got = {r[0]: r[1] for r in con.execute(sql, params).fetchall()}
-    expected = {r[0]: r[1] for r in con.execute("""
+    expected = {
+        r[0]: r[1]
+        for r in con.execute("""
         SELECT op_airline_id, SUM(passengers)::DOUBLE / NULLIF(SUM(seats), 0)
         FROM fct_segment_month
         WHERE year_month BETWEEN '2019-01' AND '2019-12' AND NOT is_quarantined
-        GROUP BY 1""").fetchall()}
+        GROUP BY 1""").fetchall()
+    }
     assert got == pytest.approx(expected)
 
 
@@ -56,9 +67,16 @@ def test_asm_differs_from_the_naive_form_across_routes(con):
 
 
 def test_pivot_asm_uses_the_correct_form(con):
-    sql, params = render_pivot(PivotQuery(
-        grain="segment", dimensions=("year",), measures=("asm",),
-        time_from="2019-01", time_to="2019-12"), con)
+    sql, params = render_pivot(
+        PivotQuery(
+            grain="segment",
+            dimensions=("year",),
+            measures=("asm",),
+            time_from="2019-01",
+            time_to="2019-12",
+        ),
+        con,
+    )
     got = con.execute(sql, params).fetchone()[1]
     expected = con.execute("""
         SELECT SUM(seats * distance) FROM fct_segment_month
@@ -76,9 +94,16 @@ def test_pivot_route_grain_shares_the_measure_catalog_correctly(con):
     synthetic fixture: a missing column here is a 500 at request time, not a validation
     error, and no earlier test (real-data or synthetic) actually executed a route-grain
     pivot's SQL."""
-    sql, params = render_pivot(PivotQuery(
-        grain="route", dimensions=("year",), measures=("seats", "asm"),
-        time_from="2019-01", time_to="2019-12"), con)
+    sql, params = render_pivot(
+        PivotQuery(
+            grain="route",
+            dimensions=("year",),
+            measures=("seats", "asm"),
+            time_from="2019-01",
+            time_to="2019-12",
+        ),
+        con,
+    )
     got_seats, got_asm = con.execute(sql, params).fetchone()[1:3]
     expected_seats, expected_asm = con.execute("""
         SELECT SUM(seats), SUM(seats * distance) FROM fct_route_month
@@ -89,9 +114,16 @@ def test_pivot_route_grain_shares_the_measure_catalog_correctly(con):
 
 
 def test_quarantined_rows_are_reported_not_hidden(con):
-    sql, params = render_pivot(PivotQuery(
-        grain="segment", dimensions=("year",), measures=("seats",),
-        time_from="2020-01", time_to="2020-12"), con)
+    sql, params = render_pivot(
+        PivotQuery(
+            grain="segment",
+            dimensions=("year",),
+            measures=("seats",),
+            time_from="2020-01",
+            time_to="2020-12",
+        ),
+        con,
+    )
     rows = con.execute(sql, params).fetchall()
     cols = [d[0] for d in con.execute(sql, params).description]
     qi = cols.index("quarantined_rows")
@@ -103,9 +135,18 @@ def test_quarantined_rows_are_reported_not_hidden(con):
 
 
 def _carrier_total(con, airline_id, month, grouping):
-    sql, params = render_pivot(PivotQuery(
-        grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-        time_from=month, time_to=month, grouping=grouping, limit=5000), con)
+    sql, params = render_pivot(
+        PivotQuery(
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from=month,
+            time_to=month,
+            grouping=grouping,
+            limit=5000,
+        ),
+        con,
+    )
     return {r[0]: r[1] for r in con.execute(sql, params).fetchall()}
 
 
@@ -153,8 +194,7 @@ def test_hawaiian_rolls_up_from_2024_09_and_not_2024_08(con):
 def test_shared_regionals_never_roll_up(con):
     """SkyWest flies for several mainlines on the same day. No date range fixes that, so it
     must not appear in the map at all."""
-    mapped = {r[0] for r in con.execute(
-        "SELECT carrier_code FROM map_mainline_group").fetchall()}
+    mapped = {r[0] for r in con.execute("SELECT carrier_code FROM map_mainline_group").fetchall()}
     assert not mapped & {"OO", "YX", "YV"}
 
 
@@ -172,8 +212,12 @@ def test_mainline_filter_does_not_coalesce_like_the_dimension_does(con):
     unfiltered = _carrier_total(con, 19930, "2017-01", "mainline")
     sql, params = render_pivot(
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2017-01", time_to="2017-01", grouping="mainline",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2017-01",
+            time_to="2017-01",
+            grouping="mainline",
             filters=(("op_airline_id", ("19930",)),),
         ),
         con,
@@ -208,8 +252,11 @@ def test_composite_route_filter_excludes_self_routes_the_naive_form_matches(con)
     """
     sql, params = render_pivot(
         PivotQuery(
-            grain="segment", dimensions=("route",), measures=("seats",),
-            time_from="2015-01", time_to="2020-12",
+            grain="segment",
+            dimensions=("route",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2020-12",
             filters=(("route", ("12478-12892",)),),
         ),
         con,

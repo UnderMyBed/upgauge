@@ -23,8 +23,13 @@ def con(tmp_path_factory):
 
 
 def q(**kw):
-    base = dict(grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-                time_from="2015-01", time_to="2015-12")
+    base = dict(
+        grain="segment",
+        dimensions=("op_airline_id",),
+        measures=("seats",),
+        time_from="2015-01",
+        time_to="2015-12",
+    )
     base.update(kw)
     return PivotQuery(**base)
 
@@ -75,9 +80,7 @@ def test_sql_injection_via_filter_key_is_rejected(con):
     like a dimension key reaches a SELECT/GROUP BY slot. This must raise, never substitute --
     same as test_sql_injection_via_dimension_is_rejected above, but for the filter loop."""
     with pytest.raises(PivotError):
-        render_pivot(
-            q(filters=(("op_airline_id; DROP TABLE fct_segment_month--", ("x",)),)), con
-        )
+        render_pivot(q(filters=(("op_airline_id; DROP TABLE fct_segment_month--", ("x",)),)), con)
 
 
 def test_segment_only_dimension_rejected_at_route_grain(con):
@@ -131,8 +134,7 @@ def test_derived_measure_is_computed_not_averaged(con):
 
 
 def test_filters_bind_their_values(con):
-    sql, params = render_pivot(
-        q(filters=(("op_airline_id", ("19790",)),)), con)
+    sql, params = render_pivot(q(filters=(("op_airline_id", ("19790",)),)), con)
     assert "19790" not in sql
     assert "19790" in str(params.values())
 
@@ -201,13 +203,23 @@ def test_sort_desc_normalizes_to_true_when_sort_is_none():
     representation. Constructing it must normalize rather than silently produce a PivotQuery
     the codec cannot round-trip."""
     normalized = PivotQuery(
-        grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-        time_from="2015-01", time_to="2015-12", sort=None, sort_desc=False,
+        grain="segment",
+        dimensions=("op_airline_id",),
+        measures=("seats",),
+        time_from="2015-01",
+        time_to="2015-12",
+        sort=None,
+        sort_desc=False,
     )
     assert normalized.sort_desc is True
     assert normalized == PivotQuery(
-        grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-        time_from="2015-01", time_to="2015-12", sort=None, sort_desc=True,
+        grain="segment",
+        dimensions=("op_airline_id",),
+        measures=("seats",),
+        time_from="2015-01",
+        time_to="2015-12",
+        sort=None,
+        sort_desc=True,
     )
 
 
@@ -223,9 +235,7 @@ def test_composite_dimension_filter_emits_least_greatest(con):
 
 def test_composite_filter_values_are_or_joined(con):
     """Multiple values keep the IN-list semantics every other dimension has: either route."""
-    sql, params = render_pivot(
-        q(filters=(("route", ("12478-12892", "10140-14747")),)), con
-    )
+    sql, params = render_pivot(q(filters=(("route", ("12478-12892", "10140-14747")),)), con)
     assert " OR " in sql
     assert "$f0_1a" in sql and "$f0_1b" in sql
     assert params["f0_1a"] == "10140"
@@ -287,9 +297,7 @@ def test_either_mode_filter_compiles_to_an_or_across_both_columns(con):
 
 
 def test_either_mode_filter_ors_multiple_values_inside_each_side(con):
-    sql, params = render_pivot(
-        q(filters=(("endpoint_airport_id", ("14747", "13930")),)), con
-    )
+    sql, params = render_pivot(q(filters=(("endpoint_airport_id", ("14747", "13930")),)), con)
     assert "(origin_airport_id IN ($f0_0, $f0_1) OR dest_airport_id IN ($f0_0, $f0_1))" in sql
     assert params["f0_0"] == "14747"
     assert params["f0_1"] == "13930"

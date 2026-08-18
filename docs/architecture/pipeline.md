@@ -516,13 +516,19 @@ is what the Docker image does.
 > interpreter invalidates the reproducibility proof, so a runtime bump re-runs `make verify` in
 > the same commit.
 
-**`check` excludes `fmt`, and the tree is not format-clean.** It runs `ruff check` and
-`pytest`, never `ruff format` — `ruff format --check .` reports 9 of 54 files would be
-reformatted, so the first person to run `make fmt` gets a large diff across files their change
-never touched. **The bad way out is reformatting only the files a change already touches** —
-that smears the same diff across every future commit instead of isolating it in one. Either
-reformat once in a commit that does nothing else and add `ruff format --check` to `check`, or
-delete `fmt` and leave formatting unenforced.
+**`check` gates formatting, so `make fmt` is safe to run at any time.** `fmt-check` is the first
+prerequisite of `check` and runs `ruff format --check .`, so drift is a red gate rather than a
+surprise diff in someone else's commit. **If it ever reddens across files you did not touch, the
+bad way out is reformatting only the files your change already touches** — that smears one diff
+across every future commit instead of isolating it in one. Reformat the tree in a commit that
+does nothing else.
+
+> **The two tools agree; only the gate was missing — and `lint` cannot stand in for it.** The
+> longest line `ruff format` produces is `test_workflow_expressions.py:62` at exactly 100
+> characters against `line-length = 100`, and E501 fires *above* 100, so a format-clean tree is
+> also `ruff check`-clean. The reverse does not hold: `select` carries no `Q`, so a single-quoted
+> string passes `make lint` (`All checks passed!`) and reddens `make fmt-check`. That asymmetry
+> is the mutant this gate was verified with.
 
 **CI runs the gates; `make check` on a developer's machine is no longer the only one.**
 `.github/workflows/ci.yml` resolves ONE warehouse release tag per run (`resolve`), restores it,
