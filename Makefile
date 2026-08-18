@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap dev app-check app-build app-smoke image image-smoke portability test lint lint-actions fmt fmt-check check check-docs clean
+.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap dev app-check app-build app-smoke image image-smoke portability provision cloudflare-apply test lint lint-actions fmt fmt-check check check-docs clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -334,6 +334,12 @@ portability: image  ## Prove the WORKDIR/data contract by breaking it three ways
 	esac; \
 	[ $$fail -eq 0 ]
 	@echo "  portability: all three negative cases reproduced their documented failure ... ok"
+
+provision:  ## Create or re-assert the Hetzner box from deploy/cloud-init.yaml (needs TUNNEL_TOKEN)
+	./deploy/provision.sh
+
+cloudflare-apply:  ## PUT the committed Cloudflare desired state (cache rule, rate limit, tunnel ingress)
+	./deploy/cloudflare-apply.sh
 
 test:  ## Run the pipeline test suite
 	$(UV) run pytest

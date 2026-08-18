@@ -1,0 +1,17 @@
+{
+  "name": "upgauge-api-rate-limit",
+  "description": "THE THRESHOLD (issue #19's third acceptance criterion, and #52's second option): block a source IP once it exceeds 60 requests per 60-second window on /api/, for 60 seconds. A human on /explore triggers a handful of /api/pivot calls a minute; a scraper walking 22,420 route pages does not fit inside 60/min. robots.txt already disallows /api/ to well-behaved crawlers -- this is the backstop for ones that ignore it.",
+  "rules": [
+    {
+      "description": "Rate limit /api/ to 60 requests per 60s per source IP so a scraper cannot keep the origin awake",
+      "expression": "(starts_with(http.request.uri.path, \"/api/\"))",
+      "action": "block",
+      "ratelimit": {
+        "characteristics": ["ip.src", "cf.colo.id"],
+        "period": 60,
+        "requests_per_period": 60,
+        "mitigation_timeout": 60
+      }
+    }
+  ]
+}
