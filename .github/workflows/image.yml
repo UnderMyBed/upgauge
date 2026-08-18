@@ -1,0 +1,190 @@
+name: Image
+
+# Builds the deployable image and pushes it ONLY on a green gate. Pushing is the last step
+# for a reason: a broken image in the registry is promotable, and `promote.yml` takes a tag
+# on trust because this workflow is what vouched for it.
+#
+# Three triggers, because the image bakes the dataset AND the code:
+#   push to main   -- a code fix must be shippable without waiting for a data release
+#   workflow_run   -- a data refresh must produce an image without waiting for a commit
+#   workflow_dispatch -- manual re-run, e.g. to retry after a transient failure
+#
+# NOT `release: published`. warehouse.yml publishes its release with `gh release create` under
+# `${{ github.token }}` (GITHUB_TOKEN), and GitHub does not start new workflow runs from events
+# created by GITHUB_TOKEN -- that trigger would be a permanent silent no-op, never once firing.
+# `workflow_run` watching "Warehouse" itself is what scheduled-failure.yml already uses to react
+# to that same workflow without depending on the token that publishes from inside it.
+#
+# `workflow_run` ALWAYS runs the copy of THIS workflow on the default branch, whatever branch
+# the watched run used (scheduled-failure.yml's `on:` comment explains why, for the same
+# reason). That is exactly right here: "Warehouse" only ever runs against main, and a data
+# refresh should bake main's current code, not some other ref.
+on:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: ["Warehouse"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: image-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # `workflow_run` fires on EVERY conclusion of "Warehouse" -- failure, cancelled, success --
+    # not only a successful publish. Building from a red or cancelled ingest would bake whatever
+    # was left in the working tree, which is not a dataset anyone vouched for. The `||` is
+    # deliberately an allow-list on `workflow_run` specifically: `push` and `workflow_dispatch`
+    # short-circuit true on the first clause and are never subject to the second.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # `git describe` needs history, not a shallow clone
+
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          cache: true
+
+      # The newest published warehouse, resolved the way freshness.py resolves it: the full
+      # anchored shape, publishedAt (never createdAt), ascending order take-last. NEVER the
+      # Makefile's default -- that is a test fixture pinned to one asset (D6), and a
+      # production image built from it would serve a dataset the release history has moved
+      # past.
+      - id: warehouse
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          releases=""
+          for attempt in 1 2 3 4 5; do
+            if releases=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+                            --exclude-drafts --exclude-pre-releases \
+                            --json tagName,publishedAt); then
+              break
+            fi
+            echo "::warning::gh release list failed (attempt $attempt of 5); retrying"
+            releases=""
+            sleep $((attempt * 5))
+          done
+          [ -n "$releases" ] || {
+            echo "::error::could not list releases after 5 attempts -- refusing to guess a warehouse tag"
+            exit 1
+          }
+          tag=$(printf '%s' "$releases" | mise exec -- python -c '
+          import json, re, sys
+          rs = json.load(sys.stdin)
+          ok = [(r["publishedAt"], r["tagName"]) for r in rs
+                if r.get("publishedAt") and re.match(r"^warehouse-[0-9]{4}\.[0-9]{2}$", r.get("tagName") or "")]
+          print(max(ok)[1] if ok else "")
+          ')
+          [ -n "$tag" ] || { echo "::error::no well-formed warehouse-YYYY.MM release exists"; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "::notice::building against $tag"
+
+      - id: sha
+        run: echo "sha=$(git describe --always --dirty --abbrev=7)" >> "$GITHUB_OUTPUT"
+
+      - id: image-tag
+        env:
+          WAREHOUSE_TAG: ${{ steps.warehouse.outputs.tag }}
+          IMAGE_SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          echo "tag=${WAREHOUSE_TAG}-${IMAGE_SHA}" >> "$GITHUB_OUTPUT"
+
+      # "Warehouse" runs DAILY (schedule: "41 6 * * *", polling for a BTS release with no
+      # published day-of-month) but only PUBLISHES when max(year_month) advances -- see its own
+      # "Stop if this month is already published" step -- which is ~monthly. Every no-op
+      # Warehouse run still completes and still fires this workflow's `workflow_run` trigger, so
+      # without this check the image would rebuild from an UNCHANGED warehouse tag and an
+      # UNCHANGED commit -- a byte-for-byte identical image -- on every one of the ~30 off days a
+      # month. `make image-smoke` alone takes on the order of 30 minutes; skipping it here is
+      # what keeps that cost tied to an actual change instead of to the poll interval.
+      #
+      # Keyed on the FULL `<warehouse-tag>-<sha>`, not the warehouse tag alone: a same-day code
+      # push must still be rebuildable even though the warehouse tag hasn't moved, and a manual
+      # re-dispatch against an unchanged tree becomes a fast no-op instead of a duplicate publish.
+      #
+      # Retried for the same reason the `warehouse` step above and scheduled-failure.yml's
+      # `assess` step retry their `gh` calls: a transient failure must never be read as "this tag
+      # does not exist yet" -- that reading would silently skip a rebuild the registry actually
+      # needs. A real 404 (no package published yet -- the very first run ever) IS "does not
+      # exist", so it short-circuits the retry loop instead of exhausting it.
+      - id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWNER: ${{ github.repository_owner }}
+          TARGET_TAG: ${{ steps.image-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tags="" resolved=""
+          for attempt in 1 2 3 4 5; do
+            if tags=$(gh api "/users/${OWNER}/packages/container/upguage/versions" \
+                        --paginate --jq '[.[].metadata.container.tags[]?] | join("\n")' \
+                        2>/tmp/exists.err); then
+              resolved=1
+              break
+            fi
+            if grep -q "HTTP 404" /tmp/exists.err; then
+              tags=""
+              resolved=1
+              break
+            fi
+            echo "::warning::gh api packages/versions failed (attempt $attempt of 5); retrying"
+            sleep $((attempt * 5))
+          done
+          [ -n "$resolved" ] || {
+            echo "::error::could not list ghcr.io/undermybed/upguage versions after 5 attempts -- refusing to guess whether $TARGET_TAG exists"
+            exit 1
+          }
+          if printf '%s\n' "$tags" | grep -qxF "$TARGET_TAG"; then
+            echo "::notice::$TARGET_TAG already published; skipping build"
+            echo "### Skipped: \`ghcr.io/undermybed/upguage:${TARGET_TAG}\` already exists" >> "$GITHUB_STEP_SUMMARY"
+            echo "SKIP=1" >> "$GITHUB_ENV"
+          fi
+
+      # Build and gate BEFORE any login or push. A red gate must not be able to reach the
+      # registry at all.
+      - name: Build and gate
+        if: env.SKIP != '1'
+        env:
+          WAREHOUSE_TAG: ${{ steps.warehouse.outputs.tag }}
+          IMAGE_SHA: ${{ steps.sha.outputs.sha }}
+        run: |
+          set -euo pipefail
+          make image-smoke \
+            WAREHOUSE_TAG="$WAREHOUSE_TAG" \
+            IMAGE_SHA="$IMAGE_SHA" \
+            SMOKE_DATASET_PINNED=0
+
+      - uses: docker/login-action@v3
+        if: env.SKIP != '1'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # Immutable tag only. No `:latest` -- a moving tag makes "which image is this" a
+      # question with a time-dependent answer, and `:deploy` (promote.yml) is the ONE moving
+      # tag this project has.
+      - name: Push
+        if: env.SKIP != '1'
+        env:
+          IMAGE_TAG: ${{ steps.image-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          remote="ghcr.io/undermybed/upguage:${IMAGE_TAG}"
+          docker tag upgauge:local "$remote"
+          docker push "$remote"
+          echo "::notice::pushed $remote"
+          echo "### Pushed \`$remote\`" >> "$GITHUB_STEP_SUMMARY"
