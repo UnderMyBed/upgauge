@@ -37,6 +37,59 @@ jobs:
         with:
           warehouse-tag: ${{ steps.pick.outputs.tag }}
           restore-raw: "true"
+      # #61: `data-contract` lived ONLY in ci.yml, which triggers on pull_request and
+      # push:main -- so the gate whose entire purpose is catching the upstream dataset moving
+      # was gated behind a human opening a PR, while the dataset moves on BTS's schedule.
+      # Measured: warehouse-2026.05 published 2026-08-14 and the first CI run to notice was an
+      # unrelated PR on 2026-08-17, three nights later.
+      #
+      # HERE rather than on a schedule added to ci.yml, for a concrete reason: ci.yml's
+      # concurrency group is `ci-${{ github.ref }}` with cancel-in-progress, which a scheduled
+      # run on main would SHARE with a push to main -- the two would cancel each other. That is
+      # a new failure mode in the workflow whose reds we are trying to make reliable. This job
+      # already resolves the newest release and already restores the warehouse, so covering the
+      # same assertion here costs one `make stats`.
+      #
+      # FIRST, before `make check` and `make verify`. An ordering, not a preference: `make
+      # verify` rebuilds the warehouse twice under a 60-minute timeout, and running it against
+      # reference values already known to be stale spends an hour to learn nothing. The
+      # tradeoff is deliberate -- if the dataset moved AND reproducibility broke, tonight only
+      # reports the first. The re-pin is a prerequisite for the second result meaning anything.
+      - name: Data contract (the assertion ci.yml only makes when a human opens a PR)
+        run: |
+          set -euo pipefail
+          if ! make stats; then
+            {
+              echo "## Data contract FAILED (nightly)"
+              echo
+              echo "\`make stats\` itself failed while regenerating the reference values --"
+              echo "it never got as far as producing JSON to diff. **This usually means a"
+              echo "STRUCTURAL upstream change** (a renamed or dropped column, a mart whose"
+              echo "shape no longer matches \`stats_reference.sql\`), not just numbers moving."
+              echo "**Any other failure in this run is most likely a consequence of this.**"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          diff_output="$(git diff -- pipeline/reference/stats.generated.json)"
+          if [ -n "$diff_output" ]; then
+            {
+              echo "## Data contract FAILED (nightly)"
+              echo
+              echo "The upstream dataset no longer matches this commit's reference values --"
+              echo "BTS published, and this repository's pins have not followed."
+              echo "**Any other failure in this run is most likely a consequence of this.**"
+              echo
+              echo "Fix: run \`make stats\`, read the diff, and re-pin whatever depended on"
+              echo "the old values in the same commit."
+              echo
+              echo '```diff'
+              echo "$diff_output"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "## Data contract ok — warehouse matches committed reference values" >> "$GITHUB_STEP_SUMMARY"
+
       # This job is the ONLY place the raw-dependent tests run. The per-PR `check` job restores
       # no `data/raw/`, so 15 real-data invariant tests skip there by design -- including
       # test_quarantine_stays_rare_on_real_data and the distance-variance bound. Running
