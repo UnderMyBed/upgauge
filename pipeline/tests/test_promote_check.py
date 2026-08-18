@@ -127,6 +127,27 @@ def test_main_treats_a_body_that_does_not_parse_as_json_as_not_yet_matched(monke
     assert "no `build` section" in out.read_text() or "matched=0" in out.read_text()
 
 
+def test_main_validates_a_well_formed_tag_with_no_health_report(monkeypatch, tmp_path):
+    """Fix round 1, finding 1: a single positional argument is the validate-only call shape
+    `promote.yml`'s new pre-flight step uses, so a typo'd tag fails in seconds instead of after
+    the full 30-attempt poll budget. No health report exists yet at this point, so nothing is
+    written to `GITHUB_OUTPUT` -- there is no `Verdict` to report."""
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setattr(sys, "argv", ["promote_check.py", TAG])
+    assert main() == 0
+    assert not out.exists()
+
+
+def test_main_fails_fast_on_a_malformed_tag_with_no_health_report(monkeypatch, tmp_path, capsys):
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setattr(sys, "argv", ["promote_check.py", "not-a-warehouse-tag"])
+    assert main() == 1
+    assert "does not match the warehouse-YYYY.MM-<sha> shape" in capsys.readouterr().out
+    assert not out.exists()
+
+
 def _promote_workflow() -> str:
     return (Path(__file__).parents[2] / ".github" / "workflows" / "promote.yml").read_text()
 
@@ -184,3 +205,52 @@ def test_the_workflow_treats_a_curl_failure_as_not_yet_not_as_abandoning_the_pol
     yaml_text = _promote_workflow()
     assert "for attempt in $(seq 1 30)" in yaml_text
     assert "|| echo '{}'" in yaml_text
+
+
+def test_the_tag_is_validated_before_the_poll_loop_is_ever_entered():
+    """Fix round 1, finding 1. Catches two shapes of regression: dropping the validate step
+    entirely, and keeping it but moving it AFTER the poll loop starts (which would satisfy a
+    membership check while still burning the full 300s budget on a typo)."""
+    yaml_text = _promote_workflow()
+    assert 'promote_check.py "$TAG"\n' in yaml_text, (
+        "no validate-only call (single positional argument) found"
+    )
+    validate_at = yaml_text.index('mise exec -- python .github/scripts/promote_check.py "$TAG"\n')
+    poll_at = yaml_text.index("for attempt in $(seq 1 30)")
+    assert validate_at < poll_at, "the tag must be validated BEFORE the poll loop is entered"
+
+
+def test_the_timeout_budget_names_what_is_measured_and_what_is_not():
+    """Fix round 1, finding 2: the reviewer's arithmetic (timer latency + healthcheck timing
+    measured from committed config, pull duration NOT measured -- no live box exists yet) has to
+    live beside the 30/10 constants themselves, not only in a gitignored report that gets deleted
+    when this plan finishes. Checks for the two halves separately so a comment that states one
+    without the other -- implying the whole 300s figure was measured -- still fails this."""
+    yaml_text = _promote_workflow()
+    assert "OnUnitActiveSec=30s" in yaml_text, "the measured timer-latency source is not cited"
+    assert "start_period=20s" in yaml_text, "the measured healthcheck-timing source is not cited"
+    assert "NOT MEASURED" in yaml_text, "the unmeasured pull-duration assumption is not admitted"
+    assert "413 MB" in yaml_text, "the pull-size figure is not named as the thing being guessed at"
+
+
+def test_the_promote_step_writes_no_output_nobody_can_read():
+    """Fix round 1, finding 3 (minor): the `digest` value was written to `$GITHUB_OUTPUT` from a
+    step with no `id:`, so nothing could ever read it -- dropped rather than wired up, since
+    nothing in this workflow needs it (the poll step compares against `TAG`, not the digest).
+    A `GITHUB_OUTPUT` write reappearing on that step without an `id:` alongside it is the same
+    dead-output shape returning."""
+    yaml_text = _promote_workflow()
+    lines = yaml_text.splitlines()
+    step_at = next(i for i, ln in enumerate(lines) if "Point :deploy at the requested digest" in ln)
+    next_step_at = next(
+        i
+        for i, ln in enumerate(lines)
+        if i > step_at and (ln.strip().startswith("- name:") or ln.strip().startswith("- uses:"))
+    )
+    step_text = "\n".join(lines[step_at:next_step_at])
+    has_output_write = "GITHUB_OUTPUT" in step_text
+    has_id = any(ln.strip().startswith("id:") for ln in lines[step_at:next_step_at])
+    assert has_output_write == has_id, (
+        "this step writes to $GITHUB_OUTPUT without an id: (dead, unreadable output) or has an "
+        "id: with nothing written (dead id) -- pick one"
+    )

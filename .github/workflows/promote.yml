@@ -48,6 +48,19 @@ jobs:
           install: true
           cache: true
 
+      # Fast-fail on a typo'd tag. `promote_check.py`'s `assess()` already reports this exact
+      # failure from inside the poll loop below, but only after the loop's full 30-attempt/300s
+      # budget elapses -- an operator who fat-fingered `-f tag=` deserves an answer in seconds,
+      # not five minutes, and shouldn't have to wait through a login and a registry round trip
+      # first either. Single positional argument (no health report) is `promote_check.py`'s
+      # validate-only call shape; see its `main()` docstring.
+      - name: Validate the tag's shape before polling
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          mise exec -- python .github/scripts/promote_check.py "$TAG"
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -97,7 +110,6 @@ jobs:
             exit 1
           }
 
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
           echo "::notice::promoted $src ($digest)"
           echo "### Promoted \`$src\` ($digest)" >> "$GITHUB_STEP_SUMMARY"
 
@@ -116,6 +128,29 @@ jobs:
       # workflows apply to `gh` calls means something different in a loop that is ALREADY the
       # retry: it is the FINAL `::error` after every attempt is exhausted that must not be
       # silently swallowed, and it isn't.
+      # 30 attempts x 10s = 300s budget. Where that number comes from, and what part of it is
+      # actually measured:
+      #
+      #   MEASURED (read straight from the committed config, not guessed):
+      #     - deploy/upgauge-deploy.timer: OnUnitActiveSec=30s -- the box's timer fires at most
+      #       every 30s, so a promote landing right after a tick can wait up to ~30s before the
+      #       NEXT tick even notices the digest moved.
+      #     - deploy/compose.yml / Dockerfile HEALTHCHECK: start_period=20s, interval=30s -- the
+      #       container's healthcheck doesn't count a failure during the first 20s, and the
+      #       first check fires at the ~30s interval mark, so a freshly-started container is
+      #       realistically confirmed healthy on the order of 30-50s after `compose up` returns.
+      #     - deploy/upgauge-deploy.sh: `docker compose pull --quiet app` runs unconditionally
+      #       every tick, THEN `docker compose up -d --wait` gates on the healthcheck above.
+      #
+      #   NOT MEASURED, because no live box exists yet (Task 6) -- an assumption, not a fact:
+      #     - how long `docker compose pull` actually takes to pull a ~413 MB image layer set
+      #       over this box's real network. Anywhere from single-digit seconds (mostly-cached
+      #       layers) to tens of seconds is plausible; there is no measurement behind that range.
+      #
+      # Summing the measured parts alone (up to ~30s timer latency + ~30-50s healthcheck
+      # confirmation) plus a guessed pull time lands around 60-100s of overhead against this
+      # step's 300s budget -- comfortable margin IF the guessed part holds, unverified until it
+      # can be timed against the real box (brief Step 5's rollback drill is where that happens).
       - name: Wait for the box to be serving it
         env:
           TAG: ${{ inputs.tag }}

@@ -133,14 +133,38 @@ def assess(tag: str, health: dict) -> Verdict:
 
 
 def main() -> int:
-    """Called once per poll attempt (`promote.yml`'s "Wait for the box to be serving it" loops
-    up to 30 times). Exit code is what the workflow's `if ...; then break; fi` reads: 0 means
+    """Two call shapes, dispatched on argument count -- not a subcommand keyword, so the loop's
+    existing `promote_check.py "$TAG" "$body"` call stays exactly as it was:
+
+      promote_check.py <tag>                     -- validate-only (one positional argument)
+      promote_check.py <tag> <health-report-json> -- the poll check (two positional arguments)
+
+    VALIDATE-ONLY exists so `promote.yml` can fast-fail on a typo'd tag before it ever enters
+    the 30-attempt/300s poll loop. Without it, `assess()`'s own shape check already reports the
+    same failure -- correctly -- but only after the full budget elapses, because it's called
+    once per attempt from inside the loop. This path calls `parse_promoted_tag` directly and
+    returns before anything about a live build enters the picture: there is no health report to
+    compare against yet, so there is no `Verdict` and nothing is written to `GITHUB_OUTPUT`.
+
+    Called once per poll attempt (`promote.yml`'s "Wait for the box to be serving it" loops up
+    to 30 times). Exit code there is what the workflow's `if ...; then break; fi` reads: 0 means
     the loop is done, 1 means keep polling. `GITHUB_OUTPUT` is also written every call, mirroring
     `freshness.py`'s shape, so the final attempt's verdict is available to any later step without
     the workflow having to re-parse this script's stdout.
     """
+    if len(sys.argv) == 2:
+        tag = sys.argv[1]
+        if parse_promoted_tag(tag) is not None:
+            return 0
+        print(
+            f"'{tag}' does not match the warehouse-YYYY.MM-<sha> shape image.yml publishes "
+            "(e.g. warehouse-2026.05-6ea164b) -- not entering the health poll for a tag that "
+            "was never a real image"
+        )
+        return 1
+
     if len(sys.argv) < 3:
-        print("usage: promote_check.py <tag> <health-report-json>")
+        print("usage: promote_check.py <tag> [health-report-json]")
         return 2
     tag = sys.argv[1]
     try:
