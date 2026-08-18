@@ -235,6 +235,39 @@ check_not_re() {
   fi
 }
 
+# Dataset-pinned checks assert values that belong to ONE warehouse asset -- the trailing/prior-12
+# window boundary, the current year's own partial-month and asterisk, and the dataset's own year
+# range, all of which move every time max(year_month) advances. A production image is built from
+# the NEWEST release, so these cannot be right there by construction -- they are skipped, never
+# rewritten, and the count is PRINTED: a gate that silently drops checks reports "ok" for less
+# coverage than the reader assumes.
+SMOKE_DATASET_PINNED="${SMOKE_DATASET_PINNED:-1}"
+DATASET_SKIPPED=0
+check_dataset() { # check_dataset <name> <haystack> <needle> -- same contract as check()/check_not()
+  if [ "$SMOKE_DATASET_PINNED" = "0" ]; then
+    DATASET_SKIPPED=$((DATASET_SKIPPED + 1))
+    echo "  skip  $1 (dataset-pinned)"
+    return 0
+  fi
+  check "$@"
+}
+check_not_dataset() { # check_not_dataset <name> <haystack> <needle> -- same contract as check_not()
+  if [ "$SMOKE_DATASET_PINNED" = "0" ]; then
+    DATASET_SKIPPED=$((DATASET_SKIPPED + 1))
+    echo "  skip  $1 (dataset-pinned)"
+    return 0
+  fi
+  check_not "$@"
+}
+check_re_dataset() { # check_re_dataset <name> <haystack> <regex> -- same contract as check_re()
+  if [ "$SMOKE_DATASET_PINNED" = "0" ]; then
+    DATASET_SKIPPED=$((DATASET_SKIPPED + 1))
+    echo "  skip  $1 (dataset-pinned)"
+    return 0
+  fi
+  check_re "$@"
+}
+
 # Turns a literal string into an ERE that matches only itself, so a `$`-anchored `check_re` is
 # actually exact. Section 15 needed this: `check_re ... "^[Ll]ocation: ${WANT}$"` interpolated
 # `/robots.txt` and `/sitemap.xml` unescaped, and an unescaped `.` matches ANY character -- the
@@ -702,7 +735,7 @@ check     "airport: DATA AS OF is present"   "$BODY" 'DATA AS OF'
 # COUNTS are identical either way (13 and 25), so they are not discriminators -- see
 # docs/data/invariants.md § Route identity. Dropping the inclusion-exclusion overlap term
 # instead reads 53,384,307.
-check     "airport: counts BOTH endpoints, not just departures" "$BODY" '53,372,100'
+check_dataset "airport: counts BOTH endpoints, not just departures" "$BODY" '53,372,100'
 check     "airport: says so in words"        "$BODY" 'at <b>both</b> endpoints'
 # `>14747<`, not a bare `14747`: SEA's airport_id legitimately appears in this page's Explorer
 # permalink (`f=endpoint_airport_id:14747` -- ONE link since M7, not the two origin/dest halves
@@ -778,9 +811,9 @@ check     "airport?y: the track offers every year, 2019 marked current" "$BODY" 
 check_not "airport?y: a complete prior year is not called partial"   "$BODY" 'calendar year 2019 — partial'
 
 BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA")
-check     "airport: the default view states the current year is partial" "$BODY" \
+check_dataset "airport: the default view states the current year is partial" "$BODY" \
   '2026 is a partial year — filed through May 2026 only.'
-check     "airport: the current year's own tick carries the asterisk"     "$BODY" '>2026*<'
+check_dataset "airport: the current year's own tick carries the asterisk" "$BODY" '>2026*<'
 
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/airport/SEA?y=2019")
 check     "airport?y=2019: a valid year still gets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
@@ -794,9 +827,9 @@ check     "airport?y=1999: an out-of-range year is no-store"          "$HDRS" "n
 check_not "airport?y=1999: ...and is never long-cached"              "$HDRS" "s-maxage"
 
 BODY=$(curl -s --max-time 15 "${BASE}/airport/SEA?y=1999")
-check     "airport?y=1999: names the offending value and the covered range" "$BODY" \
+check_dataset "airport?y=1999: names the offending value and the covered range" "$BODY" \
   "unknown year '1999' — this dataset covers 2015–2026"
-check_not "airport?y=1999: does not silently fall back to the default view" "$BODY" '53,372,100'
+check_not_dataset "airport?y=1999: does not silently fall back to the default view" "$BODY" '53,372,100'
 
 BODY=$(curl -s --max-time 15 "${BASE}/airport/SEA?y=nonsense")
 check     "airport?y=nonsense: malformed input is the same named error, not a 500" "$BODY" \
@@ -837,7 +870,7 @@ check     "airport map: the network SVG is in the served HTML" "$BODY" \
 # embedding it, so the literal 4-byte substring `<polyline` never appears a second time. A
 # doubled-count assumption carried over from the chart checks would have made this section
 # assert 546 and fail against the real build.
-check_re  "airport map: exactly 273 polylines (same-airport arc excluded)" \
+check_re_dataset "airport map: exactly 273 polylines (same-airport arc excluded)" \
   "$(count "$BODY" '<polyline')" '^273$'
 # An inset label -- ORD's own network reaches ak/hi/car (measured against this served build;
 # see the `pac` absence below), each drawn as a labelled `<rect>`+`<text>` frame (INSETS,
@@ -914,7 +947,7 @@ check     "carrier: links an aircraft cell to /aircraft/B737-8" "$BODY" 'href="/
 check     "carrier: the chart SVG is in the served HTML" "$BODY" '<svg role="img"'
 check     "carrier: ramp tokens reach the area fills (lightest)" "$BODY" '<path fill="var(--g0)" d='
 check     "carrier: ramp tokens reach the area fills (darkest)"  "$BODY" '<path fill="var(--g5)" d='
-check     "carrier: the page states the chart's own window" "$BODY" 'chart: the full window · 2015-01 → 2026-05'
+check_dataset "carrier: the page states the chart's own window" "$BODY" 'chart: the full window · 2015-01 → 2026-05'
 # Final whole-branch review, M11 (third of four canonical checks -- see /route's own comment).
 check     "carrier: carries a self-referential canonical link (Task 2)" "$BODY" \
   '<link rel="canonical" href="http://localhost:3000/carrier/DL"'
@@ -1395,7 +1428,7 @@ check_not "watch/new-routes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
 # accurate claim present AND the false one gone. All-ASCII needles for the reason above; the
 # frame itself is a plain TS string literal (lib/watch.ts), not JSX, so it ships verbatim.
 check     "watch/new-routes: states re-entry, not first appearance" "$BODY" 'not necessarily a first appearance'
-check     "watch/new-routes: carries the measured count"            "$BODY" '303 of the 606'
+check_dataset "watch/new-routes: carries the measured count"        "$BODY" '303 of the 606'
 check_not "watch/new-routes: no longer claims 'since 2015'"         "$BODY" 'since 2015'
 # The SECOND false claim on this page, found by the re-review of the wave that fixed the first:
 # mart_route_health's grain is (op_airline_id, route), so `p12_months_present = 0` says nothing
@@ -1404,7 +1437,7 @@ check_not "watch/new-routes: no longer claims 'since 2015'"         "$BODY" 'sin
 # shipped a false claim twice, so every one of them gets a served-byte guard, both directions.
 check     "watch/new-routes: names the carrier, not the route (frame)" "$BODY" 'A route this carrier flew nothing on last year'
 check     "watch/new-routes: names the carrier, not the route (note)"  "$BODY" 'this carrier filed nothing at all on this route'
-check     "watch/new-routes: carries the unserved-route measurement"   "$BODY" '466 of the 606'
+check_dataset "watch/new-routes: carries the unserved-route measurement" "$BODY" '466 of the 606'
 check_not "watch/new-routes: never claims nobody flew it"              "$BODY" 'nobody flew'
 check_re     "watch/new-routes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/new-routes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
@@ -1917,6 +1950,10 @@ if [ "$SMOKE_MODE" = "container" ]; then
   echo "    - /watch/gauge against a database missing mart_route_health (M6 Task 8)"
   echo "    - /airport map against dim_airport missing lat/lon (M7 Task 10)"
   echo "    container coverage is the served-build checks only -- NOT the full suite."
+fi
+
+if [ "$DATASET_SKIPPED" -gt 0 ]; then
+  echo "  dataset-pinned checks skipped: ${DATASET_SKIPPED} (SMOKE_DATASET_PINNED=0)"
 fi
 
 echo
