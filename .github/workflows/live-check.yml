@@ -1,0 +1,141 @@
+name: Live check
+
+# freshness.py reads the release history; this reads the SERVED SITE. Those are different
+# questions, and the gap between them is a real failure mode: a warehouse that published
+# correctly and was never promoted leaves the release-based alert green forever while
+# DATA AS OF on the page stops advancing. Nothing upstream of the box can see that.
+#
+# SEPARATE FROM promote.yml on purpose, for the reason freshness.yml's header gives: a check
+# that shares a fate with the thing it watches is not a check. promote.yml only runs when a
+# human promotes; the site can go wrong on a day nobody deploys.
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read   # gh release list
+  issues: write    # file the alert
+
+concurrency:
+  group: live-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          cache: true
+
+      - id: gather
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE: https://upgauge.shipman.dev
+        run: |
+          set -euo pipefail
+
+          # HEALTH AND SITEMAP FIRST -- the burst below blocks this IP on /api/ for 60s, and
+          # /api/health is under /api/.
+          health=$(curl -sS --max-time 15 "${BASE}/api/health" || echo '{}')
+          sitemap=$(curl -sS --max-time 15 "${BASE}/sitemap.xml" | head -c 2000 || echo "")
+
+          # Two fetches of the SAME url: the first may legitimately miss (cold edge, or the
+          # entry just expired). Only the second says whether the edge is caching HTML at all.
+          curl -sS -o /dev/null --max-time 15 "${BASE}/watch" || true
+          cf=$(curl -sS -o /dev/null -D - --max-time 15 "${BASE}/watch" \
+                | tr -d '\r' | awk -F': ' 'tolower($1)=="cf-cache-status"{print $2}')
+          cf="${cf:-absent}"
+
+          releases=""
+          for attempt in 1 2 3 4 5; do
+            if releases=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
+                            --exclude-drafts --exclude-pre-releases \
+                            --json tagName,publishedAt); then
+              break
+            fi
+            echo "::warning::gh release list failed (attempt $attempt of 5); retrying"
+            releases=""
+            sleep $((attempt * 5))
+          done
+          # NEVER let a failed listing through as empty: `[]` is an answer, an empty STRING is
+          # an outage, and passing it on would report "no newer release" -- a false green on
+          # the one check nothing else can make.
+          [ -n "$releases" ] || {
+            echo "::error::could not list releases after 5 attempts -- refusing to judge against no data"
+            exit 1
+          }
+
+          # LAST. 80 requests against a 60/min limit, so the tail must be blocked. The rule
+          # matches the /api/ prefix, so this exercises the same rule that protects /api/pivot.
+          rl=0
+          for _ in $(seq 1 80); do
+            rl=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+                 "${BASE}/api/pivot?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op" || echo 0)
+            [ "$rl" = "429" ] && break
+          done
+
+          {
+            echo "health<<EOF"; printf '%s\n' "$health"; echo "EOF"
+            echo "releases<<EOF"; printf '%s\n' "$releases"; echo "EOF"
+            echo "sitemap<<EOF"; printf '%s\n' "$sitemap"; echo "EOF"
+            echo "cf=$cf"
+            echo "rl=$rl"
+          } >> "$GITHUB_OUTPUT"
+
+      # Every value reaches the script as a quoted variable expansion through `env:`, never
+      # spliced through `${{ }}` into the script text. The sitemap is REMOTE CONTENT in a job
+      # holding issues:write -- splicing it would make whatever the origin served into source
+      # code. Same rule warehouse.yml's PREVIOUS_TAG comment spells out.
+      - id: assess
+        env:
+          HEALTH: ${{ steps.gather.outputs.health }}
+          RELEASES: ${{ steps.gather.outputs.releases }}
+          SITEMAP: ${{ steps.gather.outputs.sitemap }}
+          CF: ${{ steps.gather.outputs.cf }}
+          RL: ${{ steps.gather.outputs.rl }}
+        run: |
+          set -euo pipefail
+          mise exec -- python .github/scripts/live_check.py \
+            "$HEALTH" "$RELEASES" "$SITEMAP" "$CF" "$RL"
+
+      # A failing live check is a CONDITION, not an event: it stays true every hour until
+      # someone fixes it. Without this, one bad afternoon files a dozen issues and the alert
+      # gets muted -- freshness.yml's own reasoning, at 24x the rate.
+      - id: existing
+        if: steps.assess.outputs.file_issue == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+                   --label live-red --json number --jq 'length')
+          echo "count=$open" >> "$GITHUB_OUTPUT"
+          [ "$open" = "0" ] || echo "::notice::a live-red alert is already open; not filing another"
+
+      # `live-red` must EXIST on the repository -- `gh issue create` fails outright on an
+      # unknown label, which turns the alert into a failed run whose only symptom is a red tick
+      # nobody watches. Create it once (Step 6 of this task).
+      - name: File the live-check alert
+        if: steps.assess.outputs.file_issue == '1' && steps.existing.outputs.count == '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_BODY: ${{ steps.assess.outputs.issue_body }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          body=$(printf '%s\n\n%s' "@$OWNER" "$ISSUE_BODY")
+          url=$(gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "The served site failed a post-deploy check" \
+            --label critical --label live-red \
+            --body "$body")
+          echo "::notice::filed $url"
+          # Create first, assign second: a permissions hiccup on --assignee would fail the
+          # CREATE and lose the alert entirely. The @mention in the body is the fallback.
+          gh issue edit "$url" --add-assignee "$OWNER" \
+            || echo "::warning::could not assign $OWNER -- the @mention in the body is the fallback"

@@ -744,11 +744,21 @@ not an alert. A notify step inside `verify.yml` cannot report `verify.yml` being
 repository inactivity, being deleted, or failing before the step is reached. It also keeps
 `issues: write` off every workflow that restores a warehouse and runs `make`.
 
-**The watch list is a rule, not a snapshot.** Every workflow in the repo that carries a
-`schedule:` trigger must appear in it, and
-`test_every_scheduled_workflow_in_the_repo_is_watched` derives the expected set by reading the
-workflow directory — so the next scheduled workflow somebody adds reddens a test instead of
-quietly joining `verify.yml` in going red at nobody.
+**The watch list is a rule, not a snapshot, and the rule is wider than a literal `schedule:`
+trigger.** Every workflow that carries one must appear in it, and so must every workflow that
+only *inherits* an unattended path via `workflow_run` on one of them — `test_every_scheduled_
+workflow_in_the_repo_is_watched` derives the expected set by reading the workflow directory and
+walking that chain to a fixed point, so the next scheduled workflow somebody adds, or the next
+`workflow_run`-only workflow chained off one, reddens a test instead of quietly joining
+`verify.yml` in going red at nobody. `image.yml` is the case that found the gap: it carries no
+`schedule:` of its own, but one of its three triggers is `workflow_run` on `Warehouse`, itself a
+daily cron — so `Warehouse` publishes → `Image` rebuilds → `Image` fails is a chain nobody is
+watching on a day nobody touches this repo, sitting in the blind spot of a rule that only ever
+read `schedule:` literally. `Image`'s other two triggers (`push`, `workflow_dispatch`) are
+attended; that does not make the workflow attended, since one unattended path is enough to need
+a watcher. The chain never folds in the notifier itself — `test_the_notifier_never_watches_
+itself` guards the unbounded loop that would create — so the notifier's own file is excluded
+from the walk before it starts, not filtered out of the result afterward.
 
 **The conclusion test is an ALLOW-LIST — `failure` or `timed_out`, never `!= 'success'`.** The
 same rule CLAUDE.md holds the cacheability predicate to, and it generalises for the same reason:

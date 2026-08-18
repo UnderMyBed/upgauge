@@ -240,17 +240,57 @@ def _triggers(path: Path) -> dict:
     return doc.get("on", doc.get(True)) or {}
 
 
+def _workflow_run_targets(path: Path) -> set[str]:
+    """The names in this workflow's own `workflow_run.workflows` trigger, if it has one."""
+    wr = (_triggers(path) or {}).get("workflow_run")
+    return set((wr or {}).get("workflows") or []) if isinstance(wr, dict) else set()
+
+
+def _unattended_workflow_names() -> set[str]:
+    """Every workflow name that can run with nobody watching -- a direct `schedule:` trigger,
+    OR a `workflow_run` on a workflow that is itself unattended, transitively.
+
+    image.yml is the reason for the second clause, found in the wild: it has no `schedule:` of
+    its own, but one of its three triggers is `workflow_run` on "Warehouse", which IS a daily
+    cron. That makes `Warehouse publishes -> Image rebuilds -> Image fails` a chain nobody is
+    attending on the days nobody touches this repo -- the exact dark-guard condition this rule
+    exists to catch, sitting in the rule's own blind spot, because a literal `"schedule" in
+    triggers` check never looks at `workflow_run` at all. image.yml's OTHER triggers (push,
+    workflow_dispatch) are attended; that does not make the workflow attended -- one unattended
+    path is enough to need a watcher, the same way `mart_route_health`'s carrier-route grain
+    means one carrier's presence on a route is a fact about that carrier, not the route.
+
+    NEVER folds in NOTIFIER. The notifier's own `workflow_run` watches five-plus unattended
+    workflows, so if it were a candidate here it would compute itself as unattended and this
+    function's caller would then require the notifier to watch itself --
+    test_the_notifier_never_watches_itself exists to catch exactly that chain, so this function
+    must never let it start: NOTIFIER is excluded from the file set below before the fixed
+    point runs, not filtered out of the result afterward.
+    """
+    files = [p for p in sorted(WORKFLOWS.glob("*.yml")) if p != NOTIFIER]
+    by_name = {yaml.safe_load(p.read_text()).get("name", p.stem): p for p in files}
+
+    unattended = {name for name, p in by_name.items() if "schedule" in (_triggers(p) or {})}
+    changed = True
+    while changed:
+        changed = False
+        for name, p in by_name.items():
+            if name not in unattended and _workflow_run_targets(p) & unattended:
+                unattended.add(name)
+                changed = True
+    return unattended
+
+
 def test_every_scheduled_workflow_in_the_repo_is_watched():
-    """The rule, not a snapshot: a workflow that runs on a schedule has no human attached to
-    it, so it MUST be in the watch list. This is what makes the next scheduled workflow
-    somebody adds fail loudly here instead of joining verify.yml in going red at nobody."""
-    scheduled = {
-        yaml.safe_load(p.read_text()).get("name", p.stem)
-        for p in sorted(WORKFLOWS.glob("*.yml"))
-        if p != NOTIFIER and "schedule" in (_triggers(p) or {})
-    }
+    """The rule, not a snapshot: a workflow that can run with no human in the loop has no human
+    attached to it, so it MUST be in the watch list. This is what makes the next scheduled
+    workflow somebody adds fail loudly here instead of joining verify.yml in going red at
+    nobody -- and, since `_unattended_workflow_names` widened past a literal `schedule:` check,
+    the same for a workflow that only inherits its blind spot via `workflow_run` on one (image.yml,
+    found unwatched by this same widening: `workflow_run` on "Warehouse", itself a daily cron)."""
+    unattended = _unattended_workflow_names()
     watched = set(_triggers(NOTIFIER).get("workflow_run", {}).get("workflows", []))
-    assert scheduled <= watched, f"scheduled but unwatched: {sorted(scheduled - watched)}"
+    assert unattended <= watched, f"unattended but unwatched: {sorted(unattended - watched)}"
 
 
 def test_the_notifier_never_watches_itself():
