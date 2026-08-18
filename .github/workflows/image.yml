@@ -60,6 +60,17 @@ jobs:
           install: true
           cache: true
 
+      # `make image-smoke` runs `app/smoke.sh` against the container, but `smoke.sh`'s very
+      # first check compares the version of `next` installed under app/node_modules against
+      # the version app/package.json declares -- unconditionally, before SMOKE_MODE is even
+      # read, because a gate serving a different Next than the build under test certifies
+      # nothing. That check needs a real `app/node_modules` on THIS runner, not only inside the
+      # image being built. Same step `.github/actions/setup`'s "Install app deps" runs for every
+      # other job in this repo (ci.yml's app-check/smoke/goldens) -- missing here on this
+      # workflow's first-ever run, which failed with "next is missing or not executable. Run
+      # 'make install' first." before any container was even built.
+      - run: mise exec -- npm ci --prefix app
+
       # The newest published warehouse, resolved the way freshness.py resolves it: the full
       # anchored shape, publishedAt (never createdAt), ascending order take-last. NEVER the
       # Makefile's default -- that is a test fixture pinned to one asset (D6), and a
