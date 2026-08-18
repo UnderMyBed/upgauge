@@ -20,13 +20,8 @@ name: Image
 # reason). That is exactly right here: "Warehouse" only ever runs against main, and a data
 # refresh should bake main's current code, not some other ref.
 on:
-  # TEMPORARY: `feat/m8-deploy-runbook` added below so this brand-new workflow can be
-  # dispatch-tested. `workflow_dispatch` is only exposed by GitHub for a workflow file that
-  # already exists on the DEFAULT branch, so a workflow introduced on a feature branch cannot
-  # be `gh workflow run`-tested from that branch until it merges. This line is reverted in its
-  # own commit before this branch merges to main.
   push:
-    branches: [main, feat/m8-deploy-runbook]
+    branches: [main]
   workflow_run:
     workflows: ["Warehouse"]
     types: [completed]
