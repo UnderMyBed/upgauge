@@ -646,13 +646,13 @@ check "chart: the rest of the page still server-renders"      "$BODY" '>DL<'
 # yearly leaders are byte-identical to the pre-refresh table in crossover.test.ts. So a
 # rename can redden this check without any underlying fact changing -- re-measure before
 # assuming a data movement.
-check_not "chart: a route with no crossover gets NO annotation (JFK-LAX)" "$BODY" 'overtakes'
+check_dataset check_not "chart: a route with no crossover gets NO annotation (JFK-LAX)" "$BODY" 'overtakes'
 # The negative half of the gap pair below. JFK-LAX filed in all 136 months of the window
 # (measured), so it must claim no gaps AND draw each band in exactly one piece.
 check_not "chart: a route with no gaps claims none (JFK-LAX)" "$BODY" 'no filings'
 check_re  "chart: an ungapped band is ONE path (JFK-LAX)" "$(count "$BODY" '<path fill="var(--g5)" d=')" '^1$'
 BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-MCO")
-check "chart: a route with one gets the derived annotation (ATL-MCO)" "$BODY" 'B757-2 overtakes A321nXLR · 2018'
+check_dataset check "chart: a route with one gets the derived annotation (ATL-MCO)" "$BODY" 'B757-2 overtakes A321nXLR · 2018'
 
 # M4c final review, F1, IN THE SERVED BYTES. HNL-LAS (7.07 M seats over the window) filed
 # nothing at all for 2020-04..2020-09 -- six months INSIDE the --panel-2 band this chart
@@ -684,8 +684,8 @@ check_re "chart: the band BREAKS at them, drawn as two paths (HNL-LAS)" "$(count
 # `textContent` skips comment nodes, so all 281 unit tests passed while this tier went red. That
 # is the whole reason this file exists, and it is why the assertion below is over raw bytes.
 BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-CAK")
-check     "chart: a subject that stopped filing names ITS range (ATL-CAK)" "$BODY" 'chart: 2015-01 → 2022-06'
-check_not "chart: ...and does not claim the full window there"            "$BODY" 'chart: the full window'
+check_dataset check     "chart: a subject that stopped filing names ITS range (ATL-CAK)" "$BODY" 'chart: 2015-01 → 2022-06'
+check_dataset check_not "chart: ...and does not claim the full window there"            "$BODY" 'chart: the full window'
 
 # Page weight, recorded rather than asserted: the chart is ~136 months x 6 bands of path data
 # on a force-dynamic page, and M4d mounts this same component on three more pages. A threshold
