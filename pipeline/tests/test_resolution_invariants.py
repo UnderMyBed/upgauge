@@ -178,9 +178,7 @@ def _carrier_lookup_over_every_code() -> str:
 
 
 def _aircraft_lookup_over_every_name() -> str:
-    return _over_every(
-        AIRCRAFT_LOOKUP_SQL, "SELECT upper(short_name) FROM dim_aircraft_type"
-    )
+    return _over_every(AIRCRAFT_LOOKUP_SQL, "SELECT upper(short_name) FROM dim_aircraft_type")
 
 
 def test_carrier_reverse_lookup_returns_at_most_one_airline_per_code(con):

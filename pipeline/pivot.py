@@ -290,8 +290,7 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     group_by = ", ".join(r[1] for r in dim_renders)
 
     measure_select = ", ".join(
-        f"{entry['expr']} AS {key}"
-        for key, entry in zip(q.measures, measure_entries, strict=True)
+        f"{entry['expr']} AS {key}" for key, entry in zip(q.measures, measure_entries, strict=True)
     )
 
     params: dict[str, object] = {
@@ -457,16 +456,22 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "single_dimension_segment",
         "One dimension, one additive measure, segment grain, default sort/limit/grouping.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
         ),
     ),
     (
         "multi_dimension_segment",
         "Two dimensions x two measures -- exercises the comma-joined SELECT/GROUP BY list.",
         PivotQuery(
-            grain="segment", dimensions=("year_month", "op_airline_id"),
-            measures=("seats", "passengers"), time_from="2015-01", time_to="2015-12",
+            grain="segment",
+            dimensions=("year_month", "op_airline_id"),
+            measures=("seats", "passengers"),
+            time_from="2015-01",
+            time_to="2015-12",
         ),
     ),
     (
@@ -475,8 +480,11 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "route grain, against fct_route_month's SUM(quarantined_rows) -- not the segment "
         "template's COUNT(*) FILTER.",
         PivotQuery(
-            grain="route", dimensions=("route",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12",
+            grain="route",
+            dimensions=("route",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
         ),
     ),
     (
@@ -485,8 +493,11 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "is_quarantined -- never AVG(). Step 4 of the M3a plan mutates this measure's expr "
         "in sql/02_marts/301_meta_pivot_measures.sql to prove this golden actually pins it.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("load_factor",),
-            time_from="2015-01", time_to="2015-12",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("load_factor",),
+            time_from="2015-01",
+            time_to="2015-12",
         ),
     ),
     (
@@ -494,8 +505,11 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "A filter clause: op_airline_id IN ($f0_0, $f0_1) -- the values are bound params, "
         "never interpolated into the SQL text.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
             filters=(("op_airline_id", ("19790", "19805")),),
         ),
     ),
@@ -505,8 +519,12 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "coalesce(m.parent_airline_id, f.op_airline_id) AS op_airline_id and "
         "pivot_mainline_join.sql's LEFT JOIN is appended after FROM.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12", grouping="mainline",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
+            grouping="mainline",
         ),
     ),
     (
@@ -521,8 +539,12 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "2,336,210 filtered, 2017-01, op_airline_id=19930/Alaska). This is a pin of CURRENT "
         "behaviour, not an endorsement -- see the SQL file's header for why it's unchanged.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12", grouping="mainline",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
+            grouping="mainline",
             filters=(("op_airline_id", ("19930",)),),
         ),
     ),
@@ -530,8 +552,13 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "ascending_sort",
         "sort_desc=False renders 'ORDER BY seats ASC' instead of the default DESC.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12", sort="seats", sort_desc=False,
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
+            sort="seats",
+            sort_desc=False,
         ),
     ),
     (
@@ -542,8 +569,13 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "assigns back to op_airline_id lets ORDER BY name it uniformly in both grouping "
         "modes.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12", sort="op_airline_id", grouping="mainline",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
+            sort="op_airline_id",
+            grouping="mainline",
         ),
     ),
     (
@@ -553,9 +585,16 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "written -- filtering origin and dest separately also matches a->a and b->b, which "
         "over-counts by 18,895 seats on JFK-LAX (docs/data/invariants.md).",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
-            limit=50, grouping="operating", filters=(("route", ("12478-12892",)),),
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2025-05",
+            time_to="2026-04",
+            sort=None,
+            sort_desc=True,
+            limit=50,
+            grouping="operating",
+            filters=(("route", ("12478-12892",)),),
         ),
     ),
     (
@@ -563,9 +602,15 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "Two routes in one filter. Values stay OR'd, preserving the IN-list semantics every "
         "other dimension has.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
-            limit=50, grouping="operating",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2025-05",
+            time_to="2026-04",
+            sort=None,
+            sort_desc=True,
+            limit=50,
+            grouping="operating",
             filters=(("route", ("12478-12892", "10140-14747")),),
         ),
     ),
@@ -577,9 +622,15 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "This is what lets ONE pivot express 'this airport at either end' instead of the "
         "three-pivot inclusion-exclusion /airport assembles today.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
-            limit=50, grouping="operating",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2025-05",
+            time_to="2026-04",
+            sort=None,
+            sort_desc=True,
+            limit=50,
+            grouping="operating",
             filters=(("endpoint_airport_id", ("14747",)),),
         ),
     ),
@@ -589,9 +640,15 @@ _PIVOT_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "using the same parameter names, not one param per side -- $f0_0 and $f0_1 each "
         "appear in both the origin_airport_id and dest_airport_id IN-lists.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
-            limit=50, grouping="operating",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2025-05",
+            time_to="2026-04",
+            sort=None,
+            sort_desc=True,
+            limit=50,
+            grouping="operating",
             filters=(("endpoint_airport_id", ("14747", "13930")),),
         ),
     ),
@@ -609,17 +666,25 @@ _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "baseline_round_trip",
         "Multiple dimensions and measures, explicit descending sort, non-default limit.",
         PivotQuery(
-            grain="segment", dimensions=("year_month", "op_airline_id"),
-            measures=("seats", "load_factor"), time_from="2015-01", time_to="2015-12",
-            sort="seats", sort_desc=True, limit=25,
+            grain="segment",
+            dimensions=("year_month", "op_airline_id"),
+            measures=("seats", "load_factor"),
+            time_from="2015-01",
+            time_to="2015-12",
+            sort="seats",
+            sort_desc=True,
+            limit=25,
         ),
     ),
     (
         "route_grain",
         "grain='route' round-trips through its short URL token ('k=route').",
         PivotQuery(
-            grain="route", dimensions=("route",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12",
+            grain="route",
+            dimensions=("route",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
         ),
     ),
     (
@@ -627,16 +692,25 @@ _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "grouping='mainline' round-trips through its short URL token ('g=ml') -- must not "
         "silently decode back to the 'operating' default.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12", grouping="mainline",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
+            grouping="mainline",
         ),
     ),
     (
         "ascending_sort",
         "sort_desc=False encodes without the '-' prefix ('s=seats', not 's=-seats').",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12", sort="seats", sort_desc=False,
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
+            sort="seats",
+            sort_desc=False,
         ),
     ),
     (
@@ -654,16 +728,24 @@ _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "test; it would only show up as a diff in the next `make goldens` regeneration, "
         "which no test runs automatically.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12", sort=None, sort_desc=False,
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
+            sort=None,
+            sort_desc=False,
         ),
     ),
     (
         "multiple_plain_filter_values",
         "A filter with several ordinary values, joined by the structural ','.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
             filters=(("origin_airport_id", ("14771", "13487", "12892")),),
         ),
     ),
@@ -674,8 +756,11 @@ _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "percent-encode and round-trip exactly rather than corrupt the structural "
         "delimiters or silently reparse into the wrong number of values.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
             filters=(
                 ("origin_airport_id", ("14,771", "13&487", "9%5", "12:34", "a=b", "a+b", "a b")),
             ),
@@ -688,8 +773,11 @@ _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "unique_carrier_code values carry BTS's '(1)' suffix, 163 airport names an "
         "apostrophe. Pins the encoding for M3b's TypeScript port.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2015-01", time_to="2015-12",
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2015-01",
+            time_to="2015-12",
             filters=(("op_airline_id", ("2T (1)", "O'Hare", "a!b", "c*d")),),
         ),
     ),
@@ -698,9 +786,16 @@ _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "A route filter round-trips through the URL codec. The value contains a '-', which "
         "is not a structural delimiter in this format and so needs no escaping.",
         PivotQuery(
-            grain="segment", dimensions=("op_airline_id",), measures=("seats",),
-            time_from="2025-05", time_to="2026-04", sort=None, sort_desc=True,
-            limit=50, grouping="operating", filters=(("route", ("12478-12892",)),),
+            grain="segment",
+            dimensions=("op_airline_id",),
+            measures=("seats",),
+            time_from="2025-05",
+            time_to="2026-04",
+            sort=None,
+            sort_desc=True,
+            limit=50,
+            grouping="operating",
+            filters=(("route", ("12478-12892",)),),
         ),
     ),
 ]

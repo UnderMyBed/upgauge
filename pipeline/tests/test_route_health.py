@@ -101,10 +101,16 @@ def test_additive_sums_are_carried_alongside_the_derived_columns(con):
     """features.md requires the components be shown, not just the score."""
     cols = {r[0] for r in con.execute("DESCRIBE mart_route_health").fetchall()}
     assert {
-        "t12_seats", "t12_passengers", "t12_departures_performed",
-        "t12_departures_scheduled", "t12_months_present",
-        "p12_seats", "p12_passengers", "p12_departures_performed",
-        "p12_departures_scheduled", "p12_months_present",
+        "t12_seats",
+        "t12_passengers",
+        "t12_departures_performed",
+        "t12_departures_scheduled",
+        "t12_months_present",
+        "p12_seats",
+        "p12_passengers",
+        "p12_departures_performed",
+        "p12_departures_scheduled",
+        "p12_months_present",
     } <= cols
 
 

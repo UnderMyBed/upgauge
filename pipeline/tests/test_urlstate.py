@@ -26,8 +26,13 @@ def con(tmp_path_factory):
 
 
 def q(**kw):
-    base = dict(grain="segment", dimensions=("year_month", "op_airline_id"),
-                measures=("seats", "load_factor"), time_from="2015-01", time_to="2015-12")
+    base = dict(
+        grain="segment",
+        dimensions=("year_month", "op_airline_id"),
+        measures=("seats", "load_factor"),
+        time_from="2015-01",
+        time_to="2015-12",
+    )
     base.update(kw)
     return PivotQuery(**base)
 

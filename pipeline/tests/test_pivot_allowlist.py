@@ -135,8 +135,7 @@ def test_every_sum_is_quarantine_filtered(con):
         for m in sums:
             tail = expr[m.end() :].lstrip()
             assert tail.startswith("FILTER (WHERE NOT is_quarantined)"), (
-                f"{key}: {m.group()!r} is not immediately FILTERed by "
-                f"NOT is_quarantined: {expr}"
+                f"{key}: {m.group()!r} is not immediately FILTERed by NOT is_quarantined: {expr}"
             )
 
 

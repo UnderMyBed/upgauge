@@ -59,11 +59,7 @@ def _run_scalars(path: Path) -> list[tuple[int, str]]:
 
 
 def _actions_yaml() -> list[Path]:
-    return sorted(
-        p
-        for p in GITHUB_DIR.rglob("*")
-        if p.suffix in {".yml", ".yaml"} and p.is_file()
-    )
+    return sorted(p for p in GITHUB_DIR.rglob("*") if p.suffix in {".yml", ".yaml"} and p.is_file())
 
 
 def test_the_corpus_is_not_empty():
