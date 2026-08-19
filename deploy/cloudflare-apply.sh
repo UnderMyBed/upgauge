@@ -4,6 +4,10 @@
 # one command, and it is why this project does not carry Terraform for seven resources (D8).
 set -euo pipefail
 
+# Operator credentials come from deploy/.env when they are not already exported.
+# shellcheck source=load-env.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/load-env.sh"
+
 : "${CLOUDFLARE_API_TOKEN:?export CLOUDFLARE_API_TOKEN}"
 : "${CLOUDFLARE_ZONE_ID:?export CLOUDFLARE_ZONE_ID}"
 : "${CLOUDFLARE_ACCOUNT_ID:?export CLOUDFLARE_ACCOUNT_ID}"

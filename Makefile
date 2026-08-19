@@ -335,10 +335,10 @@ portability: image  ## Prove the WORKDIR/data contract by breaking it three ways
 	[ $$fail -eq 0 ]
 	@echo "  portability: all three negative cases reproduced their documented failure ... ok"
 
-provision:  ## Create or re-assert the Hetzner box from deploy/cloud-init.yaml (needs TUNNEL_TOKEN)
+provision:  ## Create or re-assert the Hetzner box from deploy/cloud-init.yaml (creds: deploy/.env, see .env.example)
 	./deploy/provision.sh
 
-cloudflare-apply:  ## PUT the committed Cloudflare desired state (cache rule, rate limit, tunnel ingress)
+cloudflare-apply:  ## PUT the committed Cloudflare desired state (creds: deploy/.env, see .env.example)
 	./deploy/cloudflare-apply.sh
 
 test:  ## Run the pipeline test suite

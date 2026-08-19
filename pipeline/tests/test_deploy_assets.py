@@ -4,6 +4,9 @@ a published port, a writable root, or a moving tag all work fine until they matt
 
 from __future__ import annotations
 
+import os
+import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -73,3 +76,104 @@ def test_the_tunnel_credential_is_not_committed():
     token here would be in git history forever."""
     text = (DEPLOY / "cloud-init.yaml").read_text()
     assert "TUNNEL_TOKEN=" not in text or "${TUNNEL_TOKEN}" in text
+
+
+# --- The operator credential file -------------------------------------------------------
+#
+# Five secrets reach `make provision` / `make cloudflare-apply` from the operator's machine.
+# They live in `deploy/.env`, which is gitignored, and `deploy/.env.example` is the committed
+# template. Both halves of that arrangement fail silently when broken: an example that has
+# drifted from what the scripts require sends an operator into a cryptic mid-apply abort, and
+# a `.env` that is NOT ignored puts five live credentials in git history forever.
+
+
+def _required_vars(script: str) -> set[str]:
+    """Variables a script declares mandatory via bash's `: "${VAR:?...}"` guard."""
+    text = (DEPLOY / script).read_text()
+    return set(re.findall(r'^: "\$\{([A-Z][A-Z0-9_]*):\?', text, re.MULTILINE))
+
+
+def _example_keys() -> set[str]:
+    keys = set()
+    for line in (DEPLOY / ".env.example").read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        keys.add(line.split("=", 1)[0].removeprefix("export ").strip())
+    return keys
+
+
+def test_every_variable_the_scripts_require_is_in_the_example():
+    """The example is the only thing an operator reads before their first apply. A variable
+    that a script made mandatory but the template never mentions surfaces as an abort partway
+    through provisioning -- after a box may already exist."""
+    required = _required_vars("provision.sh") | _required_vars("cloudflare-apply.sh")
+    assert required, 'parsed no required vars; the `: "${VAR:?}"` guard shape moved'
+    assert required <= _example_keys(), (
+        f"missing from deploy/.env.example: {sorted(required - _example_keys())}"
+    )
+
+
+def test_the_credential_file_is_gitignored():
+    """`deploy/.env` holds the tunnel token and a Cloudflare token that can rewrite the zone's
+    rulesets. Committing it is unrecoverable -- rotation, not deletion, is the only remedy."""
+    proc = subprocess.run(
+        ["git", "check-ignore", "-q", "deploy/.env"],
+        cwd=DEPLOY.parent,
+        capture_output=True,
+    )
+    assert proc.returncode == 0, "deploy/.env is NOT gitignored"
+
+
+def test_the_example_carries_no_filled_in_value():
+    """The template is committed, so a value typed into it ships to everyone. Every key is
+    declared empty; the operator fills the copy, never the original."""
+    for line in (DEPLOY / ".env.example").read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        assert value == "", f"{key.strip()} carries a value in the committed example: {value!r}"
+
+
+def _source_loader(env_dir: Path, environ: dict[str, str], probe: str) -> str:
+    """Source load-env.sh with `deploy/` relocated to a tmp dir, then echo one variable."""
+    script = f'set -euo pipefail\n. "{env_dir}/load-env.sh"\nprintf %s "${{{probe}:-}}"\n'
+    return subprocess.run(
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        check=True,
+        env={"PATH": os.environ["PATH"], **environ},
+    ).stdout
+
+
+def _loader_dir(tmp_path: Path, env_body: str | None) -> Path:
+    (tmp_path / "load-env.sh").write_text((DEPLOY / "load-env.sh").read_text())
+    if env_body is not None:
+        (tmp_path / ".env").write_text(env_body)
+    return tmp_path
+
+
+def test_an_exported_variable_beats_the_file(tmp_path):
+    """Environment wins, matching docker compose and dotenv. The reverse -- file wins -- makes
+    `CLOUDFLARE_API_TOKEN=$rotated make cloudflare-apply` silently apply with the stale token
+    still sitting in .env, which looks like a successful rotation and is not one."""
+    d = _loader_dir(tmp_path, "CLOUDFLARE_API_TOKEN=from-file\n")
+    got = _source_loader(d, {"CLOUDFLARE_API_TOKEN": "from-environment"}, "CLOUDFLARE_API_TOKEN")
+    assert got == "from-environment"
+
+
+def test_the_file_supplies_a_variable_the_environment_lacks(tmp_path):
+    """The whole point: an unset variable is filled from the file, and exported, so the
+    `: \"${VAR:?}\"` guard downstream is satisfied."""
+    d = _loader_dir(tmp_path, "CLOUDFLARE_ZONE_ID=zone-from-file\n")
+    assert _source_loader(d, {}, "CLOUDFLARE_ZONE_ID") == "zone-from-file"
+
+
+def test_a_missing_file_is_not_an_error(tmp_path):
+    """Both scripts run `set -euo pipefail` and both are usable with no .env at all -- CI, or
+    an operator passing values inline. A loader that returns non-zero on an absent file kills
+    the run before the script's own error message can say what is actually missing."""
+    d = _loader_dir(tmp_path, None)
+    assert _source_loader(d, {"TUNNEL_TOKEN": "inline"}, "TUNNEL_TOKEN") == "inline"

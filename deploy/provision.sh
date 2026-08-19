@@ -5,6 +5,10 @@
 # existed -- see the attach step below for why that distinction matters.
 set -euo pipefail
 
+# Operator credentials come from deploy/.env when they are not already exported.
+# shellcheck source=load-env.sh
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/load-env.sh"
+
 : "${TUNNEL_TOKEN:?export TUNNEL_TOKEN -- the credential from the Cloudflare tunnel}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
