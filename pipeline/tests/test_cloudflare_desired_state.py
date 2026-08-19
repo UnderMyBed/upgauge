@@ -31,18 +31,33 @@ def test_all_three_desired_state_files_are_valid_json():
         _load(name)  # raises json.JSONDecodeError on malformed content
 
 
-def test_rate_limit_threshold_is_60_requests_per_60_seconds_per_ip():
-    """THE number: 60 requests/minute/IP on /api/, pinned here rather than left to the
-    surrounding prose. A human on /explore triggers a handful of /api/pivot calls a minute; a
-    scraper walking 22,420 route pages does not fit inside it (CLAUDE.md, rate-limit design
-    facts). If this drifts to some other value with the JSON still well-formed, only this
-    assertion -- not the JSON parse above -- catches it."""
+def test_rate_limit_holds_one_request_per_second_per_ip_in_a_period_the_plan_allows():
+    """THE number, and the constraint it has to fit inside. MEASURED 2026-08-19: this zone's
+    plan rejects any other window --
+
+        not entitled to use the period 60, can only use a period among [10]
+
+    -- so the 60-requests-per-60s the design asked for is not expressible here. The RATE is
+    what carries the intent (a human on /explore makes a handful of /api/pivot calls a minute;
+    a scraper walking 22,420 route pages does not fit inside 1/s), so it is preserved at
+    1 req/s and the window is the one the plan permits. Asserting the ratio rather than a bare
+    threshold is what keeps this honest if the window ever changes again.
+
+    Note the tightened burst tolerance: 10-in-10s trips on a burst that 60-in-60s would have
+    absorbed. That is a real behaviour change, accepted because the plan allows nothing else."""
     rule = _load("rate-limit.json")["rules"][0]
     assert rule["action"] == "block"
     ratelimit = rule["ratelimit"]
-    assert ratelimit["period"] == 60
-    assert ratelimit["requests_per_period"] == 60
+    assert ratelimit["period"] == 10, "the plan permits no other period; measured from the API"
+    assert ratelimit["requests_per_period"] / ratelimit["period"] == 1.0, (
+        "the sustained rate must stay at 1 request/second/IP"
+    )
     assert "ip.src" in ratelimit["characteristics"]
+    # Same plan constraint, second measurement: "not entitled to use a mitigation timeout
+    # different from 10". The design asked to block for 60s; the plan blocks for 10, so a
+    # throttled scraper resumes six times sooner. The rule caps sustained throughput; it is
+    # not a wall, and nothing downstream should describe it as one.
+    assert ratelimit["mitigation_timeout"] == 10
 
 
 def test_rate_limit_targets_api_paths_only():

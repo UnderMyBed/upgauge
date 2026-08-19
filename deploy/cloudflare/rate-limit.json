@@ -1,16 +1,19 @@
 {
   "name": "upgauge-api-rate-limit",
-  "description": "THE THRESHOLD (issue #19's third acceptance criterion, and #52's second option): block a source IP once it exceeds 60 requests per 60-second window on /api/, for 60 seconds. A human on /explore triggers a handful of /api/pivot calls a minute; a scraper walking 22,420 route pages does not fit inside 60/min. robots.txt already disallows /api/ to well-behaved crawlers -- this is the backstop for ones that ignore it.",
+  "description": "THE THRESHOLD (issue #19's third acceptance criterion, and #52's second option): block a source IP once it exceeds 1 request/second on /api/, blocking for 10 seconds. A human on /explore triggers a handful of /api/pivot calls a minute; a scraper walking 22,420 route pages does not fit inside 1/s. robots.txt already disallows /api/ to well-behaved crawlers -- this is the backstop for ones that ignore it. The window is 10s because this zone's plan permits no other: the API rejects anything else with 'not entitled to use the period 60, can only use a period among [10]'. The design asked for 60-per-60s; that is the same sustained rate, but 10-in-10s trips on a burst 60-in-60s would have absorbed. The mitigation timeout is 10s for the same reason as the window: 'not entitled to use a mitigation timeout different from 10'. The design asked to block for 60s, so a throttled client resumes six times sooner than intended -- this caps sustained throughput, it is not a wall.",
   "rules": [
     {
-      "description": "Rate limit /api/ to 60 requests per 60s per source IP so a scraper cannot keep the origin awake",
+      "description": "Rate limit /api/ to 1 request/second per source IP so a scraper cannot keep the origin awake",
       "expression": "(starts_with(http.request.uri.path, \"/api/\"))",
       "action": "block",
       "ratelimit": {
-        "characteristics": ["ip.src", "cf.colo.id"],
-        "period": 60,
-        "requests_per_period": 60,
-        "mitigation_timeout": 60
+        "characteristics": [
+          "ip.src",
+          "cf.colo.id"
+        ],
+        "period": 10,
+        "requests_per_period": 10,
+        "mitigation_timeout": 10
       }
     }
   ]
