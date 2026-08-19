@@ -213,3 +213,23 @@ def test_provision_gives_the_box_an_ipv4():
     assert "--without-ipv4" not in text, (
         "provision.sh creates an IPv6-only box, which cannot resolve or reach ghcr.io"
     )
+
+
+def test_provision_does_not_depend_on_hcloud_output_templates():
+    """MEASURED: `make provision` exited 1 AFTER successfully creating the box, because its
+    final line used `-o format='{{.Datacenter.Location.Name}}'` and Hetzner removed
+    datacenters on 2026-07-01. hcloud's Go-template field paths track their API's Go structs
+    and are not stable across CLI versions, so a template is a latent failure that reports a
+    good provision as a bad one -- the worst direction for an operator, who cannot tell
+    whether to re-run. `-o columns=` (used for the list calls) is a stable, documented
+    surface; `{{.Field.Path}}` is not."""
+    code = [
+        ln
+        for ln in (DEPLOY / "provision.sh").read_text().splitlines()
+        if not ln.lstrip().startswith("#")
+    ]
+    offenders = [ln for ln in code if "{{." in ln]
+    assert not offenders, (
+        f"provision.sh references an hcloud Go-template field path: {offenders}. A renamed "
+        f"field turns a successful provision into a red exit."
+    )

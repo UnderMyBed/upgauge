@@ -122,4 +122,9 @@ else
   exit 1
 fi
 
-hcloud server describe "$NAME" -o format='{{.Name}} {{.ServerType.Name}} {{.Datacenter.Location.Name}} {{.PublicNet.IPv6.IP}}'
+# Plain describe, never `-o format='{{...}}'`. Those are Go-template paths into hcloud's
+# own structs and they move: `.Datacenter.Location.Name` was valid until Hetzner removed
+# datacenters on 2026-07-01, after which this line failed AFTER the box was already
+# created -- reporting a good provision as a red one, which is the direction an operator
+# cannot safely act on.
+hcloud server describe "$NAME"
