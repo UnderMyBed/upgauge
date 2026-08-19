@@ -177,3 +177,39 @@ def test_a_missing_file_is_not_an_error(tmp_path):
     the run before the script's own error message can say what is actually missing."""
     d = _loader_dir(tmp_path, None)
     assert _source_loader(d, {"TUNNEL_TOKEN": "inline"}, "TUNNEL_TOKEN") == "inline"
+
+
+# --- Measured on a real Hetzner box, 2026-08-19 (Task 6 probe) ---------------------------
+#
+# Two failures found by provisioning a throwaway cx23 in nbg1 and reading its logs. Both
+# produce a box that boots, runs its timer every 30s, and never serves anything -- the
+# failure mode this repo has already shipped twice.
+
+
+def test_cloud_init_installs_the_docker_client_not_just_the_daemon():
+    """MEASURED on debian-13: `docker.io` ships /usr/sbin/dockerd, /usr/sbin/docker-proxy and
+    /usr/bin/docker-init -- the DAEMON ONLY. /usr/bin/docker comes from `docker-cli`, and
+    `docker-compose-v2` does not pull it in (verified by installing it and still having no
+    `docker` on PATH). upgauge-deploy.sh's first command is `docker image inspect`, so without
+    this the unit dies with `docker: command not found` on every run, forever, silently."""
+    packages = yaml.safe_load((DEPLOY / "cloud-init.yaml").read_text())["packages"]
+    invokes_docker = any(
+        re.search(r"^\s*docker\s", (DEPLOY / f).read_text(), re.MULTILINE)
+        for f in ("upgauge-deploy.sh",)
+    )
+    assert invokes_docker, "nothing invokes `docker`; this test's premise moved"
+    assert "docker-cli" in packages, (
+        f"cloud-init installs {packages} -- none of which provides /usr/bin/docker on Debian 13"
+    )
+
+
+def test_provision_gives_the_box_an_ipv4():
+    """MEASURED: ghcr.io publishes NO AAAA record, and Hetzner's resolvers
+    (2a01:4ff:ff00::add:1/2) do NOT synthesize one -- there is no DNS64/NAT64. On an
+    IPv6-only box `curl -6 https://ghcr.io/v2/` fails with "Could not resolve host", so the
+    image can never be pulled and the site never comes up. `--without-ipv4` (D3) is
+    incompatible with pulling from GHCR (D1); the IPv4 costs about $0.60/mo."""
+    text = (DEPLOY / "provision.sh").read_text()
+    assert "--without-ipv4" not in text, (
+        "provision.sh creates an IPv6-only box, which cannot resolve or reach ghcr.io"
+    )

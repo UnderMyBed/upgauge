@@ -84,12 +84,15 @@ servers=$(hcloud server list -o noheader -o columns=name) || {
 if printf '%s\n' "$servers" | grep -qx "$NAME"; then
   echo "  server $NAME already exists; not recreating"
 else
+  # An IPv4 is REQUIRED, not a convenience: ghcr.io publishes no AAAA record and
+  # Hetzner's resolvers do not synthesize one -- there is no DNS64/NAT64. Measured on
+  # an IPv6-only cx23 in nbg1: `curl -6 https://ghcr.io/v2/` fails to resolve, so the
+  # image can never be pulled. Costs ~$0.60/mo on top of the server.
   hcloud server create \
     --name "$NAME" \
     --type "$TYPE" \
     --location "$LOCATION" \
     --image "$IMAGE" \
-    --without-ipv4 \
     --firewall upgauge-deny-inbound \
     --user-data-from-file "$USERDATA"
   echo "  server $NAME created"

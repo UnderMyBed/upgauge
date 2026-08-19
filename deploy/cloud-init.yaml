@@ -8,7 +8,13 @@
 # parse as plain YAML with the markers in it (test_deploy_assets.py loads it as-is).
 package_update: true
 packages:
+  # docker.io is the DAEMON ONLY on Debian 13 -- it ships /usr/sbin/dockerd,
+  # /usr/sbin/docker-proxy and /usr/bin/docker-init, and nothing else. /usr/bin/docker
+  # comes from docker-cli, which docker-compose-v2 does NOT pull in (measured). Without
+  # it upgauge-deploy.sh dies on `docker image inspect` every 30s and the site never
+  # comes up -- a box that boots and silently does nothing.
   - docker.io
+  - docker-cli
   - docker-compose-v2
 
 write_files:
