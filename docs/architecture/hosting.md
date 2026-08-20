@@ -1436,8 +1436,32 @@ is open on **three** axes at once: `parseFilter` accepts any non-empty value lis
 `f=origin_state:<arbitrary string>` decodes; `f` is legitimately **repeatable**, so the number of
 `f` tokens is unbounded as well as each one's value; and `f` is the one key **exempt from the
 spelling rule**, because `quote()` must escape `,`, `:`, `&`, `=` and spaces inside a filter value,
-so `%` is meaningful there rather than redundant. Every distinct spelling is a distinct 200 under
-`HTML_CACHE` on the most expensive page on the site.
+so `%` is meaningful there rather than redundant.
+
+**What each distinct spelling costs depends on the dimension's COLUMN TYPE, and on a `VARCHAR`
+dimension it is a distinct 200 under `HTML_CACHE` on the most expensive page on the site.** On an
+INTEGER-typed one it is worse than a cache entry: the value binds as a parameter and DuckDB throws
+on the cast at *execution* time, after `proxy.ts` has already committed the header. Measured on a
+served build, healthy database, one unauthenticated GET each:
+
+| request | status | `Cache-Control` |
+|---|---|---|
+| `/explore?…&f=origin_state:2T%20%281%29` (VARCHAR) | 200 | `public, s-maxage=3600, …` — zero rows |
+| `/explore?…&f=aircraft_type:079` (VARCHAR, zero-padded) | 200 | `public, s-maxage=3600, …` — matches rows; `079` and `79` are different filters |
+| `/explore?…&f=op_airline_id:2T%20%281%29` (INTEGER) | **500** | `public, s-maxage=3600, …` |
+| `/explore?…&f=distance_group:99999` (SMALLINT) | **500** | `public, s-maxage=3600, …` |
+| `/explore?…&f=quarter:999` (TINYINT) | **500** | `public, s-maxage=3600, …` |
+| `/explore?…&f=route:99999999999-99999999999` (pair) | **500** | `public, s-maxage=3600, …` |
+| `/api/pivot?…` (each 500 row above) | 500 | `no-store` — the handler owns its own header |
+
+All-digits is not the discriminator: three of those four 500s are digits only, and each overflows
+its own column width. `/api/pivot` is not a cache exposure here — its 500 is `no-store`; what it
+returns instead is an opaque `{"error":"internal error"}` where a named 400 belongs.
+
+**The spelling axis is an order of magnitude more expensive on the JSON endpoint than on the HTML
+page.** `f=op_airline_id:0000019790` casts fine, renders a byte-identical result, and is a distinct
+cache key on both — but `/api/pivot`'s successes carry the **thirty-day** `PROJECT_CACHE`, not
+`/explore`'s hour.
 
 That exemption is not a gap that could be closed by tightening the same rule one key wider: a
 filter value is warehouse text, and there is no canonical byte spelling of it to insist on without
@@ -1561,6 +1585,18 @@ pointed at a deliberately broken database, **before** the probe below:
 
 RFC 9111 § 3 lets a shared cache store a 500 that carries an explicit `s-maxage`, so this was
 a real exposure on the headline SEO-canonical URL, not a technicality.
+
+**A broken database is not the only way in.** Every row above needs one; the `f` axis does not.
+A filter value that cannot be cast to its dimension's column type — `f=op_airline_id:2T%20%281%29`,
+`f=distance_group:99999`, `f=route:99999999999-99999999999` — decodes cleanly, passes every
+origin-side bound, and throws inside DuckDB at execution time, against a **completely healthy
+database**, from one unauthenticated GET. `proxy.ts` disclaims exactly this case in
+`isExploreCacheable`'s own comment (*"NOT extended to `runPivot()` throwing after `decode()` has
+succeeded"*), and it is the reason a filter value is type-checked at render time rather than left
+to the query: the check runs inside `decode()`, which the proxy already calls, so the throw moves
+from `runPivot()` to `decode()` and the header becomes `no-store` before it is ever written.
+§ "What this does not close" carries the per-type measurements; `app/smoke.sh` § 15b pins the
+behaviour on a served build.
 
 **This is not fixable from the proxy alone.** The same shape is true of `/explore` and of every
 entity page: the proxy cannot see the downstream status, and (see below) a Server Component
