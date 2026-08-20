@@ -55,6 +55,19 @@ body { background: var(--panel); color: var(--ink); }
 /* Column order is fixed: gutter, identifiers, additive measures, derived measures, counts,
    gauge rail. Identifiers left, everything numeric right. No card containers, no rounded
    corners, no drop shadows -- see docs/design/system.md "Layout and density". */
+/* A data table is the widest thing here, and it sits in `.body`'s `minmax(0, 1fr)` column
+   next to the 214px sticky legend. A table cannot lay out narrower than its own min-content
+   width, and `minmax(0, 1fr)` PERMITS its column to shrink below that -- so without something
+   owning the overflow the table paints over the legend. Scrolling is deliberate in preference
+   to a breakpoint or a min-width: those pin the layout to particular window sizes, and the
+   next column added moves the threshold again silently. This is correct at every width.
+   `max-width` is what makes the grid column the constraint rather than the content
+   (docs/design/system.md "Layout and density"). */
+.table-scroll {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
 .data-table {
   width: 100%;
   border-collapse: collapse;

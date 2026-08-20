@@ -273,3 +273,44 @@ it("globals.css styles a data-table link with a non-colour channel, not colour a
   // the second.
   expect(body).toMatch(/text-decoration:\s*underline/);
 });
+
+// A data table is the widest thing this app renders, and it sits in `.body`'s
+// `minmax(0, 1fr)` grid column beside a 214px sticky legend rail. Three CSS facts compose
+// into a bug: a table cannot lay out narrower than its own min-content width; `minmax(0, 1fr)`
+// explicitly PERMITS its column to shrink below that; and nothing was clipping or scrolling
+// the overflow. So past the width where the columns stop fitting, the table simply paints
+// outside its column and over the legend. /watch shows it first because it is the widest --
+// fifteen measure columns against /route's and /airport's four -- but every page that renders
+// a DataTable shares the mechanism, which is why the container belongs to the COMPONENT and
+// not to one page's stylesheet.
+//
+// Deliberately not fixed by choosing a breakpoint or a min-width: those pin the layout to
+// particular window sizes, and the next column added moves the threshold again without
+// anything going red. A scroll container is width-independent -- it is correct at every
+// viewport, including ones nobody measured.
+describe("a wide table scrolls inside its column rather than over the legend", () => {
+  it("wraps the table in a scroll container, so overflow can never reach the legend rail", () => {
+    const { container } = render(<DataTable columns={COLUMNS} rows={ROWS} />);
+    const table = container.querySelector("table.data-table");
+    expect(table).not.toBeNull();
+    // The table must not be the outermost node: something has to own the overflow.
+    const wrapper = table!.parentElement;
+    expect(wrapper).not.toBeNull();
+    expect(wrapper!.className).toContain("table-scroll");
+  });
+
+  // Same deliberate weakness as the link-colour test above, and stated for the same reason:
+  // jsdom computes no layout, so this proves the rule is IN the stylesheet, not that a browser
+  // honours it. Without it the wrapper above is a plain div and the bug is unchanged -- which
+  // is exactly the failure a structural assertion alone cannot see.
+  it("globals.css makes that container actually scroll horizontally", () => {
+    const globalsCssPath = path.join(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../app/globals.css",
+    );
+    const css = readFileSync(globalsCssPath, "utf8");
+    const rule = css.match(/\.table-scroll\s*\{[^}]*\}/);
+    expect(rule).not.toBeNull();
+    expect(rule![0]).toMatch(/overflow-x:\s*auto/);
+  });
+});

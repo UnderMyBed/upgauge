@@ -146,59 +146,61 @@ export function DataTable({
   rank?: boolean;
 }) {
   return (
-    <table className="data-table">
-      <thead>
-        <tr>
-          <th className="gut" scope="col" />
-          {rank && <th className="rank" scope="col" aria-label="Rank" />}
-          {columns.map((c) => (
-            <th
-              key={c.key}
-              className={c.kind === "identifier" ? undefined : "r"}
-              data-derived={c.derived ? "true" : undefined}
-              scope="col"
-            >
-              {c.label}
-            </th>
-          ))}
-          <th scope="col">Gauge, seats per departure</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, i) => {
-          const reason = reasonFor(row);
-          const belowFloor = isBelowFloor(row);
-          return (
-            <tr key={i} data-below-floor={belowFloor ? "true" : undefined}>
-              <ReasonCode
-                reason={reason}
-                detail={
-                  typeof row.quarantine_reasons === "string" ? row.quarantine_reasons : null
-                }
-              />
-              {rank && (
-                <td className="rank" data-testid="rank-cell">
-                  {i + 1}
+    <div className="table-scroll">
+      <table className="data-table">
+        <thead>
+          <tr>
+            <th className="gut" scope="col" />
+            {rank && <th className="rank" scope="col" aria-label="Rank" />}
+            {columns.map((c) => (
+              <th
+                key={c.key}
+                className={c.kind === "identifier" ? undefined : "r"}
+                data-derived={c.derived ? "true" : undefined}
+                scope="col"
+              >
+                {c.label}
+              </th>
+            ))}
+            <th scope="col">Gauge, seats per departure</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => {
+            const reason = reasonFor(row);
+            const belowFloor = isBelowFloor(row);
+            return (
+              <tr key={i} data-below-floor={belowFloor ? "true" : undefined}>
+                <ReasonCode
+                  reason={reason}
+                  detail={
+                    typeof row.quarantine_reasons === "string" ? row.quarantine_reasons : null
+                  }
+                />
+                {rank && (
+                  <td className="rank" data-testid="rank-cell">
+                    {i + 1}
+                  </td>
+                )}
+                {columns.map((c) => (
+                  <td key={c.key} className={c.kind === "identifier" ? "id" : "num"}>
+                    {c.dimKey ? (
+                      <DimensionCell spec={c} row={row} resolved={resolved} />
+                    ) : c.href ? (
+                      <IdentifierCell spec={c} row={row} />
+                    ) : (
+                      format(c.kind, row[c.key])
+                    )}
+                  </td>
+                ))}
+                <td>
+                  <GaugeRail gauge={num(row.avg_gauge)} muted={belowFloor} />
                 </td>
-              )}
-              {columns.map((c) => (
-                <td key={c.key} className={c.kind === "identifier" ? "id" : "num"}>
-                  {c.dimKey ? (
-                    <DimensionCell spec={c} row={row} resolved={resolved} />
-                  ) : c.href ? (
-                    <IdentifierCell spec={c} row={row} />
-                  ) : (
-                    format(c.kind, row[c.key])
-                  )}
-                </td>
-              ))}
-              <td>
-                <GaugeRail gauge={num(row.avg_gauge)} muted={belowFloor} />
-              </td>
-            </tr>
-          );
-        })}
-      </tbody>
-    </table>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
