@@ -235,10 +235,6 @@ export function renderPivot(
       );
     }
     const pairClauses = values.map((value, j) => {
-      // ASCII-only strip, not `.trim()`: JS's `trim()` and Python's `.strip()` disagree on
-      // which characters count as whitespace (JS strips U+FEFF ZWNBSP; Python's `.strip()`
-      // additionally strips \x1c-\x1f). An explicit ASCII whitespace set is the only strip
-      // both languages can implement identically -- see stripAsciiWhitespace's own comment.
       const parts = value.split("-");
       // Arity and value are different failures and keep different messages. '12478' is not two
       // ids at all, so the promise this error has always made -- "two ids joined by '-'" -- is
