@@ -23,6 +23,18 @@ const QUERIES = path.resolve(__dirname, "../../../sql/03_queries");
  * exactly the failure class it exists to prevent (a real object reference vanishing from
  * `referencedObjects()`'s output is indistinguishable from that object simply not being
  * referenced). `file` is caller-supplied purely for that error message. */
+/** DuckDB's own catalog table functions, which are NOT warehouse objects and so are correctly
+ * absent from health_catalog.sql's manifest. They are part of the engine: present in any database
+ * this server can open at all, including one restored from a warehouse asset older than the query
+ * reading them -- which is precisely why `value_type` is introspected in catalog_dimensions.sql
+ * rather than stored on meta_pivot_dimensions.
+ *
+ * Deliberately a NAMED SET rather than "any table function". `read_parquet(...)` is also a table
+ * function and IS a real data dependency, so the general form must keep throwing: the parser's
+ * whole value is that it refuses what it cannot classify instead of under-matching. Adding a
+ * function here is a decision that it needs no manifest entry, not a way past the guard. */
+const CATALOG_FUNCTIONS: ReadonlySet<string> = new Set(["duckdb_columns"]);
+
 function referencedObjects(sqlText: string, file: string): Set<string> {
   const bare = sqlText.replace(/--[^\n]*/g, "");
 
@@ -46,6 +58,9 @@ function referencedObjects(sqlText: string, file: string): Set<string> {
       );
     }
     if (/^\s*\(/.test(rest)) {
+      // A catalog function contributes no object and needs no manifest entry; anything else
+      // that looks like a table function is still refused.
+      if (CATALOG_FUNCTIONS.has(name)) continue;
       throw new Error(
         `${file}: drift parser cannot vouch for this file -- "${m[0].trim()}(" after ` +
           "FROM/JOIN reads like a table function call, not a plain relation reference, " +
@@ -135,6 +150,17 @@ describe("referencedObjects handles the constructs the corpus uses, and refuses 
   it("refuses to vouch for a schema-qualified reference, naming the file and the construct", () => {
     expect(() => referencedObjects("SELECT * FROM main.dim_airport", "fixture.sql")).toThrow(
       /fixture\.sql.*cannot vouch.*schema-qualified/,
+    );
+  });
+
+  it("allows a named catalog function and contributes no object for it", () => {
+    const sql = "SELECT * FROM meta_pivot_dimensions d JOIN duckdb_columns() c ON true";
+    expect(referencedObjects(sql, "fixture.sql")).toEqual(new Set(["meta_pivot_dimensions"]));
+  });
+
+  it("still refuses an UNnamed table function, so the allow-list is not a blanket exemption", () => {
+    expect(() => referencedObjects("SELECT * FROM read_parquet('x.parquet')", "fixture.sql")).toThrow(
+      /fixture\.sql.*cannot vouch.*table function call/,
     );
   });
 
