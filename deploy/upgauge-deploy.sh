@@ -6,8 +6,16 @@
 # decides when" both hold.
 set -euo pipefail
 cd /srv/upgauge
+# `set -a` is load-bearing, not tidiness. deploy.env holds BARE assignments
+# (`TUNNEL_TOKEN=...`), so plain sourcing makes them shell variables -- visible to `echo` here
+# and invisible to every child process. `docker compose` interpolates `${TUNNEL_TOKEN:?}` from
+# its OWN environment, so without this the very first compose call below dies with "required
+# variable TUNNEL_TOKEN is missing a value", `set -e` kills the unit, and the timer repeats
+# that every 30s forever while the site stays down and the tunnel never connects.
 # shellcheck disable=SC1091
+set -a
 [ -f /etc/upgauge/deploy.env ] && . /etc/upgauge/deploy.env
+set +a
 
 TAG=ghcr.io/undermybed/upguage:deploy
 

@@ -233,3 +233,42 @@ def test_provision_does_not_depend_on_hcloud_output_templates():
         f"provision.sh references an hcloud Go-template field path: {offenders}. A renamed "
         f"field turns a successful provision into a red exit."
     )
+
+
+def test_the_deploy_script_exports_the_token_to_its_children(tmp_path):
+    """MEASURED: the box ran its timer every 30s from first boot and never served anything.
+    `upgauge-deploy.sh` sources /etc/upgauge/deploy.env, which cloud-init writes as a BARE
+    assignment (`TUNNEL_TOKEN=...`, no export), so the token is a shell variable and not part
+    of the environment. `docker compose` is a child process and interpolates
+    `${TUNNEL_TOKEN:?}` from its OWN environment, so it failed with "required variable
+    TUNNEL_TOKEN is missing a value" -- on `docker compose pull`, the script's first compose
+    call, under `set -euo pipefail`. Every tick, forever, on any box.
+
+    This asserts the real property across a real process boundary rather than the presence of
+    `set -a`: it runs the script's actual sourcing idiom and checks whether a CHILD sees the
+    value. A shell that can echo the variable proves nothing -- that was true while production
+    was down."""
+    # Run the script's real PROLOGUE -- everything before it first touches docker. Selecting
+    # only the lines that mention deploy.env would drop the very construct under test.
+    lines = (DEPLOY / "upgauge-deploy.sh").read_text().splitlines()
+    cut = next(i for i, ln in enumerate(lines) if "docker" in ln and not ln.lstrip().startswith("#"))
+    prologue = "\n".join(lines[:cut])
+    assert "deploy.env" in prologue, "the prologue no longer sources deploy.env; premise moved"
+
+    env_file = tmp_path / "deploy.env"
+    env_file.write_text("TUNNEL_TOKEN=pretend-token\n")
+    snippet = prologue.replace("/etc/upgauge/deploy.env", str(env_file)).replace(
+        "cd /srv/upgauge", f"cd {tmp_path}"
+    )
+
+    # `printenv` is a separate process, exactly like `docker compose`.
+    proc = subprocess.run(
+        ["bash", "-c", f"set -euo pipefail\n{snippet}\nprintenv TUNNEL_TOKEN"],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"]},
+    )
+    assert proc.stdout.strip() == "pretend-token", (
+        "a child process does not inherit TUNNEL_TOKEN -- docker compose will fail "
+        f"interpolation and the box will never deploy (stdout={proc.stdout!r})"
+    )
