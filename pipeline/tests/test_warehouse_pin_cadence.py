@@ -37,7 +37,7 @@ WORKFLOWS = REPO / ".github" / "workflows"
 
 sys.path.insert(0, str(REPO / ".github" / "scripts"))
 
-from bump_pin import PinError, branch_for, bump, current_pin, main  # noqa: E402
+from bump_pin import PinError, branch_for, bump, current_pin, main, pr_body  # noqa: E402
 
 MAKEFILE = (REPO / "Makefile").read_text()
 
@@ -76,28 +76,45 @@ def test_the_month_offset_helper_rolls_the_year():
 # --------------------------------------------------------------------------------------
 
 
-def test_only_the_pin_line_changes():
-    """THE test for the rewriter, run against the REAL Makefile rather than a fixture.
+#: A second `warehouse-YYYY.MM` on a line that is NOT the assignment. THE FIXTURE CARRIES ITS
+#: OWN HAZARD, and that is the whole point of this constant existing.
+#:
+#: This test used to rely on a decoy that happened to be in the Makefile -- `warehouse-2026.04`
+#: quoted in the `IMAGE_SHA` comment. Correcting that stale claim deleted the fixture, and the
+#: unanchored-substitution mutant this test is named for then PASSED. CLAUDE.md's own rule,
+#: landing on us: "when a renamed value was the fixture for a transform, MOVE the fixture -- a
+#: replacement that no longer exercises the path passes against the very bug it exists to
+#: catch." Built here, the guard can never again depend on incidental comment content.
+DECOY = f"# historical: {PINNED} was the first asset the container gate ever built from"
 
-    A `warehouse-YYYY.MM` string appears in that file TWICE: the pin itself, and the comment
-    beside `IMAGE_SHA` explaining that the repo's only git tag is lightweight. A rewriter
-    implemented as a global substitution over the tag SHAPE corrupts the second one -- silently,
-    since nothing else reads it -- and a synthetic one-line fixture cannot fail that way.
+
+def _pr_body() -> str:
+    """The body exactly as the workflow's `pr_body` output carries it."""
+    return pr_body(PINNED, NEWER, "UnderMyBed", "UnderMyBed/upguage", "https://github.com")
+
+
+def test_only_the_pin_line_changes():
+    """THE test for the rewriter. A rewriter implemented as a substitution over the tag SHAPE
+    rewrites every `warehouse-YYYY.MM` in the file rather than the pin -- silently, since
+    nothing reads prose. Anchoring on the assignment is what makes that impossible.
+
+    Run against the real Makefile PLUS a decoy, so both halves are proven: the pin moves, and a
+    same-shaped string somewhere else does not.
     """
-    after, previous = bump(MAKEFILE, NEWER)
+    source = MAKEFILE + "\n" + DECOY + "\n"
+    after, previous = bump(source, NEWER)
     assert previous == PINNED
 
     changed = [
         line
-        for line in difflib.unified_diff(
-            MAKEFILE.splitlines(), after.splitlines(), n=0, lineterm=""
-        )
+        for line in difflib.unified_diff(source.splitlines(), after.splitlines(), n=0, lineterm="")
         if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
     ]
     assert changed == [
         f"-WAREHOUSE_TAG ?= {PINNED}",
         f"+WAREHOUSE_TAG ?= {NEWER}",
     ], f"more than the pin line moved: {changed}"
+    assert DECOY in after, "the decoy tag was rewritten -- the substitution is not anchored"
 
 
 def test_a_renamed_or_missing_pin_fails_loudly():
@@ -280,6 +297,17 @@ def _code(script: str) -> str:
     return "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
 
 
+def _raw_run_scalars(job: dict) -> list[str]:
+    """Every `run:` scalar EXACTLY as Actions sees it -- comments included. Actions substitutes
+    `${{ }}` into this text before bash parses it, so a `#` line is a splice site like any
+    other."""
+    return [
+        step["run"]
+        for step in (job.get("steps") or [])
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    ]
+
+
 def _job_run_scalars(job: dict) -> list[str]:
     return [
         _code(step["run"])
@@ -324,9 +352,10 @@ def test_the_bump_job_gates_on_the_tag_existing_and_can_still_run_after_a_failed
     job_id, job = _bump_job()
     condition = str(job.get("if", ""))
     assert "publish" in (job.get("needs") or []) or job.get("needs") == "publish"
-    assert "always()" in condition, (
+    assert "!cancelled()" in condition, (
         f"{job_id} carries an implicit success(), so a crash anywhere after the release is "
-        "created strands the pin permanently -- no re-dispatch can reach this job"
+        "created strands the pin permanently -- no re-dispatch can reach this job. "
+        "`!cancelled()` and not `always()`: they differ only on a run a human stopped."
     )
     assert "needs.publish.outputs.tag_published" in condition, (
         f"{job_id} does not gate on the tag existing"
@@ -441,13 +470,19 @@ def test_no_untrusted_value_is_spliced_into_the_bump_jobs_run_scalars():
     # expression was invisible to it besides. This job legitimately splices NOTHING into a
     # shell; every value it uses arrives through `env:`. So the property is the absence of the
     # construct, not the absence of five names.
-    for scalar in _job_run_scalars(job):
+    # RAW scalars, never `_code()`. A `#` inside a `run:` block is NOT a comment -- it is part
+    # of a YAML scalar, and Actions substitutes `${{ }}` into that scalar's raw text before bash
+    # ever parses it (test_workflow_expressions.py's docstring states this rule for the same
+    # reason). Stripping `#` lines first reduced this to "no splice on non-comment lines", and
+    # `# bumping to ${{ needs.publish.outputs.tag }}` passed it -- a value carrying a newline
+    # ends the comment and the rest executes, in a job holding all three write scopes.
+    # actionlint does not cover it either: its untrusted-input list has neither `needs.*` nor
+    # `github.ref_name`.
+    for scalar in _raw_run_scalars(job) + _raw_run_scalars(_doc(GATE)["jobs"]["gate"]):
         assert "${{" not in scalar, (
-            "an Actions expression is spliced into a run: block in a job holding contents, "
-            f"pull-requests and actions write. It must arrive through env:\n{scalar}"
+            "an Actions expression is spliced into a run: block -- including inside a `#` line, "
+            f"which Actions substitutes into just the same. It must arrive through env:\n{scalar}"
         )
-    for scalar in _job_run_scalars(_doc(GATE)["jobs"]["gate"]):
-        assert "${{" not in scalar, f"the gate splices an expression into a shell:\n{scalar}"
 
     env_values = " ".join(
         str(v)
@@ -605,11 +640,8 @@ def test_the_bump_job_skips_on_an_OPEN_PR_never_merely_on_the_branch_existing():
     step = next(s for s in job["steps"] if "gh pr create" in _code(s.get("run", "")))
     code = _code(step["run"])
     early_exit = code[: code.index("gh pr create")]
-    assert "gh pr list" in early_exit and "--state open" in early_exit, (
-        "the early exit does not check for an OPEN PR"
-    )
-    branch_check = early_exit.index("git ls-remote")
-    assert early_exit.index("gh pr list") < branch_check, (
+    assert "open_pr_for" in early_exit, "the early exit does not look for an OPEN PR"
+    assert early_exit.index("open_pr_for") < early_exit.index("branch_exists"), (
         "the branch check precedes the PR check, so a branch with no PR still exits early"
     )
 
@@ -625,8 +657,16 @@ def test_the_gate_is_dispatched_only_when_a_PR_was_actually_opened():
     assert f"steps.{pr_step['id']}.outputs" in condition, (
         f"the dispatch is gated on {condition!r}, which is true on the early-exit path too"
     )
-    assert "opened" in _code(pr_step["run"]), (
-        "the PR step never records that it opened one, so the dispatch cannot key on it"
+    # POSITIONAL, exactly like the `already=` assertion above. Presence proves nothing: with
+    # `opened=1` written before the already-open early exit, the flag is set on the very path
+    # that opens no PR -- and the dispatch then fires a ~30-minute container build every day
+    # for as long as a bump PR stays open. That mutant passed a presence check.
+    code = _code(pr_step["run"])
+    exit_at = code.index("exit 0")
+    written_at = code.index("opened=1")
+    assert written_at > exit_at, (
+        "`opened=1` is written before the already-open early exit, so it is set on the path "
+        "that opens nothing"
     )
 
 
@@ -640,4 +680,106 @@ def test_the_gate_uploads_no_log_that_container_mode_never_writes():
         for step in job.get("steps") or []:
             assert "upgauge-smoke.log" not in str(step.get("with") or {}), (
                 "the gate uploads a log container mode never writes"
+            )
+
+
+def test_a_tag_with_a_trailing_newline_is_refused():
+    """Python's `$` also matches immediately before a single trailing newline, so the `$` form
+    of the tag pattern ACCEPTED "warehouse-2026.06\\n" and spliced a blank line in after the
+    pin. No wired caller delivers that today -- `stamp` builds the tag from a regex-checked
+    `ym` -- but the pattern's own comment claims both ends are anchored, and a human piping
+    `cat` output into this script is one keystroke away."""
+    with pytest.raises(PinError, match="warehouse-YYYY.MM"):
+        bump(MAKEFILE, NEWER + "\n")
+
+
+def test_the_pr_body_never_claims_the_gate_has_already_run():
+    """The body is built BEFORE the PR exists and before the dispatch is attempted, so any
+    past-tense claim about the gate is a check reported as performed that may not have been.
+    On the dispatch-failed path the workflow refuses correctly -- but that correction lived
+    only in a red Actions log, next to a PR that read "the gate above ran" and "Green: merge"."""
+    body = _pr_body()
+    assert "ran by" not in body, "the body asserts in the past tense that the gate ran"
+    assert "is dispatched" in body, "the body does not say the gate is dispatched, not done"
+    assert "Check that link before merging" in body
+
+
+def test_a_failed_dispatch_is_reported_onto_the_PR_not_only_into_the_log():
+    """The other half: if the dispatch never lands, the human reading the PR must be told
+    there, because the PR body points at a runs link that will simply be empty."""
+    _, job = _bump_job()
+    step = next(s for s in job["steps"] if "gh workflow run" in _code(s.get("run", "")))
+    code = _code(step["run"])
+    assert "gh pr comment" in code, "a failed dispatch leaves a PR that reads as gated and is not"
+    assert code.index("gh pr comment") < code.rindex("exit 1"), (
+        "the PR is annotated after the step has already failed, so it never happens"
+    )
+
+
+def _outside_quotes(line: str) -> str:
+    """`line` with every single- and double-quoted span removed."""
+    return re.sub(r"\"[^\"]*\"|'[^']*'", " ", line)
+
+
+RETRIED = ("gh pr create", "gh workflow run", "git push", "gh pr list")
+#: Must never appear in the workflow at all: `git ls-remote --exit-code` returns 2 for
+#: "absent" and 128 for a transport failure, and the obvious `if git ls-remote …; then`
+#: collapses both to "absent". That handling lives in `branch_exists`, once.
+FORBIDDEN = ("git ls-remote",)
+#: Deliberately unretried, and each must be `||`-tolerated so it cannot fail the step: both are
+#: polish on top of a PR that already exists and already mentions the owner.
+TOLERATED = ("gh pr edit", "gh pr comment")
+
+
+def test_every_network_call_in_the_bump_job_is_retried_or_explicitly_tolerated():
+    """The retry is the NAMED mitigation for this job being able to redden a run that
+    image.yml gates its build on, and it had no test -- so `gh pr list`, the first network call
+    on every real bump, sat un-retried while two comments and hosting.md both said "every gh
+    call is retried". A stated property with no failing test is the one that regresses.
+
+    `gh pr list` and `git ls-remote` must not appear here at all: they live behind
+    `open_pr_for`/`branch_exists`, which is where their retry and their exit-code semantics
+    are."""
+    _, job = _bump_job()
+    for scalar in _job_run_scalars(job):
+        for line in scalar.splitlines():
+            # Quoted spans are MESSAGES, not call sites -- `--body "… \`gh workflow run\`
+            # failed …"` names a command it does not run. Scanned outside the quotes, asserted
+            # against the raw line, so `retry "gh pr create" gh pr create …` still reads as one.
+            bare = _outside_quotes(line)
+            for command in RETRIED:
+                if command in bare:
+                    assert 'retry "' in line, f"{command} is not retried:\n{line}"
+            for command in FORBIDDEN:
+                assert command not in bare, (
+                    f"{command} is called directly rather than through the helper, so its "
+                    f"exit-code handling is whatever this line does -- and a transport failure "
+                    f"reads as 'branch absent':\n{line}"
+                )
+    joined = "\n".join(_job_run_scalars(job))
+    for command in TOLERATED:
+        for chunk in joined.split(command)[1:]:
+            assert "||" in chunk.split("\n\n")[0], (
+                f"{command} can fail the step; it is polish and must be `||`-tolerated"
+            )
+
+
+def test_the_retry_helper_does_not_sleep_after_its_last_attempt():
+    """Waiting 25s to then give up is pure latency on a job that has already failed, and both
+    loops in the helper need the guard -- one of them existing is how the other stays wrong."""
+    helper = (REPO / ".github" / "scripts" / "gh_retry.sh").read_text()
+    assert helper.count('[ "$attempt" -eq 5 ] && break') == 2, (
+        "a retry loop sleeps after its final attempt"
+    )
+
+
+def test_both_network_steps_source_the_one_retry_helper():
+    """One implementation. Three hand-copied loops is one implementation plus two places for it
+    to be missing -- which is exactly how `gh pr list` ended up bare."""
+    _, job = _bump_job()
+    for step in job["steps"]:
+        code = _code(step.get("run", "") or "")
+        if any(c in code for c in RETRIED):
+            assert "source .github/scripts/gh_retry.sh" in code, (
+                f"step {step.get('name') or step.get('id')} makes a network call without the helper"
             )

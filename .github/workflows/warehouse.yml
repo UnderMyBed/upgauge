@@ -269,13 +269,15 @@ jobs:
   #
   # ACCEPTED COST OF THAT LOUDNESS: image.yml's build is gated on this workflow's conclusion
   # being `success`, so a genuinely broken bot also defers the image build until the next push
-  # to main. The `gh` calls below are retried for that reason -- a transient API wobble must
-  # never be the thing that reddens a run this workflow's release is fine in. What is left after
+  # to main. Every network call below that can fail the job is retried for that reason, through
+  # .github/scripts/gh_retry.sh -- a transient API wobble must never be the thing that reddens a
+  # run this workflow's release is fine in. The two that are pure polish (assigning the PR,
+  # annotating a superseded one) are `||`-tolerated instead of retried. What is left after
   # the retries means the bot really is broken, and blocking one image cycle on that is the
   # correct trade rather than a surprise.
   bump-pin:
     needs: publish
-    # `always()` DELIBERATELY, and it is the repair path. A bare `needs.publish.outputs.* == …`
+    # A STATUS FUNCTION DELIBERATELY, and it is the repair path. A bare `needs.publish.outputs.* == …`
     # carries an implicit success() -- a job with `needs:` is skipped when the needed job fails
     # unless its `if:` names a status function -- so a `classify` crash after a successful
     # publish would skip this job, and every re-dispatch afterwards would skip it again. The
@@ -285,7 +287,10 @@ jobs:
     # finds the pin already current and opens nothing, on the order of a minute. That is the
     # price of the repair path, and it buys a daily reconciliation between the pin and the
     # newest release rather than a single chance per publish.
-    if: always() && needs.publish.outputs.tag_published == '1'
+    # `!cancelled()` rather than `always()`: the two differ only on a CANCELLED run, which is
+    # a human stopping this workflow on purpose -- and opening a PR out of a run someone just
+    # cancelled is the same overreach scheduled-failure.yml's own allow-list refuses.
+    if: ${{ !cancelled() && needs.publish.outputs.tag_published == '1' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Least privilege, and every one of the three is load-bearing:
@@ -341,19 +346,22 @@ jobs:
           OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
+          # `retry`, `branch_exists` and `open_pr_for` -- one implementation, because the retry
+          # is the named mitigation for this job being able to redden a run image.yml gates on.
+          source .github/scripts/gh_retry.sh
+
           # THE STATE THAT MATTERS IS THE PR, NOT THE BRANCH. An earlier form exited 0 on
           # "branch exists", which is wrong in the one case that actually needs repairing: the
           # push succeeded and `gh pr create` then failed. That leaves a branch with no PR, and
           # a bot that reports success and reopens nothing, every day, forever. So the branch
           # is only skipped when a PR is genuinely open against it; otherwise the PR is opened
           # against the branch already there.
-          open_pr=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" \
-                      --state open --json url --jq '.[0].url // ""')
+          open_pr=$(open_pr_for "$BRANCH")
           if [ -n "$open_pr" ]; then
             echo "::notice::$open_pr is already open for $BRANCH; leaving it alone"
             exit 0
           fi
-          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+          if branch_exists "$BRANCH"; then
             # Never force-push over it: a human may be re-measuring needles on this branch,
             # which is exactly what a red gate asks them to do.
             echo "::warning::$BRANCH exists with no open PR -- opening one against it"
@@ -366,38 +374,54 @@ jobs:
             body="$body the pin only; the needles are NOT re-measured here. The Image contract"
             body="$body gate is what measures them against this asset."
             git commit -m "Pin the image to ${NEW_TAG}" -m "$body"
-            git push origin "$BRANCH"
+            retry "git push" git push origin "$BRANCH"
           fi
-          # RETRIED, for the reason freshness.yml measured on 2026-08-17: `gh` returned 503
-          # five times inside one hour. Un-retried, a transient wobble fails this job, which
-          # reddens the whole "Warehouse" run -- which defers image.yml's build and pages the
-          # owner through scheduled-failure.yml, for a release that is perfectly fine.
-          url=""
-          for attempt in 1 2 3 4 5; do
-            if url=$(gh pr create --repo "$GITHUB_REPOSITORY" \
+
+          if ! url=$(retry "gh pr create" gh pr create --repo "$GITHUB_REPOSITORY" \
                        --base "${GITHUB_REF_NAME}" --head "$BRANCH" \
                        --title "Pin the image to ${NEW_TAG} (was ${PREVIOUS})" \
                        --body "$PR_BODY"); then
-              break
-            fi
-            echo "::warning::gh pr create failed (attempt $attempt of 5); retrying"
-            url=""
-            sleep $((attempt * 5))
-          done
-          [ -n "$url" ] || {
-            echo "::error::could not open the PR after 5 attempts. $BRANCH carries the bump and"
-            echo "::error::will be reused on the next run -- no work is lost, but the pin does"
-            echo "::error::not move until a PR exists."
-            exit 1
-          }
+            # `gh pr create` is NOT idempotent, so a lost response is indistinguishable from a
+            # failure: the PR may exist while attempts 2-5 all fail against "already exists".
+            # Ask what is true before reporting a failure.
+            url=$(open_pr_for "$BRANCH")
+            [ -n "$url" ] || {
+              echo "::error::could not open the PR. $BRANCH carries the bump and will be reused"
+              echo "::error::on the next run -- no work is lost, but the pin does not move until"
+              echo "::error::a PR exists."
+              exit 1
+            }
+            echo "::warning::gh pr create reported failure but $url exists; continuing"
+          fi
           echo "::notice::opened $url"
           echo "### Opened $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
           echo "opened=1" >> "$GITHUB_OUTPUT"
+
           # Assignment is delivery polish ON TOP of a PR that already exists and already
           # mentions the owner, so it is deliberately NOT `--assignee` on the create above: a
           # permissions or API hiccup there would fail the CREATE and lose the PR entirely.
           gh pr edit "$url" --add-assignee "$OWNER" \
             || echo "::warning::could not assign $OWNER -- the @mention in the body is the fallback"
+
+          # SUPERSESSION IS ANNOUNCED, NEVER ENFORCED. Two months can be in flight at once (a
+          # human re-measuring needles on last month's PR when this month publishes), and both
+          # branches edit the same line. Closing the older one would discard that work, so the
+          # older PR is told instead -- and the human decides which to carry.
+          # Retried like every other network call, and TOLERATED on top: announcing
+          # supersession is polish, and `set -o pipefail` would otherwise let a listing failure
+          # fail a step whose PR is already open and already correct.
+          stale_prs=$(retry "gh pr list" gh pr list --repo "$GITHUB_REPOSITORY" --state open \
+            --json url,headRefName \
+            --jq '.[] | select(.headRefName | startswith("bot/warehouse-pin-"))
+                      | select(.headRefName != env.BRANCH) | .url') || {
+            echo "::warning::could not list open bump PRs; supersession not announced"
+            stale_prs=""
+          }
+          for stale in $stale_prs; do
+            gh pr comment "$stale" --body "Superseded by $url ($NEW_TAG). Both edit the same \`WAREHOUSE_TAG\` line -- carry the needle re-measurements onto the newer PR rather than merging both." \
+              || echo "::warning::could not annotate $stale as superseded"
+          done
 
       # NOT OPTIONAL, and not belt-and-braces. GitHub starts no new workflow runs from events
       # created by GITHUB_TOKEN -- image.yml's `on:` comment documents the same rule for
@@ -422,16 +446,19 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.BUMP_PIN_TOKEN || github.token }}
           BRANCH: ${{ steps.bump.outputs.branch }}
+          PR_URL: ${{ steps.pr.outputs.url }}
         run: |
           set -euo pipefail
-          for attempt in 1 2 3 4 5; do
-            if gh workflow run image-contract.yml --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"; then
-              echo "::notice::dispatched Image contract on $BRANCH"
-              exit 0
-            fi
-            echo "::warning::gh workflow run failed (attempt $attempt of 5); retrying"
-            sleep $((attempt * 5))
-          done
-          echo "::error::could not dispatch the gate on $BRANCH. The PR is open and carries no"
-          echo "::error::checks -- do not merge it until the gate has run."
+          source .github/scripts/gh_retry.sh
+          if retry "gh workflow run" gh workflow run image-contract.yml \
+               --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"; then
+            echo "::notice::dispatched Image contract on $BRANCH"
+            exit 0
+          fi
+          # THE CORRECTION GOES WHERE THE HUMAN IS. The PR body says the gate is dispatched and
+          # points at its runs; if that never happened, saying so only in a red Actions log
+          # leaves a PR that reads as gated and is not. Comment first, then fail.
+          gh pr comment "$PR_URL" --body "The Image contract gate was NOT dispatched on this branch -- \`gh workflow run\` failed five times. Nothing has measured this pin against the needles. Do not merge until the gate has run; dispatch it by hand from the Actions tab." \
+            || echo "::warning::could not annotate $PR_URL -- the dispatch failure is in this log only"
+          echo "::error::could not dispatch the gate on $BRANCH; $PR_URL has been annotated"
           exit 1

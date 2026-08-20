@@ -9,10 +9,16 @@ ran nowhere.
 
 WHY A SCRIPT AND NOT SIX LINES OF `sed` IN THE WORKFLOW
     The rewrite has one non-obvious hazard, and it is invisible in a one-line fixture: a
-    `warehouse-YYYY.MM` string appears in the Makefile TWICE -- the pin, and the comment beside
-    `IMAGE_SHA` noting the repo's only git tag is lightweight. A substitution over the tag SHAPE
-    corrupts the second one, silently, because nothing reads it. Anchoring on the assignment is
-    what makes that impossible, and it is unit-testable here with no Actions runtime at all.
+    substitution over the tag SHAPE rewrites every `warehouse-YYYY.MM` in the file, not the pin.
+    Prose in this Makefile has quoted concrete tags before and will again, and nothing reads
+    those, so the corruption is silent. Anchoring on the ASSIGNMENT is what makes it impossible,
+    and it is unit-testable here with no Actions runtime at all.
+
+    The test for it must carry its own decoy. It used to rely on a second tag that happened to
+    sit in the `IMAGE_SHA` comment -- and when that stale claim was corrected, the fixture went
+    with it and the test passed against the very bug it names. CLAUDE.md's rule, on this file:
+    "when a renamed value was the fixture for a transform, MOVE the fixture".
+
     Same split as `freshness.py` and `promote_check.py`: pure functions the tests exercise, and
     a `main()` the workflow calls.
 
@@ -44,7 +50,13 @@ _PIN = re.compile(r"^WAREHOUSE_TAG \?= (.+)$", re.MULTILINE)
 #: comment measured why: git ref names permit backticks, `$`, `;`, `&`, `|`, quotes and parens,
 #: and a prefix check constrains the prefix and nothing after it. This value reaches a branch
 #: name, a commit message and a `gh pr create` argument.
-_TAG = re.compile(r"^warehouse-([0-9]{4})\.([0-9]{2})$")
+#:
+#: `\\Z`, never `$`: Python's `$` also matches immediately BEFORE a single trailing newline, so
+#: the `$` form ACCEPTED "warehouse-2026.06\\n" and spliced a blank line in after the pin. No
+#: wired caller can deliver that today (`stamp` builds the tag from a regex-checked `ym`), but a
+#: human piping `cat` output into this script is one keystroke from it, and the comment above
+#: claims both ends are anchored.
+_TAG = re.compile(r"\Awarehouse-([0-9]{4})\.([0-9]{2})\Z")
 
 #: The gate that measures what this script does not. Named here because the PR body links it.
 GATE_WORKFLOW = "image-contract.yml"
@@ -106,7 +118,10 @@ def bump(makefile: str, new_tag: str) -> tuple[str, str]:
         raise PinError(
             f"'{new_tag}' is OLDER than the committed pin '{previous}' -- refusing to move the "
             "pin backwards. The committed needles were measured against the newer dataset, so "
-            "this would turn the container gate red with no defect present."
+            "this would turn the container gate red with no defect present. If BTS has WITHDRAWN "
+            "a month, that is a data anomaly and this refusal is the correct outcome: it fails "
+            "the Warehouse run, which pages through scheduled-failure.yml. Read it as 'the "
+            "upstream month went backwards', not as a broken bot."
         )
     return _PIN.sub(f"WAREHOUSE_TAG ?= {new_tag}", makefile, count=1), previous
 
@@ -135,21 +150,24 @@ def pr_body(previous: str, new_tag: str, owner: str, repo: str, server: str) -> 
             "pages, and rewriting only the four that can be would read as a verification this",
             "made no claim to.",
             "",
-            "`make image-smoke` against the new pin, needles on, is what measures them:",
+            "`make image-smoke` against the new pin, needles on, is what measures them. It is",
+            "dispatched onto this branch when the PR opens, and the run appears here:",
             "",
             f"- {runs}",
             "",
-            "Green: merge. Red: each FAIL line names the needle that moved and the value it",
-            "still expects. Re-measure those on this branch, in this PR, so the pin and the",
-            "needles land in one commit.",
+            "**Check that link before merging.** If it is empty the dispatch did not land, and",
+            "nothing has measured this pin -- the job says so in its own log and comments here.",
+            "A green run means merge. A red one names, per FAIL line, the needle that moved and",
+            "the value it still expects: re-measure those on this branch, in this PR, so the pin",
+            "and the needles land in one commit.",
             "",
             "## Which checks ran",
             "",
             "This PR was opened with `GITHUB_TOKEN`, and GitHub starts no `pull_request` runs",
             "from events that token creates. **`ci.yml` has not run on this PR** and its checks",
-            "will not appear below. The gate above ran by `workflow_dispatch`, which is the one",
-            "documented exception. To get the full suite, push a commit to this branch or close",
-            "and reopen the PR.",
+            "will not appear below. The gate above is dispatched by `workflow_dispatch`, which",
+            "is the one documented exception. To get the full suite, push a commit to this",
+            "branch or close and reopen the PR.",
             "",
             "Setting a `BUMP_PIN_TOKEN` secret removes this caveat entirely; the bump job reads",
             "it already (`secrets.BUMP_PIN_TOKEN || github.token`).",

@@ -399,8 +399,13 @@ moves, and the only signal is a generic red. Keyed on existence instead, the nex
 which is why the job runs daily and mostly opens nothing, a checkout and a script rather than a
 single chance per publish. Its failures stay loud (they redden "Warehouse", which
 `scheduled-failure.yml` watches), and the accepted cost of that loudness is that a genuinely
-broken bot also defers `image.yml`'s build until the next push to `main`; every `gh` call is
-retried so that a transient wobble is never what triggers it. The gate is
+broken bot also defers `image.yml`'s build until the next push to `main`. **Every network call
+that can fail the job is retried** — five attempts, backoff, no sleep after the last — through the
+one helper in `.github/scripts/gh_retry.sh`, so that a transient wobble is never what triggers it;
+the two calls that are pure polish (assigning the PR, annotating a superseded one) are
+`||`-tolerated instead. `git ls-remote` goes through that helper too, and for a second reason:
+`--exit-code` returns 2 for "no such branch" and 128 for a transport failure, and the obvious
+`if git ls-remote …; then` reads both as "absent". The gate is
 `image-contract.yml`, which runs `make image-smoke` **with nothing overridden** — the committed
 pin, the needles at their default — on any PR touching either half. That is the only invocation
 that can see the coupling: `image.yml` also runs `make image-smoke`, but resolves the newest
@@ -449,8 +454,12 @@ checks, each of which starts its own short-lived `next start` against a delibera
 container contributes, and containerising them would triple image builds for zero new coverage.
 The skip is **printed**, immediately before the pass/fail tally, never silent — reporting a
 narrower count as though it were the full one is the same dishonesty as a stale build passing
-every check, one level up. `make app-smoke` (host mode) still runs all three and reports the
-documented 269 checks; `make image-smoke` reports the served-build subset alone.
+every check, one level up. `make app-smoke` (host mode) runs all three; `make image-smoke`
+reports the served-build subset alone, shorter by exactly the checks inside those three sections.
+**The two totals are not written here.** `pipeline/gatecounts.py` states that the smoke counts are
+deliberately not generated — only a real `next build` plus a served port produces them — so they
+are hand-maintained, and a second hand-maintained copy is one that goes stale silently. CLAUDE.md's
+gates table is the one place they live.
 
 **One existing check needed a container-specific path, not a skip: the "ONE `DuckDBInstance`"
 handle count** (§ "One `DuckDBInstance` per process", below). Its host-mode form walks the local process tree with
@@ -469,9 +478,9 @@ to this container's own processes, so no `pgrep` is needed either (`node:*-slim`
 
 `make portability` is the **negative** half: it breaks the WORKDIR/data-colocation contract three
 ways and asserts the *distinct* signature each break produces. The **positive** half is
-`make image-smoke` — 259 served-build checks against the real container, `--read-only`, no tmpfs
-(§ above) — against 269 in host mode, the difference being exactly the 10 checks inside the three
-host-only gap sections.
+`make image-smoke` — the served-build checks against the real container, `--read-only`, no tmpfs
+(§ above) — which is host mode's total less exactly the checks inside the three host-only gap
+sections. Both totals live in CLAUDE.md's gates table and are not restated here.
 
 **The contract is defended at four layers, and the failures are not interchangeable.** One shared
 "it 500s" assertion would pass for all of them and therefore prove none:
