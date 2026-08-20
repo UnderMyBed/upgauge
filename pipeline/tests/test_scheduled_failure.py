@@ -24,13 +24,21 @@ plausible wrong implementation, because the obvious one passes against the obvio
   * `conclusion != "success"` and `conclusion in {failure, timed_out}` agree on every run
     except a CANCELLED one, so only the cancelled fixture catches a deny-list written where
     CLAUDE.md requires an allow-list.
+  * `SIGNALLED_DISPATCHES` keyed on the TARGET rather than on the EDGE passes every dispatch
+    test except `test_a_second_undeclared_dispatch_of_a_signalled_target_is_still_caught`,
+    which is the only fixture where one target is dispatched twice.
+  * Every dispatch fixture below builds its own workflows, so a parser that matches nothing
+    at all leaves them green while this repository's one live dispatch edge stays invisible.
+    `test_the_repos_own_dispatch_edge_is_seen` is the guard against that.
 """
 
 from __future__ import annotations
 
+import shlex
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parents[2] / ".github" / "scripts"))
@@ -246,39 +254,166 @@ def _workflow_run_targets(path: Path) -> set[str]:
     return set((wr or {}).get("workflows") or []) if isinstance(wr, dict) else set()
 
 
-def _unattended_workflow_names() -> set[str]:
-    """Every workflow name that can run with nobody watching -- a direct `schedule:` trigger,
-    OR a `workflow_run` on a workflow that is itself unattended, transitively.
+#: `gh workflow run` edges whose dispatched run already carries a human-visible signal, so the
+#: dispatched workflow does not also need the notifier. Keyed on the EDGE -- (dispatching file,
+#: dispatched file) -- and never on the target alone: an entry claims "this dispatch is
+#: signalled", not "this workflow is attended", so a second, undeclared dispatch of the same
+#: target is still caught. An ALLOW-LIST, the shape CLAUDE.md holds the cacheability predicate
+#: and `ALERTING_CONCLUSIONS` to: the default for a new edge is CAUGHT, and an exemption costs a
+#: deliberate entry with a written reason.
+SIGNALLED_DISPATCHES: dict[tuple[str, str], str] = {
+    ("warehouse.yml", "image-contract.yml"): (
+        "The bump-pin job dispatches the gate only on a run that has just opened a PR "
+        "(`if: steps.pr.outputs.opened == '1'`) and targets that PR's own branch "
+        '(`--ref "$BRANCH"`). Check runs attach to the head SHA, so the dispatched run '
+        "appears on a PR that warehouse.yml assigns to the owner and whose body @mentions "
+        "them on its first line (bump_pin.pr_body), and a dispatch that never landed is "
+        "reported onto that same PR rather than only into a log. Watching `Image contract` "
+        "instead would page on the DISPATCHED run -- its event is `workflow_dispatch`, which "
+        "scheduled_failure.UNATTENDED_EVENTS alerts on -- filing a `critical`, owner-assigned "
+        "issue for a red already delivered to an assigned, @mentioning PR. Its `pull_request` "
+        "runs are dropped by that same event filter, as CodeQL's are."
+    ),
+}
 
-    image.yml is the reason for the second clause, found in the wild: it has no `schedule:` of
+
+def _bash_code(scalar: str) -> str:
+    """A `run:` scalar with its `#` lines removed -- what bash actually executes.
+
+    THE SEMANTIC ACCESSOR, and deliberately not the raw one. `test_workflow_expressions.py`
+    states that a `#` inside a `run:` block is not a comment, because Actions substitutes
+    `${{ }}` into the raw scalar before bash ever parses it -- and that rule governs a
+    DIFFERENT question: what a value can be spliced into. The question here is whether bash
+    runs the command, and bash strips `#`. Reading the raw form instead turns a commented-out
+    dispatch into an unattended path that nothing starts.
+    """
+    return "\n".join(line for line in scalar.splitlines() if not line.lstrip().startswith("#"))
+
+
+def _dispatch_targets(path: Path, known: dict[str, str]) -> set[str]:
+    """Every workflow FILE this one starts with `gh workflow run` -- the second way a run
+    begins with nobody in the loop, and the one a `workflow_run` closure cannot see.
+
+    `known` maps file name -> workflow name for the directory being walked. A target is
+    resolved against both, because `gh workflow run` accepts either.
+
+    TOKENISED with `shlex`, never matched with a regex over the text. warehouse.yml's own
+    dispatch-failure comment names `gh workflow run` inside a `--body` string, and telling a
+    human how to dispatch by hand is a message, not a call site. Only tokenisation separates
+    them: a quoted body is ONE token and can never produce the three consecutive `gh` /
+    `workflow` / `run` tokens a real invocation does. The same tokenising survives the retry
+    wrapper, whose quoted label repeats the command verbatim.
+
+    RAISES on a target it cannot resolve. `gh workflow run "$WF"` is a dispatch this closure
+    genuinely cannot follow, and skipping it silently rebuilds #80's blind spot one level down
+    -- a rule that enumerates only the dispatches it happens to understand. A red test asking
+    a human what that dispatch starts is the honest outcome, and a cross-repository dispatch
+    (`--repo other/repo`) resolves to nothing here for the same reason and gets the same
+    answer.
+
+    LIMITATION: the target is the first token after the invocation that resolves, so a flag
+    VALUE equal to a workflow file name or workflow name (`--ref image-contract.yml`) would
+    read as the target. No such call site exists, and modelling `gh`'s flag arity to rule it
+    out is more machinery than the risk.
+    """
+    file_of_name = {name: filename for filename, name in known.items()}
+    doc = yaml.safe_load(path.read_text()) or {}
+    targets: set[str] = set()
+    for job in (doc.get("jobs") or {}).values():
+        for step in job.get("steps") or []:
+            if not isinstance(step, dict) or not isinstance(step.get("run"), str):
+                continue
+            try:
+                tokens = shlex.split(_bash_code(step["run"]))
+            except ValueError as exc:
+                raise AssertionError(
+                    f"{path.name}: a run: scalar cannot be tokenised ({exc}), so nothing can "
+                    f"see whether it dispatches a workflow"
+                ) from exc
+            for i in range(len(tokens) - 2):
+                if tokens[i : i + 3] != ["gh", "workflow", "run"]:
+                    continue
+                for token in tokens[i + 3 :]:
+                    if token in known:
+                        targets.add(token)
+                        break
+                    if token in file_of_name:
+                        targets.add(file_of_name[token])
+                        break
+                else:
+                    raise AssertionError(
+                        f"{path.name}: `gh workflow run "
+                        f"{' '.join(tokens[i + 3 : i + 6]) or '<nothing>'}` names a target that "
+                        f"cannot be resolved to a workflow in {path.parent.name}/. This closure "
+                        f"cannot follow it, so it cannot say whether that run is watched -- "
+                        f"name the workflow literally, or decide by hand and record it"
+                    )
+    return targets
+
+
+def _unattended_workflow_names(
+    workflows: Path = WORKFLOWS,
+    notifier: Path = NOTIFIER,
+    signalled: dict[tuple[str, str], str] | None = None,
+) -> set[str]:
+    """Every workflow name that can run with nobody watching, closed over BOTH ways a run
+    starts unattended:
+
+      * a direct `schedule:` trigger;
+      * `on.workflow_run` naming a workflow that is itself unattended -- the listener is
+        started BY that workflow, so darkness flows target -> listener;
+      * `gh workflow run <target>` inside an unattended workflow's `run:` -- the target is
+        started BY this workflow, so darkness flows dispatcher -> target, the OPPOSITE
+        direction. Running both edges in one direction is the mistake the shared fixed point
+        invites.
+
+    image.yml is why the second clause exists, found in the wild: it carries no `schedule:` of
     its own, but one of its three triggers is `workflow_run` on "Warehouse", which IS a daily
     cron. That makes `Warehouse publishes -> Image rebuilds -> Image fails` a chain nobody is
-    attending on the days nobody touches this repo -- the exact dark-guard condition this rule
-    exists to catch, sitting in the rule's own blind spot, because a literal `"schedule" in
-    triggers` check never looks at `workflow_run` at all. image.yml's OTHER triggers (push,
-    workflow_dispatch) are attended; that does not make the workflow attended -- one unattended
-    path is enough to need a watcher, the same way `mart_route_health`'s carrier-route grain
-    means one carrier's presence on a route is a fact about that carrier, not the route.
+    attending on the days nobody touches this repo. #80 is why the third exists: a closure over
+    `workflow_run` edges alone states a property it cannot enforce, since a cron workflow that
+    dispatches another starts an unattended run the rule never looks at. A workflow's other,
+    attended triggers do not make it attended -- one unattended path is enough to need a
+    watcher, the same way `mart_route_health`'s carrier-route grain makes one carrier's
+    presence on a route a fact about that carrier, not about the route.
+
+    A dispatch edge listed in `signalled` does not propagate, because the dispatched run
+    already carries a human-visible signal; SIGNALLED_DISPATCHES holds why that is keyed on the
+    EDGE and not on the target.
 
     NEVER folds in NOTIFIER. The notifier's own `workflow_run` watches five-plus unattended
     workflows, so if it were a candidate here it would compute itself as unattended and this
     function's caller would then require the notifier to watch itself --
     test_the_notifier_never_watches_itself exists to catch exactly that chain, so this function
-    must never let it start: NOTIFIER is excluded from the file set below before the fixed
-    point runs, not filtered out of the result afterward.
+    must never let it start: NOTIFIER is excluded from the candidate set below before the fixed
+    point runs, not filtered out of the result afterward. It stays in `name_of` so that a
+    dispatch naming it still RESOLVES rather than raising.
     """
-    files = [p for p in sorted(WORKFLOWS.glob("*.yml")) if p != NOTIFIER]
-    by_name = {yaml.safe_load(p.read_text()).get("name", p.stem): p for p in files}
+    signalled = SIGNALLED_DISPATCHES if signalled is None else signalled
+    files = sorted(workflows.glob("*.yml"))
+    name_of = {p.name: (yaml.safe_load(p.read_text()) or {}).get("name", p.stem) for p in files}
+    file_of_name = {name: filename for filename, name in name_of.items()}
+    candidates = [p for p in files if p != notifier]
+    candidate_files = {p.name for p in candidates}
 
-    unattended = {name for name, p in by_name.items() if "schedule" in (_triggers(p) or {})}
+    unattended = {p.name for p in candidates if "schedule" in (_triggers(p) or {})}
     changed = True
     while changed:
         changed = False
-        for name, p in by_name.items():
-            if name not in unattended and _workflow_run_targets(p) & unattended:
-                unattended.add(name)
+        for p in candidates:
+            started_by = {file_of_name[n] for n in _workflow_run_targets(p) if n in file_of_name}
+            if p.name not in unattended and started_by & unattended:
+                unattended.add(p.name)
                 changed = True
-    return unattended
+            if p.name not in unattended:
+                continue
+            for target in _dispatch_targets(p, name_of):
+                if (p.name, target) in signalled or target not in candidate_files:
+                    continue
+                if target not in unattended:
+                    unattended.add(target)
+                    changed = True
+    return {name_of[filename] for filename in unattended}
 
 
 def test_every_scheduled_workflow_in_the_repo_is_watched():
@@ -287,7 +422,12 @@ def test_every_scheduled_workflow_in_the_repo_is_watched():
     workflow somebody adds fail loudly here instead of joining verify.yml in going red at
     nobody -- and, since `_unattended_workflow_names` widened past a literal `schedule:` check,
     the same for a workflow that only inherits its blind spot via `workflow_run` on one (image.yml,
-    found unwatched by this same widening: `workflow_run` on "Warehouse", itself a daily cron)."""
+    found unwatched by this same widening: `workflow_run` on "Warehouse", itself a daily cron).
+
+    A workflow starts unattended two ways, and enumerating one of them is a rule that cannot
+    see half of what it claims (#80). The closure walks `gh workflow run` edges as well, so a
+    cron workflow that dispatches another reddens here unless the dispatched run carries its
+    own human-visible signal and that edge is declared in SIGNALLED_DISPATCHES."""
     unattended = _unattended_workflow_names()
     watched = set(_triggers(NOTIFIER).get("workflow_run", {}).get("workflows", []))
     assert unattended <= watched, f"unattended but unwatched: {sorted(unattended - watched)}"
@@ -462,3 +602,161 @@ def test_the_data_contract_runs_before_the_expensive_proof():
     assert contract < proof, (
         f"data contract is step {contract}, the 60-minute proof is step {proof}"
     )
+
+
+# --------------------------------------------------------------------------------------
+# The second way a workflow starts unattended (#80)
+# --------------------------------------------------------------------------------------
+
+CRON = "  schedule:\n    - cron: '0 4 * * *'"
+
+
+def _write_workflow(directory: Path, filename: str, name: str, on: str, run: str = "echo hi"):
+    """A minimal, parseable workflow, for fixtures the real directory cannot express."""
+    directory.mkdir(parents=True, exist_ok=True)
+    body = "\n".join("          " + line for line in run.splitlines())
+    (directory / filename).write_text(
+        f"name: {name}\non:\n{on}\njobs:\n  main:\n    runs-on: ubuntu-latest\n"
+        f"    steps:\n      - run: |\n{body}\n"
+    )
+
+
+def test_a_dispatched_workflow_inherits_the_dispatchers_darkness(tmp_path):
+    """#80. `gh workflow run` is the SECOND way a workflow starts with nobody in the loop, and
+    a closure over `on.workflow_run` edges alone cannot see it: a cron workflow that dispatches
+    another creates an unattended run the rule reports as attended.
+
+    Asserted by VARYING THE DISPATCH, never by asserting a set -- CLAUDE.md's rule. The same
+    two workflows with the dispatch line removed must NOT report the target, or this passes
+    against an implementation that calls everything unattended.
+    """
+    dark = tmp_path / "dark"
+    _write_workflow(dark, "cron.yml", "Cron", CRON, "gh workflow run target.yml --ref main")
+    _write_workflow(dark, "target.yml", "Target", "  workflow_dispatch:")
+    assert "Target" in _unattended_workflow_names(dark, dark / "none.yml", {})
+
+    lit = tmp_path / "lit"
+    _write_workflow(lit, "cron.yml", "Cron", CRON, "echo nothing is dispatched")
+    _write_workflow(lit, "target.yml", "Target", "  workflow_dispatch:")
+    assert "Target" not in _unattended_workflow_names(lit, lit / "none.yml", {})
+
+
+def test_the_repos_own_dispatch_edge_is_seen():
+    """THE VACUITY GUARD for every fixture test around it. Those build their own workflows, so
+    a parser that matches nothing in the REAL directory leaves all of them green while this
+    repository's only live dispatch edge stays invisible -- which is #80 unfixed.
+
+    warehouse.yml's bump-pin job reaches the gate through `retry "gh workflow run" gh workflow
+    run image-contract.yml \\` and a line continuation, so this is also what proves the
+    tokeniser survives the retry wrapper (a quoted label that repeats the command verbatim) and
+    the continuation.
+    """
+    known = {
+        p.name: (yaml.safe_load(p.read_text()) or {}).get("name", p.stem)
+        for p in sorted(WORKFLOWS.glob("*.yml"))
+    }
+    assert _dispatch_targets(WORKFLOWS / "warehouse.yml", known) == {"image-contract.yml"}
+
+
+def test_a_dispatch_from_an_attended_workflow_is_not_an_unattended_path(tmp_path):
+    """Darkness flows dispatcher -> target, so it flows only from a dispatcher that is itself
+    dark. A PR-triggered workflow dispatching another has that PR's author in the loop, and an
+    implementation propagating every dispatch edge regardless of its source would put most of
+    this repo in the watch list -- the noise that gets an alert muted, which is the cost
+    scheduled-failure.yml's own header argues against."""
+    directory = tmp_path / "wf"
+    _write_workflow(directory, "onpr.yml", "On PR", "  pull_request:", "gh workflow run t.yml")
+    _write_workflow(directory, "t.yml", "Target", "  workflow_dispatch:")
+    assert _unattended_workflow_names(directory, directory / "none.yml", {}) == set()
+
+
+def test_a_signalled_dispatch_does_not_make_its_target_unattended(tmp_path):
+    """The false-positive half. `warehouse.yml` dispatches `image-contract.yml` onto a branch
+    whose PR is assigned to the owner and @mentions them, so that run is already delivered to a
+    human; a closure with no way to say so would force the gate into the watch list and file a
+    duplicate `critical` issue for every red bump. Catches the exemption being ignored."""
+    directory = tmp_path / "wf"
+    _write_workflow(directory, "cron.yml", "Cron", CRON, "gh workflow run t.yml")
+    _write_workflow(directory, "t.yml", "Target", "  workflow_dispatch:")
+    names = _unattended_workflow_names(
+        directory, directory / "none.yml", {("cron.yml", "t.yml"): "signalled on a PR"}
+    )
+    assert "Target" not in names
+    assert "Cron" in names, "the dispatcher's own schedule is unaffected by the exemption"
+
+
+def test_a_second_undeclared_dispatch_of_a_signalled_target_is_still_caught(tmp_path):
+    """THE mutant. `SIGNALLED_DISPATCHES` is keyed on the EDGE; an implementation keyed on the
+    TARGET passes every other dispatch test in this file, because no other fixture dispatches
+    one target twice. The entry only ever claims "this dispatch carries its own signal", never
+    "this workflow is attended" -- so a second dispatcher, with no PR behind it, is exactly the
+    next `gh workflow run` edge #80 was written about and must still redden."""
+    directory = tmp_path / "wf"
+    _write_workflow(directory, "signalled.yml", "Signalled", CRON, "gh workflow run t.yml")
+    _write_workflow(directory, "silent.yml", "Silent", CRON, "gh workflow run t.yml")
+    _write_workflow(directory, "t.yml", "Target", "  workflow_dispatch:")
+    names = _unattended_workflow_names(
+        directory, directory / "none.yml", {("signalled.yml", "t.yml"): "signalled on a PR"}
+    )
+    assert "Target" in names
+
+
+def test_a_quoted_mention_of_the_command_is_not_a_dispatch(tmp_path):
+    """warehouse.yml names `gh workflow run` inside the `--body` of the comment it posts when a
+    dispatch FAILED, telling a human to run it by hand. That is a message, not a call site, and
+    a scan over the text reads it as an edge and invents a dispatch nothing performs -- the same
+    class as this repo's smoke needles matching their own comments. The invented edge would push
+    somebody to widen the watch list for a run that never happens."""
+    directory = tmp_path / "wf"
+    _write_workflow(
+        directory,
+        "cron.yml",
+        "Cron",
+        CRON,
+        'gh pr comment "$URL" --body "Not dispatched. Run it by hand: '
+        'gh workflow run t.yml --ref main"',
+    )
+    _write_workflow(directory, "t.yml", "Target", "  workflow_dispatch:")
+    assert "Target" not in _unattended_workflow_names(directory, directory / "none.yml", {})
+
+
+def test_a_commented_out_dispatch_is_not_a_dispatch(tmp_path):
+    """The accessor choice, asserted rather than only argued in `_bash_code`'s docstring. A `#`
+    inside a `run:` block is not a comment to ACTIONS -- `${{ }}` is substituted into the raw
+    scalar first, which is `test_workflow_expressions.py`'s rule and the reason the splice
+    assertions elsewhere in this repo read the raw form. It is still a comment to BASH, and
+    whether bash runs the command is the question this closure asks. Read the raw form here and
+    a line nothing executes becomes an unattended path."""
+    directory = tmp_path / "wf"
+    _write_workflow(directory, "cron.yml", "Cron", CRON, "# gh workflow run t.yml\necho hi")
+    _write_workflow(directory, "t.yml", "Target", "  workflow_dispatch:")
+    assert "Target" not in _unattended_workflow_names(directory, directory / "none.yml", {})
+
+
+def test_a_dispatch_target_that_cannot_be_resolved_is_loud(tmp_path):
+    """`gh workflow run "$WF"` is a dispatch this closure cannot follow. Skipping it silently
+    rebuilds #80's blind spot one level down -- a rule that enumerates only the dispatches it
+    happens to understand, and passes for the wrong reason on the rest. The honest outcome is a
+    red test naming the call site and asking a human what it starts."""
+    directory = tmp_path / "wf"
+    _write_workflow(directory, "cron.yml", "Cron", CRON, 'gh workflow run "$WF" --ref main')
+    _write_workflow(directory, "t.yml", "Target", "  workflow_dispatch:")
+    with pytest.raises(AssertionError, match="cannot be resolved to a workflow"):
+        _unattended_workflow_names(directory, directory / "none.yml", {})
+
+
+def test_every_signalled_dispatch_still_exists():
+    """The exemption list is a rule, not a snapshot. An entry outliving the dispatch it excuses
+    is a standing licence nobody re-derived, and it silently covers the next edge added between
+    the same two files. Asserted against the dispatch actually present in the workflow, never
+    against the files merely existing."""
+    known = {
+        p.name: (yaml.safe_load(p.read_text()) or {}).get("name", p.stem)
+        for p in sorted(WORKFLOWS.glob("*.yml"))
+    }
+    for (dispatcher, target), reason in SIGNALLED_DISPATCHES.items():
+        assert (WORKFLOWS / dispatcher).exists(), f"{dispatcher} no longer exists"
+        assert target in _dispatch_targets(WORKFLOWS / dispatcher, known), (
+            f"{dispatcher} no longer dispatches {target}; the exemption outlived its edge"
+        )
+        assert reason.strip(), f"{dispatcher} -> {target} is exempt with no reason written down"

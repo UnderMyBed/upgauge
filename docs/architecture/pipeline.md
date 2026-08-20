@@ -760,6 +760,37 @@ a watcher. The chain never folds in the notifier itself — `test_the_notifier_n
 itself` guards the unbounded loop that would create — so the notifier's own file is excluded
 from the walk before it starts, not filtered out of the result afterward.
 
+**A workflow starts unattended two ways, and the closure walks both.** `on.workflow_run` is one.
+`gh workflow run <target>` inside another workflow's `run:` is the other, and it is invisible to a
+`workflow_run` walk — so a cron workflow that dispatches a second one starts an unattended run that
+a rule enumerating only the first reports as attended. The two edges point in **opposite
+directions**: a `workflow_run` listener is started *by* the workflow it names, so darkness flows
+target → listener, while a dispatcher *starts* its target, so darkness flows dispatcher → target.
+Both run in one fixed point. Dispatches are read off the comment-stripped `run:` scalar and
+**tokenised, never matched as text** — a `#` line is a comment to bash and never executes, and a
+`gh workflow run` sitting inside a quoted `--body` is a message telling a human what to do rather
+than a call site, which only tokenisation separates (a quoted body is one token and can never
+produce three consecutive `gh` / `workflow` / `run` tokens). A dispatch whose target cannot be
+resolved to a workflow in the directory — `gh workflow run "$WF"`, or a cross-repository `--repo` —
+**fails the test rather than being skipped**, because a rule enumerating only the dispatches it
+happens to understand carries the same defect one level further down.
+
+**A dispatch is exempt only when the dispatched run carries its own human-visible signal, and the
+exemption is keyed on the EDGE.** `SIGNALLED_DISPATCHES` (`pipeline/tests/test_scheduled_failure.py`)
+is an allow-list, so the default for a new edge is *caught*, and every entry names the dispatching
+file, the dispatched file and the reason. Keyed on the edge and never on the target, because an
+entry claims *"this dispatch is signalled"* and never *"this workflow is attended"* — a second,
+undeclared dispatch of the same workflow is still caught. One entry exists. `warehouse.yml`'s
+`bump-pin` job dispatches `image-contract.yml` only on a run that has just opened a PR
+(`if: steps.pr.outputs.opened == '1'`) and targets that PR's own branch (`--ref "$BRANCH"`); check
+runs attach to the head SHA, so the dispatched run appears on a PR that `warehouse.yml` assigns to
+the owner and whose body @mentions them on its first line, and a dispatch that never landed is
+reported onto that same PR rather than only into a log. Watching `Image contract` instead would
+page on the **dispatched** run — its event is `workflow_dispatch`, which `UNATTENDED_EVENTS` alerts
+on — filing a `critical`, owner-assigned issue for a red already delivered to an assigned,
+@mentioning PR. Its `pull_request` runs cost nothing either way: that same event filter drops them,
+exactly as it drops `CodeQL`'s.
+
 **The conclusion test is an ALLOW-LIST — `failure` or `timed_out`, never `!= 'success'`.** The
 same rule CLAUDE.md holds the cacheability predicate to, and it generalises for the same reason:
 the two forms differ only on a **cancelled** run, which is usually a human superseding one
