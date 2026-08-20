@@ -1984,12 +1984,25 @@ check "87: /api/pivot 400s an over-width composite id pair" "$CODE" '400'
 check "87: ...naming the rule"                              "$BODY" "$MSG87"
 check "87: ...and naming the offending dimension"           "$BODY" 'route'
 
-# The pair branch's PRE-EXISTING guard, which the new rule must not displace: a non-numeric pair
-# is still refused by its own message, not by the width rule.
+# The pair branch has TWO distinct refusals and they must stay distinguishable. ARITY is still the
+# pre-existing message; a well-formed pair whose PART is not a number is now the value rule's, which
+# is strictly more precise -- "JFK is not a whole number" rather than "give me two ids", when two
+# ids is exactly what was given. Both are asserted, because a rule that collapsed them into one
+# message would pass a check for either one alone.
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${F87R}&f=route:JFK-LAX")
 BODY=$(curl -s                              --max-time 15 "${BASE}/api/pivot?${F87R}&f=route:JFK-LAX")
 check "87: /api/pivot still 400s a non-numeric composite pair" "$CODE" '400'
-check "87: ...under its own existing message"                  "$BODY" "two ids joined by"
+check "87: ...naming the whole-number rule, the part being the wrong SHAPE not the wrong COUNT" \
+                                                              "$BODY" 'must be a plain whole number'
+check "87: ...and naming the offending PART, not the whole value" "$BODY" "'JFK'"
+check_not "87: ...not the arity message, which is a different fault" "$BODY" 'two ids joined by'
+
+# The arity message itself, still reachable and still its own text -- one id where two belong.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${F87R}&f=route:12478")
+BODY=$(curl -s                              --max-time 15 "${BASE}/api/pivot?${F87R}&f=route:12478")
+check "87: /api/pivot 400s a composite value with only ONE id" "$CODE" '400'
+check "87: ...under the pre-existing arity message"           "$BODY" 'two ids joined by'
+check_not "87: ...which is NOT the whole-number rule"         "$BODY" 'must be a plain whole number'
 
 # --- E. THE REGRESSION GUARD: VARCHAR dimensions keep working, zero-padding intact.
 # 079 and 79 are different filters against real data. A rule that guessed "integer" from the key
