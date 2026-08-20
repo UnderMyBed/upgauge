@@ -1016,7 +1016,7 @@ Mutant 1 is the pair the brief calls out by name: a `no-store`-everywhere implem
 pass "declines to cache … out-of-range" *vacuously*, so mutant 2 — the other half — has to
 redden independently for either result to mean anything. It does.
 
-### `t` and `n` on `/explore` — bounded at the origin, because a pure function can decide them
+### `/explore`'s query VALUES — bounded at the origin, because a pure function can decide them
 
 The key gate above closes which query KEYS a path reads. It closes nothing about their VALUES, and
 the value axis was the larger of the two (#52). `decode()` validates *identifiers* against the
@@ -1028,11 +1028,22 @@ the fix, every one of these decoded cleanly and rendered a distinct 200 under `H
 | `t` | `MONTH_RE` (`/^\d{4}-(0[1-9]\|1[0-2])$/`) only — 10,000 × 12 values per side, and nothing required `from ≤ to` | **1.44×10¹⁰** ordered pairs |
 | `n` | `parsePyInt` — any integer at all | unbounded |
 | `n`, `v` | nothing: `n=25`, `n=025`, `n=0025`, … `n=%32%35`, `n=%2B25`, `n=2_5` all decode to 25 | unbounded **again**, in spelling |
+| `t`, `k`, `d`, `m`, `s`, `g` | nothing: `decode()` percent-decodes at `urlstate.ts:179` and checks the shape 35 lines later at `:214`, so every byte may be sent literally or as `%XX` in either hex case | **110,592** spellings of `t=2015-01:2015-12` alone (2¹² digits × 3² hyphens × 3 for the colon) — ~**1.1×10⁹** with the ordered pairs above, before `k`/`d`/`m`/`g`/`s` multiply it |
+| `d`, `m` | nothing: split on `,`, and neither `normalizeQuery` nor `renderPivot` dedupes | unbounded in the NUMBER of repeats of one token |
 
-That third row is the one a reader is most likely to miss, and it is why bounding `n`'s *value*
-alone would have left the claim false: a ceiling does not reduce the family at all while every
-value keeps unboundedly many spellings. `v` has the identical hole — it must equal 1 and accepts
-`v=1`, `v=01`, `v=+1`, `v=%31`, …
+**A shape regex downstream of `pyUnquote` is not a spelling bound.** `MONTH_RE` pins `t` to four
+digits, a hyphen and a two-digit month — of the *decoded* value, which is the one thing it can
+never constrain the bytes to. The same holds for `URL_TO_GRAIN` on `k`, `URL_TO_GROUPING` on `g`
+and the catalog allowlist on `d`/`m`/`s`: each validates a token that `pyUnquote` has already
+produced. Measured on a served build, all of these returned **200, `s-maxage=3600`, and a
+byte-identical 36,632-byte page**: `t=2025-05:2026-04`, `t=%32025-05:2026-04`,
+`t=2025-05%3A2026-04`, `t=2025-05%3a2026-04` and
+`t=%32%30%32%35%2D%30%35%3A%32%30%32%36%2D%30%34`. `m=seats,seats,seats` returned 42,420 bytes and
+`m=seats`×200 returned 661,824 — distinct pages, all cached, all unbounded.
+
+Bounding a value's *range* therefore reduces the family by nothing on its own, on any key. That is
+true of `n` (`n=25`, `n=025`, `n=0025`, …), of `v` (`v=1`, `v=01`, `v=+1`, `v=%31`), and equally of
+every textual key.
 
 **The bound is a SERVER ADMISSION policy, not a codec check, and that placement is load-bearing.**
 `docs/product/features.md` states the codec's contract as *"Reference implementation:
@@ -1084,8 +1095,31 @@ The rules, and why each bound is the one it is:
   `bounds.test.ts` pins that `checkBounds` stays silent about it.
 - **`n` and `v` must be spelled as a plain decimal**, checked on the RAW bytes before `pyUnquote` —
   `%32%35` unquotes to `25`, so a check that runs after decoding cannot see the difference.
+- **`t`, `k`, `d`, `m`, `s` and `g` must carry no `%` at all**, on the same raw bytes and for the
+  same reason. The rule is deliberately *not* a second shape regex per key: `pyUnquote` returns its
+  input unchanged when it contains no `%` (`urlstate.ts:62`), so once these bytes carry none, the
+  raw bytes **are** the decoded value and every validator that already exists — `MONTH_RE`,
+  `URL_TO_GRAIN`, `URL_TO_GROUPING`, the catalog allowlist — pins them directly. One value, one
+  spelling, without `bounds.ts` restating a single one of those shapes. That is the same
+  drifting-duplicate-validator rule that keeps `n`'s lower bound in `render.ts`.
+- **`f` is exempt from that rule, and the exemption is load-bearing.** `encode()` builds it as
+  `f=${quote(key)}:${values.map(quote).join(",")}`, so a filter value legitimately carries `,`,
+  `:`, `&`, `=` and spaces — golden case 8 is `f=op_airline_id:2T%20%281%29,O%27Hare,…`. Banning
+  `%` there would break permalinks this product has already shipped. Both `bounds.test.ts` and
+  `app/smoke.sh` assert the exemption, so a blanket "no `%` anywhere" reddens rather than ships.
+- **No token may repeat in `d` or `m`.** This one is invisible to a spelling rule (every repeat is
+  spelled the one legal way) and to a range rule, and it is not a codec question either: `encode()`
+  cannot emit one, since a repeated dimension is a duplicate `GROUP BY` key that changes no row and
+  a repeated measure is a duplicate `SELECT` alias. Order is left alone — `d=a,b` and `d=b,a` are
+  genuinely different pivots.
 
-Result: `t` × `n` goes from unbounded to **10,440 × 1,000**, and both are decided by a pure,
+Result: every remaining family is **one cache key per distinct query**, rather than unboundedly
+many per query — which is the claim this fix can actually make, and the one worth making. `t`'s
+value axis is 10,440 ordered pairs today (the count is wall-clock-dependent: 144 months now, 156
+from 2028, because `parseYear`'s upper bound advances every January) and `n`'s is 1,000. What is
+*not* bounded to a small number is the count of distinct queries the catalog can express —
+ordered subsets of the dimension and measure allowlists — and that is a property of the product
+being expressive, not of the URL grammar being loose. Every rule above is decided by a pure,
 synchronous, database-free function on the request hot path, the same shape as `parseYear`.
 
 Mutant table (run and reverted; each edit was read back off disk before its result was believed,
@@ -1095,7 +1129,7 @@ and every touched file checksummed identical afterwards):
 |---|---|---|
 | 1 | `parseYear` drops its LOWER bound | `bounds.test.ts` "rejects a month before the data window" only — the upper-bound test stayed green |
 | 2 | `parseYear` drops its UPPER bound | "rejects a month past the current calendar year" only |
-| 3 | `checkBounds` rejects everything | the three "accepts …" boundary tests, both shipped-permalink corpora — the anti-vacuity control for 1–2 |
+| 3 | `checkBounds` rejects everything | **16**: all seven `checkBounds` positives (four "accepts …" boundary tests, both message tests, and "does NOT restate the positive-integer rule that renderPivot already owns"), all seven `decodeRequest` wiring tests, and both shipped-permalink corpora — the anti-vacuity control for 1–2. It does **not** redden "keeps renderPivot's own message for a non-positive limit": `decode()` runs first and throws there before `checkBounds` is consulted |
 | 4 | `from ≤ to` deleted | "rejects a reversed range whose two months are BOTH inside the window" only |
 | 5 | ordering written strict (`>=`) | "accepts a single-month range, where from equals to" only |
 | 6 | `n` ceiling deleted / off-by-one (`>=`) | "rejects a limit above MAX_LIMIT" / "accepts MAX_LIMIT itself" respectively |
@@ -1107,7 +1141,17 @@ and every touched file checksummed identical afterwards):
 | 12 | ceiling lowered to 24 | both shipped-permalink corpora (9 goldens, 8 hardcoded hrefs) |
 | 13–15 | each entry point reverted to bare `decode()` | that entry point's four/five negatives, with its control green in every case |
 | 16 | `/explore` branch forced to unconditional `no-store` | "still long-caches the SAME query with every value in bounds" — the control's own control |
-| 17 | `decodeRequest` made a pass-through, **on a served build** | 16 of the 26 new `app/smoke.sh` checks; all four served controls stayed green |
+| 17 | `decodeRequest` made a pass-through, **on a served build** | 16 of the then-26 new `app/smoke.sh` checks; all four served controls stayed green |
+| 18 | `t` dropped from `LITERAL_KEYS` | its three `checkSpelling` tests (encoded digit, encoded structural colon, lowercase hex) and `decodeRequest`'s "rejects a percent-encoded t" — **4**, and nothing else |
+| 19, 28–30 | `d`, `k`, `m`, `s` dropped from `LITERAL_KEYS`, one at a time | that key's own named test only — 2 for `d` (it also owns the encoded-comma test), 1 each for `k`, `m`, `s`. One test per key exists so a single-key regression names itself |
+| 20 | `g` dropped from `LITERAL_KEYS` | "rejects a percent-encoded g" only |
+| 21 | `f` **added** to `LITERAL_KEYS` (a blanket "no `%`" rule) | "leaves f alone, because percent-encoding is that key's own escape mechanism" **and** "accepts every one of the 9 golden URLs" — the exemption is pinned from both sides |
+| 22 | the `%` scan narrowed to well-formed uppercase escapes (`/%[0-9A-F]{2}/`) | "rejects LOWERCASE hex, which doubles the family again per encoded byte" only |
+| 23 | `checkSpelling` rejects everything | **11**: every `checkSpelling` positive, four `decodeRequest` wiring tests, and both shipped-permalink corpora — the anti-vacuity control for 18–22 |
+| 24 | the repetition rule deleted | its three `checkBounds` tests, its message test, and `decodeRequest`'s "rejects a repeated measure" — **5** |
+| 25 | the repetition rule applied to `m` only | "rejects a repeated dimension" only |
+| 26 | repetition compared as ADJACENT neighbours (`tokens[i] === tokens[i-1]`) | "rejects a repeat that is not adjacent" and the message test — `a,b,a` walks straight past a neighbour compare |
+| 27 | `decodeRequest` composes `checkBounds` only | the three spelling wiring tests only; the repetition wiring test stays green, because that rule lives in `checkBounds` — which is what makes the two separate claims |
 
 
 ### What the proxy's query actually costs
@@ -1384,13 +1428,22 @@ Two consequences worth stating plainly:
 Written in the same idiom as § The gap, and for the same reason: a permanent doc that reads as if
 `/explore` were finished is worse than one that names what is left.
 
-**`t` and `n` are closed; `f` is not.** `t`'s months, their ordering, `n`'s ceiling and `n`/`v`'s
-spelling are bounded at the origin by `app/src/lib/pivot/bounds.ts` — see § "`t` and `n` on
-`/explore`" above for the rule, the measurements and the mutants. What remains open is `f`, and it
-is open on two axes at once: `parseFilter` accepts any non-empty value list, so
-`f=origin_state:<arbitrary string>` decodes; and `f` is legitimately **repeatable**, so the number
-of `f` tokens is unbounded as well as each one's value. Every distinct spelling is a distinct 200
-under `HTML_CACHE` on the most expensive page on the site.
+**Every key but `f` is closed; `f` is not.** `t`'s months and their ordering, `n`'s ceiling,
+one spelling per value on `v`, `n`, `t`, `k`, `d`, `m`, `s` and `g`, and no repeated token in `d`
+or `m` are all bounded at the origin by `app/src/lib/pivot/bounds.ts` — see § "`/explore`'s query
+VALUES" above for the rules, the measurements and the mutants. What remains open is `f`, and it
+is open on **three** axes at once: `parseFilter` accepts any non-empty value list, so
+`f=origin_state:<arbitrary string>` decodes; `f` is legitimately **repeatable**, so the number of
+`f` tokens is unbounded as well as each one's value; and `f` is the one key **exempt from the
+spelling rule**, because `quote()` must escape `,`, `:`, `&`, `=` and spaces inside a filter value,
+so `%` is meaningful there rather than redundant. Every distinct spelling is a distinct 200 under
+`HTML_CACHE` on the most expensive page on the site.
+
+That exemption is not a gap that could be closed by tightening the same rule one key wider: a
+filter value is warehouse text, and there is no canonical byte spelling of it to insist on without
+either a catalog read or a re-implementation of `quote()`'s escaping policy inside the admission
+check. It is named here rather than left implicit, and both `bounds.test.ts` and `app/smoke.sh`
+assert it, so a future "simplification" to a blanket `%` ban reddens instead of shipping.
 
 **`f` is left to the edge deliberately, and a key table could not have expressed it anyway.**
 `QUERY_ROWS` maps a path to the *names* it reads. Deciding whether `f=origin_state:XX` names a real
@@ -1484,8 +1537,9 @@ payload to a plain document request.
 **`/explore` needs one more input than a key table can express:** junk *values* ride legitimate
 keys, and `ExploreView` renders its "permalink can't be read" page as a **200**, so `?d=junk1…N`
 was an unbounded family of cacheable error pages. Its cacheability now requires `decodeRequest()`
-to succeed — the codec AND the value bounds above, in one call. Bare `/explore` is therefore `no-store` — `decode("")` throws `missing required key 'v'`
-and that URL has always been the error page, and nothing links it: `TopBar` links `/` and
+to succeed — the codec AND the value bounds above, in one call. Bare `/explore` is therefore
+`no-store`: `decode("")` throws `missing required key 'v'`, and that URL has always been the
+error page, and nothing links it: `TopBar` links `/` and
 `/watch`, the front door links the full sample permalink, and `app/sitemap.ts` has no `/explore`
 entry. `/api/pivot` and `/search` are declared exempt: the first answers 400 + `no-store` in its
 own handler, and the second is `no-store` unconditionally, so neither has a cache entry to

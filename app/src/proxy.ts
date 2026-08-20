@@ -461,9 +461,12 @@ async function isDataLayerHealthy(): Promise<boolean> {
  * `decodeRequest`, not `decode` (#52). The key gate above and `decode()` between them leave the
  * VALUE axis open, and always will: `decode()` validates identifiers, never values, so
  * `t=9999-12:0000-01`, `n=999999999` and `n=00000000025` all still decode cleanly -- and until this
- * call they each rendered a distinct, cacheable 200. `t` alone admitted ~1.4x10^10 spellings, and
- * `n` an unbounded family TWICE: in its value, and in its SPELLING (arbitrary leading zeros, a
- * sign, `_` separators, percent-encoded digits -- all of which mean the same number). Cloudflare's
+ * call they each rendered a distinct, cacheable 200. Three families, and the last two are the ones
+ * a range check structurally cannot see: `t` admitted 1.44x10^10 ordered pairs by VALUE; every key
+ * but `f` admitted arbitrarily many SPELLINGS of each of those values, because `decode()`
+ * pyUnquotes at `urlstate.ts:179` and checks the shape at `:214` (so `t=2015-01:2015-12` alone has
+ * 110,592 spellings, and `n` adds leading zeros, a sign and `_` separators on top); and `d`/`m`
+ * admitted a token REPEATED any number of times, since nothing downstream dedupes. Cloudflare's
  * default cache key is the whole query string, so each is one more guaranteed origin miss on the
  * most expensive page here. `lib/pivot/bounds.ts` is the rule, and it is a SERVER admission policy
  * rather than a codec check for the reason that module documents: `decode()` is pinned to

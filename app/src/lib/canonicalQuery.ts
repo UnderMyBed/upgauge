@@ -16,12 +16,16 @@ import { presetSlugFromPath } from "@/lib/watch";
  * this module would mean a catalog read on the path that runs before every request.
  *
  * VALUES ARE BOUNDED, just not here (#52). `lib/pivot/bounds.ts` is the server's admission policy
- * -- `t` inside the dataset's own window and `from <= to`, `n` under a stated ceiling, and `n`/`v`
- * spelled one way each -- applied by `proxy.ts`, `/api/pivot` and `ExploreView` through
- * `decodeRequest`, not by any rule below. Do not read "VALUES are never inspected" as "values are
- * unbounded"; it means this file does not do it. What remains genuinely open is `f`, whose value
- * set is the warehouse's: `docs/architecture/hosting.md` § "What this does not close" has that
- * residual and the rate-limit thresholds it is left to.
+ * -- `t` inside the dataset's own window with `from <= to`; `n` under a stated ceiling; every key
+ * but `f` spelled ONE way, checked on the raw bytes before `pyUnquote` (`decode()` percent-decodes
+ * at `urlstate.ts:179` and only checks the shape at `:214`, so without that rule each admissible
+ * value keeps arbitrarily many encodings); and no repeated token in `d` or `m`. Applied by
+ * `proxy.ts`, `/api/pivot` and `ExploreView` through `decodeRequest`, not by any rule below. Do
+ * not read "VALUES are never inspected" as "values are unbounded"; it means this file does not do
+ * it. What remains genuinely open is `f`, on both of its axes -- its value set is the warehouse's,
+ * and percent-encoding is its own escape mechanism, so it is exempt from the spelling rule too:
+ * `docs/architecture/hosting.md` § "What this does not close" has that residual and the
+ * rate-limit thresholds it is left to.
  *
  * Measured on a served build at 4aa8087, before this file existed: every cacheable path accepted
  * arbitrary unknown query keys and still returned the long cache header -- `/watch?x=1`,

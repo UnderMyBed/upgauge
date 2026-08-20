@@ -1469,10 +1469,12 @@ check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize 
 # Not "one canonical spelling", which is what this header claimed first and is wider than the gate
 # delivers: key ORDER survives, and this gate inspects no VALUE at all. The value axis is bounded
 # by a different mechanism, asserted in its own block further down this section (#52,
-# `app/src/lib/pivot/bounds.ts`): `t` must sit inside the dataset's own window with from <= to, and
-# `n` must be under a stated ceiling and spelled one way. `f` is the residual and is deliberately
-# left to the edge (docs/architecture/hosting.md § "What this does not close" carries it, with the
-# thresholds -- and with the fact that today's rate-limit rule matches `/api/` only).
+# `app/src/lib/pivot/bounds.ts`): `t` must sit inside the dataset's own window with from <= to, `n`
+# must be under a stated ceiling, every key but `f` must be spelled literally on the RAW bytes, and
+# `d`/`m` may not repeat a token. `f` is the residual -- percent-encoding is its own escape
+# mechanism, so it is exempt from the spelling rule and left to the edge instead
+# (docs/architecture/hosting.md § "What this does not close" carries it, with the thresholds -- and
+# with the fact that today's rate-limit rule matches `/api/` only).
 #
 # Cloudflare's default cache key includes the full query string, so before this gate `?x=1..N`
 # minted an unbounded family of long-cached entries on every cacheable path -- measured on a
@@ -1690,11 +1692,24 @@ check_not "canonical: ...and never long-cached"                          "$HDRS"
 
 # #52: the VALUE axis, which neither the key gate nor `decode()` can see. `decode()` validates
 # identifiers, never values, so each URL below decoded cleanly and rendered a distinct 200 under
-# HTML_CACHE -- `t` alone admitting ~1.4x10^10 spellings (MONTH_RE's 10,000 x 12 per side, squared,
-# with no ordering rule), and `n` an unbounded family TWICE OVER: in its value (any integer) and in
-# its SPELLING (`n=0...025`, `n=%32%35`, `n=%2B25`, `n=2_5` all decode to 25). Cloudflare's default
-# cache key is the whole query string, so every one was a guaranteed origin miss on the most
-# expensive page here. `app/src/lib/pivot/bounds.ts` is the rule; this is the served-build proof.
+# HTML_CACHE. Cloudflare's default cache key is the whole query string, so every one was a
+# guaranteed origin miss on the most expensive page here. `app/src/lib/pivot/bounds.ts` is the
+# rule; this is the served-build proof. THREE families, not one:
+#
+#   value       `t` outside the dataset window (MONTH_RE admits 10,000 x 12 per side and required
+#               no ordering), and `n` any integer at all.
+#   spelling    `decode()` percent-decodes at urlstate.ts:179 and checks the shape at :214 -- 35
+#               lines later -- so every byte of `t`, `k`, `d`, `m`, `s` and `g` may arrive as
+#               `%XX` in either hex case. `t=2015-01:2015-12` alone has 110,592 spellings (2^12
+#               digits x 3^2 hyphens x 3 for the colon), and `n`/`v` add leading zeros, a sign
+#               and `_` separators on top. Bounding a value's RANGE bounds none of this.
+#   repetition  `d` and `m` are split on `,` and nothing dedupes, so one token may repeat any
+#               number of times -- measured on a served build at `m=seats` x200: a 661,824-byte
+#               200 under HTML_CACHE, against 36,632 for the same query spelled once.
+#
+# `f` is exempt from the spelling rule and is the residual: percent-encoding is that key's own
+# escape mechanism, so the exemption is load-bearing rather than an oversight. The two controls
+# at the end of this block are what prove it, and what would redden for a blanket "no %" rule.
 #
 # NEEDLES CARRY NO APOSTROPHE, and that is measured rather than assumed. The messages read
 # `time range 't' must ...` in the source, but `<p role="alert">{e.message}</p>` interpolates a
@@ -1710,7 +1725,10 @@ VB="v=1&k=seg&d=op_airline_id&m=seats&s=-seats&g=op"
 for U in "t=1999-01:1999-12&n=25|must fall inside 2015-01..|a time range outside the data window" \
          "t=2026-04:2025-05&n=25|must start on or before it ends|a reversed range, both months in window" \
          "t=2025-05:2026-04&n=999999|must be at most 1000, got 999999|a limit above the ceiling" \
-         "t=2025-05:2026-04&n=00000025|must be spelled as a plain decimal|a redundantly-spelled n"; do
+         "t=2025-05:2026-04&n=00000025|must be spelled as a plain decimal|a redundantly-spelled n" \
+         "t=%32025-05:2026-04&n=25|must be spelled literally, without percent-encoding|a percent-encoded digit in t" \
+         "t=2025-05%3A2026-04&n=25|must be spelled literally, without percent-encoding|a percent-encoded colon in t" \
+         "t=2025-05%3a2026-04&n=25|must be spelled literally, without percent-encoding|lowercase-hex percent-encoding in t"; do
   VQ="${U%%|*}"; REST="${U#*|}"; NEEDLE="${REST%%|*}"; WHAT="${REST##*|}"
   CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${VB}&${VQ}")
   HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${VB}&${VQ}")
@@ -1721,6 +1739,30 @@ for U in "t=1999-01:1999-12&n=25|must fall inside 2015-01..|a time range outside
   check_not "bounds: ...never long-cached"          "$HDRS" 's-maxage'
 done
 
+# The other two keys whose percent-encoded spelling is invisible to a range check, on their own
+# curls because each needs a different VB. `k`, `d` and `s` are covered by the unit tests one per
+# key; these two are the ones whose decoded value is a LIST or an enum, where the separator
+# itself has a second spelling.
+# Written out in full rather than derived from $VB by substitution: this file has produced three
+# self-defects, and a needle or a URL assembled by string surgery is how the next one arrives.
+for U in "v=1&k=seg&d=op_airline_id%2Cyear_month&m=seats&s=-seats&g=op|a percent-encoded structural comma in d" \
+         "v=1&k=seg&d=op_airline_id&m=seats&s=-seats&g=%6Fp|a percent-encoded g"; do
+  VB2="${U%%|*}"; WHAT="${U##*|}"
+  BODY=$(curl -s                   --max-time 15 "${BASE}/explore?${VB2}&t=2025-05:2026-04&n=25")
+  HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore?${VB2}&t=2025-05:2026-04&n=25")
+  check "bounds: /explore rejects ${WHAT}"  "$BODY" 'must be spelled literally, without percent-encoding'
+  check "bounds: ...never cached (${WHAT})" "$HDRS" 'no-store'
+done
+
+# The repetition family. Not a spelling variant -- the page really renders the column twice, and
+# at 200 repeats that was a 661,824-byte 200 under HTML_CACHE -- and no raw-byte rule can see it,
+# because every repeat is spelled the one legal way.
+VBR="v=1&k=seg&d=op_airline_id&m=seats,seats&s=-seats&g=op"
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${VBR}&t=2025-05:2026-04&n=25")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${VBR}&t=2025-05:2026-04&n=25")
+check "bounds: /explore rejects a repeated measure"   "$BODY" 'must appear once, got'
+check "bounds: ...never cached (a repeated measure)"  "$HDRS" 'no-store'
+
 # The control, and it is not optional: every check above is satisfied by an /explore that errors
 # on everything and by a proxy that answers no-store to everything. This is the pair that has to
 # stay green, and M16 (proxy branch forced to no-store) reddens it.
@@ -1730,6 +1772,61 @@ BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${VB}
 check     "bounds: the SAME query in bounds still renders"     "$CODE" '200'
 check_not "bounds: ...with no error state"                     "$BODY" 'must be at most'
 check     "bounds: ...and keeps the project Cache-Control"     "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# The SECOND control, and the one a blanket "no % anywhere" rule would redden: `f` is exempt from
+# the spelling rule because percent-encoding is that key's own escape mechanism -- a filter value
+# legitimately carries `,`, `:`, `&`, `=` and spaces, which is why `encode()` runs quote() over it
+# and why golden case 8 is `f=op_airline_id:2T%20%281%29,O%27Hare,...`. Banning `%` there would
+# break permalinks this product has already shipped, so the exemption is asserted, not assumed.
+#
+# The VALUE is `19790` (Delta) with every digit percent-encoded, not one of golden case 8's
+# strings: those are codec round-trip fixtures, and `op_airline_id` is an integer column, so
+# `f=op_airline_id:2T%20%281%29` decodes perfectly and then 500s in DuckDB on the cast -- measured
+# on this server. That is the `f` residual § "What this does not close" names (an unvalidated
+# filter value), not a spelling question, and asserting a 200 on it would pin the wrong thing.
+# Every digit encoded still exercises exactly what this control is for: `%` reaching `f` and being
+# admitted rather than refused.
+FQ="v=1&k=seg&d=op_airline_id&m=seats&s=-seats&g=op&t=2025-05:2026-04&f=op_airline_id:%31%39%37%39%30&n=25"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${FQ}")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${FQ}")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${FQ}")
+check     "bounds: a percent-encoded FILTER value is still admitted" "$CODE" '200'
+check_not "bounds: ...with no spelling error state"                  "$BODY" 'without percent-encoding'
+check     "bounds: ...and keeps the project Cache-Control"           "$HDRS" "$HTML_CACHE_EXPECTED"
+# ...and the filter was APPLIED, not silently dropped: a 200 alone is also what an ignored `f`
+# produces, which would make the three checks above true of the wrong page.
+check     "bounds: ...and the filter resolved to its one carrier"    "$BODY" '>DL<'
+check_not "bounds: ...with no other carrier in the table"            "$BODY" '>AA<'
+
+# THE HREFS bounds.test.ts's corpus CANNOT REACH. That test scans the source for `/explore?`
+# literals and deliberately skips anything containing `{` -- an interpolated href is built from a
+# PivotQuery, so its admissibility is a property of the BUILDER, not of a string. True, and it
+# leaves six `encode()`-built links (lib/topn.ts, lib/watch.ts and the four entity pages) with no
+# test that they decode. Nothing is broken today: all six use limits 25/50/100 and windows from
+# dataAsOf()/EARLIEST_MONTH/yearWindow(). But AIRCRAFT_MIX_LIMIT (10,000) and
+# AIRPORT_ENDPOINT_LIMIT (5,000) live in two of those same files, and an href built from either
+# would ship a dead permalink with no red test anywhere -- section 8's `/explore?` check asserts
+# the substring is PRESENT, never that it resolves.
+#
+# So: follow the link this server actually emitted, whatever it says. Nothing here is
+# dataset-pinned -- the window comes from the page's own dataAsOf(), so it moves with the dataset
+# rather than against it, and this runs unchanged in container mode.
+#
+# The Cache-Control assertion is the load-bearing one: proxy.ts grants HTML_CACHE only when
+# decodeRequest() SUCCEEDS, so a 200 under the project header IS the proof of admission.
+RBODY=$(curl -s --max-time 15 "${BASE}/route/JFK-LAX")
+EHREF=$(printf '%s' "$RBODY" | grep -o 'href="/explore?[^"]*"' | head -1 | sed 's/^href="//; s/"$//; s/&amp;/\&/g')
+# Anti-vacuity, and not optional: an empty $EHREF would curl $BASE itself, which 200s -- the
+# "answered by something else entirely" shape this file exists to refuse.
+check_re "bounds: found the Explorer href /route BUILDS with encode()" "$EHREF" '^/explore\?v=1&k='
+ECODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}${EHREF}")
+EHDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}${EHREF}")
+EBODY=$(curl -s                              --max-time 15 "${BASE}${EHREF}")
+check     "bounds: ...following it renders"                    "$ECODE" '200'
+check     "bounds: ...admitted, i.e. under the project header" "$EHDRS" "$HTML_CACHE_EXPECTED"
+check_not "bounds: ...not a window rejection"                  "$EBODY" 'must fall inside'
+check_not "bounds: ...not a ceiling rejection"                 "$EBODY" 'must be at most'
+check_not "bounds: ...not a spelling rejection"                "$EBODY" 'without percent-encoding'
 
 # /api/pivot reads the identical grammar and its SUCCESSES carry the 30-day PROJECT_CACHE -- ten
 # times any HTML page here -- so excluding it would have left the longer-lived unbounded family

@@ -81,15 +81,15 @@ path. `data/raw/` holds the full 2015–2026 window.
 deployable container from that asset, and `make portability` proves its WORKDIR/data contract by
 breaking it. Nothing is served from a public host. That is the rest of M8.
 
-Current gates (`verify` and `goldens` measured 2026-08-08, `portability` 2026-08-09, the rest
-2026-08-10; these are the only counts kept here — per-milestone history lives in git):
+Current gates (`app-check`/`app-smoke` measured 2026-08-20, `verify`/`goldens` 2026-08-08,
+`portability` 2026-08-09, the rest 2026-08-10; the only counts kept here — history lives in git):
 
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 49 skip without `data/` |
-| `make app-check` | 887 app tests · without a built `upgauge.duckdb`, 353 of them fail |
-| `make app-smoke` | 348 served-build checks |
-| `make image-smoke` | **338** served-build checks against the container (the 10 host-only gap checks print as skipped) — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
+| `make app-check` | 955 app tests · without a built `upgauge.duckdb`, 366 of them fail |
+| `make app-smoke` | 403 served-build checks |
+| `make image-smoke` | the host set less the 10 host-only gap checks, which print as skipped — **338 when last measured (2026-08-10); NOT re-measured since, and it needs Docker plus the pinned release asset** — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
 | `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
 | `make goldens` | byte-identical |
@@ -458,10 +458,14 @@ signature element; it does not own these.
   none. `f` is repeatable. It is one canonical KEY SET, never "one spelling" — key order survives,
   and *that module* inspects no value; don't restate it wider.
 - **Values are bounded too — `lib/pivot/bounds.ts`, not the key gate.** `t` inside the months this
-  dataset covers with `from ≤ to`, `n` under a ceiling, and `n`/`v` spelled one way each (`n=0025`
-  and `n=%32%35` both mean 25, so bounding a value's RANGE alone bounds nothing). SERVER admission,
-  never the codec — `decode()` is pinned to `pipeline/urlstate.py` as an exact port — so all three
-  entry points call `decodeRequest`. `f` is the residual, left to an edge rule matching `/api/` only.
+  dataset covers with `from ≤ to`, `n` under a ceiling, no repeated token in `d`/`m`, and every key
+  but `f` spelled ONE way. **A shape check downstream of `pyUnquote` is not a spelling bound** —
+  `decode()` unquotes at `urlstate.ts:179` and runs `MONTH_RE` at `:214`, so `t=2015-01:2015-12` had
+  110,592 encodings of one admissible value and `MONTH_RE` constrained none of them. Bounding a
+  RANGE alone bounds nothing, on any key. Checked on the RAW bytes; SERVER admission, never the
+  codec (`decode()` is pinned to `pipeline/urlstate.py` as an exact port), so all three entry points
+  call `decodeRequest`. `f` is the residual — `%` is its own escape mechanism there, so it is exempt
+  and left to an edge rule matching `/api/` only.
 - **Nothing on the proxy path may throw.** `canonicalize()` threw on a leading `?` as a "wiring
   bug"; `proxy.ts` strips only ONE `?` (non-global regex) and has no try/catch, so `GET /watch??x=1`
   500ed all twelve matcher paths — and no smoke check used a doubled `?`, so both gates missed it.

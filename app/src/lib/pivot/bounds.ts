@@ -19,6 +19,18 @@ import { decode, splitPairs, UrlStateError } from "@/lib/pivot/urlstate";
  * `n=999999999`, `n=00000000025`, `n=%32%35`, `n=%2B25` and `v=0001` all decoded without
  * complaint.
  *
+ * THE VALUE AXIS AND THE SPELLING AXIS ARE TWO AXES, and the second one is the larger. `decode()`
+ * percent-decodes every single-valued key at `urlstate.ts:179` (`single[key] = pyUnquote(raw)`)
+ * and only THEN checks its shape -- `MONTH_RE` runs 35 lines later, at `urlstate.ts:214`. So every
+ * byte of every value may arrive literally or as `%XX`, in either hex case, and all of those
+ * spellings decode to the same query. Bounding a value's RANGE therefore bounds nothing on its
+ * own: `t=2015-01:2015-12` has 2^12 x 3^2 x 3 = 110,592 spellings before any range check has an
+ * opinion. Measured against the real codec, with `n`'s ceiling and window already in place, all of
+ * these were admitted and identical: `t=%32015-05:2026-04`, `t=2015-05%3A2016-04`,
+ * `t=2015-05%3a2016-04`, `t=%32%30%31%35%2D%30%35%3A%32%30%31%36%2D%30%34`, `k=%73eg`, `g=%6Fp`,
+ * `m=%73eats`, `d=op%5Fairline%5Fid`, `d=op_airline_id%2Cyear_month` and `s=%2Dseats`. So this
+ * module bounds BOTH: `checkBounds` over the decoded query, `checkSpelling` over the raw bytes.
+ *
  * WHY THIS IS NOT A CHECK INSIDE `decode()`, which is the obvious place and the wrong one.
  * `docs/product/features.md` states the codec's contract as "Reference implementation:
  * `pipeline/urlstate.py` (`encode`/`decode`); the TypeScript port must match it exactly", and
@@ -87,11 +99,28 @@ const OK: BoundsVerdict = { kind: "ok" };
  * replace the accurate message with a worse one. */
 const CANONICAL_NUMERAL = /^(0|[1-9][0-9]*)$/;
 
-/** The two keys whose values are integers, and therefore the two with more than one spelling
- * per value. Every other key carries allowlisted identifier text (`k`, `d`, `m`, `s`, `g`), the
- * month shape (`t`, pinned to four digits by `MONTH_RE`, so it has no spelling freedom), or the
- * one piece of free text in the format (`f`). */
+/** The two keys whose values are integers, and therefore the two whose redundant spellings are
+ * NUMERIC as well as textual -- leading zeros, a sign, `_` separators. */
 const NUMERAL_KEYS: ReadonlySet<string> = new Set(["v", "n"]);
+
+/** Every other key except `f`: values `encode()` emits LITERALLY, so a `%` anywhere in the raw
+ * bytes is by definition a redundant spelling of a value that already has a shorter one.
+ *
+ * The rule is "no `%`", and it is deliberately not a second shape regex. `pyUnquote` returns its
+ * input unchanged when there is no `%` in it (`urlstate.ts:62`), so once these bytes carry none,
+ * the raw bytes ARE the decoded value -- and every validator that already exists then pins the
+ * raw bytes directly: `MONTH_RE` for `t`, `URL_TO_GRAIN` for `k`, `URL_TO_GROUPING` for `g`, the
+ * catalog allowlist for each `,`-separated token of `d` and `m` and for `s`. One value, one
+ * spelling, without this module restating a single one of those shapes -- which is the same
+ * drifting-duplicate-validator rule that keeps `n`'s lower bound in `render.ts`.
+ *
+ * `f` is NOT here, and that is the residual, named. `encode()` builds it as
+ * `f=${quote(key)}:${values.map(quote).join(",")}`, so percent-encoding is the format's own
+ * escape mechanism there -- a filter value legitimately carries `,`, `:`, `&`, `=` and spaces
+ * (`2T (1)`, `O'Hare`), and the goldens pin exactly that. Banning `%` in `f` would break shipped
+ * permalinks. `docs/architecture/hosting.md` § "What this does not close" carries what that
+ * leaves open. */
+const LITERAL_KEYS: ReadonlySet<string> = new Set(["k", "d", "m", "t", "s", "g"]);
 
 /** Is this `YYYY-MM` inside the window this dataset can possibly cover?
  *
@@ -153,28 +182,76 @@ export function checkBounds(q: PivotQuery): BoundsVerdict {
       message: `limit ('n') must be at most ${MAX_LIMIT}, got ${q.limit}`,
     };
   }
+  // The other unbounded family, and the one no spelling rule can see: `d` and `m` are split on
+  // `,` and neither `normalizeQuery` (types.ts:31, mirroring `PivotQuery.__post_init__`) nor
+  // `renderPivot` dedupes, so `m=seats,seats,...` is admissible for ANY number of repeats --
+  // measured at 200 repeats, a 661,824-byte 200 under HTML_CACHE, and `d` the same at 50.
+  // Repetition is not a spelling variant (the page really does render the column twice) and not
+  // a codec question either: `encode()` cannot emit one, since a repeated dimension is a
+  // duplicate GROUP BY key that changes no row and a repeated measure is a duplicate SELECT
+  // alias. It is exactly an admission question, so it is answered here. Order is left alone --
+  // `d=a,b` and `d=b,a` are genuinely different pivots, bounded by the catalog rather than by
+  // the URL grammar.
+  for (const [what, key, tokens] of [
+    ["dimension", "d", q.dimensions],
+    ["measure", "m", q.measures],
+  ] as const) {
+    const repeated = firstRepeat(tokens);
+    if (repeated !== null) {
+      return {
+        kind: "rejected",
+        message: `each ${what} in '${key}' must appear once, got '${repeated}' more than once`,
+      };
+    }
+  }
   return OK;
 }
 
-/** One value, one spelling, for the two integer keys -- run on the raw query string.
+function firstRepeat(tokens: readonly string[]): string | null {
+  const seen = new Set<string>();
+  for (const t of tokens) {
+    if (seen.has(t)) return t;
+    seen.add(t);
+  }
+  return null;
+}
+
+/** One value, one spelling, for every key but `f` -- run on the RAW query string.
  *
- * Bounding `n`'s VALUE does not bound `n`: `n=25`, `n=025`, `n=0025`, ... all decode to 25, so
- * the family is unbounded no matter what the ceiling is. Same hole on `v`, which must equal 1
- * and accepts `v=1`, `v=01`, `v=+1`, `v=%31`, ... This is the same defect as the value axis, one
- * spelling over, and it is invisible to `canonicalQuery.ts` (which decides the KEY set and never
- * inspects a value) and to `checkBounds` (which sees a number, not the bytes that produced it).
+ * Bounding a value's RANGE does not bound its family. `n=25`, `n=025`, `n=0025`, ... all decode
+ * to 25, so the ceiling reduces nothing on its own; `v` has the identical hole (`v=1`, `v=01`,
+ * `v=+1`, `v=%31`). And the textual keys are worse, not better: `decode()` percent-decodes them
+ * BEFORE checking their shape, so `t=2015-01:2015-12` -- fully in window, correctly ordered, and
+ * therefore admitted by every rule `checkBounds` has -- also arrives as `t=%32015-01:2015-12`,
+ * `t=2015-01%3A2015-12`, `t=%32%30%31%35%2D%30%31%3A...` and 110,589 others. Both defects are
+ * invisible to `canonicalQuery.ts` (which decides the KEY set and never inspects a value) and to
+ * `checkBounds` (which sees a decoded query, not the bytes that produced it), which is why this
+ * check exists separately from both and runs on bytes.
+ *
+ * ORDER: raw bytes, BEFORE `pyUnquote`. `%32%35` unquotes to `25`, so a check run after decoding
+ * cannot see the difference at all -- it is handed the canonical spelling of every input.
  *
  * Splits with the codec's own `splitPairs` rather than a second walk of the query string, for
  * the reason that function's own comment gives: decoding before every structural delimiter has
  * done its job corrupts a percent-encoded `,` inside a filter value. */
-export function checkNumeralSpelling(qs: string): BoundsVerdict {
+export function checkSpelling(qs: string): BoundsVerdict {
   for (const [key, raw] of splitPairs(qs)) {
-    if (!NUMERAL_KEYS.has(key)) continue;
-    if (!CANONICAL_NUMERAL.test(raw)) {
-      const label = key === "v" ? "url version ('v')" : "limit ('n')";
+    if (NUMERAL_KEYS.has(key)) {
+      if (!CANONICAL_NUMERAL.test(raw)) {
+        const label = key === "v" ? "url version ('v')" : "limit ('n')";
+        return {
+          kind: "rejected",
+          message: `${label} must be spelled as a plain decimal, got '${raw}'`,
+        };
+      }
+      continue;
+    }
+    if (LITERAL_KEYS.has(key) && raw.includes("%")) {
       return {
         kind: "rejected",
-        message: `${label} must be spelled as a plain decimal, got '${raw}'`,
+        message:
+          `'${key}' must be spelled literally, without percent-encoding, got '${raw}' -- ` +
+          "only a filter ('f') carries values that need escaping",
       };
     }
   }
@@ -200,7 +277,7 @@ export function checkNumeralSpelling(qs: string): BoundsVerdict {
  * message they have today -- this module only ever narrows what is left. */
 export function decodeRequest(qs: string, allowlist: Allowlist): PivotQuery {
   const query = decode(qs, allowlist);
-  for (const verdict of [checkBounds(query), checkNumeralSpelling(qs)]) {
+  for (const verdict of [checkBounds(query), checkSpelling(qs)]) {
     if (verdict.kind === "rejected") throw new UrlStateError(verdict.message);
   }
   return query;

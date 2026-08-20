@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { MAX_LIMIT, checkBounds, checkNumeralSpelling, decodeRequest } from "@/lib/pivot/bounds";
+import { MAX_LIMIT, checkBounds, checkSpelling, decodeRequest } from "@/lib/pivot/bounds";
 import { decode, UrlStateError } from "@/lib/pivot/urlstate";
 import { FIXTURE } from "@/lib/pivot/allowlist.fixture";
 import { EARLIEST_YEAR, maxValidYear } from "@/lib/year";
@@ -112,52 +112,167 @@ describe("checkBounds -- the limit", () => {
   });
 });
 
-describe("checkNumeralSpelling", () => {
+/** The family a spelling rule structurally cannot see, because every repeat is spelled exactly
+ * one way: `d` and `m` are split on `,` and nothing downstream dedupes -- not normalizeQuery
+ * (types.ts:31, which mirrors PivotQuery.__post_init__ and dedupes nothing there either) and not
+ * renderPivot. Measured on a served build: `m=seats` x200 rendered a 661,824-byte 200 under
+ * HTML_CACHE, and `d=op_airline_id` x50 a 431,790-byte one. */
+describe("checkBounds -- repeated dimensions and measures", () => {
+  it("rejects a repeated measure", () => {
+    // Catches: no dedupe rule at all, which leaves `m` unbounded in the NUMBER of tokens for a
+    // query that is in-window, under the ceiling, and canonically spelled on every byte.
+    expect(checkBounds(q({ measures: ["seats", "seats"] })).kind).toBe("rejected");
+  });
+
+  it("rejects a repeated dimension", () => {
+    // Its own test: a rule written over `q.measures` only passes the one above and leaves the
+    // identical family open on `d`.
+    expect(checkBounds(q({ dimensions: ["op_airline_id", "op_airline_id"] })).kind)
+      .toBe("rejected");
+  });
+
+  it("rejects a repeat that is not adjacent", () => {
+    // Catches: a cheap `tokens[i] === tokens[i-1]` neighbour comparison, which `a,b,a` walks
+    // straight past. The set-based form is what makes the rule about the LIST, not the order.
+    expect(checkBounds(q({ measures: ["seats", "load_factor", "seats"] })).kind).toBe("rejected");
+  });
+
+  it("accepts a multi-token d and m whose tokens are all distinct", () => {
+    // The anti-vacuity control, and a real shipped shape: golden case 1 is
+    // `d=year_month,op_airline_id&m=seats,load_factor`. A rule that rejected any list longer
+    // than one would pass all three tests above and break that permalink.
+    expect(
+      checkBounds(
+        q({ dimensions: ["year_month", "op_airline_id"], measures: ["seats", "load_factor"] }),
+      ),
+    ).toEqual({ kind: "ok" });
+  });
+
+  it("says which token repeated, per the invalid-permalink contract", () => {
+    const v = checkBounds(q({ measures: ["seats", "load_factor", "seats"] }));
+    expect(v.kind === "rejected" && v.message).toContain("seats");
+    expect(v.kind === "rejected" && v.message).toContain("'m'");
+  });
+});
+
+describe("checkSpelling -- one value, one spelling", () => {
   const BASE = "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&g=op";
 
   it("accepts the one spelling encode() emits", () => {
-    expect(checkNumeralSpelling(`${BASE}&n=25`)).toEqual({ kind: "ok" });
+    expect(checkSpelling(`${BASE}&n=25`)).toEqual({ kind: "ok" });
   });
 
   it("rejects leading zeros on n", () => {
     // Catches: bounding n's VALUE while leaving its SPELLING unbounded. n=0...025 decodes to
     // 25 for any number of leading zeros -- an unbounded cache-key family on its own, which
     // no value-range check can see.
-    expect(checkNumeralSpelling(`${BASE}&n=00000025`).kind).toBe("rejected");
+    expect(checkSpelling(`${BASE}&n=00000025`).kind).toBe("rejected");
   });
 
   it("rejects percent-encoded digits, a sign, an underscore and leading whitespace on n", () => {
     // Every one of these decodes to 25 today: pyUnquote turns %32%35 into "25", and
     // PY_INT_RE permits a sign, `_` separators and surrounding whitespace. The check must run
     // on the RAW bytes, before pyUnquote, or the first of these sails through.
-    expect(checkNumeralSpelling(`${BASE}&n=%32%35`).kind).toBe("rejected");
-    expect(checkNumeralSpelling(`${BASE}&n=%2B25`).kind).toBe("rejected");
-    expect(checkNumeralSpelling(`${BASE}&n=2_5`).kind).toBe("rejected");
-    expect(checkNumeralSpelling(`${BASE}&n=%2025`).kind).toBe("rejected");
+    expect(checkSpelling(`${BASE}&n=%32%35`).kind).toBe("rejected");
+    expect(checkSpelling(`${BASE}&n=%2B25`).kind).toBe("rejected");
+    expect(checkSpelling(`${BASE}&n=2_5`).kind).toBe("rejected");
+    expect(checkSpelling(`${BASE}&n=%2025`).kind).toBe("rejected");
   });
 
   it("rejects leading zeros on v, which has the identical hole", () => {
-    expect(checkNumeralSpelling("v=0001&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12").kind)
+    expect(checkSpelling("v=0001&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12").kind)
       .toBe("rejected");
   });
 
-  it("is silent about a key it does not own", () => {
-    // Catches a check that rejects by scanning the whole query rather than the two numeric
-    // keys: `d`, `m`, `f` and `s` carry text that is not a numeral by design.
-    expect(checkNumeralSpelling(`${BASE}&f=origin_state:OR&n=25`)).toEqual({ kind: "ok" });
+  it("does not apply the NUMERAL rule to a textual key", () => {
+    // Catches a check that rejects by scanning the whole query rather than dispatching per key:
+    // `d`, `m`, `f` and `s` carry text that is not a numeral by design, so CANONICAL_NUMERAL
+    // must never be reached for them.
+    expect(checkSpelling(`${BASE}&f=origin_state:OR&n=25`)).toEqual({ kind: "ok" });
+  });
+
+  // The percent-encoding half. `decode()` calls pyUnquote at urlstate.ts:179 and only checks the
+  // SHAPE afterwards -- MONTH_RE at urlstate.ts:214 -- so every one of these decoded to exactly
+  // the BASE query above and rendered a distinct, in-bounds, HTML_CACHE'd 200. Measured against
+  // the real codec with the window and ceiling rules already in place.
+
+  it("rejects a percent-encoded digit in t, which is in-window and correctly ordered", () => {
+    // `t=%32015-01:2015-12` decodes to `t=2015-01:2015-12`, so checkBounds sees a perfectly
+    // admissible query and says ok -- a range check structurally cannot catch this. Catches:
+    // `t` missing from LITERAL_KEYS, i.e. reasoning that MONTH_RE's four-digit shape leaves `t`
+    // no spelling freedom. It runs AFTER pyUnquote (urlstate.ts:214 vs :179), so it constrains
+    // the decoded value and says nothing at all about the bytes.
+    expect(checkSpelling(`${BASE.replace("t=2015-01", "t=%32015-01")}&n=25`).kind).toBe("rejected");
+  });
+
+  it("rejects a percent-encoded STRUCTURAL colon in t", () => {
+    // The separator, not a digit: `t=2015-01%3A2015-12` is found by indexOf(":") only because
+    // pyUnquote already ran. Its own test because a rule keyed on digits alone would pass the
+    // one above and fail here.
+    expect(checkSpelling(`${BASE.replace(":2015-12", "%3A2015-12")}&n=25`).kind).toBe("rejected");
+  });
+
+  it("rejects LOWERCASE hex, which doubles the family again per encoded byte", () => {
+    // Catches: a check written as a case-sensitive scan for `%XX` uppercase escapes. `%3a` and
+    // `%3A` both unquote to `:` (pyUnquote's own /^[0-9A-Fa-f]{2}$/), so a rule that saw only
+    // one of them would leave every letter-bearing escape with two spellings instead of one.
+    expect(checkSpelling(`${BASE.replace(":2015-12", "%3a2015-12")}&n=25`).kind).toBe("rejected");
+  });
+
+  // One test per key rather than one test looping five keys: a mutant that drops a single key
+  // from LITERAL_KEYS must redden exactly one NAMED test. Each string below was confirmed
+  // against the real codec to decode to the same query as BASE.
+  const ENCODED: [string, string][] = [
+    ["k", "v=1&k=%73eg&d=op_airline_id&m=seats&t=2015-01:2015-12&g=op&n=25"],
+    ["d", "v=1&k=seg&d=op%5Fairline%5Fid&m=seats&t=2015-01:2015-12&g=op&n=25"],
+    ["m", "v=1&k=seg&d=op_airline_id&m=%73eats&t=2015-01:2015-12&g=op&n=25"],
+    ["g", "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&g=%6Fp&n=25"],
+    ["s", "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&g=op&s=%2Dseats&n=25"],
+  ];
+  for (const [key, qs] of ENCODED) {
+    it(`rejects a percent-encoded ${key}`, () => {
+      expect(checkSpelling(qs).kind, qs).toBe("rejected");
+    });
+  }
+
+  it("rejects a percent-encoded structural COMMA in d, which separates two dimensions", () => {
+    // `d=op_airline_id%2Cyear_month` decodes to two dimensions, because single.d is split on `,`
+    // AFTER pyUnquote (urlstate.ts:179 then :235). So the separator has the same two spellings
+    // the colon in `t` does, on a key whose token list is otherwise allowlisted.
+    expect(
+      checkSpelling("v=1&k=seg&d=op_airline_id%2Cyear_month&m=seats&t=2015-01:2015-12&g=op&n=25")
+        .kind,
+    ).toBe("rejected");
+  });
+
+  it("leaves f alone, because percent-encoding is that key's own escape mechanism", () => {
+    // The anti-vacuity control for every percent test above, and the one that would break real
+    // shipped permalinks if it failed: golden case 8 is
+    // `f=op_airline_id:2T%20%281%29,O%27Hare,...` -- a filter value legitimately carries `,`,
+    // `:`, `&`, `=` and spaces, so `quote()` MUST encode them. Catches: adding `f` to
+    // LITERAL_KEYS, which a blanket "no % anywhere" rule would do.
+    expect(checkSpelling(`${BASE}&f=op_airline_id:2T%20%281%29,O%27Hare&n=25`)).toEqual({
+      kind: "ok",
+    });
+  });
+
+  it("accepts the literal spelling of every key it guards", () => {
+    // The other anti-vacuity control: a checkSpelling that rejected everything would pass all
+    // eight percent tests above. This is the half that has to stay green.
+    expect(checkSpelling(`${BASE}&s=-seats&n=25`)).toEqual({ kind: "ok" });
   });
 
   it("is silent about a non-positive n, leaving that message to renderPivot", () => {
     // n=0 and n=-5 must keep renderPivot's "limit must be a positive integer" message rather
     // than being re-diagnosed here as a spelling problem.
-    expect(checkNumeralSpelling(`${BASE}&n=0`)).toEqual({ kind: "ok" });
+    expect(checkSpelling(`${BASE}&n=0`)).toEqual({ kind: "ok" });
   });
 
   it("never throws, on any input, because it runs on the proxy path", () => {
     // canonicalize() threw on a leading `?` once and 500ed all twelve matcher paths. Anything
     // reachable from proxy.ts is total or it is that bug again.
     for (const hostile of ["", "?", "??n=1", "&&", "n", "n=", "=25", "%", "n=%", "n=%zz"]) {
-      expect(() => checkNumeralSpelling(hostile)).not.toThrow();
+      expect(() => checkSpelling(hostile)).not.toThrow();
     }
   });
 });
@@ -192,6 +307,22 @@ describe("decodeRequest -- the wiring, which is a separate thing from the rules"
     expectUrlStateError(
       () => decodeRequest(`v=0001&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&n=25&g=op`, FIXTURE),
       /decimal/i,
+    );
+  });
+
+  it("rejects a percent-encoded t as an UrlStateError", () => {
+    // The wiring half of the headline bug: checkSpelling can be entirely correct about `t` and
+    // never consulted. Catches a decodeRequest that composes checkBounds only.
+    expectUrlStateError(
+      () => decodeRequest(`${BASE}&t=%32015-01:2015-12&n=25`, FIXTURE),
+      /percent-encoding/i,
+    );
+  });
+
+  it("rejects a repeated measure as an UrlStateError", () => {
+    expectUrlStateError(
+      () => decodeRequest(`v=1&k=seg&d=op_airline_id&m=seats,seats&t=2015-01:2015-12&n=25&g=op`, FIXTURE),
+      /must appear once/i,
     );
   });
 
@@ -230,6 +361,19 @@ describe("bare decode() is untouched -- the port stays an exact port", () => {
 
   it("still accepts a non-canonically-spelled n", () => {
     expect(decode(`${BASE}&t=2015-01:2015-12&n=00000025`, FIXTURE).limit).toBe(25);
+  });
+
+  it("still accepts a percent-encoded t, colon and all", () => {
+    // pyUnquote before MONTH_RE is the codec's own documented behaviour, matching
+    // urllib.parse.unquote in pipeline/urlstate.py. The SERVER declines these; the codec must
+    // not, or the port has drifted from the reference in the other direction.
+    const q = decode(`${BASE}&t=%32015-01%3A2015-12&n=25`, FIXTURE);
+    expect([q.timeFrom, q.timeTo]).toEqual(["2015-01", "2015-12"]);
+  });
+
+  it("still accepts a repeated measure", () => {
+    expect(decode(`${BASE}&t=2015-01:2015-12&n=25`.replace("m=seats", "m=seats,seats"), FIXTURE)
+      .measures).toEqual(["seats", "seats"]);
   });
 });
 

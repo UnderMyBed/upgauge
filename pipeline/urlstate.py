@@ -63,9 +63,11 @@ silently reintroducing the exact corruption the percent-encoding exists to preve
 
 **Known accepted gap, and deliberately still one here.** The SERVER narrows several values this
 module accepts -- `app/src/lib/pivot/bounds.ts` refuses a `t` outside the dataset's own months, a
-reversed `t`, an `n` over a ceiling, and a redundantly-spelled `n`/`v` -- because each extra
-spelling is one more CDN cache entry for an identical response (see that file, and
-`docs/architecture/hosting.md` § "`t` and `n` on `/explore`"). Those bounds do NOT belong here and
+reversed `t`, an `n` over a ceiling, a repeated token in `d`/`m`, and any key but `f` spelled
+other than the one way `encode` writes it (this module unquotes each value before checking its
+shape, so `t=%32015-01:2015-12` and `n=%32%35` parse to something already valid) -- because each
+extra spelling is one more CDN cache entry for an identical response (see that file, and
+`docs/architecture/hosting.md` § "`/explore`'s query VALUES"). Those bounds do NOT belong here and
 must not be added: this module is CI-only, never faces a cache, and is the spec the TypeScript port
 is pinned to match exactly. Narrowing it would make the port and the spec disagree in the other
 direction. What follows is a statement about the CODEC and remains true of it.
