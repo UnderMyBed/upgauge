@@ -3,6 +3,10 @@
 Curated, not introspected: which dimensions we OFFER is a product decision, not a schema
 fact. But every offered column must exist, or the Explorer silently loses a dimension --
 so a drift test cross-checks the curated list against duckdb_columns().
+
+One column is the exception, and is introspected FROM duckdb_columns() rather than checked
+against it: `value_type`, the width a filter value must fit. A column's type is a schema
+fact, not a product decision. Its own four guards are grouped together below.
 """
 
 from __future__ import annotations
@@ -101,6 +105,132 @@ def test_every_both_grain_dimension_exists_at_both_grains(con):
         assert referenced <= route_cols, (
             f"{key} marked 'both' but {referenced - route_cols} missing"
         )
+
+
+# `value_type` is the one INTROSPECTED column in an otherwise curated view
+# (sql/02_marts/300_meta_pivot_dimensions.sql): the DuckDB type of the dimension's underlying
+# fact column, joined live from duckdb_columns() against the FIRST token of column_expr,
+# resolved on fct_segment_month. It exists so a filter value can be rejected at render time
+# rather than throwing a Conversion Error inside DuckDB, after proxy.ts has already resolved
+# cacheability and written Cache-Control. The four tests below hold the four assumptions that
+# introspection makes. Each one, unheld, leaves a bound that does not guard its own column --
+# and does so silently, which is why none of them can be left to review.
+
+
+def test_every_dimension_resolves_to_a_value_type(con):
+    """The join must produce exactly one TYPED row per dimension.
+
+    test_all_fifteen_dimensions_are_offered compares a SET OF KEYS, and is structurally blind
+    to two of the three ways this goes wrong:
+
+    * the INNER JOIN dropping a row when a fact column is renamed -- caught there too;
+    * the join softened to a LEFT JOIN, which KEEPS the row and leaves value_type NULL, so the
+      dimension ships carrying no bound at all;
+    * the join predicate matching MORE than one object, duplicating every row it matches --
+      a set comparison cannot see duplication at all.
+    """
+    rows = con.execute("SELECT key, value_type FROM meta_pivot_dimensions").fetchall()
+    assert len(rows) == 15, f"expected 15 dimension rows, got {len(rows)}"
+    unresolved = sorted(key for key, value_type in rows if value_type is None)
+    assert not unresolved, f"no value_type resolved for {unresolved}"
+
+
+def test_value_type_is_the_type_of_every_column_the_dimension_reads(con):
+    """The view reads `split_part(column_expr, ',', 1)` -- the FIRST token only.
+
+    A pair whose two columns carried different widths would therefore publish a bound correct
+    for one of them and wrong for the other, with nothing to show for it: `route` is
+    `route_key_low, route_key_high` and `endpoint_airport_id` is `origin_airport_id,
+    dest_airport_id`.
+
+    Comparing against the live DESCRIBE is also what keeps the column introspected -- a
+    value_type reverted to a hand-written literal beside filter_mode fails here.
+    """
+    segment_types = {r[0]: r[1] for r in con.execute("DESCRIBE fct_segment_month").fetchall()}
+    multi_column = set()
+    for key, expr, value_type in con.execute(
+        "SELECT key, column_expr, value_type FROM meta_pivot_dimensions"
+    ).fetchall():
+        tokens = [t.strip() for t in expr.split(",") if t.strip()]
+        assert tokens, f"{key}: empty column_expr"
+        if len(tokens) > 1:
+            multi_column.add(key)
+        for token in tokens:
+            assert token in segment_types, f"{key}: {token} not on fct_segment_month"
+            assert segment_types[token] == value_type, (
+                f"{key}: value_type is {value_type} but {token} is {segment_types[token]}"
+            )
+    # Not decorative. Without it the loop passes vacuously the moment a pair's column_expr is
+    # collapsed to one token -- which is the exact shape it exists to guard.
+    assert multi_column == {"route", "endpoint_airport_id"}, (
+        f"expected two multi-column dimensions, examined {sorted(multi_column)}"
+    )
+
+
+def test_both_grain_dimensions_carry_the_same_type_at_route_grain(con):
+    """value_type resolves against fct_segment_month ONLY, but a 'both' dimension is filtered
+    at route grain too, where 100_fct_route_month.sql propagates the column through
+    any_value() or GROUP BY. A cast introduced there desynchronises the bound from the column
+    it guards, at the grain the view never looks at.
+    """
+    segment_types = {r[0]: r[1] for r in con.execute("DESCRIBE fct_segment_month").fetchall()}
+    route_types = {r[0]: r[1] for r in con.execute("DESCRIBE fct_route_month").fetchall()}
+    examined = set()
+    for key, expr in con.execute(
+        "SELECT key, column_expr FROM meta_pivot_dimensions WHERE grain = 'both'"
+    ).fetchall():
+        for token in (t.strip() for t in expr.split(",") if t.strip()):
+            assert token in route_types, f"{key}: {token} not on fct_route_month"
+            assert route_types[token] == segment_types[token], (
+                f"{key}: {token} is {segment_types[token]} at segment grain "
+                f"but {route_types[token]} at route grain"
+            )
+        examined.add(key)
+    assert len(examined) == 10, f"expected 10 'both'-grain dimensions, examined {len(examined)}"
+
+
+# Pinned because introspection reports a schema move FAITHFULLY, which is exactly what makes
+# the move invisible to all three structural tests above. Two entries carry the weight:
+#
+# `aircraft_type` is VARCHAR. It is a zero-padded code column ('079') that LOOKS numeric, and
+# it is the whole reason the type is read rather than guessed from the key name -- a numeric
+# bound applied to it would re-open the '079' -> 79 join break docs/data/invariants.md
+# documents. Measured: aircraft_type = '2T (1)' returns zero rows, where the same value on
+# op_airline_id throws a Conversion Error.
+#
+# `year` is BIGINT, and NOT because of normalize_t100_segment.sql's CAST(raw.YEAR AS SMALLINT)
+# -- fct_segment_month reads its Parquet with hive_partitioning = true, and the
+# partition-derived column silently wins over the content one (see 010_fct_segment_month.sql).
+# Measured on the real warehouse: hive_partitioning = true gives BIGINT, false gives SMALLINT.
+# The bound tracks the column TYPE, never the content: narrowing `year`'s ceiling to the
+# SMALLINT its values actually fit would reject values DuckDB accepts, which turns a
+# permissive-but-correct rule into a wrong one.
+DIMENSION_VALUE_TYPES = {
+    "year_month": "VARCHAR",
+    "quarter": "TINYINT",
+    "year": "BIGINT",
+    "op_airline_id": "INTEGER",
+    "origin_airport_id": "INTEGER",
+    "dest_airport_id": "INTEGER",
+    "route": "INTEGER",
+    "endpoint_airport_id": "INTEGER",
+    "origin_city_market_id": "INTEGER",
+    "dest_city_market_id": "INTEGER",
+    "origin_state": "VARCHAR",
+    "dest_state": "VARCHAR",
+    "aircraft_type": "VARCHAR",
+    "aircraft_group": "SMALLINT",
+    "distance_group": "SMALLINT",
+}
+
+
+def test_dimension_value_types_are_the_measured_set(con):
+    """Catches a schema move the introspection reports honestly -- a widened id column, or
+    aircraft_type turning into an integer type -- which every structural test above would sail
+    straight past, because value_type would still equal the column it read.
+    """
+    catalog = dict(con.execute("SELECT key, value_type FROM meta_pivot_dimensions").fetchall())
+    assert catalog == DIMENSION_VALUE_TYPES
 
 
 def test_measures_split_additive_from_derived(con):
