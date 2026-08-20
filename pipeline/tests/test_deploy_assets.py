@@ -274,3 +274,35 @@ def test_the_deploy_script_exports_the_token_to_its_children(tmp_path):
         "a child process does not inherit TUNNEL_TOKEN -- docker compose will fail "
         f"interpolation and the box will never deploy (stdout={proc.stdout!r})"
     )
+
+
+def test_the_compose_package_exists_on_the_os_image_provision_actually_uses():
+    """MEASURED on debian-13: `E: Unable to locate package docker-compose-v2`. The name is
+    plausible -- it is what Ubuntu calls it -- and wrong here. cloud-init recorded a
+    PackageInstallerError, `make provision` exited 0 regardless, and every timer tick then ran
+    `docker compose pull` against a docker with no compose plugin: exit 125 and a page of help
+    text, every 30 seconds, indefinitely, while the tunnel never connected and the site served
+    530.
+
+    Debian 13 ships Compose v2 as `docker-compose` (2.26.1-4 -- the name looks like v1 and is
+    not), installing the plugin at /usr/libexec/docker/cli-plugins/docker-compose.
+
+    The package name is a fact about the OS image, so this asserts the two together: if the
+    image default changes, this test is what says the package list has to be re-checked
+    against it rather than assumed to carry over."""
+    packages = yaml.safe_load((DEPLOY / "cloud-init.yaml").read_text())["packages"]
+    image_default = re.search(
+        r'IMAGE="\$\{UPGAUGE_OS_IMAGE:-([^}]+)\}"', (DEPLOY / "provision.sh").read_text()
+    )
+    assert image_default, "provision.sh's OS image default moved; re-check the package names"
+    assert image_default.group(1) == "debian-13", (
+        f"OS image is now {image_default.group(1)}; the compose package name is "
+        f"distro-specific and must be re-measured on it"
+    )
+    assert "docker-compose-v2" not in packages, (
+        "docker-compose-v2 does not exist on Debian 13 -- that is the Ubuntu name"
+    )
+    assert "docker-compose" in packages, (
+        f"no package providing the `docker compose` plugin in {packages}; "
+        f"upgauge-deploy.sh calls `docker compose pull` and would exit 125"
+    )

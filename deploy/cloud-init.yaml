@@ -15,7 +15,12 @@ packages:
   # comes up -- a box that boots and silently does nothing.
   - docker.io
   - docker-cli
-  - docker-compose-v2
+  # Debian 13 has NO `docker-compose-v2` -- that is the Ubuntu name, and apt answers
+  # `E: Unable to locate package`. Compose V2 ships here as `docker-compose` 2.26.1-4,
+  # whose version string looks like v1 and is not; it installs the plugin at
+  # /usr/libexec/docker/cli-plugins/docker-compose. Without it every tick runs
+  # `docker compose pull` against a docker that has no such subcommand: exit 125.
+  - docker-compose
 
 write_files:
   - path: /srv/upgauge/compose.yml
