@@ -37,15 +37,20 @@ possible.
 |---|---|
 | Ingest — GitHub Actions monthly cron | $0 |
 | Artifacts — Cloudflare R2 (10GB + zero egress on free tier) | $0 |
-| App — **Hetzner CX22-class, 2 vCPU / 4GB, always-on** | ~€4/mo |
+| App — **Hetzner `cx23`, 2 vCPU / 4GB, always-on** | $6.49/mo |
+| IPv4 address — **required, see below** | $0.60/mo |
 | CDN + DNS — Cloudflare free tier | $0 |
 | Domain — subdomain of owned `shipman.dev` | $0 |
-| **Total** | **~€4/mo** |
+| **Total** | **$7.09/mo** |
 
-> Confirm Hetzner's exact current price in their console before relying on it — published
-> third-party figures for the same box ranged **€3.79–€4.59** as of 2026-07, and there was an
-> April 2026 price change. The ranking below doesn't change across that range; the number
-> does.
+Measured in the Hetzner console 2026-08-19, in USD. The account holds a $25 credit ≈ **3.5
+months**; revisit before it runs out.
+
+> **The IPv4 is not optional.** `ghcr.io` publishes no AAAA record and Hetzner provides no
+> NAT64/DNS64 — measured on an IPv6-only `cx23` in `nbg1`: `dig AAAA ghcr.io` against
+> `2a01:4ff:ff00::add:1` returns nothing while `deb.debian.org` returns a real address through
+> the same resolver, and `curl -6 https://ghcr.io/v2/` fails with "Could not resolve host". An
+> IPv6-only box can never pull the image.
 
 ---
 
@@ -55,11 +60,12 @@ Two criteria decide it, and neither is price. **DuckDB aggregation wants RAM** (
 thread), and **cold starts land on shared links** — the growth mechanic is someone clicking a
 pasted URL, so a sleeping box is a product problem, not a latency nit.
 
-Surveyed 2026-07:
+Surveyed 2026-07. The Hetzner row was re-measured 2026-08-19 in USD when the box was
+actually bought; the rest are as surveyed, so compare currencies before re-ranking.
 
 | Option | Cost | Resources | Assessment |
 |---|---|---|---|
-| **Hetzner CX22 / CX23** | **~€3.79–4.59/mo** | 2 vCPU / 4GB / 40GB NVMe / 20TB | **Chosen.** Best RAM-per-euro from a reputable host. Always-on, no cold start. |
+| **Hetzner `cx23`** | **$6.49/mo** (+$0.60 IPv4) | 2 vCPU / 4GB / 40GB NVMe / 20TB | **Chosen.** Best RAM-per-dollar from a reputable host. Always-on, no cold start. EU regions only; the nearest US equivalent, `cpx21`, is $37.49/mo. |
 | **Google Cloud Run** | **$0** at this traffic | container, scale-to-zero | **Strongest $0 option.** Free tier: 2M req + 180k vCPU-s + 360k GiB-s/mo. Container-based, so it *passes* the portability test. Cold start is the risk — a baked-in image is fat, and under the catalog-over-Parquet shape it's `data/parquet/` (96 MB over the full 2015–2026 window; not the thin `.duckdb` catalog file) driving that image size. Free tier is per-*account*, not per-project; `us-central1/east1/west1` only. |
 | **Self-host + Cloudflare Tunnel** | **$0** | whatever you own | Underrated: `cloudflared` is free and unlimited, needs no open ports or static IP, and the domain is already required to be on Cloudflare, so it composes. Trades cash for home uptime/power/ISP risk. |
 | Contabo VPS 10 | ~€4.50/mo | 8GB | Most RAM per euro found. Weaker reliability reputation — the tradeoff is real. |
@@ -138,6 +144,14 @@ appear as destinations.
 - **Nothing private ever goes in it.** All data is public DOT filings; keep it that way.
 
 ## The actual cost control is caching, not the tier
+
+**A `Cache-Control` header is necessary and not sufficient.** Cloudflare does not cache
+`text/html` by default at any plan level, so every HTML `s-maxage` below is inert until a Cache
+Rule tells the edge to cache the response. That rule is `deploy/cloudflare/cache-rules.json`,
+applied by `make cloudflare-apply` — it is the thing that makes this section true, and the
+origin header alone would have every page miss while looking correctly configured. Verified on
+the live site: a repeat fetch of `/route/JFK-LAX` returns `cf-cache-status: HIT` alongside
+`public, s-maxage=3600, stale-while-revalidate=86400`.
 
 Data changes monthly. Every successful JSON response (`/api/pivot`), plus `/sitemap.xml` and
 `/robots.txt`, get:
