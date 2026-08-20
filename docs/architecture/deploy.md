@@ -85,8 +85,8 @@ re-asserts rather than duplicates, and it verifies the DNS record it does not ow
 **`make provision` exits 0 even when the box is broken.** cloud-init records package failures
 that nothing reads, and the box is unreachable by design, so provisioning cannot detect them.
 Measured: a box whose `docker-compose` package failed to install provisioned "successfully" and
-served 530 indefinitely. **`live-check.yml` is the detector** — after provisioning, confirm the
-site serves rather than assuming it:
+served 530 indefinitely. **`live-check.yml` is the detector, and its schedule is muted (#77)** —
+so after provisioning, confirm the site serves by hand rather than assuming it:
 
 ```bash
 curl -sS -o /dev/null -w '%{http_code}\n' https://upgauge.shipman.dev/api/health   # expect 200
@@ -132,7 +132,7 @@ success. Env-var reference for the app itself: [hosting.md](hosting.md).
 | Alert | Meaning | First command |
 |---|---|---|
 | **Freshness** (`freshness.yml`) | `max(year_month)` has not advanced in ~45 days. The site keeps serving; `DATA AS OF` silently stops moving | `gh run list --workflow=warehouse.yml --limit 5` |
-| **Live check** (`live-check.yml`) | The served site is wrong, down, or could not be read — health, sitemap, release freshness or the rate limit | `curl -sS https://upgauge.shipman.dev/api/health \| jq .` |
+| **Live check** (`live-check.yml`) | The served site is wrong, down, or could not be read — health, sitemap, release freshness or the rate limit. **Runs only on `workflow_dispatch` until #77: a runner is served a challenge page, so nothing is watching the site on a schedule** | `curl -sS https://upgauge.shipman.dev/api/health \| jq .` |
 | **Scheduled failure** (`scheduled-failure.yml`) | An unattended workflow failed and nobody was watching | `gh run list --limit 10` |
 
 A live-check failure that is **not** a bad promote and **not** an unreadable body is almost

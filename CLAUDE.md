@@ -76,10 +76,10 @@ pipeline that satisfies them. That is both this project's rule and the skill's s
 served HTML, visible with JS off** — no client-side chart or map library anywhere in the render
 path. `data/raw/` holds the full 2015–2026 window.
 
-**Built and containerized, not yet deployed.** CI runs every gate (`.github/workflows/`),
-`warehouse.yml` polls BTS and publishes the dataset as a release asset, `make image` builds the
-deployable container from that asset, and `make portability` proves its WORKDIR/data contract by
-breaking it. Nothing is served from a public host. That is the rest of M8.
+**Deployed and serving.** `https://upgauge.shipman.dev` answers behind Cloudflare, on a Hetzner
+box its own timer keeps at `:deploy`. `warehouse.yml` polls BTS and publishes the dataset asset,
+`image.yml` builds and gates the container, `promote.yml` moves the tag. `make portability` proves
+the WORKDIR/data contract by breaking it, and is hand-run — no workflow invokes it.
 
 Current gates (`app-check`/`app-smoke` measured 2026-08-20, `verify`/`goldens` 2026-08-08,
 `portability` 2026-08-09, the rest 2026-08-10; the only counts kept here — history lives in git):
@@ -118,11 +118,11 @@ three files and drifts independently: the either-endpoint filter was described a
 **four** places for a full milestone after it shipped, two of them on served pages. A doc says
 what is TRUE about the system; the tracker says what is PLANNED.
 
-**M8 is the launch milestone, and its content is the gap between "built" and "reachable":** the
-deploy artifact and the portability test (#1 — landed), the monthly ingest and the freshness
-alert this file has required as a hard rule since M1 (#2), cache correctness before a CDN goes in
-front (#3), and launch configuration (#4). Everything in M9 is a surface the product works
-without.
+**M8 was the gap between "built" and "reachable", and its code is landed:** the deploy artifact
+and portability test (#1), the ingest and freshness alert this file has required since M1 (#2),
+cache correctness (#3), and launch configuration (#4). What is left is Cloudflare configuration
+only — runners are served a challenge page instead of the site (#77), and the edge rate limit
+matches `/api/` alone (#83). Everything in M9 is a surface the product works without.
 
 One finding worth keeping here rather than only in the tracker, because it is a rule:
 
