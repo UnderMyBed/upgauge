@@ -156,10 +156,17 @@ Down, or serving a build other than the promoted one → roll back. Reporting th
 the run was blind and the deploy is fine.
 
 **`live-check.yml` files its alert either way**, because an alert that cannot read the site is
-the one thing it must never fail silently on. An unreadable body is a single finding, and the
-checks that read the report — degraded status, forgotten promote — are withheld rather than
-answered from a default: a promote is only "forgotten" against a warehouse tag actually served,
-and `UPGAUGE_BASE_URL` is only wrong against a `<loc>` actually found carrying another host.
+the one thing it must never fail silently on. **A body that parsed is not thereby a report** —
+`{}` and a Cloudflare JSON error body both parse — so the test is whether it carries the
+`status`, `build` and `data` that a `HealthReport` always has.
+
+**Every finding names something measured**, and a check whose evidence is missing is withheld
+rather than answered from a default. A promote is only "forgotten" against a warehouse tag the
+site actually served; `UPGAUGE_BASE_URL` is only wrong against a `<loc>` actually found carrying
+another host; the edge is only "not caching" when it returned a `cf-cache-status` saying so; the
+rate limit is only "not in force" when the burst actually reached `/api/pivot`. A blocked runner
+trips all four conditions at once, and each one of those diagnoses would send an operator after a
+setting that is fine.
 
 ## Rate limiting
 

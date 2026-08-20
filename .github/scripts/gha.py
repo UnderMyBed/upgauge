@@ -33,11 +33,31 @@ def write_multiline_output(fh: TextIO, name: str, value: str) -> None:
 SNIPPET_BYTES = 200
 
 
+def _printable(text: str) -> str:
+    """Undecodable bytes as U+FFFD, rather than as an exception on the print path.
+
+    `sys.argv` decodes with `surrogateescape`, so a body that is not valid UTF-8 -- a binary
+    error page, a response truncated mid-character -- arrives carrying lone surrogates. Encoding
+    those to a stream whose error handler is `strict` raises UnicodeEncodeError, which on this
+    path means the alert CRASHES INSTEAD OF REPORTING: the exact failure its callers exist to
+    end, reachable by anything that can serve the runner a non-UTF-8 body.
+
+    Measured: `LANG=en_US.UTF-8` gives stdout `errors=strict` and raises; `ubuntu-latest` sets
+    `LANG=C.UTF-8`, whose handler is `surrogateescape`, and does not. Nothing in this repo pins
+    that variable, so the guard cannot live in the environment. A no-op for valid text.
+    """
+    return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
 def snippet(body: str, limit: int = SNIPPET_BYTES) -> str:
     """The first `limit` characters of `body`, whitespace-collapsed, truncation MARKED.
 
     Collapsed because the value is rendered as one markdown list item and one `::error::`
-    annotation, neither of which survives an embedded newline. Marked because a snippet that
+    annotation, neither of which survives an embedded newline -- and because a newline inside
+    edge-controlled evidence would put attacker-chosen bytes at the START of a line on the
+    runner's stdout, where Actions parses `::add-mask::` and `::stop-commands::`, in jobs
+    holding `packages: write`. The collapse is what makes that unreachable, so it is a security
+    property, not formatting. Marked because a snippet that
     silently ends mid-tag is indistinguishable from a body that really ended there -- the
     operator is being shown evidence, and evidence that quietly omits its own truncation is
     worse than no evidence.
@@ -45,7 +65,7 @@ def snippet(body: str, limit: int = SNIPPET_BYTES) -> str:
     Nothing else is altered: the bytes between here and `limit` are verbatim, which is why
     `code_span` below has to cope with whatever they contain rather than sanitising them.
     """
-    collapsed = " ".join(body.split())
+    collapsed = " ".join(_printable(body).split())
     if len(collapsed) <= limit:
         return collapsed
     return collapsed[:limit] + " [truncated]"

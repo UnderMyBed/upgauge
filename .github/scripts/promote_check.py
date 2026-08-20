@@ -158,7 +158,7 @@ def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
     """
     code = f"{http_status:03d}"
     if http_status == 0:
-        return {}, "the fetch did not complete -- curl reported no HTTP status at all"
+        return {}, "the fetch did not complete -- curl exited before a full response was read"
     if not body.strip():
         return {}, f"the last response was HTTP {code} with an empty body"
     try:
@@ -217,8 +217,9 @@ def assess(tag: str, health_body: str, health_status: int) -> Verdict:
         return Verdict(
             outcome=UNREADABLE,
             reason=(
-                "the health report has no `build` section -- the box may still be booting, "
-                "`/api/health` may itself be failing, or something other than this app answered"
+                "the response has no `build` section, so it is not this app's health report -- "
+                "the box may still be booting, `/api/health` may itself be failing, or "
+                f"something else answered: {code_span(snippet(health_body))}"
             ),
             expected_warehouse=expected_warehouse,
             expected_sha=expected_sha,
@@ -264,7 +265,7 @@ def _exhausted(argv: list[str]) -> int:
     """
     if len(argv) < 6:
         print("usage: promote_check.py --exhausted <tag> <http-status> <body> <attempts>")
-        return 2
+        return 64
     verdict = assess(argv[2], argv[4], int(argv[3] or 0))
     report = verdict.exhausted_report(int(argv[5] or 0))
     for line in report.splitlines():
@@ -293,6 +294,10 @@ def main() -> int:
       promote_check.py --exhausted <tag> <status> <body> <attempts>  -- the poll budget elapsed
       promote_check.py <tag>                                         -- validate-only
       promote_check.py <tag> <http-status> <health-report-json>      -- one poll attempt
+
+    The poll shape's exit code is a three-way answer, not a boolean: 0 matched (the loop ends),
+    2 a build was read and it disagreed, 1 nothing readable came back. A usage error is 64, off
+    those values deliberately, so a mis-wired call can never be mistaken for a verdict.
 
     VALIDATE-ONLY exists so `promote.yml` can fast-fail on a typo'd tag before it ever enters
     the 30-attempt/300s poll loop. Without it, `assess()`'s own shape check already reports the
@@ -323,7 +328,7 @@ def main() -> int:
 
     if len(sys.argv) < 4:
         print("usage: promote_check.py <tag> [<http-status> <health-report-json>]")
-        return 2
+        return 64
     tag = sys.argv[1]
     verdict = assess(tag, sys.argv[3], int(sys.argv[2] or 0))
     print(verdict.reason)
@@ -334,7 +339,16 @@ def main() -> int:
             fh.write(f"matched={'1' if verdict.matched else '0'}\n")
             write_multiline_output(fh, "reason", verdict.reason)
 
-    return 0 if verdict.matched else 1
+    if verdict.matched:
+        return 0
+    # 2, not 1, when a build WAS read. `code`/`body` are overwritten every iteration, so a
+    # verdict built from the last attempt alone is a verdict about one sample: 29 attempts
+    # reporting the wrong build (a genuine mismatch, which earns the unconditional rollback)
+    # followed by one flaky challenge would report that the poll never read the box, and
+    # DOWNGRADE an earned order to the conditional blind path. The loop cannot see that
+    # difference from a bare pass/fail, so it rides on the exit code and promote.yml keeps the
+    # last attempt that returned 2.
+    return 2 if verdict.read_a_build else 1
 
 
 if __name__ == "__main__":

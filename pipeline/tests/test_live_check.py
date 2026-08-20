@@ -11,6 +11,7 @@ carrying on makes the alert report a forgotten promote it never observed.
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -18,7 +19,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parents[2] / ".github" / "scripts"))
 
-from live_check import assess  # noqa: E402
+from live_check import assess, main  # noqa: E402
 
 LIVE_CHECK = Path(__file__).parents[2] / ".github" / "workflows" / "live-check.yml"
 
@@ -170,8 +171,8 @@ def test_a_curl_failure_reports_that_the_fetch_never_completed():
     v = assess("", 0, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
     assert v.failed
     named = next(f for f in v.failures if "/api/health" in f)
-    assert "could not be fetched at all" in named
-    assert "no HTTP status" in named
+    assert "did not complete the transfer" in named
+    assert "empty body" not in named, "collapsed into the finding below, which it is not"
 
 
 def test_an_empty_body_under_a_real_status_is_reported_not_defaulted():
@@ -289,3 +290,199 @@ def test_the_workflow_captures_the_health_status_code_and_passes_it_on():
     assert "%{http_code}" in health_fetch, "the health fetch measures no status"
     call = run[run.index("live_check.py") :]
     assert '"$hcode"' in call, "the measured status never reaches live_check.py"
+
+
+# --------------------------------------------------------------------------------------
+# A body that PARSED is not thereby a health report
+# --------------------------------------------------------------------------------------
+
+#: Every one of these is valid JSON and none is a health report. The first is a real Cloudflare
+#: JSON error body; the rest are shapes an intermediary or a half-configured origin can serve.
+NOT_A_REPORT = [
+    '{"success":false,"errors":[{"code":1015,"message":"rate limited"}]}',
+    "{}",
+    '{"status": "ok", "build": "not-a-dict"}',
+    # Valid `status` and `data`, bad `build` -- without this the build guard could be deleted
+    # and every other fixture would still be caught by the `data` guard.
+    '{"status": "ok", "build": "not-a-dict", "data": {"asOf": null, "missing": []}}',
+    '{"status": "degraded", "data": "oops", "build": {"warehouse": "w", "sha": "s"}}',
+    '{"build": {"warehouse": "warehouse-2026.05", "sha": "9a9511d"}}',
+]
+
+
+def test_json_that_is_not_a_health_report_is_reported_never_raised():
+    """Suppression was keyed on "did it parse", not "is it a report", so any dict flowed into
+    checks that read `build` and `data` -- and `'not-a-dict'.get(...)` raises. That is defect A
+    still live: `main()` dies before the issue-filing, on a body the edge controls."""
+    for body in NOT_A_REPORT:
+        v = assess(body, 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+        assert v.failed, body
+        assert len(v.failures) == 1, f"{body} -> {v.failures}"
+        assert "/api/health" in v.failures[0], body
+
+
+def test_a_parsed_non_report_does_not_fabricate_a_forgotten_promote():
+    """The other half, and the one that does not raise. `{}` has no `build`, so the release
+    comparison read `` and reported `the site is serving `` but `warehouse-2026.05` is
+    published -- a promote was forgotten`: a cause invented out of a body that named no build at
+    all. `docs/architecture/deploy.md` states this as a rule, so the rule and the code have to
+    agree."""
+    for body in NOT_A_REPORT:
+        v = assess(body, 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+        assert not any("promote was forgotten" in f for f in v.failures), body
+        assert not any("reports `None`" in f for f in v.failures), body
+
+
+def test_a_health_report_whose_missing_list_is_malformed_does_not_raise():
+    """`", ".join(...)` over a non-list is the last unguarded read on the degraded path."""
+    body = json.dumps(
+        {"status": "degraded", "build": {"warehouse": "w", "sha": "s"}, "data": {"missing": 5}}
+    )
+    v = assess(body, 503, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+    assert any("degraded" in f for f in v.failures)
+
+
+# --------------------------------------------------------------------------------------
+# Two more claims that were unreachable until the crash was fixed
+# --------------------------------------------------------------------------------------
+
+
+def test_an_absent_cf_cache_header_is_not_a_claim_that_the_edge_stopped_caching():
+    """`cf="${cf:-absent}"` means NO `cf-cache-status` header came back. A challenge page
+    carries none either, so "the edge is not caching HTML" is a diagnosis from a response that
+    never reached the cache path -- the `UPGAUGE_BASE_URL` mistake in a third place."""
+    v = assess(
+        json.dumps(HEALTHY), 200, RELEASES, SITEMAP, cf_cache_status="absent", ratelimit_status=429
+    )
+    named = next(f for f in v.failures if "cf-cache-status" in f)
+    assert "not caching HTML" not in named
+    assert "never measured" in named or "never observed" in named
+
+
+def test_a_reported_cf_miss_still_reports_that_the_edge_is_not_caching():
+    """Guards over-suppression. A header that says MISS IS the edge answering about its own
+    cache, and that diagnosis must survive -- otherwise the fix above silences the check."""
+    v = assess(
+        json.dumps(HEALTHY), 200, RELEASES, SITEMAP, cf_cache_status="MISS", ratelimit_status=429
+    )
+    assert any("not caching HTML" in f for f in v.failures)
+
+
+def test_a_blocked_burst_is_not_a_claim_that_the_rate_limit_is_absent():
+    """A burst that ends in 403 never reached `/api/pivot`, so it measured nothing about the
+    rate limit -- and sends an operator to check a Cloudflare rule that is fine."""
+    v = assess(
+        json.dumps(HEALTHY), 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=403
+    )
+    named = next(f for f in v.failures if "/api/" in f and "burst" in f)
+    assert "not in force" not in named
+    assert "403" in named
+
+
+def test_a_burst_that_got_through_still_reports_the_rate_limit_absent():
+    """Guards over-suppression the other way: 80 requests answered 200 IS the measurement."""
+    v = assess(
+        json.dumps(HEALTHY), 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=200
+    )
+    assert any("not in force" in f for f in v.failures)
+
+
+# --------------------------------------------------------------------------------------
+# The workflow -> script argv contract, which no test above can reach
+# --------------------------------------------------------------------------------------
+
+
+def _argv_after(run: str, script: str) -> list[str]:
+    """The quoted arguments and flags of the call to `script`, in ORDER, with bash line
+    continuations joined and COMMENT lines skipped.
+
+    The comment filter is not tidiness: this file explains `live_check.py`'s outputs in a bash
+    comment above the call, and a naive `next(... if script in ln)` reads that comment and finds
+    no arguments at all. Same trap as `_promote_emitted` -- check the bytes that run, not the
+    bytes that are written down.
+    """
+    joined = run.replace("\\\n", " ")
+    line = next(
+        ln
+        for ln in joined.splitlines()
+        if script in ln and not ln.strip().startswith("#") and "python" in ln
+    )
+    return re.findall(r'--[A-Za-z-]+|"[^"]*"', line[line.index(script) + len(script) :])
+
+
+def test_the_workflow_passes_live_check_its_arguments_in_order():
+    """`assess` reads argv positionally, so a transposed pair is a silent wrong answer and a
+    transposed status is a `ValueError` -- defect A returning by another door. Membership cannot
+    see either; this asserts the ORDER, the way
+    `test_the_tag_is_validated_before_the_poll_loop_is_ever_entered` asserts a position."""
+    run = next(r for r in _run_scalars(LIVE_CHECK) if "/api/health" in r)
+    assert _argv_after(run, "live_check.py") == [
+        '"$health"',
+        '"$hcode"',
+        '"$releases"',
+        '"$sitemap"',
+        '"$cf"',
+        '"$rl"',
+    ]
+
+
+def test_the_workflow_never_appends_to_a_status_curl_already_wrote():
+    """curl emits its `-w` output even when the transfer fails, so `$(curl -w '%{http_code}' ...
+    || echo 000)` CONCATENATES: measured `000000` on a refused connection and `200000` when
+    --max-time expires mid-body, which `f"{status:03d}"` then prints verbatim as
+    `HTTP 200000`. Assign in an `if !` block instead -- `promote.yml`'s imagetools retry is the
+    in-file precedent."""
+    run = next(r for r in _run_scalars(LIVE_CHECK) if "/api/health" in r)
+    # Continuations JOINED first: the fallback sits on the second physical line, so
+    # splitting raw made this check pass against the very bug it names.
+    for line in run.replace("\\\n", " ").splitlines():
+        if "%{http_code}" in line:
+            assert "|| echo" not in line, f"a status curl still appends a fallback: {line.strip()}"
+
+
+# --------------------------------------------------------------------------------------
+# main(), which nothing imported at all
+# --------------------------------------------------------------------------------------
+
+
+def test_main_files_an_issue_for_a_body_it_could_not_read(monkeypatch, tmp_path):
+    """End to end through the real call shape: the crash killed `main()` before any of this,
+    so `file_issue` and `issue_body` never reached the workflow and no issue was ever filed."""
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["live_check.py", CHALLENGE, "403", json.dumps(RELEASES), SITEMAP, "HIT", "429"],
+    )
+    assert main() == 0, "a site condition is reported through the ISSUE, not a red run"
+    text = out.read_text()
+    assert "failed=1" in text
+    assert "file_issue=1" in text
+    assert "Just a moment" in text
+
+
+def test_main_refuses_a_wrong_call_shape_loudly(monkeypatch, tmp_path):
+    """A mis-wired workflow printed usage and returned 0: a GREEN run, no `file_issue`, no
+    issue, forever -- a silent watchdog, which is the failure class of this whole issue. A
+    broken invocation is not a site condition, and `scheduled-failure.yml` is what reports it."""
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setattr(sys, "argv", ["live_check.py", "{}", "200", "[]"])
+    assert main() != 0
+    assert not out.exists()
+
+
+def test_main_cannot_emit_a_workflow_command_out_of_the_body(monkeypatch, tmp_path, capsys):
+    """The same surface on this side: failures are printed as `- {f}`, so the prefix lands on
+    the FIRST line only and anything after an embedded newline starts its own line on the
+    runner's stdout, where Actions parses `::add-mask::` and `::stop-commands::` in a job
+    holding issues:write."""
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    hostile = "<html>\n::stop-commands::deadbeef\n::add-mask::hunter2\n</html>"
+    monkeypatch.setattr(
+        sys, "argv", ["live_check.py", hostile, "403", json.dumps(RELEASES), SITEMAP, "HIT", "429"]
+    )
+    assert main() == 0
+    for line in capsys.readouterr().out.splitlines():
+        assert not line.startswith("::"), f"a workflow command reached line start: {line!r}"

@@ -80,9 +80,14 @@ jobs:
           # `|| echo 000` because a curl that never gets a response line has no code to report.
           # 8000 bytes is far above any real report (~150) and bounds what a hostile or broken
           # origin can put into argv.
+          # NOT `$(curl ... || echo 000)`: curl writes its `-w` output even when the transfer
+          # fails, so the fallback CONCATENATES onto it. Measured with curl 8.18.0: `000000` on
+          # a refused connection, `200000` when --max-time expires mid-body. Assign instead.
           : > /tmp/health.body
-          hcode=$(curl -sS -o /tmp/health.body -w '%{http_code}' --max-time 15 \
-                  "${BASE}/api/health" || echo 000)
+          if ! hcode=$(curl -sS -o /tmp/health.body -w '%{http_code}' --max-time 15 \
+                       "${BASE}/api/health"); then
+            hcode=000
+          fi
           health=$(head -c 8000 /tmp/health.body)
           sitemap=$(curl -sS --max-time 15 "${BASE}/sitemap.xml" | head -c 2000 || echo "")
 
@@ -116,8 +121,11 @@ jobs:
           # matches the /api/ prefix, so this exercises the same rule that protects /api/pivot.
           rl=0
           for _ in $(seq 1 80); do
-            rl=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-                 "${BASE}/api/pivot?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op" || echo 0)
+            # Same concatenation trap as the health fetch above.
+            if ! rl=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+                      "${BASE}/api/pivot?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op"); then
+              rl=000
+            fi
             [ "$rl" = "429" ] && break
           done
 

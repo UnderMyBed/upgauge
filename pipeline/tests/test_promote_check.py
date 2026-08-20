@@ -19,6 +19,7 @@ ordered a real production rollback on evidence it did not have -- see `promote_c
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -119,13 +120,15 @@ def test_main_returns_0_and_writes_matched_1_on_a_match(monkeypatch, tmp_path):
     assert "matched=1" in text
 
 
-def test_main_returns_1_and_writes_matched_0_on_a_mismatch(monkeypatch, tmp_path):
+def test_main_returns_nonzero_and_writes_matched_0_on_a_mismatch(monkeypatch, tmp_path):
+    """Non-zero keeps the poll going; the exact value is the three-way contract pinned by
+    `test_the_poll_exit_code_distinguishes_a_read_build_from_a_blind_attempt`."""
     out = tmp_path / "gh_output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
     monkeypatch.setattr(
         sys, "argv", ["promote_check.py", TAG, "200", _health("warehouse-2026.04", "6ea164b")]
     )
-    assert main() == 1
+    assert main() != 0
     text = out.read_text()
     assert "matched=0" in text
 
@@ -166,6 +169,27 @@ def test_main_fails_fast_on_a_malformed_tag_with_no_health_report(monkeypatch, t
 
 def _promote_workflow() -> str:
     return (Path(__file__).parents[2] / ".github" / "workflows" / "promote.yml").read_text()
+
+
+def _run_scalars() -> list[str]:
+    """Every `run:` string in promote.yml."""
+    doc = yaml.safe_load(_promote_workflow())
+    return [
+        step["run"]
+        for job in (doc.get("jobs") or {}).values()
+        for step in (job.get("steps") or [])
+        if isinstance(step, dict) and isinstance(step.get("run"), str)
+    ]
+
+
+def _calls(run: str, script: str) -> list[list[str]]:
+    """Argv of every real (non-comment) invocation of `script`, in order, continuations joined."""
+    joined = run.replace("\\\n", " ")
+    return [
+        re.findall(r'--[A-Za-z-]+|"[^"]*"', line[line.index(script) + len(script) :])
+        for line in joined.splitlines()
+        if script in line and not line.strip().startswith("#") and "python" in line
+    ]
 
 
 def _promote_emitted() -> str:
@@ -253,13 +277,20 @@ def test_the_workflow_delegates_the_exhausted_verdict_to_the_script():
 
 def test_the_workflow_treats_a_curl_failure_as_not_yet_not_as_abandoning_the_poll():
     """The curl-failure fallback must stay INSIDE the retry loop, not replace it -- catches
-    collapsing the 30-attempt poll down to a single curl-or-give-up. `|| echo 000` is that
-    fallback now that the poll measures a status: curl that never gets a response line has no
-    code to report, and 000 is what `assess` reads as "the fetch did not complete"."""
-    yaml_text = _promote_workflow()
-    assert "for attempt in $(seq 1 30)" in yaml_text
-    assert "|| echo 000" in yaml_text
-    assert yaml_text.index("for attempt in $(seq 1 30)") < yaml_text.index("|| echo 000")
+    collapsing the 30-attempt poll down to a single curl-or-give-up.
+
+    Asserted against EMITTED text and against the mechanism that exists, not the literal that
+    used to implement it: this test previously looked for `|| echo 000`, and once that form was
+    retired for concatenating onto curl's own `-w` output, the only remaining occurrence in the
+    file was the COMMENT explaining why it had been retired. It passed on prose. A mutant that
+    tore the fallback out of the loop entirely survived it.
+    """
+    emitted = _promote_emitted()
+    loop_at = emitted.index("for attempt in $(seq 1 30)")
+    assert "code=000" in emitted[loop_at:], "no curl-failure fallback inside the poll loop"
+    assert "|| rc=$?" in emitted[loop_at:], (
+        "a failed attempt aborts the step instead of polling again"
+    )
 
 
 def test_the_tag_is_validated_before_the_poll_loop_is_ever_entered():
@@ -388,17 +419,121 @@ def test_the_exhausted_report_keeps_the_rollback_available_once_the_box_is_check
 
 
 def test_main_exhausted_prints_the_report_and_returns_1(monkeypatch, tmp_path, capsys):
-    """Every line reaches the run's log as its own `::error::` annotation, and the report also
-    reaches the step summary -- which is what replaces `printf '%s' "$body" | jq .` on this
+    """Every line reaches the run's log as its own `::error::` annotation -- this pins the
+    per-line prefixing, NOT the whitespace collapse: because every line is prefixed, a newline
+    here only makes another annotation. The collapse is load-bearing on the two UNPREFIXED
+    prints instead, and is pinned there.
+
+    The report also reaches the step summary, which is what replaces `printf | jq .` on this
     path. That pipe wrote NOTHING when the body was not JSON, which is every case this path now
     exists to report, and printed `jq: parse error` in place of it."""
     summary = tmp_path / "summary"
     monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
-    monkeypatch.setattr(
-        sys, "argv", ["promote_check.py", "--exhausted", TAG, "403", CHALLENGE, "30"]
-    )
+    # Multi-line, and carrying something that would be a workflow command at line start. A
+    # single-line fixture cannot exercise the collapse, so the annotation assertion below would
+    # hold no matter what `snippet` did.
+    hostile = CHALLENGE + "\n::stop-commands::deadbeef\n::add-mask::hunter2\n</body></html>"
+    monkeypatch.setattr(sys, "argv", ["promote_check.py", "--exhausted", TAG, "403", hostile, "30"])
     assert main() == 1, "an exhausted poll that returns 0 is a green run on a failed deploy"
     out = capsys.readouterr().out
     assert "::error::" in out
     assert all(ln.startswith("::error::") for ln in out.splitlines() if ln.strip())
     assert "Just a moment" in summary.read_text()
+
+
+# --------------------------------------------------------------------------------------
+# The exhausted verdict must be built from the strongest thing the poll SAW (#77 review)
+# --------------------------------------------------------------------------------------
+
+
+def test_the_poll_exit_code_distinguishes_a_read_build_from_a_blind_attempt(monkeypatch, tmp_path):
+    """`code`/`body` are overwritten every iteration, so a verdict built from the last attempt
+    alone is a verdict about one sample. With attempts 1-29 reporting the WRONG build -- a
+    genuine mismatch, which earns the unconditional rollback -- and attempt 30 hitting a single
+    flaky challenge, the report claimed the poll `never read a build from the box` and
+    DOWNGRADED an earned order to the conditional blind path.
+
+    The loop cannot see that distinction from a bare pass/fail, so the exit code carries it:
+    0 matched, 2 read-a-build-and-it-disagreed, 1 read nothing. `promote.yml` keeps the last
+    attempt that returned 2."""
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+
+    monkeypatch.setattr(
+        sys, "argv", ["promote_check.py", TAG, "200", _health("warehouse-2026.05", "6ea164b")]
+    )
+    assert main() == 0, "a match must end the poll"
+
+    monkeypatch.setattr(
+        sys, "argv", ["promote_check.py", TAG, "200", _health("warehouse-2026.04", "6ea164b")]
+    )
+    assert main() == 2, "a build was read and it disagreed -- the loop must be able to keep it"
+
+    monkeypatch.setattr(sys, "argv", ["promote_check.py", TAG, "403", CHALLENGE])
+    assert main() == 1, "nothing was read; this attempt must not look like a mismatch"
+
+
+def test_the_workflow_keeps_the_last_attempt_that_read_a_build():
+    """Without this the exit code above is decoration. Asserts the loop records the sticky
+    sample AND that the exhausted call prefers it over whatever landed last."""
+    run = next(r for r in _run_scalars() if "--exhausted" in r)
+    assert "seen_code=$code" in run.replace('"', ""), "no attempt is kept when a build is read"
+    argv = _calls(run, "promote_check.py")[-1]
+    assert argv[0] == "--exhausted"
+    assert argv[2] == '"${seen_code:-$code}"', f"exhausted does not prefer the kept sample: {argv}"
+    assert argv[3] == '"${seen_body:-$body}"', f"exhausted does not prefer the kept sample: {argv}"
+
+
+def test_the_workflow_passes_promote_check_its_arguments_in_order():
+    """`assess` reads argv positionally. Transposing status and body makes every healthy deploy
+    exhaust its budget (`int('{"status"...')` -> ValueError, or a body of `200`), and no test
+    above can see it because they all call `main()` directly."""
+    run = next(r for r in _run_scalars() if "--exhausted" in r)
+    poll, exhausted = _calls(run, "promote_check.py")
+    assert poll == ['"$TAG"', '"$code"', '"$body"'], f"poll call shape drifted: {poll}"
+    assert exhausted[0] == "--exhausted"
+    assert exhausted[1] == '"$TAG"'
+    assert exhausted[-1] == '"$attempt"', f"exhausted call shape drifted: {exhausted}"
+
+
+def test_the_workflow_never_appends_to_a_status_curl_already_wrote():
+    """curl writes its `-w` output even on failure, so `|| echo 000` concatenates onto it --
+    measured `000000` refused, `200000` on a mid-body timeout, which is exactly the hung-origin
+    case a 300s poll exists for."""
+    run = next(r for r in _run_scalars() if "--exhausted" in r)
+    # Continuations JOINED first: the fallback sits on the second physical line, so
+    # splitting raw made this check pass against the very bug it names.
+    for line in run.replace("\\\n", " ").splitlines():
+        if "%{http_code}" in line:
+            assert "|| echo" not in line, f"a status curl still appends a fallback: {line.strip()}"
+
+
+def test_a_fetch_that_did_not_complete_is_named_as_such():
+    """Status 000 is curl failing, not a server answering with nothing -- the distinction
+    `live_check` already draws and this script did not test."""
+    v = assess(TAG, "", 0)
+    assert v.read_a_build is False
+    assert "did not complete" in v.reason
+
+
+def test_the_no_build_branch_carries_the_body_like_every_other_blind_branch():
+    """It was the only unreadable branch that withheld the bytes, and it is the case where they
+    are most diagnostic: a JSON body with no `build` is some OTHER service answering, and its
+    contents are what identify which."""
+    v = assess(TAG, '{"success":false,"errors":[{"code":1015}]}', 200)
+    assert v.read_a_build is False
+    assert "1015" in v.reason, "the body that identifies the responder is withheld"
+
+
+def test_a_poll_attempt_cannot_emit_a_workflow_command_out_of_the_body(monkeypatch, capsys):
+    """The real injection surface, found by a mutant surviving against the exhausted path: this
+    print is NOT line-prefixed, so an embedded newline puts edge-controlled bytes at the start
+    of a line on the runner's stdout. Actions parses `::add-mask::` and `::stop-commands::`
+    there, in a job holding `packages: write`, and this loop runs the print 30 times.
+
+    `gha.snippet`'s whitespace collapse is the only thing standing between those two facts."""
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    hostile = "<html>\n::stop-commands::deadbeef\n::add-mask::hunter2\n</html>"
+    monkeypatch.setattr(sys, "argv", ["promote_check.py", TAG, "403", hostile])
+    main()
+    for line in capsys.readouterr().out.splitlines():
+        assert not line.startswith("::"), f"a workflow command reached line start: {line!r}"

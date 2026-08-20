@@ -93,6 +93,28 @@ class LiveVerdict:
         )
 
 
+def _is_health_report(parsed: dict) -> bool:
+    """Whether this object is a `HealthReport` (`app/src/lib/health.ts:7-14`) rather than merely
+    some JSON.
+
+    `status`, `build` and `data` are all non-optional there, and `identity()` computes `build`
+    before every return branch, so an object missing any of them did not come from this app --
+    a Cloudflare JSON error body (`{"success":false,"errors":[...]}`), an intermediary's own
+    JSON, or `{}`.
+
+    THE BOUNDARY IS "is it a report", NOT "did it parse". Keying suppression on the parse let a
+    parsed non-report flow into the checks below, where `'not-a-dict'.get(...)` raised -- the
+    crash this module exists to end, still reachable -- and where, when it did not raise, `{}`
+    produced `the site is serving `` but `X` is published -- a promote was forgotten`: a cause
+    invented out of a body that named no build at all.
+    """
+    return (
+        isinstance(parsed.get("status"), str)
+        and isinstance(parsed.get("build"), dict)
+        and isinstance(parsed.get("data"), dict)
+    )
+
+
 def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
     """`(report, None)` when the body is a health report, `({}, why-not)` when it is anything
     else. See the module docstring for why the status never decides this.
@@ -103,8 +125,8 @@ def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
     code = f"{http_status:03d}"
     if http_status == 0:
         return {}, (
-            "/api/health could not be fetched at all -- curl reported no HTTP status, so "
-            "nothing was read from the box and nothing here is a claim about its health"
+            "/api/health could not be fetched -- curl did not complete the transfer, so no "
+            "response was read in full and nothing here is a claim about the site's health"
         )
     if not body.strip():
         return {}, (
@@ -121,6 +143,11 @@ def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
     if not isinstance(parsed, dict):
         return {}, (
             f"/api/health answered HTTP {code} with JSON that is not an object: "
+            f"{code_span(snippet(body))} -- {_BLIND}"
+        )
+    if not _is_health_report(parsed):
+        return {}, (
+            f"/api/health answered HTTP {code} with JSON that is not a health report: "
             f"{code_span(snippet(body))} -- {_BLIND}"
         )
     return parsed, None
@@ -146,8 +173,14 @@ def assess(
     else:
         status = health.get("status")
         if status != "ok":
-            data = health.get("data") or {}
-            cause = ", ".join(data.get("missing") or []) or data.get("error") or "no cause reported"
+            # Total by construction: `data` is a dict (checked in read_health) but its
+            # CONTENTS are not this app's to guarantee once anything else can serve JSON, and a
+            # TypeError out of `", ".join(5)` would be the same crash by another route.
+            data = health["data"]
+            missing = data.get("missing")
+            named = ", ".join(str(m) for m in missing) if isinstance(missing, list) else ""
+            error = data.get("error")
+            cause = named or (error if isinstance(error, str) else "") or "no cause reported"
             failures.append(f"/api/health reports `{status}`: {cause}")
 
         live_warehouse = (health.get("build") or {}).get("warehouse") or ""
@@ -178,28 +211,54 @@ def assess(
                 f"{code_span(snippet(sitemap))}"
             )
 
-    if cf_cache_status.upper() not in _CACHED:
-        failures.append(
-            f"a second fetch reported `cf-cache-status: {cf_cache_status}` -- the edge is not "
-            "caching HTML, so every repeat visit reaches the origin"
-        )
+    cf = cf_cache_status.strip()
+    if cf.upper() not in _CACHED:
+        if not cf or cf.lower() == "absent":
+            # `absent` is the workflow's sentinel for "no cf-cache-status header came back".
+            # A challenge page carries none either, so the header's ABSENCE cannot support a
+            # claim about the edge's caching -- same evidence rule as the <loc> branch above.
+            failures.append(
+                "a second fetch of /watch carried no `cf-cache-status` header at all, so the "
+                "response never reached the edge's cache path and HTML caching was never "
+                "measured"
+            )
+        else:
+            failures.append(
+                f"a second fetch reported `cf-cache-status: {cf_cache_status}` -- the edge is "
+                "not caching HTML, so every repeat visit reaches the origin"
+            )
 
     if ratelimit_status != 429:
-        failures.append(
-            f"a burst on /api/ returned {ratelimit_status}, not 429 -- the rate limit is not in "
-            "force"
-        )
+        if 200 <= ratelimit_status < 300:
+            failures.append(
+                f"a burst on /api/ returned {ratelimit_status}, not 429 -- the rate limit is "
+                "not in force"
+            )
+        else:
+            # The burst never reached /api/pivot, so it measured nothing about the rule. Saying
+            # "the rate limit is not in force" here sends an operator to check a Cloudflare rule
+            # that is fine, on a run whose real finding is that it could not reach the site.
+            failures.append(
+                f"a burst on /api/ ended in HTTP {ratelimit_status}, neither 429 nor a success "
+                "-- it never reached /api/pivot, so whether the rate limit is in force was "
+                "never measured"
+            )
 
     return LiveVerdict(failures=failures)
 
 
 def main() -> int:
     if len(sys.argv) < 7:
+        # NOT 0, unlike every site verdict below. Returning 0 here made a MIS-WIRED workflow a
+        # green run with no `file_issue` and no issue, forever -- a silent watchdog, which is
+        # the failure class this whole script exists to end. A broken invocation is not a site
+        # condition: scheduled-failure.yml is the right reporter for it.
         print(
             "usage: live_check.py <health> <health-status> <releases> <sitemap> "
-            "<cf-cache-status> <rl-status>"
+            "<cf-cache-status> <rl-status>",
+            file=sys.stderr,
         )
-        return 0
+        return 64
     verdict = assess(
         sys.argv[1],
         int(sys.argv[2] or 0),

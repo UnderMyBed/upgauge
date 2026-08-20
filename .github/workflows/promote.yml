@@ -167,18 +167,37 @@ jobs:
           set -euo pipefail
           code=000
           body=''
+          # The last attempt that actually READ a build, kept separately: `code`/`body` are
+          # overwritten every iteration, so one flaky sample at attempt 30 would otherwise
+          # decide a verdict about all 30 -- and would downgrade an earned rollback order to
+          # the conditional blind path. Exit status 2 from the poll is what marks such an
+          # attempt; see promote_check.py's main() for the three-way contract.
+          seen_code=''
+          seen_body=''
           for attempt in $(seq 1 30); do
             # Truncated first, so a fetch that fails part-way is never read as the PREVIOUS
             # attempt's body. 8000 bytes is far above any real report (~150) and bounds what a
             # broken origin can put into argv.
             : > /tmp/health.body
-            code=$(curl -sS -o /tmp/health.body -w '%{http_code}' --max-time 10 \
-                   https://upgauge.shipman.dev/api/health || echo 000)
+            # NOT `$(curl ... || echo 000)`: curl writes its `-w` output even when the transfer
+            # fails, so the fallback CONCATENATES onto it. Measured with curl 8.18.0: `000000`
+            # on a refused connection, and `200000` when --max-time expires mid-body -- which
+            # then prints as `HTTP 200000`. Assign in the failure branch instead.
+            if ! code=$(curl -sS -o /tmp/health.body -w '%{http_code}' --max-time 10 \
+                        https://upgauge.shipman.dev/api/health); then
+              code=000
+            fi
             body=$(head -c 8000 /tmp/health.body)
             echo "attempt ${attempt}:"
-            if mise exec -- python .github/scripts/promote_check.py "$TAG" "$code" "$body"; then
+            rc=0
+            mise exec -- python .github/scripts/promote_check.py "$TAG" "$code" "$body" || rc=$?
+            if [ "$rc" = 0 ]; then
               printf '%s' "$body" | jq . >> "$GITHUB_STEP_SUMMARY"
               exit 0
+            fi
+            if [ "$rc" = 2 ]; then
+              seen_code=$code
+              seen_body=$body
             fi
             sleep 10
           done
@@ -186,5 +205,5 @@ jobs:
           # `exit 1` under it is the backstop that keeps this step failing even if that ever
           # stops being true.
           mise exec -- python .github/scripts/promote_check.py \
-            --exhausted "$TAG" "$code" "$body" "$attempt"
+            --exhausted "$TAG" "${seen_code:-$code}" "${seen_body:-$body}" "$attempt"
           exit 1
