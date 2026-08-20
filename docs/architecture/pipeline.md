@@ -766,14 +766,37 @@ from the walk before it starts, not filtered out of the result afterward.
 a rule enumerating only the first reports as attended. The two edges point in **opposite
 directions**: a `workflow_run` listener is started *by* the workflow it names, so darkness flows
 target → listener, while a dispatcher *starts* its target, so darkness flows dispatcher → target.
-Both run in one fixed point. Dispatches are read off the comment-stripped `run:` scalar and
-**tokenised, never matched as text** — a `#` line is a comment to bash and never executes, and a
-`gh workflow run` sitting inside a quoted `--body` is a message telling a human what to do rather
-than a call site, which only tokenisation separates (a quoted body is one token and can never
-produce three consecutive `gh` / `workflow` / `run` tokens). A dispatch whose target cannot be
-resolved to a workflow in the directory — `gh workflow run "$WF"`, or a cross-repository `--repo` —
-**fails the test rather than being skipped**, because a rule enumerating only the dispatches it
-happens to understand carries the same defect one level further down.
+Both run in one fixed point, and both are pinned against the real directory as well as against
+fixtures — `image.yml` for the `workflow_run` edge, `warehouse.yml` for the dispatch edge —
+because a clause that reads nothing from `.github/workflows/` leaves every fixture green.
+
+Dispatches are read off the `run:` scalar **tokenised, never matched as text**, and the
+tokeniser owns comments, because only it knows what is quoted: a `#` is a comment to bash and
+never executes, and a whole-line filter cannot see a trailing one, so an apostrophe inside a
+trailing comment would redden this gate with a message about dispatch scanning. 5 of the
+directory's 46 `run:` scalars do not tokenise raw; none fails once comments are the tokeniser's
+job. A `gh workflow run` sitting inside a **quoted** `--body` is a message telling a human what
+to do rather than a call site, and only tokenisation separates them (a quoted body is one token
+and can never produce three consecutive `gh` / `workflow` / `run` tokens). That defence covers
+quoted text and nothing else: a heredoc body is read as commands, so a dispatch written inside
+one would read as a call site. No `run:` scalar in the directory uses a heredoc.
+
+**A dispatch's target is an argument of one command, so the search for it ends where that
+command ends** — at a shell operator or a second `gh`, with the newline counted as the command
+separator bash treats it as. A search bounded by the *step* breaks the guarantee below in both
+directions at once: it walks out of an unresolvable dispatch into a later command, finds a token
+that happens to resolve, and so neither fails loudly nor reports the truth — it invents an edge
+nothing performs, which is the defect the quoted-`--body` rule above exists to prevent, reached
+by a second route. A trailing `\` is the opposite of the newline beside it — bash joins those two
+lines into one command — and `shlex` renders both as the same token, so continuations are joined
+before tokenising rather than guessed at afterwards.
+
+A dispatch whose target cannot be resolved to a workflow in the directory — `gh workflow run
+"$WF"`, or a cross-repository `--repo` — **fails the test rather than being skipped**, because a
+rule enumerating only the dispatches it happens to understand carries the same defect one level
+further down. The remedy it names is to name the workflow literally: `SIGNALLED_DISPATCHES` is
+keyed on a resolved target and read only after this point, so it cannot excuse a dispatch whose
+target never resolved.
 
 **A dispatch is exempt only when the dispatched run carries its own human-visible signal, and the
 exemption is keyed on the EDGE.** `SIGNALLED_DISPATCHES` (`pipeline/tests/test_scheduled_failure.py`)
