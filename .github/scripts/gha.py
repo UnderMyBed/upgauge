@@ -77,10 +77,21 @@ def inline(value: object) -> str:
     way in. One rule, one place.
 
     Every EMISSION boundary is pinned by a test that fails without it. The call sites of this
-    function are not all pinned: the ones with a live vector are (a parsed body's `status`,
-    `error`, `missing[]` and `build.warehouse`; a `cf-cache-status` header; a sitemap `<loc>`
-    host; a dispatched tag), and the rest -- `newest`, the `exhausted_report` fields -- are
-    defence in depth with no reachable newline today. Said plainly rather than claimed away.
+    function are not all pinned, and the boundary is STRUCTURAL rather than a survey of today's
+    vectors -- a survey rots, and this one had: it counted `exhausted_report`'s fields as having
+    "no reachable newline", when every one of them (`live_warehouse`, `live_sha`, `live_status`)
+    is read straight out of a parsed body that an origin chose.
+
+    Pinned are the sites emitted UNPREFIXED, where a newline reaches line start: a parsed body's
+    `status`, `error`, `missing[]` and `build.warehouse` on `promote_check`'s per-attempt print;
+    a `cf-cache-status` header; a sitemap `<loc>` host; a dispatched tag. `exhausted_report`'s
+    fields are not, because its one caller prefixes EVERY line at both emissions -- `::error::`
+    on stdout, `- ` in the step summary -- so a newline there mints another annotation and
+    nothing more. No test can tell the collapse from its absence on that path, and writing one
+    that appeared to would be asserting a formatting property in a security test's clothing.
+    They are collapsed anyway, because the next caller to print that report unprefixed would
+    inherit the vector silently; `newest` is the same shape. Said plainly rather than claimed
+    away.
     """
     return " ".join(str(value).split())
 
@@ -105,6 +116,35 @@ def is_health_report(parsed: dict) -> bool:
         and isinstance(parsed.get("build"), dict)
         and isinstance(parsed.get("data"), dict)
     )
+
+
+def health_cause(report: dict) -> str:
+    """The cause a non-`ok` `HealthReport` named for itself, rendered for a one-line message.
+
+    `app/src/lib/health.ts` makes naming one the whole contract of that endpoint, and keeps the
+    two causes in SEPARATE keys because they are two different breaks at two different layers:
+    the catalog probe's message goes in `data.missing`, the freshness probe's in `data.error`
+    (`app/src/lib/health.ts:10-13`). `missing` wins when both are present -- it names WHAT is
+    absent, where `error` names only that a query raised.
+
+    SHARED, for the same reason `is_health_report` above is: both watchdogs render the cause out
+    of the same report -- `live_check` in its issue body, `promote_check` in its exhausted
+    verdict -- and a precedence that drifted between them would make one box read two ways in two
+    alerts. `is_health_report` has already run at both call sites, so `data` is a dict there; the
+    guards below are for the value it is a dict OF, which is nobody's to promise once anything on
+    the internet can answer this fetch. `", ".join(5)` is a TypeError, and a crash on this path
+    kills the alert mid-report.
+
+    "no cause reported" rather than "": an empty string interpolates as ``reports `degraded`: ``
+    and reads as a message that got truncated, instead of as a report that named nothing.
+    """
+    data = report.get("data")
+    if not isinstance(data, dict):
+        return "no cause reported"
+    missing = data.get("missing")
+    named = ", ".join(str(m) for m in missing) if isinstance(missing, list) else ""
+    error = data.get("error")
+    return named or (error if isinstance(error, str) else "") or "no cause reported"
 
 
 def snippet(body: str, limit: int = SNIPPET_CHARS) -> str:

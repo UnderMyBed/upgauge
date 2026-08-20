@@ -41,7 +41,15 @@ import re
 import sys
 from dataclasses import dataclass
 
-from gha import code_span, inline, is_health_report, printable, snippet, write_multiline_output
+from gha import (
+    code_span,
+    health_cause,
+    inline,
+    is_health_report,
+    printable,
+    snippet,
+    write_multiline_output,
+)
 
 _TAG = re.compile(r"^warehouse-[0-9]{4}\.[0-9]{2}$")
 
@@ -156,14 +164,11 @@ def assess(
     else:
         status = health.get("status")
         if status != "ok":
-            # Total by construction: `data` is a dict (checked in read_health) but its
-            # CONTENTS are not this app's to guarantee once anything else can serve JSON, and a
-            # TypeError out of `", ".join(5)` would be the same crash by another route.
-            data = health["data"]
-            missing = data.get("missing")
-            named = ", ".join(str(m) for m in missing) if isinstance(missing, list) else ""
-            error = data.get("error")
-            cause = named or (error if isinstance(error, str) else "") or "no cause reported"
+            # `health_cause` is total by construction and SHARED with promote_check: `data` is a
+            # dict (checked in read_health) but its CONTENTS are not this app's to guarantee once
+            # anything else can serve JSON, and a TypeError out of `", ".join(5)` would be the
+            # same crash by another route. Both watchdogs render one box's cause one way.
+            cause = health_cause(health)
             failures.append(f"/api/health reports `{inline(status)}`: {inline(cause)}")
 
         live_warehouse = health["build"].get("warehouse")

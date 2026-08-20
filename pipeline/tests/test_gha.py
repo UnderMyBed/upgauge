@@ -18,7 +18,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parents[2] / ".github" / "scripts"))
 
 import gha  # noqa: E402
-from gha import code_span, printable, snippet, write_multiline_output  # noqa: E402
+from gha import (  # noqa: E402
+    code_span,
+    health_cause,
+    printable,
+    snippet,
+    write_multiline_output,
+)
 
 
 def _longest_backtick_run(text: str) -> int:
@@ -134,3 +140,32 @@ def test_write_multiline_output_regenerates_a_delimiter_that_collides(monkeypatc
     assert written == "bb" * 16, "the delimiter written is not the one the check cleared"
     assert written not in value, "the written delimiter collides -- the value truncates on parse"
     assert buf.getvalue().count(written) == 2, "opening and closing delimiters disagree"
+
+
+def test_health_cause_prefers_the_catalog_gap_over_the_freshness_error():
+    """`health.ts` keeps the two apart on purpose -- the catalog probe's cause lands in
+    `missing`, the freshness probe's in `error` (`app/src/lib/health.ts:10-13`) -- and `missing`
+    is the one that names WHAT is absent, so it wins when both are present.
+
+    Shared for the same reason `is_health_report` is: both watchdogs render the cause out of the
+    same report, and a precedence that differed between them would make one box read two ways in
+    two alerts."""
+    assert (
+        health_cause(
+            {"data": {"missing": ["mart_route_health", "fct_segment_month.seats"], "error": "boom"}}
+        )
+        == "mart_route_health, fct_segment_month.seats"
+    )
+    assert health_cause({"data": {"missing": [], "error": "boom"}}) == "boom"
+
+
+def test_health_cause_never_raises_and_never_reports_a_cause_it_does_not_have():
+    """This runs on a body an edge chose. `", ".join(5)` is a TypeError, and a crash here kills
+    the alert that was in the middle of reporting the outage.
+
+    A report with neither key is a real shape too -- `health.ts` promises a cause, an
+    intermediary promises nothing -- and "no cause reported" is the honest rendering of that. An
+    empty string would interpolate as ``reports `degraded`: `` and read as a truncated message
+    rather than as a report that named nothing."""
+    for report in ({"data": {"missing": 5}}, {"data": "oops"}, {}, {"data": {"error": 5}}):
+        assert health_cause(report) == "no cause reported", report
