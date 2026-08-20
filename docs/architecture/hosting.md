@@ -372,14 +372,61 @@ re-verifying `make image-smoke` clean.
 **`WAREHOUSE_TAG` and `app/smoke.sh`'s dataset needles are ONE fixture — bump the pin in the same
 commit that re-measures the needles.** The Makefile pins the tag for reproducibility, but
 `make image-smoke` then runs dataset-month-specific checks against that pinned asset: the two
-chart-window needles (`2015-01 → 2026-04`, on `/route` and `/carrier`), the current-year asterisk
-(`>2026*<` on `/airport`), `2026 is a partial year — filed through April 2026 only.` and `this
-dataset covers 2015–2026`. When BTS publishes 2026-05, `make ingest && make build` moves the local
-database, those needles get re-measured, and **`make app-smoke` goes green while `make image-smoke`
-goes red with no defect present** — it is still building from `warehouse-2026.04`. Whoever meets
-that red beside a green host gate will reach for the needles, which is the wrong end. Same rule as
-CLAUDE.md's "when a renamed value was the fixture for a transform, MOVE the fixture", applied to
-this coupling; stated at the pin itself (`Makefile`, `WAREHOUSE_TAG`) as well as here.
+chart-window needles on `/route` and `/carrier`, the current year's asterisked tick and its
+partial-year sentence on `/airport`, and the covered-range message an out-of-range `?y=` returns
+(`app/smoke.sh`'s `check_dataset` call sites). **Those needle values are not quoted here, and must
+not be** — every one of them moves when BTS publishes, and a copy written into prose rots silently
+while the fixture itself moves on. When BTS publishes, `make ingest && make build` moves the local
+database and those needles get re-measured, so **`make app-smoke` goes green while `make
+image-smoke` goes red with no defect present** — it is still building from the previous pin.
+Whoever meets that red beside a green host gate will reach for the needles, which is the wrong end.
+Same rule as CLAUDE.md's "when a renamed value was the fixture for a transform, MOVE the fixture",
+applied to this coupling; stated at the pin itself (`Makefile`, `WAREHOUSE_TAG`) as well as here.
+
+**Two mechanisms hold the fixture together, and neither is a human remembering.** The bot is
+`warehouse.yml`'s `bump-pin` job: it opens a PR moving the pin when the pin is behind, and does
+**not** touch the needles. Only four of those (the partial-year sentence, the chart window, the
+current-year asterisk, the covered range) follow from `max(year_month)`; the rest need the
+warehouse queried through the rendered pages, so a rewriter that fixed the derivable four would
+emit a PR that reads as re-measured and is not.
+
+**The bot's guard is `!cancelled()` plus "a release with this tag exists", never "this run
+published it" — and that difference is a permanent stall.** `classify` runs after the release is created and
+can legitimately throw (a real upstream shape change is exactly when it should), which fails the
+publish job and skips the bump. Every re-dispatch afterwards takes the already-published path, so
+a flag meaning "this run created the release" is never set again: the release ships, the pin never
+moves, and the only signal is a generic red. Keyed on existence instead, the next run repairs it —
+which is why the job runs daily and mostly opens nothing, a checkout and a script rather than a
+single chance per publish. `!cancelled()` rather than `always()`: the two differ only on a run a
+human stopped on purpose, and opening a PR out of one is the overreach `scheduled-failure.yml`'s
+own allow-list already refuses. Its failures stay loud (they redden "Warehouse", which
+`scheduled-failure.yml` watches), and the accepted cost of that loudness is that a genuinely
+broken bot also defers `image.yml`'s build until the next push to `main`. **Every network call
+that can fail the job is retried** — five attempts, backoff, no sleep after the last — through the
+one helper in `.github/scripts/gh_retry.sh`, so that a transient wobble is never what triggers it;
+the two calls that are pure polish (assigning the PR, annotating a superseded one) are
+`||`-tolerated instead. `git ls-remote` goes through that helper too, and for a second reason:
+`--exit-code` returns 2 for "no such branch" and 128 for a transport failure, and the obvious
+`if git ls-remote …; then` reads both as "absent". The gate is
+`image-contract.yml`, which runs `make image-smoke` **with nothing overridden** — the committed
+pin, the needles at their default — on any PR touching either half. That is the only invocation
+that can see the coupling: `image.yml` also runs `make image-smoke`, but resolves the newest
+published release and passes `SMOKE_DATASET_PINNED=0`, so both halves are absent from it by
+construction, and correctly so (a production image is built from the newest release, which the
+committed needles trail between a publish and its bump PR merging). Neither `WAREHOUSE_TAG` nor
+`SMOKE_DATASET_PINNED` may appear in the gate's command **or in an `env:` block at any scope**:
+`WAREHOUSE_TAG ?=` is a conditional assignment, so an environment variable of that name wins over
+the pin, and `app/smoke.sh` reads `${SMOKE_DATASET_PINNED:-1}`.
+
+**The bump PR carries no `pull_request` checks, and the PR says so.** GitHub starts no workflow
+runs from events created by `GITHUB_TOKEN` (the same rule that rules out `release: published` as a
+trigger — see `image.yml`'s `on:` comment), so a PR the bot opens starts neither `ci.yml` nor the
+gate. `workflow_dispatch` is the documented exception, and `bump-pin` uses it to run the gate
+against its own branch; the PR body states plainly that `ci.yml` has not run and links the
+branch-filtered runs. **A reader who merges on a green-looking PR with no checks is the failure
+this caveat exists to prevent.** Setting a `BUMP_PIN_TOKEN` secret removes it — the job already
+reads `secrets.BUMP_PIN_TOKEN || github.token`, so the PR would be authored by a real account and
+every workflow would fire normally. The repo grants no such secret today and nothing requires one.
 
 **`/api/health` carries its own served-build checks, in both modes** — exactly
 `cache-control: no-store`, and no `s-maxage=2592000`. It was the readiness probe and the identity
@@ -409,8 +456,12 @@ checks, each of which starts its own short-lived `next start` against a delibera
 container contributes, and containerising them would triple image builds for zero new coverage.
 The skip is **printed**, immediately before the pass/fail tally, never silent — reporting a
 narrower count as though it were the full one is the same dishonesty as a stale build passing
-every check, one level up. `make app-smoke` (host mode) still runs all three and reports the
-documented 269 checks; `make image-smoke` reports the served-build subset alone.
+every check, one level up. `make app-smoke` (host mode) runs all three; `make image-smoke`
+reports the served-build subset alone, shorter by exactly the checks inside those three sections.
+**The two totals are not written here.** `pipeline/gatecounts.py` states that the smoke counts are
+deliberately not generated — only a real `next build` plus a served port produces them — so they
+are hand-maintained, and a second hand-maintained copy is one that goes stale silently. CLAUDE.md's
+gates table is the one place they live.
 
 **One existing check needed a container-specific path, not a skip: the "ONE `DuckDBInstance`"
 handle count** (§ "One `DuckDBInstance` per process", below). Its host-mode form walks the local process tree with
@@ -429,9 +480,9 @@ to this container's own processes, so no `pgrep` is needed either (`node:*-slim`
 
 `make portability` is the **negative** half: it breaks the WORKDIR/data-colocation contract three
 ways and asserts the *distinct* signature each break produces. The **positive** half is
-`make image-smoke` — 259 served-build checks against the real container, `--read-only`, no tmpfs
-(§ above) — against 269 in host mode, the difference being exactly the 10 checks inside the three
-host-only gap sections.
+`make image-smoke` — the served-build checks against the real container, `--read-only`, no tmpfs
+(§ above) — which is host mode's total less exactly the checks inside the three host-only gap
+sections. Both totals live in CLAUDE.md's gates table and are not restated here.
 
 **The contract is defended at four layers, and the failures are not interchangeable.** One shared
 "it 500s" assertion would pass for all of them and therefore prove none:

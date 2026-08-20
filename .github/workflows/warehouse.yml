@@ -26,6 +26,20 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    # Read by `bump-pin` below. `tag_published` means "a release with this tag EXISTS", not
+    # "this run created it" -- and that distinction is the difference between a bot with a
+    # repair path and one that stalls permanently.
+    #
+    # Written by EITHER of the two steps that can establish existence: the `gh release create`
+    # step, and the "already published" guard above it. Keying only on the create step looked
+    # right and was a trap: `classify` runs AFTER the publish and can throw (a genuine upstream
+    # shape change is exactly when it should), which fails the job, which skips the bump. Every
+    # re-dispatch after that hits the already-published guard, so the create step never runs
+    # again, so a create-only output is never set again -- the release ships and the pin never
+    # moves, forever, behind a bot that looks like it is handling it.
+    outputs:
+      tag: ${{ steps.stamp.outputs.tag }}
+      tag_published: ${{ steps.released.outputs.published || steps.existing.outputs.already }}
     steps:
       - uses: actions/checkout@v7
 
@@ -144,6 +158,7 @@ jobs:
       # derivation quietly degrades into "when did we last run", i.e. healthy forever.
       # See .github/scripts/freshness.py's module docstring.
       - name: Stop if this month is already published
+        id: existing
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -151,6 +166,10 @@ jobs:
           if gh release view "${{ steps.stamp.outputs.tag }}" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "::notice::${{ steps.stamp.outputs.tag }} already published; nothing to do"
             echo "SKIP=1" >> "$GITHUB_ENV"
+            # NOT the same claim as SKIP. SKIP means "this run has nothing to publish";
+            # `already` means "the release exists", which is what the bump job needs to know
+            # and is true on every re-dispatch after a failed run. See the job outputs above.
+            echo "already=1" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Pack the assets
@@ -178,6 +197,7 @@ jobs:
           subject-path: "*.tar.zst"
 
       - name: Publish the release
+        id: released
         if: env.SKIP != '1'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -187,6 +207,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --title "Warehouse ${{ steps.stamp.outputs.year_month }}" \
             --notes "BTS T-100 warehouse through ${{ steps.stamp.outputs.year_month }}."
+          echo "published=1" >> "$GITHUB_OUTPUT"
 
       # Deliberately AFTER the publish above, not before it: classify is an observability
       # feature, not a release gate. A crash here must never skip "Publish the release" --
@@ -229,3 +250,251 @@ jobs:
             --title "Upstream data shape changed (${{ steps.stamp.outputs.year_month }})" \
             --label critical \
             --body "$ISSUE_BODY"
+
+  # THE BOT HALF OF #74. `WAREHOUSE_TAG` (Makefile) and `app/smoke.sh`'s dataset-pinned needles
+  # are one fixture, and nothing moved them together on a cadence: measured, the pin sat on
+  # warehouse-2026.04 for four days after the needles had been re-pinned to 2026.05, with every
+  # gate green. This opens the PR that moves the pin; `image-contract.yml` is what measures the
+  # needles against it.
+  #
+  # A SEPARATE JOB, not steps appended to `publish`, for two reasons. Permissions are per job,
+  # so `pull-requests: write` here never reaches the job that runs `make ingest` against a .gov
+  # endpoint while holding contents/id-token/attestations/issues write. And a failure here
+  # cannot precede the release -- `publish` has already completed by the time this starts.
+  #
+  # A FAILURE HERE IS LOUD ALREADY, and that is why there is no watcher of its own: this job
+  # failing makes the "Warehouse" run's conclusion `failure`, and scheduled-failure.yml watches
+  # "Warehouse" by name -- it files a critical issue, @mentions the owner and assigns them. A
+  # second watcher would be the very thing this issue is about.
+  #
+  # ACCEPTED COST OF THAT LOUDNESS: image.yml's build is gated on this workflow's conclusion
+  # being `success`, so a genuinely broken bot also defers the image build until the next push
+  # to main. Every network call below that can fail the job is retried for that reason, through
+  # .github/scripts/gh_retry.sh -- a transient API wobble must never be the thing that reddens a
+  # run this workflow's release is fine in. The two that are pure polish (assigning the PR,
+  # annotating a superseded one) are `||`-tolerated instead of retried. What is left after
+  # the retries means the bot really is broken, and blocking one image cycle on that is the
+  # correct trade rather than a surprise.
+  bump-pin:
+    needs: publish
+    # A STATUS FUNCTION DELIBERATELY, and it is the repair path. A bare `needs.publish.outputs.* == …`
+    # carries an implicit success() -- a job with `needs:` is skipped when the needed job fails
+    # unless its `if:` names a status function -- so a `classify` crash after a successful
+    # publish would skip this job, and every re-dispatch afterwards would skip it again. The
+    # guard is therefore about the TAG EXISTING, not about this run having gone well.
+    #
+    # This now runs on the ~30 no-op days a month too: a checkout, mise, and a script that
+    # finds the pin already current and opens nothing, on the order of a minute. That is the
+    # price of the repair path, and it buys a daily reconciliation between the pin and the
+    # newest release rather than a single chance per publish.
+    # `!cancelled()` rather than `always()`: the two differ only on a CANCELLED run, which is
+    # a human stopping this workflow on purpose -- and opening a PR out of a run someone just
+    # cancelled is the same overreach scheduled-failure.yml's own allow-list refuses.
+    if: ${{ !cancelled() && needs.publish.outputs.tag_published == '1' }}
+    runs-on: ubuntu-latest
+    # DERIVED, not round: every retry-backed call in this job can burn a full 5+10+15+20s
+    # backoff, and the total must fit with room for checkout, mise and every `gh` round trip.
+    # The count is NOT written here -- it moves whenever a call is added, which is exactly the
+    # regression test_the_bump_jobs_timeout_covers_its_own_worst_case_backoff computes from the
+    # job itself. Too low and a slow-but-not-failing `gh` replaces every crafted `::error::`
+    # above with a generic "job timed out", the one message that explains nothing.
+    timeout-minutes: 20
+    # Least privilege, and every one of the three is load-bearing:
+    #   contents      -- push the bump branch
+    #   pull-requests -- open the PR and assign it
+    #   actions       -- `gh workflow run` the gate (see the dispatch step for why that is not
+    #                    optional)
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    steps:
+      # `secrets.BUMP_PIN_TOKEN || github.token` -- the repo grants no such secret today and
+      # this workflow does not require one. It is written this way so that adding one later is a
+      # zero-code change, and because the difference matters: see the dispatch step below.
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.BUMP_PIN_TOKEN || github.token }}
+
+      # No `uv sync`: bump_pin.py is stdlib-only (plus gha.py beside it), so this needs an
+      # interpreter and nothing else. mise rather than the runner's python3 keeps it on the same
+      # 3.12.12 the tests pinned it against. Same shape as freshness.yml.
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          cache: true
+
+      # NEW_TAG reaches the script through `env:`, never spliced via `${{ }}` into the script
+      # text -- the rule PREVIOUS_TAG and ISSUE_BODY above spell out. The `stamp` step already
+      # proved this value is `warehouse-[0-9]{4}\.[0-9]{2}`, and bump_pin.py re-checks the full
+      # anchored shape on its own side: a consumer-side check, the same doubling the tag
+      # resolver at the top of this file uses, because a producer's guard is not a thing a
+      # consumer should have to depend on staying passed.
+      - id: bump
+        env:
+          NEW_TAG: ${{ needs.publish.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mise exec -- python .github/scripts/bump_pin.py "$NEW_TAG"
+
+      # PR_BODY goes through `env:` for the reason the drift-issue step below states: the body
+      # carries markdown code spans -- live backticks -- and a spliced `--body "${{ ... }}"`
+      # lets bash execute them as command substitution before `gh` ever sees the string.
+      - name: Open the pull request
+        id: pr
+        if: steps.bump.outputs.changed == '1'
+        env:
+          GH_TOKEN: ${{ secrets.BUMP_PIN_TOKEN || github.token }}
+          NEW_TAG: ${{ needs.publish.outputs.tag }}
+          PREVIOUS: ${{ steps.bump.outputs.previous }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
+          PR_BODY: ${{ steps.bump.outputs.pr_body }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          # `retry`, `branch_exists` and `open_pr_for` -- one implementation, because the retry
+          # is the named mitigation for this job being able to redden a run image.yml gates on.
+          source .github/scripts/gh_retry.sh
+
+          # THE STATE THAT MATTERS IS THE PR, NOT THE BRANCH. An earlier form exited 0 on
+          # "branch exists", which is wrong in the one case that actually needs repairing: the
+          # push succeeded and `gh pr create` then failed. That leaves a branch with no PR, and
+          # a bot that reports success and reopens nothing, every day, forever. So the branch
+          # is only skipped when a PR is genuinely open against it; otherwise the PR is opened
+          # against the branch already there.
+          open_pr=$(open_pr_for "$BRANCH")
+          if [ -n "$open_pr" ]; then
+            echo "::notice::$open_pr is already open for $BRANCH; leaving it alone"
+            exit 0
+          fi
+          # A CLOSED PR IS A DELIBERATE NO, and honouring it is a cost control. Without this,
+          # closing a bump PR without also deleting its branch leaves the next run finding no
+          # open PR, finding the branch, opening a fresh one and dispatching a ~30-minute
+          # container build -- every day, indefinitely. The next month's tag gets its own
+          # branch, so this refuses one bump, never the mechanism.
+          closed_pr=$(closed_pr_for "$BRANCH")
+          if [ -n "$closed_pr" ]; then
+            echo "::notice::$closed_pr was closed for $BRANCH; not reopening this bump"
+            exit 0
+          fi
+          if branch_exists "$BRANCH"; then
+            # Never force-push over it: a human may be re-measuring needles on this branch,
+            # which is exactly what a red gate asks them to do.
+            echo "::warning::$BRANCH exists with no open PR -- opening one against it"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git switch -c "$BRANCH"
+            git add Makefile
+            body="WAREHOUSE_TAG and app/smoke.sh's dataset needles are one fixture. This moves"
+            body="$body the pin only; the needles are NOT re-measured here. The Image contract"
+            body="$body gate is what measures them against this asset."
+            git commit -m "Pin the image to ${NEW_TAG}" -m "$body"
+            retry "git push" git push origin "$BRANCH"
+          fi
+
+          if ! url=$(retry "gh pr create" gh pr create --repo "$GITHUB_REPOSITORY" \
+                       --base "${GITHUB_REF_NAME}" --head "$BRANCH" \
+                       --title "Pin the image to ${NEW_TAG} (was ${PREVIOUS})" \
+                       --body "$PR_BODY"); then
+            # `gh pr create` is NOT idempotent, so a lost response is indistinguishable from a
+            # failure: the PR may exist while attempts 2-5 all fail against "already exists".
+            # Ask what is true before reporting a failure.
+            url=$(open_pr_for "$BRANCH")
+            [ -n "$url" ] || {
+              echo "::error::could not open the PR. $BRANCH carries the bump and will be reused"
+              echo "::error::on the next run -- no work is lost, but the pin does not move until"
+              echo "::error::a PR exists."
+              exit 1
+            }
+            echo "::warning::gh pr create reported failure but $url exists; continuing"
+          fi
+          # `retry` returns the LAST attempt's stdout, so a command that printed before failing
+          # folds its output into this capture -- and `url=$url` is a bare `k=v` line in
+          # $GITHUB_OUTPUT, the injection shape gha.write_multiline_output exists for. `gh`
+          # writes diagnostics to stderr so this is theoretical today; validating costs a line.
+          case "$url" in
+            https://*) ;;
+            *) echo "::error::gh pr create returned something that is not a URL: $url"; exit 1 ;;
+          esac
+          echo "::notice::opened $url"
+          echo "### Opened $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+          echo "opened=1" >> "$GITHUB_OUTPUT"
+
+          # Assignment is delivery polish ON TOP of a PR that already exists and already
+          # mentions the owner, so it is deliberately NOT `--assignee` on the create above: a
+          # permissions or API hiccup there would fail the CREATE and lose the PR entirely.
+          gh pr edit "$url" --add-assignee "$OWNER" \
+            || echo "::warning::could not assign $OWNER -- the @mention in the body is the fallback"
+
+          # SUPERSESSION IS ANNOUNCED, NEVER ENFORCED. Two months can be in flight at once (a
+          # human re-measuring needles on last month's PR when this month publishes), and both
+          # branches edit the same line. Closing the older one would discard that work, so the
+          # older PR is told instead -- and the human decides which to carry.
+          # Retried like every other network call, and TOLERATED on top: announcing
+          # supersession is polish, and `set -o pipefail` would otherwise let a listing failure
+          # fail a step whose PR is already open and already correct.
+          stale_prs=$(retry "gh pr list" gh pr list --repo "$GITHUB_REPOSITORY" --state open \
+            --limit 100 --json url,headRefName \
+            --jq '.[] | select(.headRefName | startswith("bot/warehouse-pin-"))
+                      | select(.headRefName != env.BRANCH) | .url') || {
+            echo "::warning::could not list open bump PRs; supersession not announced"
+            stale_prs=""
+          }
+          for stale in $stale_prs; do
+            gh pr comment "$stale" --body "Superseded by $url ($NEW_TAG). Both edit the same \`WAREHOUSE_TAG\` line -- carry the needle re-measurements onto the newer PR rather than merging both." \
+              || echo "::warning::could not annotate $stale as superseded"
+          done
+
+      # NOT OPTIONAL, and not belt-and-braces. GitHub starts no new workflow runs from events
+      # created by GITHUB_TOKEN -- image.yml's `on:` comment documents the same rule for
+      # `release: published`, where it would have made the trigger a permanent silent no-op. So
+      # a PR opened by the step above starts NO `pull_request` runs: not ci.yml, and not the one
+      # gate that can see the fixture this PR moves. Without this dispatch the bot would emit an
+      # ungated PR, which is #74's own defect wearing a different hat.
+      #
+      # `workflow_dispatch` is the documented exception to that rule, which is why the gate
+      # declares it. The PR body carries the branch-filtered link to the run this starts, and
+      # says plainly that ci.yml has not run -- a reader who merges on a green-looking PR with
+      # no checks is the failure mode here.
+      #
+      # GATED ON A PR HAVING BEEN OPENED, never on `changed` alone: the step above exits early
+      # when a PR is already open, and dispatching there would fire a 30-minute container build
+      # on every daily run for as long as that PR stayed open.
+      #
+      # With a BUMP_PIN_TOKEN secret set, the PR is authored by a real account, every workflow
+      # fires normally, and this dispatch becomes a duplicate rather than the only coverage.
+      - name: Dispatch the image-contract gate on the bump branch
+        if: steps.pr.outputs.opened == '1'
+        env:
+          GH_TOKEN: ${{ secrets.BUMP_PIN_TOKEN || github.token }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
+          PR_URL: ${{ steps.pr.outputs.url }}
+        run: |
+          set -euo pipefail
+          source .github/scripts/gh_retry.sh
+          if retry "gh workflow run" gh workflow run image-contract.yml \
+               --repo "$GITHUB_REPOSITORY" --ref "$BRANCH"; then
+            echo "::notice::dispatched Image contract on $BRANCH"
+            exit 0
+          fi
+          # THE CORRECTION GOES WHERE THE HUMAN IS. The PR body says the gate is dispatched and
+          # points at its runs; if that never happened, saying so only in a red Actions log
+          # leaves a PR that reads as gated and is not.
+          #
+          # RETRIED, not `||`-tolerated: this comment IS the correction the PR body promises, so
+          # it is not polish, and one transient 503 would leave exactly the PR this branch
+          # exists to prevent. The step is already failing, so the retries cost nothing.
+          #
+          # And the final message BRANCHES on whether the comment landed. It used to `||` the
+          # comment and then assert "has been annotated" unconditionally -- two adjacent
+          # contradictory lines with the louder one false, on the one path this code is for.
+          if retry "gh pr comment" gh pr comment "$PR_URL" --body "The Image contract gate was NOT dispatched on this branch -- \`gh workflow run\` failed five times. Nothing has measured this pin against the needles. Do not merge until the gate has run; dispatch it by hand from the Actions tab."; then
+            echo "::error::could not dispatch the gate on $BRANCH; $PR_URL has been annotated"
+          else
+            echo "::error::could not dispatch the gate on $BRANCH, AND could not annotate"
+            echo "::error::$PR_URL -- this log is the only record. That PR reads as gated and"
+            echo "::error::is not. Do not merge it until the gate has run."
+          fi
+          exit 1
