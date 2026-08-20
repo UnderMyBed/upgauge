@@ -160,6 +160,7 @@ def load_allowlist(
                     "join_key",
                     "filter_only",
                     "filter_mode",
+                    "value_type",
                 ),
                 r,
                 strict=True,
