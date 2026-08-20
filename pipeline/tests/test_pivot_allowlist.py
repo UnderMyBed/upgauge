@@ -53,8 +53,15 @@ def test_all_fifteen_dimensions_are_offered(con):
 
 
 def test_every_offered_dimension_column_actually_exists(con):
-    """The drift guard. A renamed fact column must fail loudly here, not silently drop a
-    dimension from the Explorer.
+    """The drift guard, for every token AFTER the first. A missing column must fail loudly
+    somewhere, and which test fires depends on WHICH token went missing.
+
+    A missing FIRST token no longer reaches this loop at all: `value_type` is INNER JOINed on
+    `split_part(column_expr, ',', 1)`, so the dimension's whole row is gone before this test
+    can iterate it, and this test stays GREEN. Measured -- renaming `origin_state` on
+    `fct_segment_month` leaves this green and turns four others red, including
+    test_all_fifteen_dimensions_are_offered and test_every_dimension_resolves_to_a_value_type.
+    Still loud, just not loud HERE. A missing later token keeps the row and fails here.
 
     Asserts EVERY referenced token resolves, not merely that one does -- `route`'s expr is
     `route_key_low, route_key_high`, so a heuristic that passes when *any* token matches
@@ -124,8 +131,10 @@ def test_every_dimension_resolves_to_a_value_type(con):
     to two of the three ways this goes wrong:
 
     * the INNER JOIN dropping a row when a fact column is renamed -- caught there too;
-    * the join softened to a LEFT JOIN, which KEEPS the row and leaves value_type NULL, so the
-      dimension ships carrying no bound at all;
+    * the join softened to a LEFT JOIN *and* a column going missing, which KEEPS the row and
+      leaves value_type NULL, so the dimension ships carrying no bound at all. A LEFT JOIN on
+      its own is a no-op here and correctly changes nothing: while every column resolves, LEFT
+      and INNER produce identical rows;
     * the join predicate matching MORE than one object, duplicating every row it matches --
       a set comparison cannot see duplication at all.
     """
@@ -143,8 +152,9 @@ def test_value_type_is_the_type_of_every_column_the_dimension_reads(con):
     `route_key_low, route_key_high` and `endpoint_airport_id` is `origin_airport_id,
     dest_airport_id`.
 
-    Comparing against the live DESCRIBE is also what keeps the column introspected -- a
-    value_type reverted to a hand-written literal beside filter_mode fails here.
+    This does NOT prove the column is introspected: it compares value_type against the CURRENT
+    schema, and a hand-written literal equal to the current schema satisfies it. That property
+    has its own guard -- test_value_type_is_introspected_not_hand_written below.
     """
     segment_types = {r[0]: r[1] for r in con.execute("DESCRIBE fct_segment_month").fetchall()}
     multi_column = set()
@@ -231,6 +241,35 @@ def test_dimension_value_types_are_the_measured_set(con):
     """
     catalog = dict(con.execute("SELECT key, value_type FROM meta_pivot_dimensions").fetchall())
     assert catalog == DIMENSION_VALUE_TYPES
+
+
+def test_value_type_is_introspected_not_hand_written(con):
+    """The property the whole column exists for, and the ONLY test here that can see it.
+
+    Every other value_type test compares the catalog against the CURRENT schema, so a
+    hand-written CASE carrying today's fifteen values satisfies all of them. Measured:
+    deleting the duckdb_columns() join and substituting such a CASE leaves every other test in
+    this file green. A curated type is precisely what this column exists to avoid -- it stops
+    tracking the column the moment a width changes in normalize, and the bound silently stops
+    matching what DuckDB will accept.
+
+    So this asserts on the COMPILED VIEW's own SQL text -- the artifact this repo controls --
+    the same way test_fct_segment_month_view_sets_hive_partitioning_for_pruning pins a config
+    setting that leaves no trace at all in query output.
+    """
+    sql = con.execute(
+        "SELECT sql FROM duckdb_views() WHERE view_name = 'meta_pivot_dimensions'"
+    ).fetchone()[0]
+    assert "duckdb_columns()" in sql, "value_type no longer joins duckdb_columns()"
+    assert "data_type" in sql, "value_type no longer reads duckdb_columns().data_type"
+    # A QUOTED type name in this view means someone wrote a type down by hand. DuckDB
+    # re-serializes genuine casts with the type UNquoted (CAST('f' AS BOOLEAN)), verified
+    # against the compiled view on this DuckDB version, so this cannot fire on a real cast.
+    upper = sql.upper()
+    hand_written = [
+        t for t in ("VARCHAR", "TINYINT", "SMALLINT", "INTEGER", "BIGINT") if f"'{t}'" in upper
+    ]
+    assert not hand_written, f"type name(s) hand-written into the view: {hand_written}"
 
 
 def test_measures_split_additive_from_derived(con):
