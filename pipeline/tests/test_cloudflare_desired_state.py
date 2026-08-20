@@ -111,10 +111,20 @@ def test_cloudflare_apply_verifies_the_dns_record_points_at_the_tunnel():
     aimed somewhere other than <tunnel>.cfargotunnel.com resolves to the wrong origin, and an
     unproxied record bypasses the cache rule and the rate limit entirely while still serving
     the site -- the silent one."""
-    script = (CLOUDFLARE.parent / "cloudflare-apply.sh").read_text()
-    assert "dns_records" in script, "cloudflare-apply.sh never queries DNS"
-    assert "cfargotunnel.com" in script, "it does not check the record targets the tunnel"
-    assert "proxied" in script, (
+    # Executable lines only. A needle that also matches the script's own explanatory comments
+    # certifies prose, which is how two other checks in this repo passed while broken.
+    code = "\n".join(
+        ln
+        for ln in (CLOUDFLARE.parent / "cloudflare-apply.sh").read_text().splitlines()
+        if not ln.lstrip().startswith("#")
+    )
+    assert "dns_records" in code, "cloudflare-apply.sh never queries DNS"
+    # The target is BUILT from the tunnel id, never matched loosely: a bare-domain check would
+    # accept a record pointing at someone else's <other-id>.cfargotunnel.com.
+    assert "${CLOUDFLARE_TUNNEL_ID}.cfargotunnel.com" in code, (
+        "it does not construct the expected target from the tunnel id"
+    )
+    assert "proxied" in code, (
         "it does not check the record is PROXIED -- an unproxied record still serves the site "
         "but silently bypasses the cache rule and the rate limit"
     )
