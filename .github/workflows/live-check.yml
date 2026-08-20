@@ -72,7 +72,18 @@ jobs:
 
           # HEALTH AND SITEMAP FIRST -- the burst below blocks this IP on /api/ for 60s, and
           # /api/health is under /api/.
-          health=$(curl -sS --max-time 15 "${BASE}/api/health" || echo '{}')
+          #
+          # The STATUS as well as the body. A challenge page, an HTML error page and a 502 are
+          # all "not JSON", and live_check.py cannot tell them apart -- or let an operator tell
+          # them apart from the alert alone -- without the code. `-o` to a file truncated first,
+          # so a fetch that fails part-way can never be read as whatever was there before, and
+          # `|| echo 000` because a curl that never gets a response line has no code to report.
+          # 8000 bytes is far above any real report (~150) and bounds what a hostile or broken
+          # origin can put into argv.
+          : > /tmp/health.body
+          hcode=$(curl -sS -o /tmp/health.body -w '%{http_code}' --max-time 15 \
+                  "${BASE}/api/health" || echo 000)
+          health=$(head -c 8000 /tmp/health.body)
           sitemap=$(curl -sS --max-time 15 "${BASE}/sitemap.xml" | head -c 2000 || echo "")
 
           # Two fetches of the SAME url: the first may legitimately miss (cold edge, or the
@@ -118,7 +129,7 @@ jobs:
           # below, through gha.write_multiline_output's randomized delimiter, which is what
           # makes that half safe without a matching fix.
           mise exec -- python .github/scripts/live_check.py \
-            "$health" "$releases" "$sitemap" "$cf" "$rl"
+            "$health" "$hcode" "$releases" "$sitemap" "$cf" "$rl"
 
       # A failing live check is a CONDITION, not an event: it stays true every hour until
       # someone fixes it. Without this, one bad afternoon files a dozen issues and the alert

@@ -31,6 +31,30 @@ Because the bug lived entirely in string parsing, it is unit-testable with no ne
 box, and no Actions runtime -- which is the whole reason this file exists apart from
 `promote.yml`. Mirrors `freshness.py`'s split exactly: a pure function (`assess`) the tests
 exercise directly, and a `main()` that reads argv/env, which is what the workflow calls.
+
+WHAT THE POLL IS ENTITLED TO CONCLUDE WHEN IT RUNS OUT OF ATTEMPTS
+    The exhausted path used to emit, unconditionally, "The tag moved; the deploy did not" and
+    "ROLL BACK NOW". On 2026-08-1x it emitted both against a healthy, correctly-promoted deploy:
+    every one of the 30 attempts had been served a challenge page, so the workflow had never
+    read the box at all. Telling an operator to roll back a good deploy is worse than staying
+    silent -- a rollback is a real production action.
+
+    So the report is built from what was OBSERVED, and `read_a_build` is the boundary:
+
+      - a build was read and it disagrees -> the box is up and never took the image, `:deploy`
+        still points at that image, and re-dispatching the previous known-good tag is the remedy.
+        Ordered outright.
+      - no build was ever read -> the finding is that the poll is blind, and it is NOT evidence
+        the deploy failed. It is not evidence the deploy SUCCEEDED either: `docker compose up -d
+        --wait` recreates the container before confirming health, so an image that fails to start
+        closes the port and the real emergency arrives looking exactly like an edge that refuses
+        this runner. The report says so, gives the one command that separates them, and keeps the
+        remedy conditional on it.
+
+    Unreadability is a property of the BODY, never of the status: `/api/health` answers 503 with
+    a complete, valid report when the data layer is degraded
+    (`app/src/app/api/health/route.ts:27`), and a wrong build read from one of those is an
+    ordinary mismatch.
 """
 
 from __future__ import annotations
@@ -41,22 +65,81 @@ import re
 import sys
 from dataclasses import dataclass
 
-from gha import write_multiline_output
+from gha import code_span, snippet, write_multiline_output
 
 #: The shape `image.yml` mints and `warehouse.yml` asserts before ever publishing a release.
 #: Anchored at the start only -- the SHA half is deliberately unconstrained, since it is
 #: whatever `git describe --always --dirty --abbrev=7` produces today or grows tomorrow.
 _WAREHOUSE_PREFIX = re.compile(r"^(warehouse-[0-9]{4}\.[0-9]{2})-(.+)$")
 
+#: `outcome` values. `read_a_build` is derived from these rather than stored twice.
+MATCHED = "matched"
+MISMATCH = "mismatch"
+UNREADABLE = "unreadable"
+BAD_TAG = "bad-tag"
+
+_HAND_CHECK = "curl -sS -D - https://upgauge.shipman.dev/api/health"
+
 
 @dataclass(frozen=True)
 class Verdict:
-    matched: bool
+    outcome: str
     reason: str
     expected_warehouse: str | None
     expected_sha: str | None
     live_warehouse: str | None
     live_sha: str | None
+
+    @property
+    def matched(self) -> bool:
+        return self.outcome == MATCHED
+
+    @property
+    def read_a_build(self) -> bool:
+        """Whether the box's own build was actually read. The ONLY thing that licenses the
+        exhausted report to say anything about the deploy."""
+        return self.outcome in (MATCHED, MISMATCH)
+
+    def exhausted_report(self, attempts: int) -> str:
+        """The final word after the poll budget elapses, one finding per line. See the module
+        docstring for why the two branches differ in what they are allowed to claim."""
+        if self.outcome == MISMATCH:
+            return "\n".join(
+                [
+                    f"the box is serving `{self.live_warehouse}` / `{self.live_sha}` after "
+                    f"{attempts} attempts, not the promoted `{self.expected_warehouse}` / "
+                    f"`{self.expected_sha}`. The tag moved; the deploy did not.",
+                    "The box answers, so it is up -- it never took the new image, and `:deploy` "
+                    "still points at that image, so the box can land on it at any 30s tick. "
+                    "ROLL BACK NOW: re-dispatch this workflow with the previous known-good tag, "
+                    "then find out why this one never pulled (`upgauge-deploy.timer` on the box).",
+                ]
+            )
+        if self.outcome == UNREADABLE:
+            return "\n".join(
+                [
+                    f"after {attempts} attempts the poll never read a build from the box: "
+                    f"{self.reason}",
+                    "THIS IS NOT EVIDENCE EITHER WAY. `docker compose up -d --wait` recreates "
+                    "the container before confirming health, so an image that fails to start "
+                    "closes the port and takes the site DOWN while the box's timer retries it "
+                    "forever -- and an edge that refuses this runner looks identical from here.",
+                    f"Check by hand, from a network that reaches the site: `{_HAND_CHECK}`. "
+                    "If it is down, or serving a build other than the promoted one, ROLL BACK "
+                    "NOW: re-dispatch this workflow with the previous known-good tag. If it "
+                    "reports the promoted build, this run was blind and the deploy is fine.",
+                ]
+            )
+        if self.outcome == MATCHED:
+            return (
+                f"the last attempt MATCHED after {attempts} attempts, yet the poll loop did not "
+                f"exit on it -- that is a bug in promote.yml's loop, not in the deploy: "
+                f"{self.reason}"
+            )
+        return (
+            f"{self.reason}. Nothing about the box was measured, so this says nothing about the "
+            "deploy: fix the dispatch input and re-run."
+        )
 
 
 def parse_promoted_tag(tag: str) -> tuple[str, str] | None:
@@ -69,19 +152,40 @@ def parse_promoted_tag(tag: str) -> tuple[str, str] | None:
     return (m.group(1), m.group(2)) if m else None
 
 
-def assess(tag: str, health: dict) -> Verdict:
-    """`health` is exactly the JSON `/api/health` returns (`app/src/lib/health.ts`'s
-    `HealthReport`) -- or `{}`, which is what the workflow substitutes when `curl` itself fails
-    (dropped connection, box still booting, DNS not yet resolving) or when the endpoint answers
-    with a body that doesn't even parse. `{}`, a genuine 503 body, and a malformed body all lack
-    a usable `build`, and all three must read as "not yet", never as a crash -- the poll runs up
-    to 30 times and a raised exception would take the whole workflow down on the first flaky
-    fetch instead of retrying it.
+def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
+    """`(report, None)` when the body is a health report, `({}, why-not)` when it is anything
+    else. `http_status` is curl's `%{http_code}`: 0 (`000`) means no response line arrived.
     """
-    parsed = parse_promoted_tag(tag)
-    if parsed is None:
+    code = f"{http_status:03d}"
+    if http_status == 0:
+        return {}, "the fetch did not complete -- curl reported no HTTP status at all"
+    if not body.strip():
+        return {}, f"the last response was HTTP {code} with an empty body"
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return {}, (
+            f"the last response was HTTP {code} and its body is not JSON: "
+            f"{code_span(snippet(body))}"
+        )
+    if not isinstance(parsed, dict):
+        return {}, (
+            f"the last response was HTTP {code} and its body is JSON that is not an object: "
+            f"{code_span(snippet(body))}"
+        )
+    return parsed, None
+
+
+def assess(tag: str, health_body: str, health_status: int) -> Verdict:
+    """`health_body` is exactly the body `/api/health` returned (`app/src/lib/health.ts`'s
+    `HealthReport`, serialized) -- or a challenge page, or an HTML 502, or nothing at all. The
+    poll runs up to 30 times, so none of those may raise; each must read as "not yet", and each
+    must be distinguishable afterwards, which is what `read_a_build` carries.
+    """
+    parsed_tag = parse_promoted_tag(tag)
+    if parsed_tag is None:
         return Verdict(
-            matched=False,
+            outcome=BAD_TAG,
             reason=(
                 f"'{tag}' does not match the warehouse-YYYY.MM-<sha> shape image.yml "
                 "publishes -- refusing to compare the live build against a tag that was "
@@ -92,15 +196,29 @@ def assess(tag: str, health: dict) -> Verdict:
             live_warehouse=None,
             live_sha=None,
         )
-    expected_warehouse, expected_sha = parsed
+    expected_warehouse, expected_sha = parsed_tag
+
+    health, unreadable = read_health(health_body, health_status)
+    if unreadable:
+        return Verdict(
+            outcome=UNREADABLE,
+            reason=unreadable,
+            expected_warehouse=expected_warehouse,
+            expected_sha=expected_sha,
+            live_warehouse=None,
+            live_sha=None,
+        )
 
     build = health.get("build")
     if not isinstance(build, dict):
+        # `build` is non-optional on `HealthReport` and `identity()` computes it before every
+        # return branch, so JSON without one did not come from this app: nothing here is a
+        # reading of the box's build, whatever else parsed.
         return Verdict(
-            matched=False,
+            outcome=UNREADABLE,
             reason=(
                 "the health report has no `build` section -- the box may still be booting, "
-                "`/api/health` may itself be failing, or the curl to it did not succeed"
+                "`/api/health` may itself be failing, or something other than this app answered"
             ),
             expected_warehouse=expected_warehouse,
             expected_sha=expected_sha,
@@ -112,7 +230,7 @@ def assess(tag: str, health: dict) -> Verdict:
 
     if live_warehouse == expected_warehouse and live_sha == expected_sha:
         return Verdict(
-            matched=True,
+            outcome=MATCHED,
             reason=f"live matches the promoted tag ({expected_warehouse} / {expected_sha})",
             expected_warehouse=expected_warehouse,
             expected_sha=expected_sha,
@@ -120,7 +238,7 @@ def assess(tag: str, health: dict) -> Verdict:
             live_sha=live_sha,
         )
     return Verdict(
-        matched=False,
+        outcome=MISMATCH,
         reason=(
             f"live is '{live_warehouse}' / '{live_sha}', want "
             f"'{expected_warehouse}' / '{expected_sha}'"
@@ -132,12 +250,49 @@ def assess(tag: str, health: dict) -> Verdict:
     )
 
 
-def main() -> int:
-    """Two call shapes, dispatched on argument count -- not a subcommand keyword, so the loop's
-    existing `promote_check.py "$TAG" "$body"` call stays exactly as it was:
+def _exhausted(argv: list[str]) -> int:
+    """`--exhausted <tag> <http-status> <body> <attempts>`.
 
-      promote_check.py <tag>                     -- validate-only (one positional argument)
-      promote_check.py <tag> <health-report-json> -- the poll check (two positional arguments)
+    The poll triple sits in the same order as the per-attempt shape below, deliberately: the
+    workflow passes the same two variables it has been passing all along, plus the loop counter.
+
+    Each line becomes its own `::error::` annotation (Actions parses those per line) and the
+    whole report also goes to the step summary. That summary write is what replaces
+    `printf '%s' "$body" | jq .` on this path -- a pipe that wrote NOTHING whenever the body was
+    not JSON, which is every case this path exists to report, and printed `jq: parse error` in
+    place of it.
+    """
+    if len(argv) < 6:
+        print("usage: promote_check.py --exhausted <tag> <http-status> <body> <attempts>")
+        return 2
+    verdict = assess(argv[2], argv[4], int(argv[3] or 0))
+    report = verdict.exhausted_report(int(argv[5] or 0))
+    for line in report.splitlines():
+        print(f"::error::{line}")
+
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as fh:
+            fh.write(
+                "\n".join(
+                    ["### The promoted build was not confirmed", ""]
+                    + [f"- {line}" for line in report.splitlines()]
+                )
+                + "\n"
+            )
+    # Always non-zero: the budget elapsed without the box confirming the build, whatever the
+    # reason turned out to be.
+    return 1
+
+
+def main() -> int:
+    """Three call shapes. The first is dispatched on an explicit flag because it asks a
+    different QUESTION -- not "is it there yet" but "what is this run entitled to conclude from
+    having never seen it" -- and the other two stay dispatched on argument count:
+
+      promote_check.py --exhausted <tag> <status> <body> <attempts>  -- the poll budget elapsed
+      promote_check.py <tag>                                         -- validate-only
+      promote_check.py <tag> <http-status> <health-report-json>      -- one poll attempt
 
     VALIDATE-ONLY exists so `promote.yml` can fast-fail on a typo'd tag before it ever enters
     the 30-attempt/300s poll loop. Without it, `assess()`'s own shape check already reports the
@@ -146,12 +301,15 @@ def main() -> int:
     returns before anything about a live build enters the picture: there is no health report to
     compare against yet, so there is no `Verdict` and nothing is written to `GITHUB_OUTPUT`.
 
-    Called once per poll attempt (`promote.yml`'s "Wait for the box to be serving it" loops up
-    to 30 times). Exit code there is what the workflow's `if ...; then break; fi` reads: 0 means
-    the loop is done, 1 means keep polling. `GITHUB_OUTPUT` is also written every call, mirroring
-    `freshness.py`'s shape, so the final attempt's verdict is available to any later step without
-    the workflow having to re-parse this script's stdout.
+    The poll shape is called once per attempt (`promote.yml`'s "Wait for the box to be serving
+    it" loops up to 30 times). Exit code there is what the workflow's `if ...; then break; fi`
+    reads: 0 means the loop is done, 1 means keep polling. `GITHUB_OUTPUT` is also written every
+    call, mirroring `freshness.py`'s shape, so the final attempt's verdict is available to any
+    later step without the workflow having to re-parse this script's stdout.
     """
+    if len(sys.argv) >= 2 and sys.argv[1] == "--exhausted":
+        return _exhausted(sys.argv)
+
     if len(sys.argv) == 2:
         tag = sys.argv[1]
         if parse_promoted_tag(tag) is not None:
@@ -163,18 +321,11 @@ def main() -> int:
         )
         return 1
 
-    if len(sys.argv) < 3:
-        print("usage: promote_check.py <tag> [health-report-json]")
+    if len(sys.argv) < 4:
+        print("usage: promote_check.py <tag> [<http-status> <health-report-json>]")
         return 2
     tag = sys.argv[1]
-    try:
-        health = json.loads(sys.argv[2])
-    except json.JSONDecodeError:
-        health = {}
-    if not isinstance(health, dict):
-        health = {}
-
-    verdict = assess(tag, health)
+    verdict = assess(tag, sys.argv[3], int(sys.argv[2] or 0))
     print(verdict.reason)
 
     out = os.environ.get("GITHUB_OUTPUT")
