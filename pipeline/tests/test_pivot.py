@@ -267,7 +267,7 @@ def test_composite_filter_rejects_ascii_whitespace_around_an_id(con):
     It also removes a latent cross-language divergence: .strip() strips \x1c-\x1f which JS's
     trim() does not, and trim() strips U+FEFF which .strip() does not. With no strip on either
     side there is no whitespace set for the two runtimes to disagree about."""
-    with pytest.raises(PivotError, match="must be a plain whole number"):
+    with pytest.raises(PivotError, match=r"for 'route' must be a plain whole number"):
         render_pivot(q(filters=(("route", (" 12478 - 12892\t",)),)), con)
 
 
@@ -507,7 +507,14 @@ def test_filter_value_rejects_every_shape_of_whitespace_in_a_composite_pair(con)
         "12478 - 12892",
         " 12478  -  12892 ",
     ):
-        with pytest.raises(PivotError, match="must be a plain whole number"):
+        # The key is pinned as well as the message, and the reason is narrower than "some
+        # other error could fire". A mistyped grain would NOT satisfy a message-only assertion
+        # (it raises "unknown grain", different text). What DOES satisfy one is a rejection
+        # naming a DIFFERENT dimension: a query carrying both op_airline_id='2T (1)' and a
+        # perfectly valid route value raises "filter value '2T (1)' for 'op_airline_id' must be
+        # a plain whole number", which matches the message alone and reads as a pass for route.
+        # Verified both ways before this line was written.
+        with pytest.raises(PivotError, match=r"for 'route' must be a plain whole number"):
             render_pivot(q(filters=(("route", (spelling,)),)), con)
 
 

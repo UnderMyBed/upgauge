@@ -222,7 +222,7 @@ describe("composite-dimension filters", () => {
     // .strip() strips \x1c-\x1f, trim() does not. With no strip, no set to disagree about.
     expect(() =>
       renderPivot({ ...BASE, filters: [["route", [" 12478 - 12892\t"]]] }, FIXTURE),
-    ).toThrow(/must be a plain whole number/);
+    ).toThrow(/for 'route' must be a plain whole number/);
   });
 
   it("leaves the single-column filter path untouched", () => {
@@ -491,8 +491,13 @@ describe("filter values are type-checked against the dimension's column type", (
       "12478 - 12892",
       " 12478  -  12892 ",
     ]) {
+      // The key is pinned as well as the message. Not because "some other error might fire"
+      // -- a mistyped grain raises different text and would fail a message-only assertion too
+      // -- but because a rejection naming a DIFFERENT dimension does match one: a query with
+      // op_airline_id='2T (1)' alongside a valid route value raises "... for 'op_airline_id'
+      // must be a plain whole number", which a message-only check reads as a pass for route.
       expect(() => renderPivot(q({ filters: [["route", [spelling]]] }), FIXTURE)).toThrow(
-        /must be a plain whole number/,
+        /for 'route' must be a plain whole number/,
       );
     }
   });
