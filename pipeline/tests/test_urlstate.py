@@ -91,8 +91,12 @@ def test_filter_values_with_reserved_characters_round_trip(con):
     """A filter value is user/attacker-controlled free text, not an allowlisted identifier.
     ',' is our own inter-value delimiter, '&' is the inter-pair delimiter, and '%' is the
     escape character itself -- a value containing any of them must not corrupt the delimiter
-    structure or silently reparse into the wrong number of values."""
-    original = q(filters=(("origin_airport_id", ("14,771", "13&487", "9%5", "13487")),))
+    structure or silently reparse into the wrong number of values.
+
+    Carried on origin_state (VARCHAR) because the escaping under test belongs to the CODEC,
+    not to any dimension: these values are not plain whole numbers, and render_pivot rejects
+    a non-canonical value on an integer-typed dimension before it can reach DuckDB."""
+    original = q(filters=(("origin_state", ("14,771", "13&487", "9%5", "13487")),))
     assert decode(encode(original), con) == original
 
 

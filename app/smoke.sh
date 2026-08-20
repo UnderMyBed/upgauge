@@ -1776,16 +1776,17 @@ check     "bounds: ...and keeps the project Cache-Control"     "$HDRS" "$HTML_CA
 # The SECOND control, and the one a blanket "no % anywhere" rule would redden: `f` is exempt from
 # the spelling rule because percent-encoding is that key's own escape mechanism -- a filter value
 # legitimately carries `,`, `:`, `&`, `=` and spaces, which is why `encode()` runs quote() over it
-# and why golden case 8 is `f=op_airline_id:2T%20%281%29,O%27Hare,...`. Banning `%` there would
-# break permalinks this product has already shipped, so the exemption is asserted, not assumed.
+# and why golden case 8 carries `2T (1)`, `O'Hare`, `a!b` and `c*d` in one filter value list.
+# Banning `%` there would break permalinks this product has already shipped, so the exemption is
+# asserted, not assumed. (The DIMENSION that golden hangs its values on is not named here on
+# purpose -- it is a reserved-character fixture, and which column it filters is incidental to what
+# it pins.)
 #
 # The VALUE is `19790` (Delta) with every digit percent-encoded, not one of golden case 8's
-# strings: those are codec round-trip fixtures, and `op_airline_id` is an integer column, so
-# `f=op_airline_id:2T%20%281%29` decodes perfectly and then 500s in DuckDB on the cast -- measured
-# on this server. That is the `f` residual § "What this does not close" names (an unvalidated
-# filter value), not a spelling question, and asserting a 200 on it would pin the wrong thing.
-# Every digit encoded still exercises exactly what this control is for: `%` reaching `f` and being
-# admitted rather than refused.
+# strings, because those strings are not castable to an INTEGER column and this control must
+# isolate SPELLING from type. A non-numeric value on an integer-typed dimension is a different
+# question entirely, owned by section 15b below. Every digit encoded still exercises exactly what
+# this control is for: `%` reaching `f` and being admitted rather than refused.
 FQ="v=1&k=seg&d=op_airline_id&m=seats&s=-seats&g=op&t=2025-05:2026-04&f=op_airline_id:%31%39%37%39%30&n=25"
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${FQ}")
 HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${FQ}")
@@ -1846,6 +1847,236 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?$
 HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/api/pivot?${VB}&t=2025-05:2026-04&n=5")
 check "bounds: /api/pivot still 200s the same query in bounds" "$CODE" '200'
 check "bounds: ...under the project's 30-day header"           "$HDRS" "$CACHE_EXPECTED"
+
+# ---------------------------------------------------------------------------------------------
+# 15b. Issue #87: a filter VALUE that cannot be cast to its dimension's COLUMN TYPE.
+#
+# The `f` residual that § "What this does not close" names is not only a cache-CARDINALITY
+# problem. On an INTEGER-typed dimension a junk value decodes cleanly, binds as a parameter, and
+# throws inside DuckDB at EXECUTION time -- after proxy.ts has resolved cacheability and already
+# committed HTML_CACHE. Measured on a served build at 01ea39e, before the rule existed:
+#
+#   /explore   f=op_airline_id:2T%20%281%29     500  public, s-maxage=3600, ...
+#   /explore   f=distance_group:99999           500  public, s-maxage=3600, ...
+#   /explore   f=quarter:999                    500  public, s-maxage=3600, ...
+#   /explore   f=route:99999999999-99999999999  500  public, s-maxage=3600, ...
+#   /api/pivot (each of the above)              500  no-store, {"error":"internal error"}
+#
+# A CACHED 500 on the most expensive page here, for one unauthenticated GET -- and the first
+# instance of § "The gap" reachable against a HEALTHY database, by URL alone. /api/pivot is NOT
+# a cache exposure (its handler owns no-store); there it is an opaque 500 where a named 400 belongs.
+#
+# THREE THINGS THESE CHECKS EXIST TO PIN, each a bug a plausible fix still ships:
+#
+#  1. ALL-DIGITS IS NOT THE RULE. distance_group:99999, quarter:999 and op_airline_id:99999999999
+#     are every one of them digits and every one of them throws -- SMALLINT, TINYINT and INTEGER
+#     overflow respectively. A digits-only check copied from the `route` branch passes a test
+#     written with '2T (1)' and still 500s: CLAUDE.md's "asserting an outcome the buggy
+#     implementation also produces", pre-loaded. So distance_group:99999 carries the FULL header
+#     set, not a status check -- it is the single case that kills a digits-only fix.
+#
+#  2. THE `route` BRANCH HAS THE SAME HOLE. isIntegerPair is /^\d+$/ with no width bound
+#     (lib/pivot/render.ts), so route:99999999999-99999999999 passes validation and throws on the
+#     cast. It is a DIFFERENT code path from the single-column IN branch -- different validation,
+#     different SQL -- and it is the branch that already HAD a check and was still wrong, so it is
+#     pinned in full rather than folded in as "another /explore case".
+#
+#  3. VARCHAR DIMENSIONS MUST NOT GET A NUMERIC CHECK. The type is READ from the catalog, never
+#     inferred from the key name. aircraft_type is VARCHAR carrying zero-padded codes, and
+#     f=aircraft_type:079 and f=aircraft_type:79 are DIFFERENT filters against real data --
+#     measured here: 079 matches rows, 79 matches none. A canonical-integer rule applied to this
+#     key would reject a permalink that works today AND re-open CLAUDE.md's zero-padding gotcha.
+#     That pair is the regression guard, and both halves must stay 200.
+#
+# NEEDLE FORM, and it is this file's self-defect #2 in a new costume: React HTML-ESCAPES the
+# apostrophes in the message. The served bytes are `filter value &#x27;2T (1)&#x27; for
+# &#x27;op_airline_id&#x27; ...`, NOT render.ts's plain quotes -- so a needle copied from the
+# source could never fire. Measured, not assumed, against the error page f=route:JFK-LAX already
+# renders today. The key is therefore asserted BARE and INSIDE the isolated <p role="alert">
+# region, and the phrase asserted is the stable `must be a plain whole number`, never the full
+# wording (the rule's owner may still refine it).
+F87="v=1&k=seg&d=op_airline_id&m=seats&s=-seats&g=op&t=2025-05:2026-04&n=25"
+F87R="v=1&k=route&d=route&m=seats&t=2015-01:2016-12&s=-seats&n=5&g=op"
+MSG87='must be a plain whole number'
+
+# `between` returns its input UNCHANGED when the start marker is absent, so a needle asserted
+# against a "region" extracted from a page that has none is answered by the WHOLE PAGE. Not
+# hypothetical: Next's __next_error__ 500 page embeds the RSC flight payload, which echoes the
+# request URL -- so `d=op_airline_id` appears SIX times in it and the page carries no `</p>` at
+# all, and a bare `check "$ALERT" 'op_airline_id'` printed **ok** against the very 500 this
+# section exists to fail. Measured at 01ea39e while writing these checks. This wrapper turns that
+# silent pass into a guaranteed red, which is the only reason it exists.
+alert_region() { # alert_region <body> -> the <p role="alert"> text, or a sentinel matching no needle
+  has "$1" 'role="alert"' || { printf '%s' '(no alert region on this page)'; return; }
+  between "$1" 'role="alert"' '</p>'
+}
+
+# --- A. /explore, the canonical case: non-numeric value on an INTEGER column. Full header set.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:2T%20%281%29")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:2T%20%281%29")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:2T%20%281%29")
+# `check ... '200'`, never `check_not ... '500'`: a dead server scores 000 and would PASS the
+# negative form -- self-defect #1 wearing a different hat.
+check     "87: /explore does not 5xx on a non-numeric INTEGER filter value" "$CODE" '200'
+check     "87: ...and is never cached"                                     "$HDRS" 'no-store'
+check_not "87: ...so there is no long-cached 500 (the defect itself)"       "$HDRS" 's-maxage'
+# Anti-vacuity, printing its own line because `between` returns its input UNCHANGED when the start
+# marker is absent -- a silent-pass shape, and a cousin of self-defect #1. Measured at 01ea39e: on
+# the 500 page the marker is absent and the "isolated" region came back as all 7,413 body bytes.
+check     "87: ...rendering the named permalink error page, not Next's own 500" "$BODY" 'role="alert"'
+ALERT=$(alert_region "$BODY")
+check_not "87: ...and that region really is isolated (excludes the page's own body copy)" "$ALERT" 'known-valid'
+check     "87: ...naming the rule"                     "$ALERT" "$MSG87"
+check     "87: ...and naming the offending dimension"  "$ALERT" 'op_airline_id'
+
+# --- B. /api/pivot, the canonical case. 400, never 307: a JSON endpoint must not redirect an XHR.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${F87}&f=op_airline_id:2T%20%281%29")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/api/pivot?${F87}&f=op_airline_id:2T%20%281%29")
+BODY=$(curl -s                              --max-time 15 "${BASE}/api/pivot?${F87}&f=op_airline_id:2T%20%281%29")
+check        "87: /api/pivot 400s a non-numeric INTEGER filter value" "$CODE" '400'
+check        "87: ...under no-store"                                  "$HDRS" 'no-store'
+check_not    "87: ...never the 30-day header"                         "$HDRS" 's-maxage'
+check_not_re "87: ...and is never redirected"                         "$HDRS" '[Ll]ocation:'
+check        "87: ...naming the rule, not an opaque internal error"   "$BODY" "$MSG87"
+check        "87: ...and naming the offending dimension"              "$BODY" 'op_airline_id'
+
+# --- C. The all-digit family. THESE are what a digits-only fix cannot survive.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${F87}&f=distance_group:99999")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${F87}&f=distance_group:99999")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${F87}&f=distance_group:99999")
+check     "87: /explore does not 5xx on an over-width SMALLINT (distance_group:99999)" "$CODE" '200'
+check     "87: ...and is never cached"                                                 "$HDRS" 'no-store'
+check_not "87: ...so there is no long-cached 500"                                      "$HDRS" 's-maxage'
+check     "87: ...rendering the named permalink error page"                            "$BODY" 'role="alert"'
+ALERT=$(alert_region "$BODY")
+check     "87: ...naming the rule"                    "$ALERT" "$MSG87"
+check     "87: ...and naming the offending dimension" "$ALERT" 'distance_group'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${F87}&f=quarter:999")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${F87}&f=quarter:999")
+ALERT=$(alert_region "$BODY")
+check "87: /explore does not 5xx on an over-width TINYINT (quarter:999)" "$CODE" '200'
+check "87: ...naming the rule"                    "$ALERT" "$MSG87"
+check "87: ...and naming the offending dimension" "$ALERT" 'quarter'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:99999999999")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:99999999999")
+ALERT=$(alert_region "$BODY")
+check "87: /explore does not 5xx on an over-width INTEGER (op_airline_id:99999999999)" "$CODE" '200'
+check "87: ...naming the rule"                    "$ALERT" "$MSG87"
+check "87: ...and naming the offending dimension" "$ALERT" 'op_airline_id'
+
+# --- D. The `route` pair branch -- a separate code path, and one that already had a check.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${F87R}&f=route:99999999999-99999999999")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${F87R}&f=route:99999999999-99999999999")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${F87R}&f=route:99999999999-99999999999")
+check     "87: /explore does not 5xx on an over-width composite id pair" "$CODE" '200'
+check     "87: ...and is never cached"                                   "$HDRS" 'no-store'
+check_not "87: ...so there is no long-cached 500"                        "$HDRS" 's-maxage'
+check     "87: ...rendering the named permalink error page"              "$BODY" 'role="alert"'
+ALERT=$(alert_region "$BODY")
+check     "87: ...naming the rule"                    "$ALERT" "$MSG87"
+check     "87: ...and naming the offending dimension" "$ALERT" 'route'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${F87R}&f=route:99999999999-99999999999")
+BODY=$(curl -s                              --max-time 15 "${BASE}/api/pivot?${F87R}&f=route:99999999999-99999999999")
+check "87: /api/pivot 400s an over-width composite id pair" "$CODE" '400'
+check "87: ...naming the rule"                              "$BODY" "$MSG87"
+check "87: ...and naming the offending dimension"           "$BODY" 'route'
+
+# The pair branch has TWO distinct refusals and they must stay distinguishable. ARITY is still the
+# pre-existing message; a well-formed pair whose PART is not a number is now the value rule's, which
+# is strictly more precise -- "JFK is not a whole number" rather than "give me two ids", when two
+# ids is exactly what was given. Both are asserted, because a rule that collapsed them into one
+# message would pass a check for either one alone.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${F87R}&f=route:JFK-LAX")
+BODY=$(curl -s                              --max-time 15 "${BASE}/api/pivot?${F87R}&f=route:JFK-LAX")
+check "87: /api/pivot still 400s a non-numeric composite pair" "$CODE" '400'
+check "87: ...naming the whole-number rule, the part being the wrong SHAPE not the wrong COUNT" \
+                                                              "$BODY" 'must be a plain whole number'
+check "87: ...and naming the offending PART, not the whole value" "$BODY" "'JFK'"
+check_not "87: ...not the arity message, which is a different fault" "$BODY" 'two ids joined by'
+
+# The arity message itself, still reachable and still its own text -- one id where two belong.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${F87R}&f=route:12478")
+BODY=$(curl -s                              --max-time 15 "${BASE}/api/pivot?${F87R}&f=route:12478")
+check "87: /api/pivot 400s a composite value with only ONE id" "$CODE" '400'
+check "87: ...under the pre-existing arity message"           "$BODY" 'two ids joined by'
+check_not "87: ...which is NOT the whole-number rule"         "$BODY" 'must be a plain whole number'
+
+# --- E. THE REGRESSION GUARD: VARCHAR dimensions keep working, zero-padding intact.
+# 079 and 79 are different filters against real data. A rule that guessed "integer" from the key
+# name, or that canonicalised leading zeros here, breaks the first and conflates it with the second.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${F87}&f=aircraft_type:079")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${F87}&f=aircraft_type:079")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${F87}&f=aircraft_type:079")
+check     "87: a zero-padded VARCHAR filter still renders (aircraft_type:079)" "$CODE" '200'
+check     "87: ...and keeps the project Cache-Control"                         "$HDRS" "$HTML_CACHE_EXPECTED"
+check_not "87: ...and is NOT reached by the whole-number rule"                 "$BODY" "$MSG87"
+# Dataset-pinned: WHICH rows 079 matches moves with the warehouse, but that it matches some is
+# what makes the check above non-vacuous -- a 200 alone is also what a silently-empty filter gives.
+check_dataset check_not "87: ...and the filter still matches rows" "$BODY" 'No rows match'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${F87}&f=aircraft_type:79")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${F87}&f=aircraft_type:79")
+check "87: the UNPADDED spelling is a different filter, not an error (aircraft_type:79)" "$CODE" '200'
+check_not "87: ...also not reached by the whole-number rule"                             "$BODY" "$MSG87"
+check_dataset check "87: ...and it matches nothing, which is how 079 differs from 79"    "$BODY" 'No rows match'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${F87}&f=origin_state:2T%20%281%29")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${F87}&f=origin_state:2T%20%281%29")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${F87}&f=origin_state:2T%20%281%29")
+check     "87: junk on a VARCHAR dimension is an ordinary empty result, not an error" "$CODE" '200'
+check     "87: ...and keeps the project Cache-Control"                                "$HDRS" "$HTML_CACHE_EXPECTED"
+check_not "87: ...and is NOT reached by the whole-number rule"                        "$BODY" "$MSG87"
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${F87}&f=aircraft_type:079")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/api/pivot?${F87}&f=aircraft_type:079")
+check "87: /api/pivot keeps serving a zero-padded VARCHAR filter" "$CODE" '200'
+check "87: ...under the project's 30-day header"                  "$HDRS" "$CACHE_EXPECTED"
+
+# --- F. The canonical-spelling axis (#52), unclosed on `f` until this rule. `0000019790` casts
+# fine and renders a byte-identical page under a DISTINCT CDN key -- 30 days of them on /api/pivot,
+# not the hour /explore gets. `encode()` emits neither spelling, so no shipped permalink breaks.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:0000019790")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:0000019790")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:0000019790")
+check     "87: a non-canonical integer spelling does not 5xx (refusal is a page, not a crash)" "$CODE" '200'
+check     "87: ...under no-store"                                       "$HDRS" 'no-store'
+check_not "87: ...so it is not one more distinct cacheable key"         "$HDRS" 's-maxage'
+check     "87: ...rendering the named permalink error page"             "$BODY" 'role="alert"'
+ALERT=$(alert_region "$BODY")
+check     "87: ...naming the rule"                                      "$ALERT" "$MSG87"
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${F87}&f=op_airline_id:0000019790")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/api/pivot?${F87}&f=op_airline_id:0000019790")
+check     "87: /api/pivot refuses the same spelling"                 "$CODE" '400'
+check_not "87: ...so it never mints a 30-day key for a repeat page"  "$HDRS" 's-maxage'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:-1")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:-1")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:-1")
+ALERT=$(alert_region "$BODY")
+check "87: a negative integer does not 5xx either (it casts fine and matches nothing)" "$CODE" '200'
+check "87: ...under no-store"                                                     "$HDRS" 'no-store'
+check "87: ...naming the rule"                                                    "$ALERT" "$MSG87"
+
+# --- G. THE CONTROLS. Without these, an /explore that errored on every filter and a proxy that
+# answered no-store to everything would satisfy every check above.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:19790")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:19790")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${F87}&f=op_airline_id:19790")
+check     "87: the canonical spelling of the SAME id still renders" "$CODE" '200'
+check     "87: ...and keeps the project Cache-Control"              "$HDRS" "$HTML_CACHE_EXPECTED"
+check_not "87: ...with no whole-number error state"                 "$BODY" "$MSG87"
+check     "87: ...and the filter resolved to its one carrier"       "$BODY" '>DL<'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${F87}&f=op_airline_id:19790")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/api/pivot?${F87}&f=op_airline_id:19790")
+BODY=$(curl -s                              --max-time 15 "${BASE}/api/pivot?${F87}&f=op_airline_id:19790")
+check     "87: /api/pivot still serves the canonical spelling" "$CODE" '200'
+check     "87: ...under the project's 30-day header"           "$HDRS" "$CACHE_EXPECTED"
+check_not "87: ...with no whole-number error"                  "$BODY" "$MSG87"
 
 # ---------------------------------------------------------------------------------------------
 # 16. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.

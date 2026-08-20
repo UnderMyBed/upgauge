@@ -219,12 +219,16 @@ describe("critical fix round 1: decodeURIComponent threw where Python's unquote 
     );
   });
 
-  it("ACCEPTS a malformed percent-escape inside a filter value -- filter values are never allowlisted, so it decodes to the literal string and the query is valid (zero rows, not an error)", () => {
+  it("ACCEPTS a malformed percent-escape inside a VARCHAR filter value -- such values are never allowlisted, so it decodes to the literal string and the query is valid (zero rows, not an error)", () => {
+    // origin_state, not an id column: '%ZZ' is not a plain whole number, and renderPivot
+    // rejects that on an integer-typed dimension. The property under test is the CODEC's --
+    // decodeURIComponent must not throw a URIError where Python's unquote passes through --
+    // and a VARCHAR dimension is where a literal '%ZZ' is a legitimate value.
     const q = decode(
-      "v=1&k=seg&d=year_month&m=seats&t=2015-01:2015-12&f=origin_airport_id:%ZZ&n=5&g=op",
+      "v=1&k=seg&d=year_month&m=seats&t=2015-01:2015-12&f=origin_state:%ZZ&n=5&g=op",
       FIXTURE,
     );
-    expect(q.filters).toEqual([["origin_airport_id", ["%ZZ"]]]);
+    expect(q.filters).toEqual([["origin_state", ["%ZZ"]]]);
   });
 
   it("rejects a malformed percent-escape in the sort key ('s=%') via the allowlist, not a URIError", () => {

@@ -5,10 +5,15 @@
 -- file: the server already opens this database, so there is no extra artifact to ship and
 -- `make build` regenerates it. That is what makes it un-driftable.
 --
--- CURATED, not introspected. Which dimensions we offer is a product decision, not a schema
--- fact -- fct_segment_month has columns (download_date, quarantine_reason) that are not
--- Explorer dimensions. A test cross-checks every column_expr against duckdb_columns(), so a
--- renamed fact column fails loudly instead of silently dropping a dimension.
+-- The VOCABULARY is curated, not introspected. Which dimensions we offer is a product
+-- decision, not a schema fact -- fct_segment_month has columns (download_date,
+-- quarantine_reason) that are not Explorer dimensions. A test cross-checks every column_expr
+-- against duckdb_columns(), so a renamed fact column fails loudly instead of silently
+-- dropping a dimension. The filter-value bound that reads these rows needs each
+-- column's TYPE too; that is a schema fact rather than a product decision, so it is
+-- introspected -- and it is introspected in sql/03_queries/catalog_dimensions.sql rather than
+-- here, because a column added to THIS view only exists in a warehouse asset rebuilt after the
+-- change, while a column computed in the QUERY ships with the code. See that file.
 --
 -- `grain`: 'both' | 'segment' | 'route'. aircraft_type and aircraft_group are segment-only
 -- because fct_route_month drops that grain.

@@ -66,18 +66,17 @@ describe("GET /api/pivot", () => {
   });
 
   it("rejects a non-numeric composite filter value with 400, not 500", async () => {
-    // End-to-end regression: a malformed composite filter must never 500. As of the render.ts
-    // fix (Important 4) this specific input is actually caught one level up, by decode()'s
-    // own renderPivot-based validation (which now also rejects non-numeric ids) -- so this
-    // proves the OUTCOME (400, named message, no leak) without pinning which of the two guard
-    // layers below is responsible. Fails if the composite-value digit check in render.ts
-    // regresses to accept non-numeric ids again.
+    // End-to-end regression: a malformed composite filter must never 500. This input is
+    // caught one level up, by decode()'s own renderPivot-based validation -- so this proves
+    // the OUTCOME (400, named message, no leak) without pinning which of the two guard layers
+    // below is responsible. Fails if the per-part value check in render.ts's pair branch
+    // regresses to accept ids that cannot cast to the column type.
     const res = await GET(
       req("v=1&k=route&d=route&m=seats&t=2025-05:2026-04&f=route:JFK-LAX&n=5&g=op"),
     );
     expect(res.status).toBe(400);
     const body = await res.json();
-    expect(body.error).toMatch(/two ids joined by/);
+    expect(body.error).toMatch(/must be a plain whole number/);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
