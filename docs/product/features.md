@@ -53,6 +53,17 @@ table" section.
      is reused as-is from `pipeline.pivot.render_pivot` — one allowlist, not two. URL syntax
      that `render_pivot` can't see (`v` itself, unknown or duplicate query-string keys, the
      shape of `t` and `f`, `n`/`v` as integers) is validated in the codec.
+   - **The SERVER admits less than the codec parses, and that is a separate contract.** The port
+     above must match `pipeline/urlstate.py` exactly, so the bounds a *deployment* needs do not
+     live in it: `app/src/lib/pivot/bounds.ts` additionally refuses a `t` outside the months this
+     dataset covers, a `t` that ends before it starts, an `n` above 1000, and an `n` or `v`
+     spelled other than as a plain decimal (`n=0025` and `n=%32%35` both mean 25, and each extra
+     spelling is one more CDN cache entry for an identical page). `/explore` renders these as the
+     same named error as any other bad permalink; `/api/pivot` answers 400. Nothing `encode()`
+     produces is affected, and no permalink this app has ever shipped is — a test decodes all nine
+     goldens and every hardcoded `/explore` href in the app to keep that true. Why it is not in
+     the codec, and what stays open (`f`): `docs/architecture/hosting.md` § "`t` and `n` on
+     `/explore`".
    - **Filter values are percent-encoded individually**, because they are the one piece of
      free text in the format and can legally contain the delimiters (`,`, `:`, `&`, `=`) the
      format itself uses. This is what makes the raw query string load-bearing: once a web

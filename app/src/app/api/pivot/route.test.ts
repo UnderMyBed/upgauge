@@ -207,3 +207,58 @@ describe("GET /api/pivot raw query fidelity", () => {
     expect(JSON.stringify(body)).not.toMatch(/x-upgauge-raw-query|proxy\.ts|\/home\//);
   });
 });
+
+// #52. The value axis, on the path whose SUCCESSES carry the 30-day `PROJECT_CACHE` -- ten
+// times any HTML page here. `/api/pivot` reads the same grammar as `/explore` (its
+// `QUERY_ROWS` row declares `keys: ALLOWED_KEYS`, "the SAME keys as /explore, and for the same
+// reason"), so leaving it out of the bound would have left the LONGER-lived unbounded family
+// outside the fix -- the `exempt`-means-the-rules-are-off misreading that already left the
+// `&&` axis a 30-day-cached 200 on this exact path.
+describe("GET /api/pivot value bounds (#52)", () => {
+  const BASE = "v=1&k=seg&d=op_airline_id&m=seats&s=-seats&g=op";
+
+  it("400s a time range outside the dataset window, uncached", async () => {
+    const res = await GET(req(`${BASE}&t=1999-01:1999-12&n=5`));
+    expect(res.status).toBe(400);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect((await res.json()).error).toMatch(/time range/i);
+  });
+
+  it("400s a reversed time range whose months are both in window", async () => {
+    const res = await GET(req(`${BASE}&t=2026-04:2025-05&n=5`));
+    expect(res.status).toBe(400);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("400s a limit above the ceiling, uncached", async () => {
+    const res = await GET(req(`${BASE}&t=2025-05:2026-04&n=999999`));
+    expect(res.status).toBe(400);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect((await res.json()).error).toMatch(/limit/i);
+  });
+
+  it("400s a redundantly-spelled n that decodes to a perfectly legal value", async () => {
+    // n=0000005 IS 5. The value is in bounds; the SPELLING is one of unboundedly many, and
+    // each one is a distinct 30-day CDN entry for an identical response body.
+    const res = await GET(req(`${BASE}&t=2025-05:2026-04&n=0000005`));
+    expect(res.status).toBe(400);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("answers 400, never a 307 -- a JSON endpoint must not redirect an XHR", async () => {
+    const res = await GET(req(`${BASE}&t=1999-01:1999-12&n=5`));
+    expect(res.status).toBe(400);
+    expect(res.headers.get("Location")).toBeNull();
+  });
+
+  it("still 200s the same query in bounds, under the project's 30-day header", async () => {
+    // The control. Without it every assertion above is satisfied by a handler that 400s
+    // everything, which is the vacuity this repo has been bitten by before.
+    const res = await GET(req(`${BASE}&t=2025-05:2026-04&n=5`));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe(
+      "public, s-maxage=2592000, stale-while-revalidate=86400",
+    );
+    expect((await res.json()).rows.length).toBeGreaterThan(0);
+  });
+});

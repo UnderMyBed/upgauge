@@ -1467,10 +1467,12 @@ check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize 
 # 15. M8 Task 3: one canonical KEY SET per cacheable URL.
 #
 # Not "one canonical spelling", which is what this header claimed first and is wider than the gate
-# delivers: key ORDER survives and VALUES are never inspected, so `/explore?t=<any YYYY-MM>:<any
-# YYYY-MM>` alone is still ~1.4x10^10 distinct long-cached spellings -- MONTH_RE admits 10,000 x 12
-# valid values per side and nothing requires from <= to (docs/architecture/hosting.md § "What this
-# does not close" has the derivation).
+# delivers: key ORDER survives, and this gate inspects no VALUE at all. The value axis is bounded
+# by a different mechanism, asserted in its own block further down this section (#52,
+# `app/src/lib/pivot/bounds.ts`): `t` must sit inside the dataset's own window with from <= to, and
+# `n` must be under a stated ceiling and spelled one way. `f` is the residual and is deliberately
+# left to the edge (docs/architecture/hosting.md § "What this does not close" carries it, with the
+# thresholds -- and with the fact that today's rate-limit rule matches `/api/` only).
 #
 # Cloudflare's default cache key includes the full query string, so before this gate `?x=1..N`
 # minted an unbounded family of long-cached entries on every cacheable path -- measured on a
@@ -1685,6 +1687,68 @@ check_re "rsc: ...in the SAME one hop -- unaffected by this fix either way"     
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore?v=1&k=seg&d=junk&m=seats&t=2025-05:2026-04")
 check     "canonical: an undecodable /explore permalink is never cached" "$HDRS" 'no-store'
 check_not "canonical: ...and never long-cached"                          "$HDRS" 's-maxage'
+
+# #52: the VALUE axis, which neither the key gate nor `decode()` can see. `decode()` validates
+# identifiers, never values, so each URL below decoded cleanly and rendered a distinct 200 under
+# HTML_CACHE -- `t` alone admitting ~1.4x10^10 spellings (MONTH_RE's 10,000 x 12 per side, squared,
+# with no ordering rule), and `n` an unbounded family TWICE OVER: in its value (any integer) and in
+# its SPELLING (`n=0...025`, `n=%32%35`, `n=%2B25`, `n=2_5` all decode to 25). Cloudflare's default
+# cache key is the whole query string, so every one was a guaranteed origin miss on the most
+# expensive page here. `app/src/lib/pivot/bounds.ts` is the rule; this is the served-build proof.
+#
+# NEEDLES CARRY NO APOSTROPHE, and that is measured rather than assumed. The messages read
+# `time range 't' must ...` in the source, but `<p role="alert">{e.message}</p>` interpolates a
+# RUNTIME string, so React escapes it -- the wire bytes are `time range &#x27;t&#x27; must ...`.
+# A needle copied from the source would print `ok` for a string that is never present, which is
+# this file's self-defect #2 exactly. Verified against this server before these lines were written.
+#
+# The trailing year is left OUT of the window needle on purpose: the upper bound is wall-clock
+# (`lib/year.ts`'s maxValidYear), so `2015-01..2026-12` becomes `..2027-12` next January and a
+# needle pinning it would go red with no defect present.
+echo "==> value bounds on /explore and /api/pivot (#52)"
+VB="v=1&k=seg&d=op_airline_id&m=seats&s=-seats&g=op"
+for U in "t=1999-01:1999-12&n=25|must fall inside 2015-01..|a time range outside the data window" \
+         "t=2026-04:2025-05&n=25|must start on or before it ends|a reversed range, both months in window" \
+         "t=2025-05:2026-04&n=999999|must be at most 1000, got 999999|a limit above the ceiling" \
+         "t=2025-05:2026-04&n=00000025|must be spelled as a plain decimal|a redundantly-spelled n"; do
+  VQ="${U%%|*}"; REST="${U#*|}"; NEEDLE="${REST%%|*}"; WHAT="${REST##*|}"
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${VB}&${VQ}")
+  HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${VB}&${VQ}")
+  BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${VB}&${VQ}")
+  check     "bounds: /explore rejects ${WHAT}"      "$BODY" "$NEEDLE"
+  check     "bounds: ...as a 200 error page"        "$CODE" '200'
+  check     "bounds: ...never cached"               "$HDRS" 'no-store'
+  check_not "bounds: ...never long-cached"          "$HDRS" 's-maxage'
+done
+
+# The control, and it is not optional: every check above is satisfied by an /explore that errors
+# on everything and by a proxy that answers no-store to everything. This is the pair that has to
+# stay green, and M16 (proxy branch forced to no-store) reddens it.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore?${VB}&t=2025-05:2026-04&n=25")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/explore?${VB}&t=2025-05:2026-04&n=25")
+BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${VB}&t=2025-05:2026-04&n=25")
+check     "bounds: the SAME query in bounds still renders"     "$CODE" '200'
+check_not "bounds: ...with no error state"                     "$BODY" 'must be at most'
+check     "bounds: ...and keeps the project Cache-Control"     "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# /api/pivot reads the identical grammar and its SUCCESSES carry the 30-day PROJECT_CACHE -- ten
+# times any HTML page here -- so excluding it would have left the longer-lived unbounded family
+# outside the fix. 400, never 307: a JSON endpoint must not redirect an XHR (the same ruling the
+# key gate above already follows on this path).
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${VB}&t=1999-01:1999-12&n=5")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/api/pivot?${VB}&t=1999-01:1999-12&n=5")
+BODY=$(curl -s                              --max-time 15 "${BASE}/api/pivot?${VB}&t=1999-01:1999-12&n=5")
+check        "bounds: /api/pivot 400s an out-of-window t"   "$CODE" '400'
+check        "bounds: ...under no-store"                    "$HDRS" 'no-store'
+check_not    "bounds: ...never the 30-day header"           "$HDRS" 's-maxage'
+check_not_re "bounds: ...and is never redirected"           "$HDRS" '[Ll]ocation:'
+check        "bounds: ...naming the range, not a bare 400"  "$BODY" 'must fall inside 2015-01..'
+
+# The same endpoint's own control, at the 30-day header this bound is protecting.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/api/pivot?${VB}&t=2025-05:2026-04&n=5")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 15 "${BASE}/api/pivot?${VB}&t=2025-05:2026-04&n=5")
+check "bounds: /api/pivot still 200s the same query in bounds" "$CODE" '200'
+check "bounds: ...under the project's 30-day header"           "$HDRS" "$CACHE_EXPECTED"
 
 # ---------------------------------------------------------------------------------------------
 # 16. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.

@@ -1016,6 +1016,100 @@ Mutant 1 is the pair the brief calls out by name: a `no-store`-everywhere implem
 pass "declines to cache … out-of-range" *vacuously*, so mutant 2 — the other half — has to
 redden independently for either result to mean anything. It does.
 
+### `t` and `n` on `/explore` — bounded at the origin, because a pure function can decide them
+
+The key gate above closes which query KEYS a path reads. It closes nothing about their VALUES, and
+the value axis was the larger of the two (#52). `decode()` validates *identifiers* against the
+catalog through `renderPivot`; it never validates a value. Measured against the real codec before
+the fix, every one of these decoded cleanly and rendered a distinct 200 under `HTML_CACHE`:
+
+| key | what constrained it | family |
+|---|---|---|
+| `t` | `MONTH_RE` (`/^\d{4}-(0[1-9]\|1[0-2])$/`) only — 10,000 × 12 values per side, and nothing required `from ≤ to` | **1.44×10¹⁰** ordered pairs |
+| `n` | `parsePyInt` — any integer at all | unbounded |
+| `n`, `v` | nothing: `n=25`, `n=025`, `n=0025`, … `n=%32%35`, `n=%2B25`, `n=2_5` all decode to 25 | unbounded **again**, in spelling |
+
+That third row is the one a reader is most likely to miss, and it is why bounding `n`'s *value*
+alone would have left the claim false: a ceiling does not reduce the family at all while every
+value keeps unboundedly many spellings. `v` has the identical hole — it must equal 1 and accepts
+`v=1`, `v=01`, `v=+1`, `v=%31`, …
+
+**The bound is a SERVER ADMISSION policy, not a codec check, and that placement is load-bearing.**
+`docs/product/features.md` states the codec's contract as *"Reference implementation:
+`pipeline/urlstate.py`; the TypeScript port must match it exactly"*, and `pipeline/urlstate.py`
+records the reversed range as a **"Known accepted gap … Not guarded here on purpose"** — a
+judgement about *meaning* (a backwards range is a plausible reading that returns zero rows) made by
+a module that runs in CI and never faces a CDN. Putting the bound inside `decode()` would silently
+make the port stricter than the spec it is pinned to and falsify a shipped product doc, and would
+make a frozen public codec depend on `new Date()`. So `app/src/lib/pivot/bounds.ts` owns the rule
+and `decodeRequest` composes it with the codec — exactly the relationship `lib/year.ts` already has
+with `/airport`'s `y`, where no codec owns `parseYear` either. `bounds.test.ts` pins the boundary
+from the other side: bare `decode()` must still accept every value above.
+
+**One wiring point, three entry points.** `proxy.ts`'s `isExploreCacheable`, `/api/pivot`'s handler
+and `ExploreView` all call `decodeRequest` instead of `decode`, and every downstream behaviour then
+already existed: the proxy's `catch` answers `no-store`, the handler's `instanceof UrlStateError`
+answers **400** + `no-store` (never a 307 — a JSON endpoint must not redirect an XHR), and the page
+renders its named "This permalink can't be read" error with the message wired through. A fourth
+entry point copying three lines out of four is the failure `ENTITY_ROUTES` and `QUERY_ROWS` are both
+tables to prevent; this is the same defence.
+
+**`/api/pivot` is in scope deliberately.** Its `QUERY_ROWS` row already declares `keys:
+ALLOWED_KEYS` — "the SAME keys as /explore, and for the same reason" — and its *successes* carry
+`PROJECT_CACHE`, thirty days, ten times any HTML page here. Excluding it would have left the
+**longer-lived** unbounded family outside the fix, which is the `exempt`-means-the-rules-are-off
+misreading that already left this exact path's `&&` axis a 30-day-cached 200.
+
+The rules, and why each bound is the one it is:
+
+- **`t`'s months must fall in a year `parseYear` already accepts**, i.e. `2015-01` through the
+  current wall-clock year's December. Not a second constant: `monthInWindow` calls `parseYear`, so
+  `y` on `/airport/:code` and `t` on `/explore` cannot disagree about which months this dataset
+  covers. Wall-clock, never a literal year, for the reason the `y` section above already gives.
+- **The upper bound is YEAR-END, not the current month.** `/airport/ORD?y=2026` maps through
+  `yearWindow(2026)` to `2026-01 → 2026-12`, months past `asOf`; a month-tight bound would refuse on
+  `/explore` the very window `/airport` hands the user, to save four months out of 144. Months past
+  `asOf` simply return no rows.
+- **`from ≤ to`, with `from == to` allowed** — a single-month query is legitimate and `encode()`
+  emits it.
+- **`n ≤ 1000`.** An order of magnitude above the largest `n` this product ever puts in a permalink
+  (100). Measured on a served build, one query at three limits: n=25 → 73,300 bytes; n=100 →
+  240,014; n=1000 → **2,225,172** (~2,225 bytes per row, since the Explorer has no pagination and
+  every row ships twice, body plus RSC payload). The ceiling costs 2.2 MB, comparable to
+  `/sitemap.xml`; what it refuses is `n=100000`, a ~220 MB response this box would have built and
+  let a CDN store once per spelling.
+- **`n`'s lower bound is NOT restated here.** `render.ts` already rejects `limit <= 0` by name and
+  `decode()` runs `renderPivot` first, so `n=0` keeps the accurate "limit must be a positive
+  integer" message. A second validator for one boundary is how two rules drift into disagreeing;
+  `bounds.test.ts` pins that `checkBounds` stays silent about it.
+- **`n` and `v` must be spelled as a plain decimal**, checked on the RAW bytes before `pyUnquote` —
+  `%32%35` unquotes to `25`, so a check that runs after decoding cannot see the difference.
+
+Result: `t` × `n` goes from unbounded to **10,440 × 1,000**, and both are decided by a pure,
+synchronous, database-free function on the request hot path, the same shape as `parseYear`.
+
+Mutant table (run and reverted; each edit was read back off disk before its result was believed,
+and every touched file checksummed identical afterwards):
+
+| # | Mutation | Test(s) reddened |
+|---|---|---|
+| 1 | `parseYear` drops its LOWER bound | `bounds.test.ts` "rejects a month before the data window" only — the upper-bound test stayed green |
+| 2 | `parseYear` drops its UPPER bound | "rejects a month past the current calendar year" only |
+| 3 | `checkBounds` rejects everything | the three "accepts …" boundary tests, both shipped-permalink corpora — the anti-vacuity control for 1–2 |
+| 4 | `from ≤ to` deleted | "rejects a reversed range whose two months are BOTH inside the window" only |
+| 5 | ordering written strict (`>=`) | "accepts a single-month range, where from equals to" only |
+| 6 | `n` ceiling deleted / off-by-one (`>=`) | "rejects a limit above MAX_LIMIT" / "accepts MAX_LIMIT itself" respectively |
+| 7 | `checkBounds` restates the positive-integer rule | "does NOT restate the positive-integer rule that renderPivot already owns" |
+| 8 | `decodeRequest` never calls `checkBounds` | **only** the `decodeRequest` wiring tests — all eleven `checkBounds` unit tests stayed green, which is what makes them a separate claim from the wiring |
+| 9 | spelling regex loosened to `PY_INT_RE`'s own set | all five spelling tests |
+| 10 | `v` dropped from the numeral keys | the two `v` tests only |
+| 11 | the bound moved INTO `decode()` | "bare decode() is untouched" — the port-parity boundary |
+| 12 | ceiling lowered to 24 | both shipped-permalink corpora (9 goldens, 8 hardcoded hrefs) |
+| 13–15 | each entry point reverted to bare `decode()` | that entry point's four/five negatives, with its control green in every case |
+| 16 | `/explore` branch forced to unconditional `no-store` | "still long-caches the SAME query with every value in bounds" — the control's own control |
+| 17 | `decodeRequest` made a pass-through, **on a served build** | 16 of the 26 new `app/smoke.sh` checks; all four served controls stayed green |
+
+
 ### What the proxy's query actually costs
 
 Calling this *"one extra read of dimension-sized tables … on a request that is about to run a
@@ -1290,23 +1384,34 @@ Two consequences worth stating plainly:
 Written in the same idiom as § The gap, and for the same reason: a permanent doc that reads as if
 `/explore` were finished is worse than one that names what is left.
 
-**The value axis is open, and it is much larger than the key axis this branch closed.** `decode()`
-validates *identifiers* against the catalog via `renderPivot`; it does not validate *values*.
-Reading `urlstate.ts`: `parseFilter` accepts any non-empty value list, so
-`f=origin_state:<arbitrary string>` decodes; `t` is checked only against `MONTH_RE`
-(`/^\d{4}-(0[1-9]|1[0-2])$/`, `urlstate.ts:14`), which admits 10,000 × 12 = 1.2×10⁵ valid values per
-side, and nothing requires `from ≤ to` — `normalizeQuery` (`types.ts:31-33`) only touches
-`sortDesc`, and `decode` range-checks neither bound — so `t` alone admits (1.2×10⁵)² ≈ 1.4×10¹⁰
-combinations that all decode; `n` is any Python-shaped integer. Every one of those is a distinct 200
-under `HTML_CACHE` on the most expensive page on the site. `/airport/:code`'s `y` is the
-counter-example that shows the shape of a fix: a closed set, validated by `parseYear`, so an
-out-of-range year declines the cache instead of minting an entry.
+**`t` and `n` are closed; `f` is not.** `t`'s months, their ordering, `n`'s ceiling and `n`/`v`'s
+spelling are bounded at the origin by `app/src/lib/pivot/bounds.ts` — see § "`t` and `n` on
+`/explore`" above for the rule, the measurements and the mutants. What remains open is `f`, and it
+is open on two axes at once: `parseFilter` accepts any non-empty value list, so
+`f=origin_state:<arbitrary string>` decodes; and `f` is legitimately **repeatable**, so the number
+of `f` tokens is unbounded as well as each one's value. Every distinct spelling is a distinct 200
+under `HTML_CACHE` on the most expensive page on the site.
 
-A key table cannot express any of that. `QUERY_ROWS` maps a path to the *names* it reads; deciding
-whether a *value* is one of finitely many legitimate ones needs the catalog, the dataset's own
-month range, and a policy for `n` — i.e. it belongs with `decode()`, not with a pure, database-free
-proxy-path module. **`decode()` validating values is not a check that exists**, and no rule in this
-section should be read as implying it does. Deliberately out of scope for epic #3.
+**`f` is left to the edge deliberately, and a key table could not have expressed it anyway.**
+`QUERY_ROWS` maps a path to the *names* it reads. Deciding whether `f=origin_state:XX` names a real
+state is a property of the WAREHOUSE, not of the URL grammar, so checking it means a catalog read on
+the path that runs before every request — which is exactly what `t` and `n` did **not** need, and
+why they were closed at the origin instead: both are decidable by a pure, synchronous,
+database-free function, the same shape as `parseYear`. Do not generalise "values need the catalog"
+from `f` to the others; that reading is what kept `t` and `n` open for a milestone.
+
+**The thresholds `f` is left to, stated plainly rather than assumed.**
+`deploy/cloudflare/rate-limit.json` blocks a source IP past **10 requests per 10 s** per
+`(ip.src, cf.colo.id)`, with a 10 s mitigation timeout — a sustained **1 req/s**. Two things about
+it are easy to get wrong and both matter here:
+
+- **Its expression is `starts_with(http.request.uri.path, "/api/")`.** `/explore` is not under
+  `/api/`, so **the residual `f` axis on `/explore` has no edge rate limit at all today.** The rule
+  covers `/api/pivot`, where the same `f` axis rides the *thirty-day* `PROJECT_CACHE`; it does not
+  cover the HTML page. Whether to extend it is its own question and is not answered here.
+- **A rate limit caps rate, not cardinality.** Even where it applies, 1 req/s is 86,400 distinct
+  cache entries per day per IP, each a full pivot render. It bounds how fast the space can be
+  walked, never how large the space is.
 
 Smaller, and also open: a bare trailing `?`. WHATWG URL parsing gives
 `new URL("http://h/watch?").search === ""` — byte-identical to what the query-less request
@@ -1378,8 +1483,8 @@ payload to a plain document request.
 
 **`/explore` needs one more input than a key table can express:** junk *values* ride legitimate
 keys, and `ExploreView` renders its "permalink can't be read" page as a **200**, so `?d=junk1…N`
-was an unbounded family of cacheable error pages. Its cacheability now requires `decode()` to
-succeed. Bare `/explore` is therefore `no-store` — `decode("")` throws `missing required key 'v'`
+was an unbounded family of cacheable error pages. Its cacheability now requires `decodeRequest()`
+to succeed — the codec AND the value bounds above, in one call. Bare `/explore` is therefore `no-store` — `decode("")` throws `missing required key 'v'`
 and that URL has always been the error page, and nothing links it: `TopBar` links `/` and
 `/watch`, the front door links the full sample permalink, and `app/sitemap.ts` has no `/explore`
 entry. `/api/pivot` and `/search` are declared exempt: the first answers 400 + `no-store` in its

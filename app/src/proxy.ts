@@ -10,7 +10,7 @@ import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
 import { presetSlugFromPath, presetBySlug } from "@/lib/watch";
 import { parseYear } from "@/lib/year";
-import { decode } from "@/lib/pivot/urlstate";
+import { decodeRequest } from "@/lib/pivot/bounds";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
 
 // `proxy`, not `middleware`: Next 16 deprecated and renamed the convention
@@ -456,11 +456,24 @@ async function isDataLayerHealthy(): Promise<boolean> {
  * door links the full sample permalink, and `app/sitemap.ts` has no `/explore` entry.
  *
  * NOT extended to `runPivot()` throwing after `decode()` has succeeded: that is the residual gap
- * `docs/architecture/hosting.md` § "The gap" documents, and this task does not change it. */
+ * `docs/architecture/hosting.md` § "The gap" documents, and this task does not change it.
+ *
+ * `decodeRequest`, not `decode` (#52). The key gate above and `decode()` between them leave the
+ * VALUE axis open, and always will: `decode()` validates identifiers, never values, so
+ * `t=9999-12:0000-01`, `n=999999999` and `n=00000000025` all still decode cleanly -- and until this
+ * call they each rendered a distinct, cacheable 200. `t` alone admitted ~1.4x10^10 spellings, and
+ * `n` an unbounded family TWICE: in its value, and in its SPELLING (arbitrary leading zeros, a
+ * sign, `_` separators, percent-encoded digits -- all of which mean the same number). Cloudflare's
+ * default cache key is the whole query string, so each is one more guaranteed origin miss on the
+ * most expensive page here. `lib/pivot/bounds.ts` is the rule, and it is a SERVER admission policy
+ * rather than a codec check for the reason that module documents: `decode()` is pinned to
+ * `pipeline/urlstate.py` as an exact port. This costs no extra database query -- same
+ * `loadAllowlist()`, same single `decode()` inside it -- and is the same shape as `parseYear` on
+ * the `/airport` branch: validate the value, decline to cache when it fails. */
 async function isExploreCacheable(rawQuery: string): Promise<boolean> {
   try {
     const allowlist = await loadAllowlist();
-    decode(rawQuery, allowlist);
+    decodeRequest(rawQuery, allowlist);
     return true;
   } catch {
     return false;

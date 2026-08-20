@@ -400,12 +400,16 @@ fmt-check:  ## Fail if the tree is not `ruff format`-clean
 # Raising it is allowed and is a deliberate act -- change the number here and say why in the
 # commit message. What is not allowed is the number drifting upward unremarked.
 #
-# 475 is derived, not round: the file is 443 after the M7-era compaction, and a rule costs
-# 8-15 lines, so this is headroom for about three more before a prune is forced. A budget of
-# 450 was tried first and left 7 lines -- it would have failed on the very next rule, which
-# makes the gate noise instead of signal. Set it close enough to bite, far enough to mean
-# something when it does.
-CLAUDE_MD_BUDGET ?= 480
+# The number is derived, not round, and the derivation is restated whenever it moves -- a budget
+# whose stated justification names a different figure than the constant is the same rot this gate
+# exists to catch. A rule costs 5-15 lines, so the budget sits roughly one rule above the file:
+# close enough to bite on the one after that, far enough that it is signal and not noise. A budget
+# of 450 was tried early and left 7 lines, which would have failed on the very next rule.
+#
+# 486 as of #52: the file is 484 after that issue's value-bounds rule (five lines, replacing a
+# clause that had become false -- `canonicalQuery.ts` inspects no value, but values are no longer
+# unvalidated). Previously 480 against a 479-line file.
+CLAUDE_MD_BUDGET ?= 486
 
 check-docs:  ## Enforce the CLAUDE.md line budget (see CLAUDE.md § Working agreements)
 	@n=$$(wc -l < CLAUDE.md); \

@@ -455,8 +455,13 @@ signature element; it does not own these.
   never "the rules do not apply"** — the second reading left `/api/pivot`'s `&&`/trailing-`&` axis
   a 30-day-cached 200 (`splitPairs` skips an empty chunk), on the ELEVENTH cacheable path this file
   had called ten. Byte-equality against the canonical string, not "unknown key present": `?&&` has
-  none. `f` is repeatable. It is one canonical KEY SET, never "one spelling" — key order survives
-  and values are never validated at all; don't restate it wider.
+  none. `f` is repeatable. It is one canonical KEY SET, never "one spelling" — key order survives,
+  and *that module* inspects no value; don't restate it wider.
+- **Values are bounded too — `lib/pivot/bounds.ts`, not the key gate.** `t` inside the months this
+  dataset covers with `from ≤ to`, `n` under a ceiling, and `n`/`v` spelled one way each (`n=0025`
+  and `n=%32%35` both mean 25, so bounding a value's RANGE alone bounds nothing). SERVER admission,
+  never the codec — `decode()` is pinned to `pipeline/urlstate.py` as an exact port — so all three
+  entry points call `decodeRequest`. `f` is the residual, left to an edge rule matching `/api/` only.
 - **Nothing on the proxy path may throw.** `canonicalize()` threw on a leading `?` as a "wiring
   bug"; `proxy.ts` strips only ONE `?` (non-global regex) and has no try/catch, so `GET /watch??x=1`
   500ed all twelve matcher paths — and no smoke check used a doubled `?`, so both gates missed it.

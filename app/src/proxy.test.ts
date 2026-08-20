@@ -592,3 +592,45 @@ describe("proxy", () => {
 function getReqHeader(res: { headers: Headers }, name: string): string | null {
   return res.headers.get(`x-middleware-request-${name}`) ?? res.headers.get(name);
 }
+
+// #52. The key gate rejects unknown KEYS and M8 Task 4 required the permalink to decode();
+// neither sees a junk VALUE riding a legitimate key. Every URL below still decodes cleanly --
+// bare `decode()` accepts all of them by design, and `bounds.test.ts` pins that -- and until the
+// proxy called `decodeRequest`, each rendered a distinct 200 under HTML_CACHE. `t` alone admitted
+// ~1.4x10^10 spellings; `n` was unbounded in its value AND in its spelling. Cloudflare's default
+// cache key is the whole query string, so every one was a guaranteed origin miss on the most
+// expensive page here.
+describe("proxy /explore value bounds (#52)", () => {
+  const BASE = "v=1&k=seg&d=op_airline_id&m=seats&s=-seats&g=op";
+  const at = (qs: string) => proxy(new NextRequest(`http://localhost/explore?${qs}`));
+
+  it("does not long-cache /explore when t falls outside the dataset window", async () => {
+    const res = await at(`${BASE}&t=1999-01:1999-12&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not long-cache /explore when t is reversed but both months are in window", async () => {
+    // Both months are admissible on their own, so this can only go red for the ordering rule.
+    const res = await at(`${BASE}&t=2026-04:2025-05&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not long-cache /explore when n is above the ceiling", async () => {
+    const res = await at(`${BASE}&t=2025-05:2026-04&n=999999`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not long-cache /explore when n is spelled redundantly", async () => {
+    // n=00000025 decodes to 25 -- an in-bounds value with unboundedly many spellings, each a
+    // distinct CDN entry for a byte-identical page.
+    const res = await at(`${BASE}&t=2025-05:2026-04&n=00000025`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("still long-caches the SAME query with every value in bounds", async () => {
+    // The control that stops all four above being vacuous: a proxy that answered `no-store`
+    // for every /explore request would satisfy them and this one goes red for it.
+    const res = await at(`${BASE}&t=2025-05:2026-04&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+});
