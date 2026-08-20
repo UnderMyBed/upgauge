@@ -178,16 +178,17 @@ jobs:
             # Truncated first, so a fetch that fails part-way is never read as the PREVIOUS
             # attempt's body. 8000 bytes is far above any real report (~150) and bounds what a
             # broken origin can put into argv.
-            : > /tmp/health.body
+            body_file="${RUNNER_TEMP:-/tmp}/health.body"
+            : > "$body_file"
             # NOT `$(curl ... || echo 000)`: curl writes its `-w` output even when the transfer
             # fails, so the fallback CONCATENATES onto it. Measured with curl 8.18.0: `000000`
             # on a refused connection, and `200000` when --max-time expires mid-body -- which
             # then prints as `HTTP 200000`. Assign in the failure branch instead.
-            if ! code=$(curl -sS -o /tmp/health.body -w '%{http_code}' --max-time 10 \
+            if ! code=$(curl -sS -o "$body_file" -w '%{http_code}' --max-time 10 \
                         https://upgauge.shipman.dev/api/health); then
               code=000
             fi
-            body=$(head -c 8000 /tmp/health.body)
+            body=$(head -c 8000 "$body_file")
             echo "attempt ${attempt}:"
             rc=0
             mise exec -- python .github/scripts/promote_check.py "$TAG" "$code" "$body" || rc=$?

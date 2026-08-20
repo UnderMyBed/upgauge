@@ -626,6 +626,17 @@ def test_the_workflow_treats_a_usage_failure_as_a_wiring_bug_not_a_site_conditio
     assert "exit 1" in block, f"a usage failure does not stop the poll: {block}"
     assert "wiring bug" in block, "the operator is not told this is a wiring bug, not the site"
 
+    # POSITION, not presence -- the same upgrade this file already made for the sticky carry.
+    # Moved after `done`, this block inspects only the last attempt and only once the full 300s
+    # budget is spent, which is verbatim the failure its own message names; every test stayed
+    # green against exactly that move.
+    loop_at = next(i for i, ln in enumerate(lines) if "for attempt in $(seq 1 30)" in ln)
+    done_at = next(i for i in range(loop_at + 1, len(lines)) if lines[i].strip() == "done")
+    assert loop_at < start < done_at, (
+        "the usage check must run INSIDE the poll loop, on the attempt that failed -- not after "
+        "the budget is already spent"
+    )
+
 
 def test_a_fetch_that_hung_mid_body_carries_what_did_arrive():
     """The same withholding this file fixed on the no-`build` branch: status 000 with bytes in
@@ -647,3 +658,14 @@ def test_an_undecodable_byte_in_a_poll_attempt_does_not_kill_the_loop(monkeypatc
     monkeypatch.setattr(sys, "argv", ["promote_check.py", TAG, "200", body])
     assert main() == 2, "a build WAS read; a crash here would look like a blind attempt"
     assert "warehouse-2026.04" in capsys.readouterr().out
+
+
+def test_a_newline_in_a_dispatched_tag_cannot_open_a_workflow_command(monkeypatch, capsys):
+    """`--validate` echoes the dispatch input back on a rejection, unprefixed, in a job holding
+    `packages: write`. Anyone who can dispatch this workflow chooses that string."""
+    monkeypatch.setattr(
+        sys, "argv", ["promote_check.py", "--validate", "nope\n::stop-commands::deadbeef"]
+    )
+    assert main() == 1
+    for line in capsys.readouterr().out.splitlines():
+        assert not line.startswith("::"), f"a workflow command reached line start: {line!r}"

@@ -10,12 +10,14 @@ broken fencing scheme also does.
 
 from __future__ import annotations
 
+import io
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2] / ".github" / "scripts"))
 
+import gha  # noqa: E402
 from gha import code_span, printable, snippet, write_multiline_output  # noqa: E402
 
 
@@ -110,3 +112,25 @@ def test_a_snippet_marks_truncation_and_alters_nothing_else():
     assert s.startswith("<html>")
     assert "[truncated]" in s
     assert len(s) < len(body)
+
+
+def test_write_multiline_output_regenerates_a_delimiter_that_collides(monkeypatch):
+    """The delimiter WRITTEN must be the one the collision check cleared.
+
+    This guard was dead for one commit and nothing could see it: the loop body had been
+    overwritten with a no-op, so it could not terminate, and a fresh delimiter was drawn AFTER
+    the check and written unexamined. `live-check.yml`'s design comment leans on this by name,
+    and the only test asserted that the write did not raise -- true under every broken form.
+
+    Draws are stubbed so a collision is certain instead of 2**-128: the first two hit the body,
+    the third does not, and the third is what must be written."""
+    draws = iter(["aa" * 16, "aa" * 16, "bb" * 16])
+    monkeypatch.setattr(gha.secrets, "token_hex", lambda n: next(draws))
+    value = "line\n" + "aa" * 16 + "\ntail"
+    buf = io.StringIO()
+    gha.write_multiline_output(buf, "issue_body", value)
+
+    written = buf.getvalue().split("<<", 1)[1].split("\n", 1)[0]
+    assert written == "bb" * 16, "the delimiter written is not the one the check cleared"
+    assert written not in value, "the written delimiter collides -- the value truncates on parse"
+    assert buf.getvalue().count(written) == 2, "opening and closing delimiters disagree"

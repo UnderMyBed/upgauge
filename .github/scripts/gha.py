@@ -24,8 +24,7 @@ def write_multiline_output(fh: TextIO, name: str, value: str) -> None:
     value = printable(value)
     delim = secrets.token_hex(16)
     while delim in value:
-        value = printable(value)
-    delim = secrets.token_hex(16)
+        delim = secrets.token_hex(16)
     fh.write(f"{name}<<{delim}\n{value}\n{delim}\n")
 
 
@@ -75,7 +74,13 @@ def inline(value: object) -> str:
     This does NOT re-encode undecodable bytes: `printable` owns that, once, at the emission
     boundary. Doing it in both places left every boundary guard unreachable -- three mutants
     deleting them survived the whole suite, because the value had already been sanitised on its
-    way in. One rule, one place, one test each.
+    way in. One rule, one place.
+
+    Every EMISSION boundary is pinned by a test that fails without it. The call sites of this
+    function are not all pinned: the ones with a live vector are (a parsed body's `status`,
+    `error`, `missing[]` and `build.warehouse`; a `cf-cache-status` header; a sitemap `<loc>`
+    host; a dispatched tag), and the rest -- `newest`, the `exhausted_report` fields -- are
+    defence in depth with no reachable newline today. Said plainly rather than claimed away.
     """
     return " ".join(str(value).split())
 

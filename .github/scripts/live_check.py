@@ -105,11 +105,11 @@ def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
         # Whatever arrived before the transfer died: `{"status":"ok"` from an origin that began
         # answering and then hung is a different finding from nothing at all, and those bytes
         # are the only thing that tells them apart.
-        partial = f", after {code_span(snippet(body))}" if body.strip() else ""
+        partial = f" What did arrive: {code_span(snippet(body))}" if body.strip() else ""
         return {}, (
             "/api/health could not be fetched -- curl did not complete the transfer, so no "
-            f"response was read in full{partial}, and nothing here is a claim about the site's "
-            "health"
+            "response was read in full and nothing here is a claim about the site's health."
+            f"{partial}"
         )
     if not body.strip():
         return {}, (

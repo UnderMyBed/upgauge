@@ -159,9 +159,9 @@ def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
     """
     code = f"{http_status:03d}"
     if http_status == 0:
-        partial = f", after {code_span(snippet(body))}" if body.strip() else ""
+        partial = f" What did arrive: {code_span(snippet(body))}" if body.strip() else ""
         return {}, (
-            f"the fetch did not complete -- curl exited before a full response was read{partial}"
+            f"the fetch did not complete -- curl exited before a full response was read.{partial}"
         )
     if not body.strip():
         return {}, f"the last response was HTTP {code} with an empty body"

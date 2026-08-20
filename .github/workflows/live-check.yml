@@ -83,12 +83,13 @@ jobs:
           # NOT `$(curl ... || echo 000)`: curl writes its `-w` output even when the transfer
           # fails, so the fallback CONCATENATES onto it. Measured with curl 8.18.0: `000000` on
           # a refused connection, `200000` when --max-time expires mid-body. Assign instead.
-          : > /tmp/health.body
-          if ! hcode=$(curl -sS -o /tmp/health.body -w '%{http_code}' --max-time 15 \
+          body_file="${RUNNER_TEMP:-/tmp}/health.body"
+          : > "$body_file"
+          if ! hcode=$(curl -sS -o "$body_file" -w '%{http_code}' --max-time 15 \
                        "${BASE}/api/health"); then
             hcode=000
           fi
-          health=$(head -c 8000 /tmp/health.body)
+          health=$(head -c 8000 "$body_file")
           sitemap=$(curl -sS --max-time 15 "${BASE}/sitemap.xml" | head -c 2000 || echo "")
 
           # Two fetches of the SAME url: the first may legitimately miss (cold edge, or the
@@ -129,14 +130,23 @@ jobs:
 
           # LAST. 80 requests against a 60/min limit, so the tail must be blocked. The rule
           # matches the /api/ prefix, so this exercises the same rule that protects /api/pivot.
+          # BOUNDED, not just per-request. 80 x --max-time with no overall deadline is up to
+          # 800s against an origin that BLACKHOLES rather than refusing or challenging -- past
+          # this job's timeout-minutes: 10, so the step is killed and no issue is filed at all.
+          # That is the one case where "files its alert either way" would not have held.
           rl=0
+          burst_deadline=$((SECONDS + 60))
           for _ in $(seq 1 80); do
             # Same concatenation trap as the health fetch above.
-            if ! rl=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+            if ! rl=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
                       "${BASE}/api/pivot?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op"); then
               rl=000
             fi
             [ "$rl" = "429" ] && break
+            if [ "$SECONDS" -ge "$burst_deadline" ]; then
+              echo "::notice::rate-limit burst stopped at its 60s bound; last status $rl"
+              break
+            fi
           done
 
           # health/releases/sitemap are LOCAL SHELL VARIABLES, passed as quoted argv -- never

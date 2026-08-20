@@ -507,7 +507,7 @@ def test_main_cannot_emit_a_workflow_command_out_of_the_body(monkeypatch, tmp_pa
         assert not line.startswith("::"), f"a workflow command reached line start: {line!r}"
 
 
-def test_the_fetch_half_of_the_step_survives_an_unreachable_origin():
+def test_the_fetch_half_of_the_step_survives_an_unreachable_origin(tmp_path):
     """No text assertion can see this, so the scalar is executed.
 
     Under `set -euo pipefail` a bare `cf=$(curl ... | tr | awk)` whose curl cannot reach the
@@ -520,13 +520,23 @@ def test_the_fetch_half_of_the_step_survives_an_unreachable_origin():
     Only the fetch half runs here: the release listing needs `gh` and the script call needs
     `mise`, neither of which this assertion is about.
     """
-    if shutil.which("curl") is None:
-        pytest.skip("curl is not installed")
+    for tool in ("bash", "curl"):
+        if shutil.which(tool) is None:
+            pytest.skip(f"{tool} is not installed")
     run = next(r for r in _run_scalars(LIVE_CHECK) if "/api/health" in r)
     fetches = run.split('releases=""')[0]
+    # Hermetic: a proxy variable would send these fetches somewhere that can ANSWER, and
+    # RUNNER_TEMP keeps the body file out of a fixed host path. 127.0.0.1:1 is refused rather
+    # than blackholed, so this is fast -- but the verdict does not depend on that, only the
+    # runtime does.
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k.lower() not in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}
+    }
     result = subprocess.run(
         ["bash", "-c", fetches + '\necho "SURVIVED hcode=$hcode cf=$cf"'],
-        env={**os.environ, "BASE": "http://127.0.0.1:1"},
+        env={**env, "BASE": "http://127.0.0.1:1", "RUNNER_TEMP": str(tmp_path)},
         capture_output=True,
         text=True,
         timeout=120,
@@ -536,15 +546,21 @@ def test_the_fetch_half_of_the_step_survives_an_unreachable_origin():
         f"no verdict, no file_issue, no issue:\n{result.stderr[-400:]}"
     )
     assert "SURVIVED hcode=000 cf=absent" in result.stdout, result.stdout
+    # Hermetic in the other direction too: the body file honours RUNNER_TEMP rather than
+    # clobbering a fixed host path that a parallel job (or a developer) also owns.
+    assert (tmp_path / "health.body").exists(), (
+        "the step wrote its body file outside RUNNER_TEMP, to a fixed host path"
+    )
 
 
 def test_a_report_naming_no_warehouse_is_not_a_forgotten_promote():
-    """`(health.get("build") or {}).get("warehouse") or ""` turned a MISSING warehouse into an
-    empty one and then compared it, so a well-formed report whose build names no warehouse
-    produced `the site is serving `` but `warehouse-2026.05` is published -- a promote was
-    forgotten`: item 1's string verbatim, from a body no `NOT_A_REPORT` fixture supplies,
-    because this one IS a health report. Default-for-missing on a required field, which is the
-    rule the <loc> and cf-cache-status branches already follow."""
+    """A well-formed report whose `build` names no warehouse produced `the site is serving ``
+    but `warehouse-2026.05` is published -- a promote was forgotten`, from a body no
+    `NOT_A_REPORT` fixture supplies, because this one IS a health report.
+
+    The mutant is deleting the `isinstance(live_warehouse, str) or not live_warehouse` branch,
+    NOT restoring the `or ""` this used to name: `""` is a falsy str, so the branch catches it
+    either way and that mutant survives. Name the branch that does the work."""
     for build in ({}, {"sha": "x"}, {"warehouse": None}, {"warehouse": ""}):
         body = json.dumps({"status": "ok", "build": build, "data": {}})
         v = assess(body, 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
@@ -605,3 +621,36 @@ def test_a_fetch_that_hung_mid_body_carries_what_did_arrive():
     named = next(f for f in v.failures if "/api/health" in f)
     assert "did not complete the transfer" in named
     assert '{"status":"ok"' in named, "the partial response was discarded"
+
+
+def test_a_newline_in_the_sitemap_host_cannot_open_a_workflow_command(
+    monkeypatch, tmp_path, capsys
+):
+    """`_LOC_HOST`'s `[^/]+` matches newlines in Python, and what it captures is REMOTE CONTENT
+    from the origin that reaches `print(rendered)` unprefixed, in a job holding `issues: write`.
+    The parsed-body fixtures cannot reach this: it is the sitemap argument, not the health one."""
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    hostile = "<loc>https://evil\n::stop-commands::deadbeef/explore</loc>"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["live_check.py", json.dumps(HEALTHY), "200", json.dumps(RELEASES), hostile, "HIT", "429"],
+    )
+    assert main() == 0
+    for line in capsys.readouterr().out.splitlines():
+        assert not line.startswith("::"), f"a workflow command reached line start: {line!r}"
+
+
+def test_the_rate_limit_burst_is_bounded_overall_not_only_per_request():
+    """80 requests x `--max-time` with no overall deadline is up to 800s against an origin that
+    BLACKHOLES rather than refusing or challenging -- past this job's `timeout-minutes: 10`, so
+    the step is killed and no issue is filed. That is the last case where this branch's own
+    claim in deploy.md ("files its alert either way") would not have held."""
+    run = _uncommented(next(r for r in _run_scalars(LIVE_CHECK) if "/api/health" in r))
+    lines = run.splitlines()
+    start = next(i for i, ln in enumerate(lines) if "seq 1 80" in ln)
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "done")
+    burst = "\n".join(lines[start:end])
+    assert "burst_deadline" in burst, "the burst has no overall deadline, only a per-request one"
+    assert "break" in burst
+    assert any("burst_deadline=" in ln for ln in lines[:start]), "the deadline is never set"
