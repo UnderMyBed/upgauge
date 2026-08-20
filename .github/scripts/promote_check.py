@@ -65,7 +65,7 @@ import re
 import sys
 from dataclasses import dataclass
 
-from gha import code_span, snippet, write_multiline_output
+from gha import code_span, inline, is_health_report, printable, snippet, write_multiline_output
 
 #: The shape `image.yml` mints and `warehouse.yml` asserts before ever publishing a release.
 #: Anchored at the start only -- the SHA half is deliberately unconstrained, since it is
@@ -106,7 +106,8 @@ class Verdict:
         if self.outcome == MISMATCH:
             return "\n".join(
                 [
-                    f"the box is serving `{self.live_warehouse}` / `{self.live_sha}` after "
+                    f"the box is serving `{inline(self.live_warehouse)}` / "
+                    f"`{inline(self.live_sha)}` after "
                     f"{attempts} attempts, not the promoted `{self.expected_warehouse}` / "
                     f"`{self.expected_sha}`. The tag moved; the deploy did not.",
                     "The box answers, so it is up -- it never took the new image, and `:deploy` "
@@ -158,7 +159,10 @@ def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
     """
     code = f"{http_status:03d}"
     if http_status == 0:
-        return {}, "the fetch did not complete -- curl exited before a full response was read"
+        partial = f", after {code_span(snippet(body))}" if body.strip() else ""
+        return {}, (
+            f"the fetch did not complete -- curl exited before a full response was read{partial}"
+        )
     if not body.strip():
         return {}, f"the last response was HTTP {code} with an empty body"
     try:
@@ -172,6 +176,15 @@ def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
         return {}, (
             f"the last response was HTTP {code} and its body is JSON that is not an object: "
             f"{code_span(snippet(body))}"
+        )
+    if not is_health_report(parsed):
+        # Not "does it have a build" -- `{"build":{}}` has one, and passing it through made an
+        # arbitrary JSON body earn an unconditional ROLL BACK NOW, or a lucky one declare the
+        # promote successful. The question is whether this is THIS APP's report.
+        return {}, (
+            f"the last response was HTTP {code} and is not this app's health report -- no "
+            f"`status`/`build`/`data` section, so the box may still be booting, `/api/health` "
+            f"may itself be failing, or something else answered: {code_span(snippet(body))}"
         )
     return parsed, None
 
@@ -187,7 +200,7 @@ def assess(tag: str, health_body: str, health_status: int) -> Verdict:
         return Verdict(
             outcome=BAD_TAG,
             reason=(
-                f"'{tag}' does not match the warehouse-YYYY.MM-<sha> shape image.yml "
+                f"'{inline(tag)}' does not match the warehouse-YYYY.MM-<sha> shape image.yml "
                 "publishes -- refusing to compare the live build against a tag that was "
                 "never a real image"
             ),
@@ -209,23 +222,11 @@ def assess(tag: str, health_body: str, health_status: int) -> Verdict:
             live_sha=None,
         )
 
-    build = health.get("build")
-    if not isinstance(build, dict):
-        # `build` is non-optional on `HealthReport` and `identity()` computes it before every
-        # return branch, so JSON without one did not come from this app: nothing here is a
-        # reading of the box's build, whatever else parsed.
-        return Verdict(
-            outcome=UNREADABLE,
-            reason=(
-                "the response has no `build` section, so it is not this app's health report -- "
-                "the box may still be booting, `/api/health` may itself be failing, or "
-                f"something else answered: {code_span(snippet(health_body))}"
-            ),
-            expected_warehouse=expected_warehouse,
-            expected_sha=expected_sha,
-            live_warehouse=None,
-            live_sha=None,
-        )
+    # `build` is a dict by construction: `read_health` rejects anything that is not this app's
+    # report before we reach here, and `is_health_report` is what guarantees the type. A second
+    # `isinstance(build, dict)` guard stood here after that gate went in and was UNREACHABLE --
+    # a mutant flipping its outcome changed nothing, which is how it was found.
+    build = health["build"]
     live_warehouse = build.get("warehouse")
     live_sha = build.get("sha")
 
@@ -241,7 +242,7 @@ def assess(tag: str, health_body: str, health_status: int) -> Verdict:
     return Verdict(
         outcome=MISMATCH,
         reason=(
-            f"live is '{live_warehouse}' / '{live_sha}', want "
+            f"live is '{inline(live_warehouse)}' / '{inline(live_sha)}', want "
             f"'{expected_warehouse}' / '{expected_sha}'"
         ),
         expected_warehouse=expected_warehouse,
@@ -268,16 +269,18 @@ def _exhausted(argv: list[str]) -> int:
         return 64
     verdict = assess(argv[2], argv[4], int(argv[3] or 0))
     report = verdict.exhausted_report(int(argv[5] or 0))
-    for line in report.splitlines():
+    for line in printable(report).splitlines():
         print(f"::error::{line}")
 
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as fh:
             fh.write(
-                "\n".join(
-                    ["### The promoted build was not confirmed", ""]
-                    + [f"- {line}" for line in report.splitlines()]
+                printable(
+                    "\n".join(
+                        ["### The promoted build was not confirmed", ""]
+                        + [f"- {line}" for line in report.splitlines()]
+                    )
                 )
                 + "\n"
             )
@@ -292,14 +295,17 @@ def main() -> int:
     having never seen it" -- and the other two stay dispatched on argument count:
 
       promote_check.py --exhausted <tag> <status> <body> <attempts>  -- the poll budget elapsed
-      promote_check.py <tag>                                         -- validate-only
+      promote_check.py --validate <tag>                              -- validate-only
       promote_check.py <tag> <http-status> <health-report-json>      -- one poll attempt
 
     The poll shape's exit code is a three-way answer, not a boolean: 0 matched (the loop ends),
     2 a build was read and it disagreed, 1 nothing readable came back. A usage error is 64, off
     those values deliberately, so a mis-wired call can never be mistaken for a verdict.
 
-    VALIDATE-ONLY exists so `promote.yml` can fast-fail on a typo'd tag before it ever enters
+    VALIDATE-ONLY carries an explicit flag rather than being inferred from a bare argument
+    count: it and a successful poll both exit 0, so a call that lost two argv entries would have
+    read as "validated, fine" and declared a promote successful with zero verification. It
+    exists so `promote.yml` can fast-fail on a typo'd tag before it ever enters
     the 30-attempt/300s poll loop. Without it, `assess()`'s own shape check already reports the
     same failure -- correctly -- but only after the full budget elapses, because it's called
     once per attempt from inside the loop. This path calls `parse_promoted_tag` directly and
@@ -315,14 +321,16 @@ def main() -> int:
     if len(sys.argv) >= 2 and sys.argv[1] == "--exhausted":
         return _exhausted(sys.argv)
 
-    if len(sys.argv) == 2:
-        tag = sys.argv[1]
+    if len(sys.argv) == 3 and sys.argv[1] == "--validate":
+        tag = sys.argv[2]
         if parse_promoted_tag(tag) is not None:
             return 0
         print(
-            f"'{tag}' does not match the warehouse-YYYY.MM-<sha> shape image.yml publishes "
-            "(e.g. warehouse-2026.05-6ea164b) -- not entering the health poll for a tag that "
-            "was never a real image"
+            printable(
+                f"'{inline(tag)}' does not match the warehouse-YYYY.MM-<sha> shape image.yml "
+                "publishes (e.g. warehouse-2026.05-6ea164b) -- not entering the health poll for "
+                "a tag that was never a real image"
+            )
         )
         return 1
 
@@ -331,7 +339,7 @@ def main() -> int:
         return 64
     tag = sys.argv[1]
     verdict = assess(tag, sys.argv[3], int(sys.argv[2] or 0))
-    print(verdict.reason)
+    print(printable(verdict.reason))
 
     out = os.environ.get("GITHUB_OUTPUT")
     if out:

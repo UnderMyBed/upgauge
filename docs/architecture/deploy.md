@@ -137,7 +137,7 @@ debugging in place — replacement is one command and the box holds nothing.
 ### "Could not read the box" is a verdict, and it is not evidence about the deploy
 
 Both watchdogs report an `/api/health` body they could not parse as what it is: an observation,
-carried with its HTTP status and the first bytes of the body, never raised and never defaulted.
+carried with its HTTP status and the first characters of the body, never raised and never defaulted.
 An edge challenge page, an HTML error page and an origin that is down are indistinguishable from
 a runner, so that reading argues in neither direction. **The status code never decides it** —
 `/api/health` answers 503 with a complete, valid report when the data layer is degraded, and a

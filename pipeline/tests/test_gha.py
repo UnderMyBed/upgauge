@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[2] / ".github" / "scripts"))
 
-from gha import code_span, snippet  # noqa: E402
+from gha import code_span, printable, snippet, write_multiline_output  # noqa: E402
 
 
 def _longest_backtick_run(text: str) -> int:
@@ -79,17 +79,29 @@ def test_a_snippet_collapses_newlines_so_no_line_can_open_a_workflow_command():
     assert "::stop-commands::deadbeef" in s
 
 
-def test_a_snippet_survives_a_body_that_is_not_valid_utf8():
+def test_printable_replaces_undecodable_bytes_instead_of_raising():
     """`sys.argv` decodes with `surrogateescape`, so a binary or truncated error page arrives
-    carrying lone surrogates. Printing those to a stdout whose error handler is `strict` raises
-    UnicodeEncodeError -- the alert crashing instead of reporting, which is the whole defect
-    class this fix exists to end. `ubuntu-latest` sets LANG=C.UTF-8 (handler `surrogateescape`,
-    no raise) and nothing in this repo pins that, so the guard cannot live in the environment.
-    """
+    carrying lone surrogates. Encoding those raises UnicodeEncodeError, and on these paths that
+    means the alert dies before filing anything.
+
+    `printable` is the ONE owner of this, applied at each emission boundary. It deliberately is
+    NOT also applied inside `inline`/`snippet`: doing both made every boundary guard unreachable
+    -- three mutants deleting them survived the entire suite."""
     body = b"<html>\xff\xfe bad bytes</html>".decode("utf-8", "surrogateescape")
-    s = snippet(body)
-    s.encode("utf-8")  # the print path. Raises UnicodeEncodeError without the guard.
-    assert "<html>" in s and "bad bytes" in s
+    out = printable(body)
+    out.encode("utf-8")  # raises without the guard
+    assert "<html>" in out and "bad bytes" in out
+
+
+def test_write_multiline_output_survives_an_undecodable_value(tmp_path):
+    """`open()` defaults to `errors="strict"` under EVERY locale -- the locale only ever affected
+    stdout -- so this write raises on ubuntu-latest today, taking `file_issue` and the issue with
+    it. This is the boundary the delimiter rule already guards; it has to guard encoding too."""
+    target = tmp_path / "gh_output"
+    value = b"boom \xff\xfe".decode("utf-8", "surrogateescape")
+    with open(target, "a") as fh:
+        write_multiline_output(fh, "issue_body", value)
+    assert "issue_body<<" in target.read_text()
 
 
 def test_a_snippet_marks_truncation_and_alters_nothing_else():

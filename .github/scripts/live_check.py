@@ -41,7 +41,7 @@ import re
 import sys
 from dataclasses import dataclass
 
-from gha import code_span, snippet, write_multiline_output
+from gha import code_span, inline, is_health_report, printable, snippet, write_multiline_output
 
 _TAG = re.compile(r"^warehouse-[0-9]{4}\.[0-9]{2}$")
 
@@ -93,28 +93,6 @@ class LiveVerdict:
         )
 
 
-def _is_health_report(parsed: dict) -> bool:
-    """Whether this object is a `HealthReport` (`app/src/lib/health.ts:7-14`) rather than merely
-    some JSON.
-
-    `status`, `build` and `data` are all non-optional there, and `identity()` computes `build`
-    before every return branch, so an object missing any of them did not come from this app --
-    a Cloudflare JSON error body (`{"success":false,"errors":[...]}`), an intermediary's own
-    JSON, or `{}`.
-
-    THE BOUNDARY IS "is it a report", NOT "did it parse". Keying suppression on the parse let a
-    parsed non-report flow into the checks below, where `'not-a-dict'.get(...)` raised -- the
-    crash this module exists to end, still reachable -- and where, when it did not raise, `{}`
-    produced `the site is serving `` but `X` is published -- a promote was forgotten`: a cause
-    invented out of a body that named no build at all.
-    """
-    return (
-        isinstance(parsed.get("status"), str)
-        and isinstance(parsed.get("build"), dict)
-        and isinstance(parsed.get("data"), dict)
-    )
-
-
 def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
     """`(report, None)` when the body is a health report, `({}, why-not)` when it is anything
     else. See the module docstring for why the status never decides this.
@@ -124,9 +102,14 @@ def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
     """
     code = f"{http_status:03d}"
     if http_status == 0:
+        # Whatever arrived before the transfer died: `{"status":"ok"` from an origin that began
+        # answering and then hung is a different finding from nothing at all, and those bytes
+        # are the only thing that tells them apart.
+        partial = f", after {code_span(snippet(body))}" if body.strip() else ""
         return {}, (
             "/api/health could not be fetched -- curl did not complete the transfer, so no "
-            "response was read in full and nothing here is a claim about the site's health"
+            f"response was read in full{partial}, and nothing here is a claim about the site's "
+            "health"
         )
     if not body.strip():
         return {}, (
@@ -145,7 +128,7 @@ def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
             f"/api/health answered HTTP {code} with JSON that is not an object: "
             f"{code_span(snippet(body))} -- {_BLIND}"
         )
-    if not _is_health_report(parsed):
+    if not is_health_report(parsed):
         return {}, (
             f"/api/health answered HTTP {code} with JSON that is not a health report: "
             f"{code_span(snippet(body))} -- {_BLIND}"
@@ -181,22 +164,33 @@ def assess(
             named = ", ".join(str(m) for m in missing) if isinstance(missing, list) else ""
             error = data.get("error")
             cause = named or (error if isinstance(error, str) else "") or "no cause reported"
-            failures.append(f"/api/health reports `{status}`: {cause}")
+            failures.append(f"/api/health reports `{inline(status)}`: {inline(cause)}")
 
-        live_warehouse = (health.get("build") or {}).get("warehouse") or ""
+        live_warehouse = health["build"].get("warehouse")
         published = [r["tagName"] for r in releases if _TAG.match(r.get("tagName") or "")]
         newest = max(published) if published else ""
-        if newest and live_warehouse != newest:
-            failures.append(
-                f"the site is serving `{live_warehouse}` but `{newest}` is published -- a "
-                "promote was forgotten, and the release-based freshness alert cannot see this"
-            )
+        if newest:
+            if not isinstance(live_warehouse, str) or not live_warehouse:
+                # `... or ""` turned a missing warehouse into an empty one and then compared it,
+                # reporting a forgotten promote out of a report that never named a build. Same
+                # default-for-missing the <loc> and cf-cache-status branches already refuse.
+                failures.append(
+                    "/api/health named no warehouse in its `build` section, so what the site is "
+                    f"serving could not be compared against the published `{inline(newest)}`"
+                )
+            elif live_warehouse != newest:
+                failures.append(
+                    f"the site is serving `{inline(live_warehouse)}` but `{inline(newest)}` is "
+                    "published -- a promote was forgotten, and the release-based freshness "
+                    "alert cannot see this"
+                )
 
     if base_url not in sitemap:
         m = _LOC_HOST.search(sitemap)
         if m:
             failures.append(
-                f"/sitemap.xml does not carry `{base_url}` -- found `{m.group(1)}` instead, so "
+                f"/sitemap.xml does not carry `{base_url}` -- found `{inline(m.group(1))}` "
+                "instead, so "
                 "UPGAUGE_BASE_URL is wrong and every <loc> and every canonical points somewhere "
                 "a crawler cannot resolve"
             )
@@ -224,7 +218,8 @@ def assess(
             )
         else:
             failures.append(
-                f"a second fetch reported `cf-cache-status: {cf_cache_status}` -- the edge is "
+                f"a second fetch reported `cf-cache-status: {inline(cf_cache_status)}` -- the "
+                "edge is "
                 "not caching HTML, so every repeat visit reaches the origin"
             )
 
@@ -277,11 +272,15 @@ def main() -> int:
     report = ["## Live check - " + ("FAILED" if verdict.failed else "ok"), ""] + [
         f"- {f}" for f in verdict.failures
     ]
+    # printable() at the boundary, not only on bodies: `open()` is strict under every locale,
+    # so a surrogate anywhere in a rendered line kills the write -- and with it the file_issue
+    # output and the issue. See gha.printable.
+    rendered = printable("\n".join(report))
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as fh:
-            fh.write("\n".join(report) + "\n")
-    print("\n".join(report))
+            fh.write(rendered + "\n")
+    print(rendered)
 
     out = os.environ.get("GITHUB_OUTPUT")
     if out:

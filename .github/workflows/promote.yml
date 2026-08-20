@@ -52,14 +52,14 @@ jobs:
       # failure from inside the poll loop below, but only after the loop's full 30-attempt/300s
       # budget elapses -- an operator who fat-fingered `-f tag=` deserves an answer in seconds,
       # not five minutes, and shouldn't have to wait through a login and a registry round trip
-      # first either. Single positional argument (no health report) is `promote_check.py`'s
-      # validate-only call shape; see its `main()` docstring.
+      # first either. `--validate` is an explicit flag rather than an inferred argument count,
+      # because it and a successful poll both exit 0; see `promote_check.py`'s `main()`.
       - name: Validate the tag's shape before polling
         env:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          mise exec -- python .github/scripts/promote_check.py "$TAG"
+          mise exec -- python .github/scripts/promote_check.py --validate "$TAG"
 
       - uses: docker/login-action@v3
         with:
@@ -151,15 +151,15 @@ jobs:
       #     - deploy/upgauge-deploy.sh: `docker compose pull --quiet app` runs unconditionally
       #       every tick, THEN `docker compose up -d --wait` gates on the healthcheck above.
       #
-      #   NOT MEASURED, because no live box exists yet (Task 6) -- an assumption, not a fact:
-      #     - how long `docker compose pull` actually takes to pull a ~413 MB image layer set
-      #       over this box's real network. Anywhere from single-digit seconds (mostly-cached
-      #       layers) to tens of seconds is plausible; there is no measurement behind that range.
+      #   MEASURED END TO END, against the live box: retag to serving, and the same for a
+      #   rollback. `docs/architecture/deploy.md` (Promote, Roll back) is where those two
+      #   figures are recorded; they are deliberately not restated here, because a number
+      #   written in two places is a number that will disagree with itself.
       #
-      # Summing the measured parts alone (up to ~30s timer latency + ~30-50s healthcheck
-      # confirmation) plus a guessed pull time lands around 60-100s of overhead against this
-      # step's 300s budget -- comfortable margin IF the guessed part holds, unverified until it
-      # can be timed against the real box (brief Step 5's rollback drill is where that happens).
+      #   The end-to-end figure supersedes the per-part arithmetic this comment used to carry,
+      #   including its NOT-MEASURED pull-duration assumption: the whole path has now been timed
+      #   on the real box, so the parts no longer have to be summed to justify the budget. Both
+      #   observations sit far inside the 300s here.
       - name: Wait for the box to be serving it
         env:
           TAG: ${{ inputs.tag }}
@@ -194,6 +194,12 @@ jobs:
             if [ "$rc" = 0 ]; then
               printf '%s' "$body" | jq . >> "$GITHUB_STEP_SUMMARY"
               exit 0
+            fi
+            if [ "$rc" = 64 ]; then
+              echo "::error::promote_check.py rejected its own call shape (exit 64). That is a"
+              echo "::error::wiring bug in this workflow, not a condition of the site -- the poll"
+              echo "::error::is not measuring anything and must not be read as one that did."
+              exit 1
             fi
             if [ "$rc" = 2 ]; then
               seen_code=$code

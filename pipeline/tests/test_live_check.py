@@ -11,10 +11,14 @@ carrying on makes the alert report a forgotten promote it never observed.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parents[2] / ".github" / "scripts"))
@@ -238,6 +242,17 @@ def _run_scalars(path: Path) -> list[str]:
     ]
 
 
+def _uncommented(run: str) -> str:
+    """`run` with bash comment lines removed.
+
+    Without this, an index lookup finds the string in PROSE. Measured: the ordering test below
+    resolved `/api/health` to character 104 -- inside `# /api/health is under /api/.` -- so
+    moving the actual fetch after the burst left it green. Fifth instance of that shape on this
+    branch, and the only pre-existing one.
+    """
+    return "\n".join(ln for ln in run.splitlines() if not ln.strip().startswith("#"))
+
+
 def test_no_static_delimiter_output_write_of_remote_content():
     """THE fix for the Important review finding. `sitemap` is remote content fetched from the
     origin, in a job holding issues:write. A `name<<EOF ... EOF` heredoc write to
@@ -271,7 +286,7 @@ def test_health_and_sitemap_are_fetched_before_the_rate_limit_burst():
     false failure. Merging the fetch and the decision into one bash script (the fix for the
     static-delimiter finding above) makes an accidental reorder a one-line diff instead of a
     cross-step change, which is exactly what this guards."""
-    run = next(r for r in _run_scalars(LIVE_CHECK) if "/api/health" in r)
+    run = _uncommented(next(r for r in _run_scalars(LIVE_CHECK) if "/api/health" in r))
     health_at = run.index("/api/health")
     burst_at = run.index("seq 1 80")
     assert health_at < burst_at, "the health/sitemap fetch must run BEFORE the rate-limit burst"
@@ -307,6 +322,10 @@ NOT_A_REPORT = [
     '{"status": "ok", "build": "not-a-dict", "data": {"asOf": null, "missing": []}}',
     '{"status": "degraded", "data": "oops", "build": {"warehouse": "w", "sha": "s"}}',
     '{"build": {"warehouse": "warehouse-2026.05", "sha": "9a9511d"}}',
+    # `build` and `data` both well-formed, `status` absent: without this the status clause of
+    # is_health_report can be deleted with the whole suite still green, and the mutant then
+    # emits the `reports `None`` string another test says must never appear.
+    '{"build": {"warehouse": "w", "sha": "s"}, "data": {"asOf": null, "missing": []}}',
 ]
 
 
@@ -486,3 +505,103 @@ def test_main_cannot_emit_a_workflow_command_out_of_the_body(monkeypatch, tmp_pa
     assert main() == 0
     for line in capsys.readouterr().out.splitlines():
         assert not line.startswith("::"), f"a workflow command reached line start: {line!r}"
+
+
+def test_the_fetch_half_of_the_step_survives_an_unreachable_origin():
+    """No text assertion can see this, so the scalar is executed.
+
+    Under `set -euo pipefail` a bare `cf=$(curl ... | tr | awk)` whose curl cannot reach the
+    origin makes the pipeline non-zero and ABORTS THE STEP -- live_check.py never runs, nothing
+    is written to $GITHUB_OUTPUT, and no issue is filed, on precisely the condition this alert
+    exists to report. Measured before the fix: exit 7, no output file. That is defect A reached
+    through the shell instead of through Python, and `docs/architecture/deploy.md`'s "files its
+    alert either way" was false while it held.
+
+    Only the fetch half runs here: the release listing needs `gh` and the script call needs
+    `mise`, neither of which this assertion is about.
+    """
+    if shutil.which("curl") is None:
+        pytest.skip("curl is not installed")
+    run = next(r for r in _run_scalars(LIVE_CHECK) if "/api/health" in r)
+    fetches = run.split('releases=""')[0]
+    result = subprocess.run(
+        ["bash", "-c", fetches + '\necho "SURVIVED hcode=$hcode cf=$cf"'],
+        env={**os.environ, "BASE": "http://127.0.0.1:1"},
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, (
+        f"the step aborted before live_check.py could run (exit {result.returncode}) -- "
+        f"no verdict, no file_issue, no issue:\n{result.stderr[-400:]}"
+    )
+    assert "SURVIVED hcode=000 cf=absent" in result.stdout, result.stdout
+
+
+def test_a_report_naming_no_warehouse_is_not_a_forgotten_promote():
+    """`(health.get("build") or {}).get("warehouse") or ""` turned a MISSING warehouse into an
+    empty one and then compared it, so a well-formed report whose build names no warehouse
+    produced `the site is serving `` but `warehouse-2026.05` is published -- a promote was
+    forgotten`: item 1's string verbatim, from a body no `NOT_A_REPORT` fixture supplies,
+    because this one IS a health report. Default-for-missing on a required field, which is the
+    rule the <loc> and cf-cache-status branches already follow."""
+    for build in ({}, {"sha": "x"}, {"warehouse": None}, {"warehouse": ""}):
+        body = json.dumps({"status": "ok", "build": build, "data": {}})
+        v = assess(body, 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+        assert not any("promote was forgotten" in f for f in v.failures), build
+        assert any("named no warehouse" in f for f in v.failures), build
+
+
+def test_a_newline_in_a_parsed_value_cannot_open_a_workflow_command(monkeypatch, tmp_path, capsys):
+    """`snippet`'s collapse guards the raw-body branch only. Every OTHER failure interpolates a
+    value read out of a PARSED body -- `status`, `data.error`, `data.missing[]`,
+    `build.warehouse`, the `cf-cache-status` header -- and a newline in any of them reaches the
+    same unprefixed stdout, in a job holding `issues: write`."""
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
+    hostile = "x\n::stop-commands::deadbeef"
+    body = json.dumps(
+        {
+            "status": f"degraded{hostile}",
+            "build": {"warehouse": f"w{hostile}", "sha": "s"},
+            "data": {"asOf": None, "missing": [f"m{hostile}"], "error": f"e{hostile}"},
+        }
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["live_check.py", body, "503", json.dumps(RELEASES), SITEMAP, f"HIT{hostile}", "429"],
+    )
+    assert main() == 0
+    for line in capsys.readouterr().out.splitlines():
+        assert not line.startswith("::"), f"a workflow command reached line start: {line!r}"
+
+
+def test_an_undecodable_byte_in_a_parsed_value_does_not_kill_the_output_write(
+    monkeypatch, tmp_path
+):
+    """`open()` is strict under EVERY locale, so this is live on ubuntu-latest today: a
+    surrogate anywhere in a rendered line kills the $GITHUB_OUTPUT write, and with it
+    `file_issue` and the issue. Guarding only `snippet` left every value read out of a parsed
+    body exposed."""
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary"))
+    bad = b"\xff\xfe".decode("utf-8", "surrogateescape")
+    body = json.dumps(
+        {"status": "degraded", "build": {"warehouse": "w", "sha": "s"}, "data": {"error": bad}}
+    )
+    monkeypatch.setattr(
+        sys, "argv", ["live_check.py", body, "503", json.dumps(RELEASES), SITEMAP, "HIT", "429"]
+    )
+    assert main() == 0
+    assert "file_issue=1" in out.read_text()
+
+
+def test_a_fetch_that_hung_mid_body_carries_what_did_arrive():
+    """Status 000 with a NON-EMPTY body: the origin began answering and then stalled, which is a
+    different finding from a connection refused -- and the bytes that arrived are the only thing
+    that separates them. Both other 000 fixtures pass an empty body, so neither can see this."""
+    v = assess('{"status":"ok"', 0, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+    named = next(f for f in v.failures if "/api/health" in f)
+    assert "did not complete the transfer" in named
+    assert '{"status":"ok"' in named, "the partial response was discarded"

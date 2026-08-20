@@ -82,7 +82,7 @@ def test_a_health_report_missing_build_entirely_does_not_match():
     `health["build"]` -- and it is NOT a reading of the box's build."""
     v = assess(TAG, "{}", 200)
     assert v.matched is False
-    assert "no `build` section" in v.reason
+    assert "not this app's health report" in v.reason
     assert v.read_a_build is False
 
 
@@ -90,9 +90,10 @@ def test_a_non_dict_build_does_not_crash():
     """Catches dropping the `isinstance(build, dict)` guard. A malformed or hand-edited health
     body could carry `build` as anything -- this must degrade to the same "not yet" reason as a
     missing key, never raise."""
-    v = assess(TAG, '{"build": "not-a-dict"}', 200)
+    v = assess(TAG, '{"status": "ok", "build": "not-a-dict", "data": {}}', 200)
     assert v.matched is False
-    assert "no `build` section" in v.reason
+    assert "not this app's health report" in v.reason
+    assert v.read_a_build is False
 
 
 def test_a_tag_that_does_not_match_the_warehouse_shape_is_named_as_such():
@@ -153,7 +154,7 @@ def test_main_validates_a_well_formed_tag_with_no_health_report(monkeypatch, tmp
     written to `GITHUB_OUTPUT` -- there is no `Verdict` to report."""
     out = tmp_path / "gh_output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
-    monkeypatch.setattr(sys, "argv", ["promote_check.py", TAG])
+    monkeypatch.setattr(sys, "argv", ["promote_check.py", "--validate", TAG])
     assert main() == 0
     assert not out.exists()
 
@@ -161,7 +162,7 @@ def test_main_validates_a_well_formed_tag_with_no_health_report(monkeypatch, tmp
 def test_main_fails_fast_on_a_malformed_tag_with_no_health_report(monkeypatch, tmp_path, capsys):
     out = tmp_path / "gh_output"
     monkeypatch.setenv("GITHUB_OUTPUT", str(out))
-    monkeypatch.setattr(sys, "argv", ["promote_check.py", "not-a-warehouse-tag"])
+    monkeypatch.setattr(sys, "argv", ["promote_check.py", "--validate", "not-a-warehouse-tag"])
     assert main() == 1
     assert "does not match the warehouse-YYYY.MM-<sha> shape" in capsys.readouterr().out
     assert not out.exists()
@@ -298,25 +299,36 @@ def test_the_tag_is_validated_before_the_poll_loop_is_ever_entered():
     entirely, and keeping it but moving it AFTER the poll loop starts (which would satisfy a
     membership check while still burning the full 300s budget on a typo)."""
     yaml_text = _promote_workflow()
-    assert 'promote_check.py "$TAG"\n' in yaml_text, (
-        "no validate-only call (single positional argument) found"
+    assert 'promote_check.py --validate "$TAG"\n' in yaml_text, "no validate-only call found"
+    validate_at = yaml_text.index(
+        'mise exec -- python .github/scripts/promote_check.py --validate "$TAG"\n'
     )
-    validate_at = yaml_text.index('mise exec -- python .github/scripts/promote_check.py "$TAG"\n')
     poll_at = yaml_text.index("for attempt in $(seq 1 30)")
     assert validate_at < poll_at, "the tag must be validated BEFORE the poll loop is entered"
 
 
-def test_the_timeout_budget_names_what_is_measured_and_what_is_not():
-    """Fix round 1, finding 2: the reviewer's arithmetic (timer latency + healthcheck timing
-    measured from committed config, pull duration NOT measured -- no live box exists yet) has to
-    live beside the 30/10 constants themselves, not only in a gitignored report that gets deleted
-    when this plan finishes. Checks for the two halves separately so a comment that states one
-    without the other -- implying the whole 300s figure was measured -- still fails this."""
+def test_the_timeout_budget_says_where_its_evidence_lives_and_does_not_restate_it():
+    """The 300s budget has to justify itself beside the 30/10 constants, not in a report that
+    gets deleted. What that justification IS has changed: it was an arithmetic of measured parts
+    plus an admitted NOT-MEASURED pull duration, "because no live box exists yet". A box exists
+    now and the whole path has been timed, so that sentence had become false while a test held
+    it in place -- and it contradicted `docs/architecture/deploy.md`, which records both
+    end-to-end figures as measured.
+
+    So this pins the two things that must stay true: the committed-config sources are still
+    cited, and the timings themselves are NOT restated here. CLAUDE.md's rule -- a number
+    written in two places is a number that will disagree with itself, which is what happened."""
     yaml_text = _promote_workflow()
     assert "OnUnitActiveSec=30s" in yaml_text, "the measured timer-latency source is not cited"
     assert "start_period=20s" in yaml_text, "the measured healthcheck-timing source is not cited"
-    assert "NOT MEASURED" in yaml_text, "the unmeasured pull-duration assumption is not admitted"
-    assert "413 MB" in yaml_text, "the pull-size figure is not named as the thing being guessed at"
+    assert "docs/architecture/deploy.md" in yaml_text, "the budget cites no record for its timings"
+    assert "NOT MEASURED" not in yaml_text, (
+        "the retired no-live-box assumption is back; the path has been timed end to end"
+    )
+    for stale in ("55s", "85s"):
+        assert stale not in yaml_text, (
+            f"{stale} is restated here as well as in deploy.md -- one of the two will rot"
+        )
 
 
 def test_the_promote_step_writes_no_output_nobody_can_read():
@@ -476,7 +488,17 @@ def test_the_workflow_keeps_the_last_attempt_that_read_a_build():
     """Without this the exit code above is decoration. Asserts the loop records the sticky
     sample AND that the exhausted call prefers it over whatever landed last."""
     run = next(r for r in _run_scalars() if "--exhausted" in r)
-    assert "seen_code=$code" in run.replace('"', ""), "no attempt is kept when a build is read"
+    # The POSITION, not the presence: a membership check cannot see WHICH rc branch the
+    # assignments sit in. Measured -- `if [ "$rc" = 2 ]` mutated to `= 1` (records the BLIND
+    # attempt, downgrading the very rollback this carry exists to protect) and `seen_body=$body`
+    # mutated to `=$code` (the kept body becomes "200", which reads as blind) both left the
+    # whole suite green.
+    lines = run.splitlines()
+    start = next(i for i, ln in enumerate(lines) if 'if [ "$rc" = 2 ]' in ln)
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "fi")
+    kept = "\n".join(lines[start + 1 : end])
+    assert "seen_code=$code" in kept, f"the read-a-build branch does not keep the code: {kept}"
+    assert "seen_body=$body" in kept, f"the read-a-build branch does not keep the body: {kept}"
     argv = _calls(run, "promote_check.py")[-1]
     assert argv[0] == "--exhausted"
     assert argv[2] == '"${seen_code:-$code}"', f"exhausted does not prefer the kept sample: {argv}"
@@ -537,3 +559,91 @@ def test_a_poll_attempt_cannot_emit_a_workflow_command_out_of_the_body(monkeypat
     main()
     for line in capsys.readouterr().out.splitlines():
         assert not line.startswith("::"), f"a workflow command reached line start: {line!r}"
+
+
+def test_a_newline_in_a_parsed_value_cannot_open_a_workflow_command(monkeypatch, capsys):
+    """The poll's per-attempt `print(verdict.reason)` is unprefixed and runs 30 times, in a job
+    holding `packages: write`. `build.warehouse` reaches it straight out of the parsed body, and
+    `snippet`'s collapse never touches it."""
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    hostile = "w\n::stop-commands::deadbeef"
+    body = json.dumps({"status": "ok", "build": {"warehouse": hostile, "sha": "s"}, "data": {}})
+    monkeypatch.setattr(sys, "argv", ["promote_check.py", TAG, "200", body])
+    main()
+    for line in capsys.readouterr().out.splitlines():
+        assert not line.startswith("::"), f"a workflow command reached line start: {line!r}"
+
+
+def test_an_undecodable_byte_in_a_parsed_value_does_not_kill_the_exhausted_report(
+    monkeypatch, tmp_path, capsys
+):
+    """The step-summary write is strict under every locale, so this is live on ubuntu-latest. A
+    crash here hands the operator a traceback instead of the rollback verdict -- and it exits 1,
+    this script's code for "read nothing", so it would silently downgrade an earned rollback to
+    the blind path too."""
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary"))
+    bad = b"\xff\xfe".decode("utf-8", "surrogateescape")
+    body = json.dumps(
+        {"status": "ok", "build": {"warehouse": f"warehouse-2026.04{bad}", "sha": "x"}, "data": {}}
+    )
+    monkeypatch.setattr(sys, "argv", ["promote_check.py", "--exhausted", TAG, "200", body, "30"])
+    assert main() == 1
+    assert "ROLL BACK NOW" in (tmp_path / "summary").read_text()
+    assert "ROLL BACK NOW" in capsys.readouterr().out
+
+
+def test_json_that_is_not_this_apps_report_never_earns_a_rollback():
+    """`is_health_report` shipped in live_check and not here, so for one commit any JSON with a
+    `build` dict counted as a reading of the box: `{"build":{}}` produced a `mismatch` whose
+    exhausted report ordered ROLL BACK NOW unconditionally, and a body whose keys happened to
+    line up declared the promote SUCCESSFUL outright. `deploy.md` states the rule for both
+    watchdogs; now both hold it."""
+    for body in (
+        '{"build":{}}',
+        '{"success":false,"build":{"warehouse":"w","sha":"s"},"errors":[{"code":1015}]}',
+        '{"build":{"warehouse":"warehouse-2026.05","sha":"6ea164b"}}',
+    ):
+        v = assess(TAG, body, 200)
+        assert v.read_a_build is False, body
+        assert v.matched is False, body
+        report = v.exhausted_report(30)
+        # Not "no rollback anywhere" -- the blind branch keeps a CONDITIONAL one by design. The
+        # property is that it never asserts the deploy failed, and never orders the rollback
+        # outright, which is what the mismatch branch does.
+        assert "The tag moved; the deploy did not." not in report, body
+        assert "NOT EVIDENCE EITHER WAY" in report, body
+
+
+def test_the_workflow_treats_a_usage_failure_as_a_wiring_bug_not_a_site_condition():
+    """Exit 64 is `promote_check.py` refusing its own call shape. Folded into the loop's
+    "keep polling" alongside a genuine 1, a wiring bug spends the full 300s budget and is then
+    reported as a condition of the SITE -- the misattribution this whole branch exists to end."""
+    run = next(r for r in _run_scalars() if "--exhausted" in r)
+    lines = run.splitlines()
+    start = next(i for i, ln in enumerate(lines) if 'if [ "$rc" = 64 ]' in ln)
+    end = next(i for i in range(start + 1, len(lines)) if lines[i].strip() == "fi")
+    block = "\n".join(lines[start + 1 : end])
+    assert "exit 1" in block, f"a usage failure does not stop the poll: {block}"
+    assert "wiring bug" in block, "the operator is not told this is a wiring bug, not the site"
+
+
+def test_a_fetch_that_hung_mid_body_carries_what_did_arrive():
+    """The same withholding this file fixed on the no-`build` branch: status 000 with bytes in
+    hand is an origin that started answering and stalled, not a refused connection."""
+    v = assess(TAG, '{"status":"ok","build"', 0)
+    assert v.read_a_build is False
+    assert "did not complete" in v.reason
+    assert '{"status":"ok","build"' in v.reason, "the partial response was discarded"
+
+
+def test_an_undecodable_byte_in_a_poll_attempt_does_not_kill_the_loop(monkeypatch, capsys):
+    """The per-attempt print is a boundary too, and it runs 30 times. A crash exits 1 -- this
+    script's code for "read nothing" -- so it would also downgrade an earned rollback."""
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    bad = b"\xff\xfe".decode("utf-8", "surrogateescape")
+    body = json.dumps(
+        {"status": "ok", "build": {"warehouse": f"warehouse-2026.04{bad}", "sha": "x"}, "data": {}}
+    )
+    monkeypatch.setattr(sys, "argv", ["promote_check.py", TAG, "200", body])
+    assert main() == 2, "a build WAS read; a crash here would look like a blind attempt"
+    assert "warehouse-2026.04" in capsys.readouterr().out

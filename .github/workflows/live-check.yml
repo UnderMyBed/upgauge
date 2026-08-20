@@ -93,10 +93,20 @@ jobs:
 
           # Two fetches of the SAME url: the first may legitimately miss (cold edge, or the
           # entry just expired). Only the second says whether the edge is caching HTML at all.
+          #
+          # The second fetch is NOT a bare pipeline. Under `set -euo pipefail` a curl that
+          # cannot reach the origin makes the whole pipeline non-zero, the assignment aborts the
+          # STEP, and live_check.py never runs -- no verdict, no `file_issue`, no issue, on
+          # exactly the condition this alert exists to report. Measured against a dead port:
+          # the step exits 7 and $GITHUB_OUTPUT is never written. So curl is gated on its own
+          # exit status and the header parse happens afterwards, on a value already in hand.
           curl -sS -o /dev/null --max-time 15 "${BASE}/watch" || true
-          cf=$(curl -sS -o /dev/null -D - --max-time 15 "${BASE}/watch" \
-                | tr -d '\r' | awk -F': ' 'tolower($1)=="cf-cache-status"{print $2}')
-          cf="${cf:-absent}"
+          cf=absent
+          if headers=$(curl -sS -o /dev/null -D - --max-time 15 "${BASE}/watch"); then
+            cf=$(printf '%s' "$headers" | tr -d '\r' \
+                 | awk -F': ' 'tolower($1)=="cf-cache-status"{print $2}')
+            cf="${cf:-absent}"
+          fi
 
           releases=""
           for attempt in 1 2 3 4 5; do

@@ -21,20 +21,23 @@ def write_multiline_output(fh: TextIO, name: str, value: str) -> None:
     of failing loudly. The cost of generating one is a function call, and the alternative is a
     delimiter collision nobody would notice until an issue body went missing its tail.
     """
+    value = printable(value)
     delim = secrets.token_hex(16)
     while delim in value:
-        delim = secrets.token_hex(16)
+        value = printable(value)
+    delim = secrets.token_hex(16)
     fh.write(f"{name}<<{delim}\n{value}\n{delim}\n")
 
 
-#: How much of an unreadable body reaches the operator. Enough to tell a Cloudflare interstitial
-#: from a 502 from a truncated JSON body without going and fetching it by hand, which is the
-#: whole point of carrying it at all.
-SNIPPET_BYTES = 200
+#: How many CHARACTERS of an unreadable body reach the operator -- characters, not bytes: the
+#: value is sliced after decoding, so a multi-byte character counts once. Enough to tell a
+#: Cloudflare interstitial from a 502 from a truncated JSON body without going and fetching it by
+#: hand, which is the whole point of carrying it at all.
+SNIPPET_CHARS = 200
 
 
-def _printable(text: str) -> str:
-    """Undecodable bytes as U+FFFD, rather than as an exception on the print path.
+def printable(text: str) -> str:
+    """Undecodable bytes as U+FFFD, rather than as an exception on the way out.
 
     `sys.argv` decodes with `surrogateescape`, so a body that is not valid UTF-8 -- a binary
     error page, a response truncated mid-character -- arrives carrying lone surrogates. Encoding
@@ -42,14 +45,64 @@ def _printable(text: str) -> str:
     path means the alert CRASHES INSTEAD OF REPORTING: the exact failure its callers exist to
     end, reachable by anything that can serve the runner a non-UTF-8 body.
 
-    Measured: `LANG=en_US.UTF-8` gives stdout `errors=strict` and raises; `ubuntu-latest` sets
-    `LANG=C.UTF-8`, whose handler is `surrogateescape`, and does not. Nothing in this repo pins
-    that variable, so the guard cannot live in the environment. A no-op for valid text.
+    APPLY THIS AT EVERY BOUNDARY, not only to bodies. `open()` defaults to `errors="strict"`
+    under EVERY locale, so the locale only ever affected stdout -- measured:
+
+        LANG=C.UTF-8 (ubuntu-latest)   stdout ok        file write RAISES
+        LANG=en_US.UTF-8               stdout RAISES    file write RAISES
+
+    So a `$GITHUB_OUTPUT` or step-summary write raises on the runner today, and any value read
+    out of a PARSED body (a status, a warehouse name, an error message) carries the same risk as
+    a raw one. A crash there means the alert dies before filing anything -- and in
+    `promote_check` it exits 1, the code for "read nothing", silently downgrading an earned
+    rollback to the blind path. A no-op for valid text.
     """
     return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
 
 
-def snippet(body: str, limit: int = SNIPPET_BYTES) -> str:
+def inline(value: object) -> str:
+    """An untrusted VALUE rendered for a one-line message: printable, whitespace collapsed.
+
+    `snippet` guards raw bodies, but every message these alerts build also interpolates values
+    read OUT of a parsed body -- a `status`, a `data.error`, a `build.warehouse`, a
+    `cf-cache-status` header, a dispatch-supplied tag. Those are just as attacker-shaped as the
+    body they came from, and a newline in one of them lands in the same two places a raw body
+    would: an unprefixed line on the runner's stdout, where Actions parses `::add-mask::` and
+    `::stop-commands::` in jobs holding `issues: write` and `packages: write`.
+
+    So the collapse belongs where the message is BUILT, not only on the snippet.
+
+    This does NOT re-encode undecodable bytes: `printable` owns that, once, at the emission
+    boundary. Doing it in both places left every boundary guard unreachable -- three mutants
+    deleting them survived the whole suite, because the value had already been sanitised on its
+    way in. One rule, one place, one test each.
+    """
+    return " ".join(str(value).split())
+
+
+def is_health_report(parsed: dict) -> bool:
+    """Whether this object is a `HealthReport` (`app/src/lib/health.ts:7-14`) rather than merely
+    some JSON that parsed.
+
+    `status`, `build` and `data` are all non-optional there, and `identity()` computes `build`
+    before every return branch, so an object missing any of them did not come from this app --
+    a Cloudflare JSON error body (`{"success":false,"errors":[...]}`), an intermediary's own
+    JSON, or `{}`.
+
+    SHARED, because both watchdogs answer the same question and `docs/architecture/deploy.md`
+    states the rule for both. It lived in `live_check` alone for one commit, and in that commit
+    any JSON carrying a `build` dict -- `{"build":{}}` included -- earned `promote.yml`'s
+    unconditional ROLL BACK NOW, or, if the keys happened to line up, declared the promote a
+    success outright.
+    """
+    return (
+        isinstance(parsed.get("status"), str)
+        and isinstance(parsed.get("build"), dict)
+        and isinstance(parsed.get("data"), dict)
+    )
+
+
+def snippet(body: str, limit: int = SNIPPET_CHARS) -> str:
     """The first `limit` characters of `body`, whitespace-collapsed, truncation MARKED.
 
     Collapsed because the value is rendered as one markdown list item and one `::error::`
@@ -65,7 +118,7 @@ def snippet(body: str, limit: int = SNIPPET_BYTES) -> str:
     Nothing else is altered: the bytes between here and `limit` are verbatim, which is why
     `code_span` below has to cope with whatever they contain rather than sanitising them.
     """
-    collapsed = " ".join(_printable(body).split())
+    collapsed = inline(body)
     if len(collapsed) <= limit:
         return collapsed
     return collapsed[:limit] + " [truncated]"
