@@ -42,8 +42,9 @@ WHAT THE POLL IS ENTITLED TO CONCLUDE WHEN IT RUNS OUT OF ATTEMPTS
     So the report is built from what was OBSERVED, and `read_a_build` is the boundary:
 
       - a build was read and it disagrees -> the box is up and never took the image, `:deploy`
-        still points at that image, and re-dispatching the previous known-good tag is the remedy.
-        Ordered outright.
+        still points at that image, and re-dispatching a tag that SERVES is the remedy, ordered
+        outright. "The previous known-good tag" names one only while the build the box is on is
+        serving; this branch has read that build's status, so it says which.
       - no build was ever read -> the finding is that the poll is blind, and it is NOT evidence
         the deploy failed. It is not evidence the deploy SUCCEEDED either: `docker compose up -d
         --wait` recreates the container before confirming health, so an image that fails to start
@@ -68,6 +69,14 @@ A MATCHING BUILD IS NOT A DEPLOY (#79)
     `is_health_report` requires `status` to be a string and nothing further. And the BUILD is
     compared first: a box still serving the old image and reporting degraded is telling this poll
     about an image nobody promoted, which is a mismatch and nothing else.
+
+    THE RULE GOVERNS THE HAND CHECK TOO. The blind branch reads no status because it read no
+    body, so what it emits is the rule for the operator who will read one -- and a rule that
+    clears on the build alone hands out this same false all-clear from a human's terminal
+    instead of from this script. Compose the two open realities to see it: the runner is served
+    a challenge page for the full budget (#77) WHILE the box serves 503 on the correctly-promoted
+    image (#79). So that branch's decision rule carries the status clause the degraded branch
+    earned, and only the promoted build under `ok` is an all-clear.
 
 WHAT A DEGRADED BOX EARNS, AND WHY IT IS NOT A MISMATCH'S REMEDY
     The tag moved and the box took the image; what it took cannot answer. Rolling back is
@@ -150,16 +159,29 @@ class Verdict:
         order: `read_a_build` is the evidence boundary, and among the outcomes that cleared it,
         a wrong build and a build that cannot serve are different failures with different fixes."""
         if self.outcome == MISMATCH:
+            # Two clauses, one condition, and what the branch RECOMMENDS is unchanged either
+            # way: the box never took the new image whatever the old one is doing.
+            #
             # "so it is up" is a claim about the build the box IS serving, and this branch has
-            # that build's status in hand: a box serving an old, degraded image is up and NOT
-            # serving. A clause, not a restructure -- what the branch RECOMMENDS is unchanged,
-            # because the box never took the new image whatever the old one is doing.
-            up = (
-                "The box answers, so it is up"
-                if self.live_status == "ok"
-                else f"The box answers, but reports `{inline(self.live_status)}` on the build it "
-                "is serving, so it is up and not serving what it has"
-            )
+            # that build's status in hand -- a box serving an old, degraded image is up and NOT
+            # serving. The same status decides what the rollback TARGET may be called: the
+            # remedy pins `:deploy` at a tag that SERVES, and only a serving build makes "the
+            # previous known-good tag" a name for the one the box is already on.
+            if self.live_status == "ok":
+                up = "The box answers, so it is up"
+                target = "the previous known-good tag"
+            else:
+                up = (
+                    f"The box answers, but reports `{inline(self.live_status)}` on the build it "
+                    "is serving, so it is up and not serving what it has"
+                )
+                # The quadrant where a new image is promoted TO FIX an outage and the box never
+                # pulled it. Here "previous known-good" names a build this poll watched fail on
+                # every attempt, and would send the operator back into the outage they came from.
+                target = (
+                    "a tag you know SERVES (not the build the box is on now, which reported "
+                    "that status on every attempt)"
+                )
             return "\n".join(
                 [
                     f"the box is serving `{inline(self.live_warehouse)}` / "
@@ -168,7 +190,7 @@ class Verdict:
                     f"`{self.expected_sha}`. The tag moved; the deploy did not.",
                     f"{up} -- it never took the new image, and `:deploy` "
                     "still points at that image, so the box can land on it at any 30s tick. "
-                    "ROLL BACK NOW: re-dispatch this workflow with the previous known-good tag, "
+                    f"ROLL BACK NOW: re-dispatch this workflow with {target}, "
                     "then find out why this one never pulled (`upgauge-deploy.timer` on the box).",
                 ]
             )
@@ -202,9 +224,12 @@ class Verdict:
                     "closes the port and takes the site DOWN while the box's timer retries it "
                     "forever -- and an edge that refuses this runner looks identical from here.",
                     f"Check by hand, from a network that reaches the site: `{_HAND_CHECK}`. "
-                    "If it is down, or serving a build other than the promoted one, ROLL BACK "
-                    "NOW: re-dispatch this workflow with the previous known-good tag. If it "
-                    "reports the promoted build, this run was blind and the deploy is fine.",
+                    "If it is down, serving a build other than the promoted one, or reporting "
+                    "anything but `ok`, ROLL BACK NOW: re-dispatch this workflow with the "
+                    "previous known-good tag. Only the promoted build under `ok` says this run "
+                    "was blind and the deploy is fine -- `/api/health` serves the promoted "
+                    "identity verbatim under a 503 when the data layer is degraded, so a "
+                    "matching build is not a deploy.",
                 ]
             )
         if self.outcome == MATCHED:
@@ -398,8 +423,15 @@ def main() -> int:
       promote_check.py <tag> <http-status> <health-report-json>      -- one poll attempt
 
     The poll shape's exit code is a three-way answer, not a boolean: 0 matched (the loop ends),
-    2 a build was read and it disagreed, 1 nothing readable came back. A usage error is 64, off
-    those values deliberately, so a mis-wired call can never be mistaken for a verdict.
+    2 a build was read and it did not confirm the promote, 1 nothing readable came back. A usage
+    error is 64, off those values deliberately, so a mis-wired call can never be mistaken for a
+    verdict.
+
+    2 covers BOTH failing outcomes that read a build, and they are different failures: a
+    different build (MISMATCH) and the promoted build under a status that is not `ok` (DEGRADED,
+    #79 -- there the build agreed and only the status did not). The workflow branches on the
+    number alone, which is all it needs: the number means "this attempt saw the box, keep it as
+    the sticky sample". `exhausted_report` is where the two part company.
 
     VALIDATE-ONLY carries an explicit flag rather than being inferred from a bare argument
     count: it and a successful poll both exit 0, so a call that lost two argv entries would have

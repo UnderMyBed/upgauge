@@ -39,6 +39,18 @@ from promote_check import (  # noqa: E402
 TAG = "warehouse-2026.05-6ea164b"
 DIRTY_TAG = "warehouse-2026.05-a2020f0-dirty"
 
+#: The attempt count handed to `exhausted_report`, deliberately NOT the real budget of 30, and
+#: asserted as `f"after {ATTEMPTS} attempts"` rather than as a bare number.
+#:
+#: Every branch of that report interpolates its count into fixed prose that already contains a
+#: 30 -- "retries the same digest every 30s forever" on the degraded branch, "any 30s tick" on
+#: the mismatch one -- so `assert "30" in report` holds no matter what the count renders as, or
+#: whether it renders at all. Measured: replacing the interpolation with the literal `NN`
+#: survived the whole suite on BOTH branches (mutants M17/M18 of the #79 review). CLAUDE.md's
+#: rule -- vary the input that distinguishes correct from buggy, never assert an outcome the
+#: buggy implementation also produces.
+ATTEMPTS = 17
+
 
 #: What the runner was actually served on 2026-08-1x, in place of the health report: an HTTP
 #: success carrying HTML. Empty would have parsed under the old `or "{}"`; this did not.
@@ -394,12 +406,14 @@ def test_the_exhausted_report_orders_a_rollback_when_the_box_reported_a_differen
     a promote that did not take leaves `:deploy` pointing at an image the box can land on at any
     tick -- re-dispatching the previous known-good tag is what stops that."""
     v = assess(TAG, _health("warehouse-2026.04", "6ea164b"), 200)
-    report = v.exhausted_report(30)
+    report = v.exhausted_report(ATTEMPTS)
     assert "ROLL BACK NOW" in report
     assert "previous known-good tag" in report
     assert "The tag moved; the deploy did not." in report
     assert "warehouse-2026.04" in report and "warehouse-2026.05" in report
-    assert "30" in report
+    assert f"after {ATTEMPTS} attempts" in report, (
+        "the count of attempts behind this verdict is not reported -- see ATTEMPTS"
+    )
 
 
 def test_the_exhausted_report_does_not_assert_a_failed_deploy_when_the_box_was_never_read():
@@ -473,8 +487,10 @@ def test_the_poll_exit_code_distinguishes_a_read_build_from_a_blind_attempt(monk
     DOWNGRADED an earned order to the conditional blind path.
 
     The loop cannot see that distinction from a bare pass/fail, so the exit code carries it:
-    0 matched, 2 read-a-build-and-it-disagreed, 1 read nothing. `promote.yml` keeps the last
-    attempt that returned 2."""
+    0 matched, 2 read-a-build-that-did-not-confirm, 1 read nothing. `promote.yml` keeps the last
+    attempt that returned 2. The three cases below are match / wrong build / blind; the fourth
+    way to earn a 2 -- the promoted build under a non-`ok` status -- has its own test, because
+    its remedy differs."""
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
 
     monkeypatch.setattr(
@@ -774,10 +790,12 @@ def test_the_exhausted_report_names_the_cause_the_box_reported():
 
     BOTH fixtures are needed: a `missing`-only implementation passes the first and silently
     drops the second, which is the very case `health.ts` keeps a separate key for."""
-    gap = assess(TAG, _degraded("warehouse-2026.05", "6ea164b"), 503).exhausted_report(30)
+    gap = assess(TAG, _degraded("warehouse-2026.05", "6ea164b"), 503).exhausted_report(ATTEMPTS)
     assert CATALOG_GAP in gap, "the catalog probe's cause is not carried"
     assert "warehouse-2026.05" in gap and "6ea164b" in gap
-    assert "30" in gap
+    assert f"after {ATTEMPTS} attempts" in gap, (
+        "the count of attempts behind this verdict is not reported -- see ATTEMPTS"
+    )
 
     stamp = assess(
         TAG,
@@ -811,6 +829,35 @@ def test_the_exhausted_report_orders_a_rollback_without_promising_it_fixes_the_b
     assert "replace it" in report, "no path for the case where the box is the subject"
 
 
+def test_the_blind_branch_does_not_call_a_matching_build_a_good_deploy():
+    """#79 in the branch that hands the decision to a human, and it needs both open realities to
+    see: a runner served a challenge page for the full budget is blind (#77), and the box can be
+    serving 503 on the correctly-promoted image at the same time (#79).
+
+    The blind branch never read the box, so it offers a hand check and states the rule for
+    reading what comes back. That rule read the BUILD and nothing else -- "If it reports the
+    promoted build, this run was blind and the deploy is fine" -- which concludes, against a site
+    serving 503 to every visitor, exactly what the DEGRADED branch directly above it exists to
+    refuse. `-D -` does put the status on screen; the stated rule beside it did not read it.
+
+    Asserted as the two halves of the rule rather than as a phrase, because a paraphrase of
+    either half is the same defect: the roll-back condition must name a non-`ok` status, and the
+    all-clear must be qualified by `ok`. BACKTICKED -- `ok` unfenced is a substring of "looks"
+    and "took", both already in this branch's fixed prose, which is the same collision that made
+    `assert "30" in report` decoration (see ATTEMPTS)."""
+    report = assess(TAG, CHALLENGE, 403).exhausted_report(30)
+    rule = next(ln for ln in report.splitlines() if "ROLL BACK NOW" in ln)
+    condition, _, all_clear = rule.partition("ROLL BACK NOW")
+    assert "`ok`" in condition, (
+        f"the roll-back condition reads the build and never the status, so a box serving 503 on "
+        f"the promoted image reads as an all-clear: {condition}"
+    )
+    assert "`ok`" in all_clear, (
+        f"a build identity alone is called a good deploy -- the finding #79 fixed in `assess`, "
+        f"restated to an operator thirty lines below its own module docstring: {all_clear}"
+    )
+
+
 def test_a_wrong_build_is_reported_as_a_mismatch_even_when_that_build_is_degraded():
     """The build is compared FIRST, and the order is the finding. A box still serving the OLD
     image and reporting degraded is telling this poll about an image nobody promoted -- reading
@@ -840,7 +887,7 @@ def test_the_mismatch_report_does_not_claim_a_degraded_box_is_up_and_serving():
         "a box reporting it cannot answer is called up and serving"
     )
     assert "degraded" in degraded, "the status the box reported is not named"
-    for claim in ("ROLL BACK NOW", "previous known-good tag", "never pulled"):
+    for claim in ("ROLL BACK NOW", "re-dispatch this workflow with", "never pulled"):
         assert claim in degraded, f"the mismatch recommendation changed: {claim}"
 
     healthy = assess(TAG, _health("warehouse-2026.04", "6ea164b"), 200).exhausted_report(30)
@@ -848,6 +895,36 @@ def test_the_mismatch_report_does_not_claim_a_degraded_box_is_up_and_serving():
         "the ordinary mismatch message changed, or the degraded clause leaked onto it"
     )
     assert "degraded" not in healthy
+
+
+def test_the_mismatch_report_does_not_call_a_tag_it_watched_fail_known_good():
+    """Which tag the operator is sent to is mechanical and unchanged -- `:deploy` has to come
+    off the image the box never pulled. What the report may CALL that tag is not.
+
+    In the quadrant where a new image is promoted TO FIX an outage and the box never pulled it,
+    "the previous known-good tag" names the build this poll just watched report a non-`ok`
+    status on every attempt. The branch already reads that status for its `up` clause, so the
+    phrase is contradicted by the branch's own evidence -- the same shape as comparing a build
+    identity and calling it a deploy, one field over.
+
+    ONLY this quadrant, which is why both halves are here: an ordinary mismatch against an old
+    build that is serving keeps the phrase, because there the previous tag IS one this poll
+    watched serve. The DEGRADED and blind branches never observed the previous tag at all, so
+    "known-good" there is the operator's own knowledge and not a claim this report makes; their
+    own tests pin it in place."""
+    degraded = assess(TAG, _degraded("warehouse-2026.04", "6ea164b"), 503).exhausted_report(30)
+    assert "previous known-good tag" not in degraded, (
+        "the report measured this build failing on every attempt and calls its tag known-good"
+    )
+    assert "on every attempt" in degraded, (
+        "the operator is not told to reach PAST the build the box is on, so the correction is "
+        "an omission rather than a rule"
+    )
+
+    healthy = assess(TAG, _health("warehouse-2026.04", "6ea164b"), 200).exhausted_report(30)
+    assert "previous known-good tag" in healthy, (
+        "the clause leaked onto a mismatch whose old build is serving fine"
+    )
 
 
 def test_a_newline_in_the_reported_status_or_cause_cannot_open_a_workflow_command(

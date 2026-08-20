@@ -77,10 +77,21 @@ def inline(value: object) -> str:
     way in. One rule, one place.
 
     Every EMISSION boundary is pinned by a test that fails without it. The call sites of this
-    function are not all pinned: the ones with a live vector are (a parsed body's `status`,
-    `error`, `missing[]` and `build.warehouse`; a `cf-cache-status` header; a sitemap `<loc>`
-    host; a dispatched tag), and the rest -- `newest`, the `exhausted_report` fields -- are
-    defence in depth with no reachable newline today. Said plainly rather than claimed away.
+    function are not all pinned, and the boundary is STRUCTURAL rather than a survey of today's
+    vectors -- a survey rots, and this one had: it counted `exhausted_report`'s fields as having
+    "no reachable newline", when every one of them (`live_warehouse`, `live_sha`, `live_status`)
+    is read straight out of a parsed body that an origin chose.
+
+    Pinned are the sites emitted UNPREFIXED, where a newline reaches line start: a parsed body's
+    `status`, `error`, `missing[]` and `build.warehouse` on `promote_check`'s per-attempt print;
+    a `cf-cache-status` header; a sitemap `<loc>` host; a dispatched tag. `exhausted_report`'s
+    fields are not, because its one caller prefixes EVERY line at both emissions -- `::error::`
+    on stdout, `- ` in the step summary -- so a newline there mints another annotation and
+    nothing more. No test can tell the collapse from its absence on that path, and writing one
+    that appeared to would be asserting a formatting property in a security test's clothing.
+    They are collapsed anyway, because the next caller to print that report unprefixed would
+    inherit the vector silently; `newest` is the same shape. Said plainly rather than claimed
+    away.
     """
     return " ".join(str(value).split())
 

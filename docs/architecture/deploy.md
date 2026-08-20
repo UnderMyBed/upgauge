@@ -55,6 +55,11 @@ what `/api/health` returns, or compare the index's child.
 The same operation with the previous tag. Measured: **85s** from retag to the older build
 serving.
 
+**The target is a tag you know serves, which is not always the one the box is on.** A promote made
+to *fix* an outage, against a box that then never pulls it, leaves the box running the build that
+is failing — so "the previous tag" there is the outage. `promote.yml`'s mismatch verdict says
+which, because it has read that build's status over the full poll.
+
 ```bash
 gh workflow run promote.yml -f tag=warehouse-2026.05-6ea164b
 curl -sS https://upgauge.shipman.dev/api/health | jq -r .build.sha
@@ -153,8 +158,11 @@ that reaches the site, and act on what it shows, not on the failed run:
 curl -sS -D - https://upgauge.shipman.dev/api/health
 ```
 
-Down, or serving a build other than the promoted one → roll back. Reporting the promoted build →
-the run was blind and the deploy is fine.
+Down, serving a build other than the promoted one, or reporting anything but `ok` → roll back.
+The promoted build under `ok` → the run was blind and the deploy is fine. **A build identity does
+not close it**: `/api/health` serves the promoted pair verbatim under a 503 whenever the data layer
+is degraded (below), so a hand check read for the build alone hands out the same false all-clear
+the poll itself is built to refuse.
 
 ### The promoted build, serving 503, is its own verdict
 
