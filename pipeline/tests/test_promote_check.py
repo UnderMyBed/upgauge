@@ -27,7 +27,14 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).parents[2] / ".github" / "scripts"))
 
-from promote_check import _HAND_CHECK, assess, main, parse_promoted_tag  # noqa: E402
+from promote_check import (  # noqa: E402
+    _HAND_CHECK,
+    DEGRADED,
+    MISMATCH,
+    assess,
+    main,
+    parse_promoted_tag,
+)
 
 TAG = "warehouse-2026.05-6ea164b"
 DIRTY_TAG = "warehouse-2026.05-a2020f0-dirty"
@@ -667,5 +674,198 @@ def test_a_newline_in_a_dispatched_tag_cannot_open_a_workflow_command(monkeypatc
         sys, "argv", ["promote_check.py", "--validate", "nope\n::stop-commands::deadbeef"]
     )
     assert main() == 1
+    for line in capsys.readouterr().out.splitlines():
+        assert not line.startswith("::"), f"a workflow command reached line start: {line!r}"
+
+
+# --------------------------------------------------------------------------------------
+# A box serving the promoted build and reporting it cannot answer (#79)
+# --------------------------------------------------------------------------------------
+
+#: A cause in the shape the container really produces, measured on `make portability` negative 3
+#: and recorded verbatim at `docs/architecture/hosting.md:575`.
+CATALOG_GAP = (
+    'catalog probe failed: IO Error: Cannot open database "/tmp/upgauge.duckdb" in read-only '
+    "mode: database does not exist"
+)
+
+#: The other degraded shape, and it is NOT reachable through `missing`: the catalog is intact and
+#: `dataAsOf()` threw, so the cause lands in `data.error` instead (`app/src/lib/health.ts:73-82`,
+#: measured on `make portability` negative 1).
+ASOF_ERROR = (
+    'IO Error: No files found that match the pattern "data/parquet/t100_segment/**/*.parquet"'
+)
+
+
+def _degraded(warehouse: str, sha: str, data: dict | None = None, status: str = "degraded") -> str:
+    """A degraded `/api/health` body carrying the PROMOTED build identity.
+
+    That combination is #79 itself, and it is not contrived: `build` is baked from the
+    Dockerfile's runtime build args and `health.ts`'s `identity()` computes it before every
+    return branch, so a container whose data layer never opened reports the promoted sha and
+    warehouse exactly as a healthy one does.
+    """
+    return json.dumps(
+        {
+            "status": status,
+            "build": {"warehouse": warehouse, "sha": sha},
+            "data": data if data is not None else {"asOf": None, "missing": [CATALOG_GAP]},
+        }
+    )
+
+
+def test_a_degraded_box_serving_the_promoted_build_is_not_a_match():
+    """THE defect. `assess` compared the build identity and never read `status`, so the first
+    poll attempt against a box answering 503 returned matched and `promote.yml` exited 0 --
+    reporting a successful deploy against a site serving 503 to every visitor.
+
+    It is a reading of the box, not a blind attempt: the build was there and it was right."""
+    v = assess(TAG, _degraded("warehouse-2026.05", "6ea164b"), 503)
+    assert v.matched is False, "a box that reports it cannot answer confirmed a deploy"
+    assert v.outcome == DEGRADED
+    assert v.read_a_build is True, "the build WAS read; this is not a blind attempt"
+    assert "degraded" in v.reason
+    assert CATALOG_GAP in v.reason, "the cause the box named is not carried"
+
+
+def test_only_ok_confirms_the_promoted_build():
+    """An allow-list, never `!= "degraded"` -- CLAUDE.md's cacheability-predicate rule in another
+    guise. `is_health_report` requires `status` to be a string and nothing further, so a future
+    status value, an intermediary's own word, or a case variant all reach here and none of them
+    is a confirmation. The deny-list form passes the test above and waves every one of these
+    through."""
+    for status in ("wat", "", "OK", "okay", "starting"):
+        v = assess(TAG, _degraded("warehouse-2026.05", "6ea164b", status=status), 200)
+        assert v.matched is False, status
+        assert v.outcome == DEGRADED, status
+        if status:
+            assert status in v.reason, status
+
+
+def test_a_degraded_attempt_keeps_the_loop_going_and_is_kept_as_the_sticky_sample(
+    monkeypatch, tmp_path
+):
+    """Exit 2, and neither of its neighbours. 0 ends the poll and declares the promote
+    successful -- #79 with an extra step. 1 is this script's code for "read nothing", which
+    drops the attempt out of `promote.yml`'s sticky carry (`if [ "$rc" = 2 ]`), so one flaky
+    challenge page at attempt 30 would report a blind poll against a box that had named its own
+    failure 29 times.
+
+    A later `ok` must still end the poll: promoting a new image is HOW a degraded box gets
+    fixed, and that promote's early attempts read the old, still-degraded build."""
+    out = tmp_path / "gh_output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(out))
+    monkeypatch.setattr(
+        sys, "argv", ["promote_check.py", TAG, "503", _degraded("warehouse-2026.05", "6ea164b")]
+    )
+    assert main() == 2, "a degraded box either ended the poll green or read as a blind attempt"
+    assert "matched=0" in out.read_text()
+
+    monkeypatch.setattr(
+        sys, "argv", ["promote_check.py", TAG, "200", _health("warehouse-2026.05", "6ea164b")]
+    )
+    assert main() == 0, "a degraded attempt must not stop a later ok from ending the poll"
+
+
+def test_the_exhausted_report_names_the_cause_the_box_reported():
+    """`health.ts` guarantees every degraded path names a cause -- the catalog probe's in
+    `missing`, the freshness probe's in `error` -- so a report saying only "degraded" sends an
+    operator to fetch a fact this poll already had in hand.
+
+    BOTH fixtures are needed: a `missing`-only implementation passes the first and silently
+    drops the second, which is the very case `health.ts` keeps a separate key for."""
+    gap = assess(TAG, _degraded("warehouse-2026.05", "6ea164b"), 503).exhausted_report(30)
+    assert CATALOG_GAP in gap, "the catalog probe's cause is not carried"
+    assert "warehouse-2026.05" in gap and "6ea164b" in gap
+    assert "30" in gap
+
+    stamp = assess(
+        TAG,
+        _degraded(
+            "warehouse-2026.05", "6ea164b", data={"asOf": None, "missing": [], "error": ASOF_ERROR}
+        ),
+        503,
+    ).exhausted_report(30)
+    assert ASOF_ERROR in stamp, "the freshness probe's cause is not carried"
+
+
+def test_the_exhausted_report_orders_a_rollback_without_promising_it_fixes_the_box():
+    """The remedy differs from a mismatch's, and saying so IS the finding. The tag moved AND the
+    box took the image, so "The tag moved; the deploy did not" is false here and "why this one
+    never pulled" sends an operator after a pull that happened.
+
+    The order stands: unlike the blind branch, the box has reported over the full 300s that it
+    cannot answer, and that is a measurement. It is not PROMISED: `deploy/compose.yml` mounts no
+    data volume (the dataset is baked into the image), `image.yml` gates every image with
+    `make image-smoke` before it can reach the registry, and a rollback lands the previous image
+    on the SAME box. So the report has to carry the discriminator -- if the cause survives the
+    rollback, the subject is the box."""
+    report = assess(TAG, _degraded("warehouse-2026.05", "6ea164b"), 503).exhausted_report(30)
+    assert "ROLL BACK NOW" in report, "the remedy is withheld while the box says it is down"
+    assert "previous known-good tag" in report
+    assert "The tag moved; the deploy did not." not in report, (
+        "the mismatch claim leaked onto a promote that DID land"
+    )
+    assert "never pulled" not in report, "the box pulled; this sends the operator after the timer"
+    assert "SAME box" in report, "the rollback is promised as a fix it cannot guarantee"
+    assert "replace it" in report, "no path for the case where the box is the subject"
+
+
+def test_a_wrong_build_is_reported_as_a_mismatch_even_when_that_build_is_degraded():
+    """The build is compared FIRST, and the order is the finding. A box still serving the OLD
+    image and reporting degraded is telling this poll about an image nobody promoted -- reading
+    the status first would report "the build you promoted is not serving" out of a box that
+    never ran it, which is the unearned claim #77 spent three rounds removing."""
+    v = assess(TAG, _degraded("warehouse-2026.04", "6ea164b"), 503)
+    assert v.outcome == MISMATCH
+    assert "warehouse-2026.04" in v.reason and "warehouse-2026.05" in v.reason
+    report = v.exhausted_report(30)
+    assert "The tag moved; the deploy did not." in report
+    assert CATALOG_GAP not in report, (
+        "a cause read off the OLD build is reported as though it were the promoted image's"
+    )
+
+
+def test_the_mismatch_report_does_not_claim_a_degraded_box_is_up_and_serving():
+    """The mismatch branch's `The box answers, so it is up` is a claim about the build the box
+    IS serving, and this branch has that build's status in hand. A box serving an old, degraded
+    image is up and NOT serving, and asserting otherwise is the same unearned claim in the other
+    direction.
+
+    Both halves, because the clause must not leak: an ordinary mismatch against a healthy old
+    build keeps the message it has always had, and the recommendation is unchanged either way --
+    the box still never took the new image, whatever the old one is doing."""
+    degraded = assess(TAG, _degraded("warehouse-2026.04", "6ea164b"), 503).exhausted_report(30)
+    assert "The box answers, so it is up" not in degraded, (
+        "a box reporting it cannot answer is called up and serving"
+    )
+    assert "degraded" in degraded, "the status the box reported is not named"
+    for claim in ("ROLL BACK NOW", "previous known-good tag", "never pulled"):
+        assert claim in degraded, f"the mismatch recommendation changed: {claim}"
+
+    healthy = assess(TAG, _health("warehouse-2026.04", "6ea164b"), 200).exhausted_report(30)
+    assert "The box answers, so it is up" in healthy, (
+        "the ordinary mismatch message changed, or the degraded clause leaked onto it"
+    )
+    assert "degraded" not in healthy
+
+
+def test_a_newline_in_the_reported_status_or_cause_cannot_open_a_workflow_command(
+    monkeypatch, capsys
+):
+    """Two NEW values off the parsed body reach the per-attempt `print(verdict.reason)`, which is
+    unprefixed and runs 30 times in a job holding `packages: write`. `snippet`'s collapse never
+    touches either -- `inline` at the message build site is the only thing standing between them
+    and `::stop-commands::` at line start."""
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    hostile = "x\n::stop-commands::deadbeef"
+    body = _degraded(
+        "warehouse-2026.05",
+        "6ea164b",
+        data={"asOf": None, "missing": [f"m{hostile}"], "error": f"e{hostile}"},
+        status=f"degraded{hostile}",
+    )
+    monkeypatch.setattr(sys, "argv", ["promote_check.py", TAG, "503", body])
+    assert main() == 2
     for line in capsys.readouterr().out.splitlines():
         assert not line.startswith("::"), f"a workflow command reached line start: {line!r}"

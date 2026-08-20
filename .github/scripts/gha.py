@@ -107,6 +107,35 @@ def is_health_report(parsed: dict) -> bool:
     )
 
 
+def health_cause(report: dict) -> str:
+    """The cause a non-`ok` `HealthReport` named for itself, rendered for a one-line message.
+
+    `app/src/lib/health.ts` makes naming one the whole contract of that endpoint, and keeps the
+    two causes in SEPARATE keys because they are two different breaks at two different layers:
+    the catalog probe's message goes in `data.missing`, the freshness probe's in `data.error`
+    (`app/src/lib/health.ts:10-13`). `missing` wins when both are present -- it names WHAT is
+    absent, where `error` names only that a query raised.
+
+    SHARED, for the same reason `is_health_report` above is: both watchdogs render the cause out
+    of the same report -- `live_check` in its issue body, `promote_check` in its exhausted
+    verdict -- and a precedence that drifted between them would make one box read two ways in two
+    alerts. `is_health_report` has already run at both call sites, so `data` is a dict there; the
+    guards below are for the value it is a dict OF, which is nobody's to promise once anything on
+    the internet can answer this fetch. `", ".join(5)` is a TypeError, and a crash on this path
+    kills the alert mid-report.
+
+    "no cause reported" rather than "": an empty string interpolates as ``reports `degraded`: ``
+    and reads as a message that got truncated, instead of as a report that named nothing.
+    """
+    data = report.get("data")
+    if not isinstance(data, dict):
+        return "no cause reported"
+    missing = data.get("missing")
+    named = ", ".join(str(m) for m in missing) if isinstance(missing, list) else ""
+    error = data.get("error")
+    return named or (error if isinstance(error, str) else "") or "no cause reported"
+
+
 def snippet(body: str, limit: int = SNIPPET_CHARS) -> str:
     """The first `limit` characters of `body`, whitespace-collapsed, truncation MARKED.
 

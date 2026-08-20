@@ -55,6 +55,29 @@ WHAT THE POLL IS ENTITLED TO CONCLUDE WHEN IT RUNS OUT OF ATTEMPTS
     a complete, valid report when the data layer is degraded
     (`app/src/app/api/health/route.ts:27`), and a wrong build read from one of those is an
     ordinary mismatch.
+
+A MATCHING BUILD IS NOT A DEPLOY (#79)
+    `build` is baked from the Dockerfile's runtime build args and `health.ts`'s `identity()`
+    computes it before every return branch, so a degraded report carries the promoted sha and
+    warehouse VERBATIM -- and the route serves that report under a 503 with the body unchanged.
+    Comparing build identity alone therefore returned `matched` on the first poll attempt against
+    a box answering 503 to every visitor, and the workflow exited 0 on it. The hourly watchdog
+    read `status` and this one, holding the rollback decision, did not.
+
+    So `MATCHED` requires `status == "ok"` -- an allow-list, never `!= "degraded"`, because
+    `is_health_report` requires `status` to be a string and nothing further. And the BUILD is
+    compared first: a box still serving the old image and reporting degraded is telling this poll
+    about an image nobody promoted, which is a mismatch and nothing else.
+
+WHAT A DEGRADED BOX EARNS, AND WHY IT IS NOT A MISMATCH'S REMEDY
+    The tag moved and the box took the image; what it took cannot answer. Rolling back is
+    ORDERED -- unlike the blind branch, the box has reported over the full budget that it is not
+    serving, and that is a measurement -- but it is not PROMISED. `deploy/compose.yml` mounts no
+    data volume (the dataset is baked into the image) and `image.yml` gates every image with
+    `make image-smoke` before it can reach the registry, so the cause is the image's contents,
+    the pull, or the box itself; and a rollback lands the previous image on the SAME box. The
+    report carries the cause `/api/health` named so the operator can tell which afterwards, and
+    says where each answer leads.
 """
 
 from __future__ import annotations
@@ -65,7 +88,15 @@ import re
 import sys
 from dataclasses import dataclass
 
-from gha import code_span, inline, is_health_report, printable, snippet, write_multiline_output
+from gha import (
+    code_span,
+    health_cause,
+    inline,
+    is_health_report,
+    printable,
+    snippet,
+    write_multiline_output,
+)
 
 #: The shape `image.yml` mints and `warehouse.yml` asserts before ever publishing a release.
 #: Anchored at the start only -- the SHA half is deliberately unconstrained, since it is
@@ -75,6 +106,10 @@ _WAREHOUSE_PREFIX = re.compile(r"^(warehouse-[0-9]{4}\.[0-9]{2})-(.+)$")
 #: `outcome` values. `read_a_build` is derived from these rather than stored twice.
 MATCHED = "matched"
 MISMATCH = "mismatch"
+#: The box is serving the promoted build and says it cannot answer with it (#79). Its own
+#: outcome: the identity is RIGHT, so it is neither a mismatch nor an unreadable box, and the
+#: remedy differs from both.
+DEGRADED = "degraded"
 UNREADABLE = "unreadable"
 BAD_TAG = "bad-tag"
 
@@ -89,6 +124,10 @@ class Verdict:
     expected_sha: str | None
     live_warehouse: str | None
     live_sha: str | None
+    #: The `status` the box reported, or None when no report was read. Carried as a field rather
+    #: than only inside `reason` because the MISMATCH branch needs it too: "The box answers, so
+    #: it is up" is a claim about the build the box IS serving, and it is false of a degraded one.
+    live_status: str | None
 
     @property
     def matched(self) -> bool:
@@ -97,23 +136,60 @@ class Verdict:
     @property
     def read_a_build(self) -> bool:
         """Whether the box's own build was actually read. The ONLY thing that licenses the
-        exhausted report to say anything about the deploy."""
-        return self.outcome in (MATCHED, MISMATCH)
+        exhausted report to say anything about the deploy.
+
+        DEGRADED belongs here: the build was there and it was right. Reporting it as a blind
+        attempt would drop it out of `promote.yml`'s sticky carry, so one flaky challenge page at
+        attempt 30 would report a poll that never saw the box -- against a box that had named its
+        own failure 29 times."""
+        return self.outcome in (MATCHED, MISMATCH, DEGRADED)
 
     def exhausted_report(self, attempts: int) -> str:
         """The final word after the poll budget elapses, one finding per line. See the module
-        docstring for why the two branches differ in what they are allowed to claim."""
+        docstring for why the branches differ in what they are allowed to claim, and in what they
+        order: `read_a_build` is the evidence boundary, and among the outcomes that cleared it,
+        a wrong build and a build that cannot serve are different failures with different fixes."""
         if self.outcome == MISMATCH:
+            # "so it is up" is a claim about the build the box IS serving, and this branch has
+            # that build's status in hand: a box serving an old, degraded image is up and NOT
+            # serving. A clause, not a restructure -- what the branch RECOMMENDS is unchanged,
+            # because the box never took the new image whatever the old one is doing.
+            up = (
+                "The box answers, so it is up"
+                if self.live_status == "ok"
+                else f"The box answers, but reports `{inline(self.live_status)}` on the build it "
+                "is serving, so it is up and not serving what it has"
+            )
             return "\n".join(
                 [
                     f"the box is serving `{inline(self.live_warehouse)}` / "
                     f"`{inline(self.live_sha)}` after "
                     f"{attempts} attempts, not the promoted `{self.expected_warehouse}` / "
                     f"`{self.expected_sha}`. The tag moved; the deploy did not.",
-                    "The box answers, so it is up -- it never took the new image, and `:deploy` "
+                    f"{up} -- it never took the new image, and `:deploy` "
                     "still points at that image, so the box can land on it at any 30s tick. "
                     "ROLL BACK NOW: re-dispatch this workflow with the previous known-good tag, "
                     "then find out why this one never pulled (`upgauge-deploy.timer` on the box).",
+                ]
+            )
+        if self.outcome == DEGRADED:
+            return "\n".join(
+                [
+                    f"after {attempts} attempts, {self.reason}. The tag moved and the box took "
+                    "the image; what it took cannot answer.",
+                    "It does not recover on its own: a 503 fails the container's own HEALTHCHECK "
+                    "(`deploy/compose.yml`'s probe is `r.ok`), so `docker compose up -d --wait` "
+                    "never confirms it and the box's timer retries the same digest every 30s "
+                    "forever.",
+                    "ROLL BACK NOW: re-dispatch this workflow with the previous known-good tag. "
+                    "That is the fastest way back to a serving site and costs nothing if the "
+                    "image was not the cause -- but it is not guaranteed to fix this: no data "
+                    "volume is mounted (the dataset is baked into the image), every image passes "
+                    "`make image-smoke` before it can be published, and a rollback lands the "
+                    "previous image on the SAME box. If `/api/health` reports the cause above "
+                    "again once the previous image is back, the subject is the box, not the "
+                    "image -- replace it (docs/architecture/deploy.md, Provision, or replace the "
+                    "box). It holds no state.",
                 ]
             )
         if self.outcome == UNREADABLE:
@@ -208,6 +284,7 @@ def assess(tag: str, health_body: str, health_status: int) -> Verdict:
             expected_sha=None,
             live_warehouse=None,
             live_sha=None,
+            live_status=None,
         )
     expected_warehouse, expected_sha = parsed_tag
 
@@ -220,6 +297,7 @@ def assess(tag: str, health_body: str, health_status: int) -> Verdict:
             expected_sha=expected_sha,
             live_warehouse=None,
             live_sha=None,
+            live_status=None,
         )
 
     # `build` is a dict by construction: `read_health` rejects anything that is not this app's
@@ -229,8 +307,27 @@ def assess(tag: str, health_body: str, health_status: int) -> Verdict:
     build = health["build"]
     live_warehouse = build.get("warehouse")
     live_sha = build.get("sha")
+    # A str by construction -- `is_health_report` is what guarantees that, and it has already run.
+    live_status = health["status"]
 
     if live_warehouse == expected_warehouse and live_sha == expected_sha:
+        # The BUILD first, the status second, and the order is load-bearing: see the module
+        # docstring. Only `ok` confirms -- an allow-list, so a status this app never emits
+        # ("starting", an intermediary's own word, a case variant) cannot end the poll either.
+        if live_status != "ok":
+            return Verdict(
+                outcome=DEGRADED,
+                reason=(
+                    f"the box is serving the promoted build ({expected_warehouse} / "
+                    f"{expected_sha}) but /api/health reports `{inline(live_status)}`: "
+                    f"{inline(health_cause(health))}"
+                ),
+                expected_warehouse=expected_warehouse,
+                expected_sha=expected_sha,
+                live_warehouse=live_warehouse,
+                live_sha=live_sha,
+                live_status=live_status,
+            )
         return Verdict(
             outcome=MATCHED,
             reason=f"live matches the promoted tag ({expected_warehouse} / {expected_sha})",
@@ -238,6 +335,7 @@ def assess(tag: str, health_body: str, health_status: int) -> Verdict:
             expected_sha=expected_sha,
             live_warehouse=live_warehouse,
             live_sha=live_sha,
+            live_status=live_status,
         )
     return Verdict(
         outcome=MISMATCH,
@@ -249,6 +347,7 @@ def assess(tag: str, health_body: str, health_status: int) -> Verdict:
         expected_sha=expected_sha,
         live_warehouse=live_warehouse,
         live_sha=live_sha,
+        live_status=live_status,
     )
 
 
