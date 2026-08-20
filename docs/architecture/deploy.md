@@ -149,6 +149,13 @@ Q='v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op'
 for i in $(seq 1 40); do curl -sS -o /dev/null -w '%{http_code} ' "https://upgauge.shipman.dev/api/pivot?$Q" & done; wait
 ```
 
+**Running that burst blocks your own next checks for 10 seconds.** `/api/health` is under
+`/api/`, so it matches the same rule — after a burst, health polls from the same address return
+429 and read as "the site is down" or "the deploy failed". Wait out the mitigation timeout
+before believing a health check that follows a burst. The pollers themselves are safely under
+the limit: `promote.yml` polls once per 10s (30 attempts), and `live-check.yml` makes single
+calls, with its own burst step last.
+
 ## Cost, and when to revisit
 
 `cx23` at **$6.49/mo** plus a **$0.60/mo IPv4** — the IPv4 is required, not optional: `ghcr.io`
