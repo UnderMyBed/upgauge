@@ -52,14 +52,14 @@ jobs:
       # failure from inside the poll loop below, but only after the loop's full 30-attempt/300s
       # budget elapses -- an operator who fat-fingered `-f tag=` deserves an answer in seconds,
       # not five minutes, and shouldn't have to wait through a login and a registry round trip
-      # first either. Single positional argument (no health report) is `promote_check.py`'s
-      # validate-only call shape; see its `main()` docstring.
+      # first either. `--validate` is an explicit flag rather than an inferred argument count,
+      # because it and a successful poll both exit 0; see `promote_check.py`'s `main()`.
       - name: Validate the tag's shape before polling
         env:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          mise exec -- python .github/scripts/promote_check.py "$TAG"
+          mise exec -- python .github/scripts/promote_check.py --validate "$TAG"
 
       - uses: docker/login-action@v3
         with:
@@ -122,12 +122,21 @@ jobs:
       # avoid (breaks on a `-dirty` sha). `TAG` reaches the script only as an argv value under
       # `env:`, never spliced through `${{ }}` into this script's text.
       #
-      # A `curl` failure is folded into `{}` deliberately: this loop already retries every 10s
-      # for up to 5 minutes, so a single dropped connection must read as "not yet", not abort
-      # the whole workflow -- the SAME "never treat a failure as an empty answer" rule other
-      # workflows apply to `gh` calls means something different in a loop that is ALREADY the
-      # retry: it is the FINAL `::error` after every attempt is exhausted that must not be
-      # silently swallowed, and it isn't.
+      # A `curl` failure reads as "not yet" deliberately: this loop already retries every 10s
+      # for up to 5 minutes, so a single dropped connection must not abort the whole workflow --
+      # the SAME "never treat a failure as an empty answer" rule other workflows apply to `gh`
+      # calls means something different in a loop that is ALREADY the retry: it is the FINAL
+      # verdict after every attempt is exhausted that must not be silently swallowed, and it
+      # isn't.
+      #
+      # THE STATUS IS MEASURED, NOT ONLY THE BODY, and the final verdict comes from
+      # `promote_check.py --exhausted` rather than a bare `echo` here. This step used to emit
+      # "The tag moved; the deploy did not" and "ROLL BACK NOW" unconditionally; on 2026-08-1x
+      # it emitted both against a healthy, correctly-promoted deploy, because all 30 attempts
+      # had been served a challenge page and the workflow had never read the box at all. A
+      # message hardcoded in bash cannot be conditional on the evidence, and a rollback is a real
+      # production action -- so the decision lives with the rest of the decisions, in the script.
+      # See its `exhausted_report` for which verdict earns the rollback and which does not.
       # 30 attempts x 10s = 300s budget. Where that number comes from, and what part of it is
       # actually measured:
       #
@@ -142,31 +151,66 @@ jobs:
       #     - deploy/upgauge-deploy.sh: `docker compose pull --quiet app` runs unconditionally
       #       every tick, THEN `docker compose up -d --wait` gates on the healthcheck above.
       #
-      #   NOT MEASURED, because no live box exists yet (Task 6) -- an assumption, not a fact:
-      #     - how long `docker compose pull` actually takes to pull a ~413 MB image layer set
-      #       over this box's real network. Anywhere from single-digit seconds (mostly-cached
-      #       layers) to tens of seconds is plausible; there is no measurement behind that range.
+      #   MEASURED END TO END, against the live box: retag to serving, and the same for a
+      #   rollback. `docs/architecture/deploy.md` (Promote, Roll back) is where those two
+      #   figures are recorded; they are deliberately not restated here, because a number
+      #   written in two places is a number that will disagree with itself.
       #
-      # Summing the measured parts alone (up to ~30s timer latency + ~30-50s healthcheck
-      # confirmation) plus a guessed pull time lands around 60-100s of overhead against this
-      # step's 300s budget -- comfortable margin IF the guessed part holds, unverified until it
-      # can be timed against the real box (brief Step 5's rollback drill is where that happens).
+      #   The end-to-end figure supersedes the per-part arithmetic this comment used to carry,
+      #   including its NOT-MEASURED pull-duration assumption: the whole path has now been timed
+      #   on the real box, so the parts no longer have to be summed to justify the budget. Both
+      #   observations sit far inside the 300s here.
       - name: Wait for the box to be serving it
         env:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          body='{}'
+          code=000
+          body=''
+          # The last attempt that actually READ a build, kept separately: `code`/`body` are
+          # overwritten every iteration, so one flaky sample at attempt 30 would otherwise
+          # decide a verdict about all 30 -- and would downgrade an earned rollback order to
+          # the conditional blind path. Exit status 2 from the poll is what marks such an
+          # attempt; see promote_check.py's main() for the three-way contract.
+          seen_code=''
+          seen_body=''
           for attempt in $(seq 1 30); do
-            body=$(curl -sS --max-time 10 https://upgauge.shipman.dev/api/health || echo '{}')
+            # Truncated first, so a fetch that fails part-way is never read as the PREVIOUS
+            # attempt's body. 8000 bytes is far above any real report (~150) and bounds what a
+            # broken origin can put into argv.
+            body_file="${RUNNER_TEMP:-/tmp}/health.body"
+            : > "$body_file"
+            # NOT `$(curl ... || echo 000)`: curl writes its `-w` output even when the transfer
+            # fails, so the fallback CONCATENATES onto it. Measured with curl 8.18.0: `000000`
+            # on a refused connection, and `200000` when --max-time expires mid-body -- which
+            # then prints as `HTTP 200000`. Assign in the failure branch instead.
+            if ! code=$(curl -sS -o "$body_file" -w '%{http_code}' --max-time 10 \
+                        https://upgauge.shipman.dev/api/health); then
+              code=000
+            fi
+            body=$(head -c 8000 "$body_file")
             echo "attempt ${attempt}:"
-            if mise exec -- python .github/scripts/promote_check.py "$TAG" "$body"; then
+            rc=0
+            mise exec -- python .github/scripts/promote_check.py "$TAG" "$code" "$body" || rc=$?
+            if [ "$rc" = 0 ]; then
               printf '%s' "$body" | jq . >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
+            if [ "$rc" = 64 ]; then
+              echo "::error::promote_check.py rejected its own call shape (exit 64). That is a"
+              echo "::error::wiring bug in this workflow, not a condition of the site -- the poll"
+              echo "::error::is not measuring anything and must not be read as one that did."
+              exit 1
+            fi
+            if [ "$rc" = 2 ]; then
+              seen_code=$code
+              seen_body=$body
+            fi
             sleep 10
           done
-          echo "::error::the box never reported the promoted build after 5 minutes. The tag moved; the deploy did not."
-          echo "::error::docker compose up -d --wait recreates the container before confirming health, so a bad image already took the site DOWN and the box's own timer will keep retrying it forever. ROLL BACK NOW: re-dispatch this workflow with the previous known-good tag."
-          printf '%s' "$body" | jq . >> "$GITHUB_STEP_SUMMARY" || true
+          # Writes its own `::error::` lines and its own step summary, then exits 1. The bare
+          # `exit 1` under it is the backstop that keeps this step failing even if that ever
+          # stops being true.
+          mise exec -- python .github/scripts/promote_check.py \
+            --exhausted "$TAG" "${seen_code:-$code}" "${seen_body:-$body}" "$attempt"
           exit 1

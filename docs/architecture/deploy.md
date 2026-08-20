@@ -22,7 +22,8 @@ new one is confirmed healthy. An image that pulls but fails its healthcheck take
 and the 30s timer retries it forever. Accepted: every image passes `make image-smoke` before it
 can reach the registry, and blue/green on a 4 GB box is not worth it for ~12 deploys a year.
 `promote.yml`'s health poll is the detector; **rolling back is the remedy and is the same
-operation as deploying.**
+operation as deploying.** The poll detects it only when it can read the box — see § What to do
+when each alert fires.
 
 ## Promote
 
@@ -126,12 +127,46 @@ success. Env-var reference for the app itself: [hosting.md](hosting.md).
 | Alert | Meaning | First command |
 |---|---|---|
 | **Freshness** (`freshness.yml`) | `max(year_month)` has not advanced in ~45 days. The site keeps serving; `DATA AS OF` silently stops moving | `gh run list --workflow=warehouse.yml --limit 5` |
-| **Live check** (`live-check.yml`) | The served site is wrong or down — health, sitemap, release freshness or the rate limit | `curl -sS https://upgauge.shipman.dev/api/health \| jq .` |
+| **Live check** (`live-check.yml`) | The served site is wrong, down, or could not be read — health, sitemap, release freshness or the rate limit | `curl -sS https://upgauge.shipman.dev/api/health \| jq .` |
 | **Scheduled failure** (`scheduled-failure.yml`) | An unattended workflow failed and nobody was watching | `gh run list --limit 10` |
 
-A live-check failure that is **not** a bad promote is almost always the box: confirm with
-`hcloud server describe upgauge`, and replace it rather than debugging in place — replacement is
-one command and the box holds nothing.
+A live-check failure that is **not** a bad promote and **not** an unreadable body is almost
+always the box: confirm with `hcloud server describe upgauge`, and replace it rather than
+debugging in place — replacement is one command and the box holds nothing.
+
+### "Could not read the box" is a verdict, and it is not evidence about the deploy
+
+Both watchdogs report an `/api/health` body they could not parse as what it is: an observation,
+carried with its HTTP status and the first characters of the body, never raised and never defaulted.
+An edge challenge page, an HTML error page and an origin that is down are indistinguishable from
+a runner, so that reading argues in neither direction. **The status code never decides it** —
+`/api/health` answers 503 with a complete, valid report when the data layer is degraded, and a
+build read from one of those is as real as any other.
+
+**`promote.yml` orders a rollback only when the box reported a build and it was the wrong one.**
+Where no build was read it names what came back instead and hands over the check that separates
+the two readings. Run that check from a network that reaches the site, and act on what it shows,
+not on the failed run:
+
+```bash
+curl -sS -D - https://upgauge.shipman.dev/api/health
+```
+
+Down, or serving a build other than the promoted one → roll back. Reporting the promoted build →
+the run was blind and the deploy is fine.
+
+**`live-check.yml` files its alert either way**, because an alert that cannot read the site is
+the one thing it must never fail silently on. **A body that parsed is not thereby a report** —
+`{}` and a Cloudflare JSON error body both parse — so the test is whether it carries the
+`status`, `build` and `data` that a `HealthReport` always has.
+
+**Every finding names something measured**, and a check whose evidence is missing is withheld
+rather than answered from a default. A promote is only "forgotten" against a warehouse tag the
+site actually served; `UPGAUGE_BASE_URL` is only wrong against a `<loc>` actually found carrying
+another host; the edge is only "not caching" when it returned a `cf-cache-status` saying so; the
+rate limit is only "not in force" when the burst actually reached `/api/pivot`. A blocked runner
+trips all four conditions at once, and each one of those diagnoses would send an operator after a
+setting that is fine.
 
 ## Rate limiting
 

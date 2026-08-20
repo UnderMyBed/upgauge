@@ -72,15 +72,42 @@ jobs:
 
           # HEALTH AND SITEMAP FIRST -- the burst below blocks this IP on /api/ for 60s, and
           # /api/health is under /api/.
-          health=$(curl -sS --max-time 15 "${BASE}/api/health" || echo '{}')
+          #
+          # The STATUS as well as the body. A challenge page, an HTML error page and a 502 are
+          # all "not JSON", and live_check.py cannot tell them apart -- or let an operator tell
+          # them apart from the alert alone -- without the code. `-o` to a file truncated first,
+          # so a fetch that fails part-way can never be read as whatever was there before, and
+          # `|| echo 000` because a curl that never gets a response line has no code to report.
+          # 8000 bytes is far above any real report (~150) and bounds what a hostile or broken
+          # origin can put into argv.
+          # NOT `$(curl ... || echo 000)`: curl writes its `-w` output even when the transfer
+          # fails, so the fallback CONCATENATES onto it. Measured with curl 8.18.0: `000000` on
+          # a refused connection, `200000` when --max-time expires mid-body. Assign instead.
+          body_file="${RUNNER_TEMP:-/tmp}/health.body"
+          : > "$body_file"
+          if ! hcode=$(curl -sS -o "$body_file" -w '%{http_code}' --max-time 15 \
+                       "${BASE}/api/health"); then
+            hcode=000
+          fi
+          health=$(head -c 8000 "$body_file")
           sitemap=$(curl -sS --max-time 15 "${BASE}/sitemap.xml" | head -c 2000 || echo "")
 
           # Two fetches of the SAME url: the first may legitimately miss (cold edge, or the
           # entry just expired). Only the second says whether the edge is caching HTML at all.
+          #
+          # The second fetch is NOT a bare pipeline. Under `set -euo pipefail` a curl that
+          # cannot reach the origin makes the whole pipeline non-zero, the assignment aborts the
+          # STEP, and live_check.py never runs -- no verdict, no `file_issue`, no issue, on
+          # exactly the condition this alert exists to report. Measured against a dead port:
+          # the step exits 7 and $GITHUB_OUTPUT is never written. So curl is gated on its own
+          # exit status and the header parse happens afterwards, on a value already in hand.
           curl -sS -o /dev/null --max-time 15 "${BASE}/watch" || true
-          cf=$(curl -sS -o /dev/null -D - --max-time 15 "${BASE}/watch" \
-                | tr -d '\r' | awk -F': ' 'tolower($1)=="cf-cache-status"{print $2}')
-          cf="${cf:-absent}"
+          cf=absent
+          if headers=$(curl -sS -o /dev/null -D - --max-time 15 "${BASE}/watch"); then
+            cf=$(printf '%s' "$headers" | tr -d '\r' \
+                 | awk -F': ' 'tolower($1)=="cf-cache-status"{print $2}')
+            cf="${cf:-absent}"
+          fi
 
           releases=""
           for attempt in 1 2 3 4 5; do
@@ -103,11 +130,23 @@ jobs:
 
           # LAST. 80 requests against a 60/min limit, so the tail must be blocked. The rule
           # matches the /api/ prefix, so this exercises the same rule that protects /api/pivot.
+          # BOUNDED, not just per-request. 80 x --max-time with no overall deadline is up to
+          # 800s against an origin that BLACKHOLES rather than refusing or challenging -- past
+          # this job's timeout-minutes: 10, so the step is killed and no issue is filed at all.
+          # That is the one case where "files its alert either way" would not have held.
           rl=0
+          burst_deadline=$((SECONDS + 60))
           for _ in $(seq 1 80); do
-            rl=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
-                 "${BASE}/api/pivot?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op" || echo 0)
+            # Same concatenation trap as the health fetch above.
+            if ! rl=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
+                      "${BASE}/api/pivot?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op"); then
+              rl=000
+            fi
             [ "$rl" = "429" ] && break
+            if [ "$SECONDS" -ge "$burst_deadline" ]; then
+              echo "::notice::rate-limit burst stopped at its 60s bound; last status $rl"
+              break
+            fi
           done
 
           # health/releases/sitemap are LOCAL SHELL VARIABLES, passed as quoted argv -- never
@@ -118,7 +157,7 @@ jobs:
           # below, through gha.write_multiline_output's randomized delimiter, which is what
           # makes that half safe without a matching fix.
           mise exec -- python .github/scripts/live_check.py \
-            "$health" "$releases" "$sitemap" "$cf" "$rl"
+            "$health" "$hcode" "$releases" "$sitemap" "$cf" "$rl"
 
       # A failing live check is a CONDITION, not an event: it stays true every hour until
       # someone fixes it. Without this, one bad afternoon files a dozen issues and the alert
