@@ -147,15 +147,23 @@ app-smoke:  ## Build, serve, and curl real URLs. Catches production-only bugs no
 # rebuilt on a different day is not reproducible. Bumping this is a deliberate commit.
 #
 # AND IT IS A TEST FIXTURE, not only a reproducibility pin. `make image-smoke` runs app/smoke.sh's
-# dataset-specific needles against THIS asset: the two chart-window checks (`2015-01 -> 2026-04`),
-# the current-year asterisk (`>2026*<`), `2026 is a partial year -- filed through April 2026
-# only.` and `this dataset covers 2015-2026`. So when BTS publishes a new month, `make ingest &&
-# make build` moves the local database, those needles get re-measured, `make app-smoke` goes green
-# -- and `make image-smoke` keeps building from the OLD pinned asset, so the same needles go red
-# with no defect present. Whoever meets that red beside a green host gate will reach for the
-# needles, which is the wrong end. BUMP THIS TAG IN THE SAME COMMIT that re-measures those
-# needles; they are one fixture (the project's existing rule -- "when a renamed value was the
-# fixture for a transform, MOVE the fixture" -- applied to this coupling).
+# dataset-specific needles against THIS asset -- the chart windows, the current year's asterisked
+# tick and partial-year sentence, the covered-range message (app/smoke.sh's `check_dataset` call
+# sites; the values are deliberately NOT copied here, because a copy rots silently while the
+# fixture moves). So when BTS publishes a new month, `make ingest && make build` moves the local
+# database, those needles get re-measured, `make app-smoke` goes green -- and `make image-smoke`
+# keeps building from the OLD pinned asset, so the same needles go red with no defect present.
+# Whoever meets that red beside a green host gate will reach for the needles, which is the wrong
+# end. BUMP THIS TAG IN THE SAME COMMIT that re-measures those needles; they are one fixture (the
+# project's existing rule -- "when a renamed value was the fixture for a transform, MOVE the
+# fixture" -- applied to this coupling).
+#
+# TWO MECHANISMS HOLD THAT TOGETHER, neither of them a human remembering. warehouse.yml's
+# `bump-pin` job opens a PR moving this line when a release publishes (the pin only -- most
+# needles cannot be derived without querying the warehouse). image-contract.yml then runs
+# `make image-smoke` UNOVERRIDDEN on any PR touching either half, which is the only invocation
+# that can see the coupling: image.yml's resolves the newest release and passes
+# SMOKE_DATASET_PINNED=0. docs/architecture/hosting.md carries the full rule.
 WAREHOUSE_TAG ?= warehouse-2026.05
 IMAGE ?= upgauge:local
 
@@ -165,8 +173,10 @@ IMAGE ?= upgauge:local
 # that commit, which is the one thing that gate exists to refuse. /api/health publishes this value
 # as provenance (docs/architecture/hosting.md § UPGAUGE_BUILD_SHA). One variable, referenced by
 # both targets: two copies of the expression could drift and fail identity for a non-reason.
-# `--always` keeps it a bare SHA if no tag describes HEAD, which is the case here (the repo's only
-# tag, warehouse-2026.04, is lightweight, and describe ignores those without --tags).
+# `--always` keeps it a bare SHA if no tag describes HEAD, which is the case here: this repo's
+# tags are the `warehouse-YYYY.MM` release tags, they are lightweight, and describe ignores
+# lightweight tags without --tags. (A count of them is not written here on purpose -- one lands
+# every month.)
 IMAGE_SHA := $(shell git describe --always --dirty --abbrev=7)
 
 image:  ## Build the deployable image from the published warehouse asset
