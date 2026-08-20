@@ -11,10 +11,21 @@ import { presetSlugFromPath } from "@/lib/watch";
  * claimed first and is wider than anything here can deliver. What is decided below is byte-
  * equality over the KEYS a path reads: an unknown key, a keyless chunk, a trailing `&` and a
  * leading `?` are each non-canonical, but key ORDER survives (see rule 4), and VALUES are never
- * inspected -- `/explore?t=<any YYYY-MM>:<any YYYY-MM>` alone admits ~1.4x10^10 distinct spellings
- * (MONTH_RE's 10,000 x 12 valid values per side, squared, since nothing requires from <= to) that
- * every rule here calls clean. `docs/architecture/hosting.md` § "What this does not close" has the
- * full derivation and why a key table cannot express it.
+ * inspected here at all. A key table is the wrong shape for a value: whether `f=origin_state:XX`
+ * names a real state is a property of the WAREHOUSE, not of the URL grammar, so answering it from
+ * this module would mean a catalog read on the path that runs before every request.
+ *
+ * VALUES ARE BOUNDED, just not here (#52). `lib/pivot/bounds.ts` is the server's admission policy
+ * -- `t` inside the dataset's own window with `from <= to`; `n` under a stated ceiling; every key
+ * but `f` spelled ONE way, checked on the raw bytes before `pyUnquote` (`decode()` percent-decodes
+ * at `urlstate.ts:179` and only checks the shape at `:214`, so without that rule each admissible
+ * value keeps arbitrarily many encodings); and no repeated token in `d` or `m`. Applied by
+ * `proxy.ts`, `/api/pivot` and `ExploreView` through `decodeRequest`, not by any rule below. Do
+ * not read "VALUES are never inspected" as "values are unbounded"; it means this file does not do
+ * it. What remains genuinely open is `f`, on both of its axes -- its value set is the warehouse's,
+ * and percent-encoding is its own escape mechanism, so it is exempt from the spelling rule too:
+ * `docs/architecture/hosting.md` § "What this does not close" has that residual and the
+ * rate-limit thresholds it is left to.
  *
  * Measured on a served build at 4aa8087, before this file existed: every cacheable path accepted
  * arbitrary unknown query keys and still returned the long cache header -- `/watch?x=1`,

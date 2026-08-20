@@ -592,3 +592,80 @@ describe("proxy", () => {
 function getReqHeader(res: { headers: Headers }, name: string): string | null {
   return res.headers.get(`x-middleware-request-${name}`) ?? res.headers.get(name);
 }
+
+// #52. The key gate rejects unknown KEYS and M8 Task 4 required the permalink to decode();
+// neither sees a junk VALUE riding a legitimate key. Every URL below still decodes cleanly --
+// bare `decode()` accepts all of them by design, and `bounds.test.ts` pins that -- and until the
+// proxy called `decodeRequest`, each rendered a distinct 200 under HTML_CACHE. Cloudflare's
+// default cache key is the whole query string, so every one was a guaranteed origin miss on the
+// most expensive page here.
+//
+// THREE FAMILIES, not one, and the last two are the ones a range check cannot see:
+//   value     `t` outside the window or reversed; `n` above the ceiling.
+//   spelling  every byte of `t`/`k`/`d`/`m`/`s`/`g` may be sent as `%XX` in either hex case,
+//             because decode() pyUnquotes at urlstate.ts:179 and checks the shape at :214.
+//             `t=2015-01:2015-12` alone has 110,592 spellings of one admissible value.
+//   repetition `d` and `m` are split on `,` and nothing dedupes, so one token may repeat any
+//             number of times.
+describe("proxy /explore value bounds (#52)", () => {
+  const BASE = "v=1&k=seg&d=op_airline_id&m=seats&s=-seats&g=op";
+  const at = (qs: string) => proxy(new NextRequest(`http://localhost/explore?${qs}`));
+
+  it("does not long-cache /explore when t falls outside the dataset window", async () => {
+    const res = await at(`${BASE}&t=1999-01:1999-12&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not long-cache /explore when t is reversed but both months are in window", async () => {
+    // Both months are admissible on their own, so this can only go red for the ordering rule.
+    const res = await at(`${BASE}&t=2026-04:2025-05&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not long-cache /explore when n is above the ceiling", async () => {
+    const res = await at(`${BASE}&t=2025-05:2026-04&n=999999`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not long-cache /explore when n is spelled redundantly", async () => {
+    // n=00000025 decodes to 25 -- an in-bounds value with unboundedly many spellings, each a
+    // distinct CDN entry for a byte-identical page.
+    const res = await at(`${BASE}&t=2025-05:2026-04&n=00000025`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not long-cache /explore when t is percent-encoded", async () => {
+    // The spelling family on a TEXTUAL key: `%32015-05` unquotes to `2015-05` before MONTH_RE
+    // ever runs, so this is in-window, correctly ordered, under the ceiling -- and byte-identical
+    // to the control below once rendered. Only a raw-byte rule can decline it.
+    const res = await at(`${BASE}&t=%32025-05:2026-04&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not long-cache /explore when t's structural colon is percent-encoded", async () => {
+    const res = await at(`${BASE}&t=2025-05%3A2026-04&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not long-cache /explore when a measure repeats", async () => {
+    // Not a spelling variant -- the page really does render the column twice -- but unbounded in
+    // exactly the same way: `m=seats,seats,...` for any number of repeats.
+    const res = await at(`${BASE.replace("m=seats", "m=seats,seats")}&t=2025-05:2026-04&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("still long-caches the SAME query with every value in bounds", async () => {
+    // The control that stops all seven above being vacuous: a proxy that answered `no-store`
+    // for every /explore request would satisfy them and this one goes red for it.
+    const res = await at(`${BASE}&t=2025-05:2026-04&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it("still long-caches a permalink whose FILTER value is percent-encoded", async () => {
+    // The second control, and the one that would break shipped permalinks: `f` is exempt from
+    // the raw-byte rule because quote() must escape `,`, `:`, `&`, `=` and spaces there. Golden
+    // case 8 is `f=op_airline_id:2T%20%281%29,...`. A blanket "no % anywhere" reddens this.
+    const res = await at(`${BASE}&t=2025-05:2026-04&f=op_airline_id:2T%20%281%29&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+});

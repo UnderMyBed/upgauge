@@ -1,4 +1,5 @@
-import { decode, encode, UrlStateError } from "@/lib/pivot/urlstate";
+import { encode, UrlStateError } from "@/lib/pivot/urlstate";
+import { decodeRequest } from "@/lib/pivot/bounds";
 import { PivotError } from "@/lib/pivot/types";
 import { loadAllowlist, runPivot } from "@/lib/db";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
@@ -80,7 +81,14 @@ export async function GET(request: Request): Promise<Response> {
       );
     }
     const allowlist = await loadAllowlist();
-    const query = decode(qs, allowlist);
+    // `decodeRequest`, not `decode` (#52): the same admission policy `/explore` runs, on the same
+    // grammar. This row already declares `keys: ALLOWED_KEYS` -- "the SAME keys as /explore, and
+    // for the same reason" -- and this endpoint's SUCCESSES carry `PROJECT_CACHE`, thirty days,
+    // ten times any HTML page here. Leaving it out would have put the LONGER-lived unbounded
+    // family outside the fix, which is the `exempt`-means-the-rules-are-off misreading that left
+    // the `&&` axis a 30-day-cached 200 on this very path. It answers 400 + `no-store` through the
+    // catch below, never a 307, for the reason the key gate above already gives.
+    const query = decodeRequest(qs, allowlist);
     const result = await runPivot(query);
     // Named fields, not `...result`: `Response.json()` can't serialise a `Map`, so a bare
     // spread would silently emit `"resolved": {}` -- data-shaped, but not data. Spelling out

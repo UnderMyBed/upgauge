@@ -125,8 +125,14 @@ export function encode(q: PivotQuery): string {
 
 /** Split on the literal & and the first =. Deliberately NOT URLSearchParams: decoding must
  * happen only after every structural delimiter -- including f's own : and , -- has done its
- * job, or a percent-encoded structural comma is silently corrupted. */
-function splitPairs(qs: string): [string, string][] {
+ * job, or a percent-encoded structural comma is silently corrupted.
+ *
+ * Exported for `lib/pivot/bounds.ts`'s `checkNumeralSpelling` (#52), which has to read `v` and
+ * `n` as RAW bytes -- `%32%35` unquotes to `25`, so a spelling check that runs after decoding
+ * cannot see the difference. It walks with this function rather than its own, for the reason
+ * above: a second splitter is a second chance to decode before the delimiters have done their
+ * job. Returns raw, still-percent-encoded values, which is exactly what that caller needs. */
+export function splitPairs(qs: string): [string, string][] {
   if (!qs) return [];
   const out: [string, string][] = [];
   for (const chunk of qs.split("&")) {

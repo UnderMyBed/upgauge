@@ -1,5 +1,6 @@
 import { headers } from "next/headers";
-import { decode, encode, UrlStateError } from "@/lib/pivot/urlstate";
+import { encode, UrlStateError } from "@/lib/pivot/urlstate";
+import { decodeRequest } from "@/lib/pivot/bounds";
 import { PivotError } from "@/lib/pivot/types";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
@@ -203,7 +204,14 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
   let query: PivotQuery;
   let result: PivotResult;
   try {
-    query = decode(qs, allowlist);
+    // `decodeRequest`, not `decode` (#52): the page-side half of the same admission policy
+    // `proxy.ts` has already independently applied to decide this response is `no-store` -- not a
+    // second definition of it, both read `lib/pivot/bounds.ts`, exactly as `/airport`'s
+    // `InvalidYearView` and the proxy's `y` branch both read `lib/year.ts`. A `t` outside the
+    // dataset window, a reversed one, an `n` over the ceiling or a redundantly-spelled `n`/`v`
+    // therefore lands in the named error below with its own message, never a silent fallback to
+    // a default view and never a full pivot render nobody can cache.
+    query = decodeRequest(qs, allowlist);
     result = await runPivot(query);
   } catch (e) {
     if (e instanceof UrlStateError || e instanceof PivotError) {

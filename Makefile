@@ -400,12 +400,22 @@ fmt-check:  ## Fail if the tree is not `ruff format`-clean
 # Raising it is allowed and is a deliberate act -- change the number here and say why in the
 # commit message. What is not allowed is the number drifting upward unremarked.
 #
-# 475 is derived, not round: the file is 443 after the M7-era compaction, and a rule costs
-# 8-15 lines, so this is headroom for about three more before a prune is forced. A budget of
-# 450 was tried first and left 7 lines -- it would have failed on the very next rule, which
-# makes the gate noise instead of signal. Set it close enough to bite, far enough to mean
-# something when it does.
-CLAUDE_MD_BUDGET ?= 480
+# The number is derived, not round, and the derivation is restated whenever it moves -- a budget
+# whose stated justification names a different figure than the constant is the same rot this gate
+# exists to catch, and the prose is the half that rots first.
+#
+# It sits a LINE OR TWO above the file, not a rule above it. Headroom for a whole rule would let
+# the next rule land unremarked, which is precisely the drift the gate exists to catch; two lines
+# means the next one fails this target and has to raise the number in the same commit, with the
+# why in the message. That makes "raising it is a deliberate act" unavoidable rather than
+# optional. The gate is not there to stop the file growing -- it is there to stop it growing
+# QUIETLY.
+#
+# 490 as of #52: the file is 488 after that issue's value-bounds rule (nine lines, replacing a
+# clause that had become false -- `canonicalQuery.ts` inspects no value, but values are no longer
+# unvalidated, and a shape check downstream of pyUnquote bounds no spelling). Previously 480
+# against a 479-line file.
+CLAUDE_MD_BUDGET ?= 490
 
 check-docs:  ## Enforce the CLAUDE.md line budget (see CLAUDE.md § Working agreements)
 	@n=$$(wc -l < CLAUDE.md); \

@@ -53,6 +53,22 @@ table" section.
      is reused as-is from `pipeline.pivot.render_pivot` — one allowlist, not two. URL syntax
      that `render_pivot` can't see (`v` itself, unknown or duplicate query-string keys, the
      shape of `t` and `f`, `n`/`v` as integers) is validated in the codec.
+   - **The SERVER admits less than the codec parses, and that is a separate contract.** The port
+     above must match `pipeline/urlstate.py` exactly, so the bounds a *deployment* needs do not
+     live in it: `app/src/lib/pivot/bounds.ts` additionally refuses a `t` outside the months this
+     dataset covers, a `t` that ends before it starts, an `n` above 1000, a repeated token in `d`
+     or `m`, and any value spelled other than the one way `encode()` writes it — `n` and `v` as a
+     plain decimal, and `t`, `k`, `d`, `m`, `s`, `g` with no percent-encoding at all. Every extra
+     spelling is one more CDN cache entry for an identical page, and the codec cannot see them:
+     it unquotes each value before checking its shape, so `n=0025`, `n=%32%35`,
+     `t=2015-01%3A2015-12` and `t=%32015-01:2015-12` all decode to something already admissible.
+     **`f` is exempt**, because percent-encoding is that key's own escape mechanism (next bullet).
+     `/explore` renders all of these as the same named error as any other bad permalink;
+     `/api/pivot` answers 400. Nothing `encode()` produces is affected, and no permalink this app
+     has ever shipped is — a test decodes all nine goldens and every hardcoded `/explore` href in
+     the app, and a served-build check follows the `encode()`-built Explorer link an entity page
+     actually emits, to keep that true. Why it is not in the codec, and what stays open (`f`):
+     `docs/architecture/hosting.md` § "`/explore`'s query VALUES".
    - **Filter values are percent-encoded individually**, because they are the one piece of
      free text in the format and can legally contain the delimiters (`,`, `:`, `&`, `=`) the
      format itself uses. This is what makes the raw query string load-bearing: once a web

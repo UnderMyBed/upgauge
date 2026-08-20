@@ -61,7 +61,18 @@ each value as part of splitting it out, which would decode a percent-encoded str
 (`%2C`) back into a literal comma before `_parse_filter`'s own `.split(",")` ever saw it --
 silently reintroducing the exact corruption the percent-encoding exists to prevent.
 
-**Known accepted gap.** A reversed time range (`t=2015-12:2015-01`) decodes without error and
+**Known accepted gap, and deliberately still one here.** The SERVER narrows several values this
+module accepts -- `app/src/lib/pivot/bounds.ts` refuses a `t` outside the dataset's own months, a
+reversed `t`, an `n` over a ceiling, a repeated token in `d`/`m`, and any key but `f` spelled
+other than the one way `encode` writes it (this module unquotes each value before checking its
+shape, so `t=%32015-01:2015-12` and `n=%32%35` parse to something already valid) -- because each
+extra spelling is one more CDN cache entry for an identical response (see that file, and
+`docs/architecture/hosting.md` § "`/explore`'s query VALUES"). Those bounds do NOT belong here and
+must not be added: this module is CI-only, never faces a cache, and is the spec the TypeScript port
+is pinned to match exactly. Narrowing it would make the port and the spec disagree in the other
+direction. What follows is a statement about the CODEC and remains true of it.
+
+A reversed time range (`t=2015-12:2015-01`) decodes without error and
 simply yields zero rows once queried, matching `render_pivot`'s own boundary -- it doesn't
 validate ordering either. Not guarded here on purpose: `encode` never produces one, but a
 hand-edited link can, and the empty result is a plausible (if surprising) reading of a

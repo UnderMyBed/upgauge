@@ -272,3 +272,44 @@ describe("/explore route cell links to the canonical, code-alphabetical /route/<
     expect(container.querySelector("td.id a")).toBeNull();
   });
 });
+
+// #52, the page-side half. proxy.ts has already independently answered `no-store` for each of
+// these (proxy.test.ts's own block); this is what the reader actually gets, and it must be the
+// named error with the real reason in it -- never a silent fallback to a default view, and
+// never a full pivot render of a query the dataset cannot answer.
+describe("/explore refuses a value outside what this dataset can answer", () => {
+  const BASE = { v: "1", k: "seg", d: "op_airline_id", m: "seats", s: "-seats", g: "op" };
+  const shown = () => screen.getByRole("alert").textContent ?? "";
+
+  it("names the window when t falls outside it, rather than guessing", async () => {
+    render(await ExploreView({ rawQuery: qs({ ...BASE, t: "1999-01:1999-12", n: "25" }) }));
+    expect(screen.getByText(/can’t be read|can't be read/i)).toBeDefined();
+    // The offending value AND the valid range, per docs/design/system.md's invalid-permalink
+    // contract. A bare "invalid permalink" would pass a weaker assertion than this.
+    expect(shown()).toMatch(/1999-01:1999-12/);
+    expect(shown()).toMatch(/2015-01/);
+  });
+
+  it("names a reversed range for what it is", async () => {
+    render(await ExploreView({ rawQuery: qs({ ...BASE, t: "2026-04:2025-05", n: "25" }) }));
+    expect(shown()).toMatch(/start on or before it ends/i);
+  });
+
+  it("names the ceiling when n is above it", async () => {
+    render(await ExploreView({ rawQuery: qs({ ...BASE, t: "2025-05:2026-04", n: "999999" }) }));
+    expect(shown()).toMatch(/limit/i);
+    expect(shown()).toMatch(/999999/);
+  });
+
+  it("refuses a redundantly-spelled n even though its value is legal", async () => {
+    render(await ExploreView({ rawQuery: qs({ ...BASE, t: "2025-05:2026-04", n: "00000025" }) }));
+    expect(shown()).toMatch(/decimal/i);
+  });
+
+  it("still renders the table when every value is in bounds", async () => {
+    // The control. All four above are satisfied by a page that errors on everything.
+    render(await ExploreView({ rawQuery: qs({ ...BASE, t: "2025-05:2026-04", n: "5" }) }));
+    expect(screen.queryByText(/can’t be read|can't be read/i)).toBeNull();
+    expect(screen.getAllByRole("row").length).toBeGreaterThan(1);
+  });
+});

@@ -37,8 +37,14 @@ export const EARLIEST_YEAR = 2015;
  * legitimately contain, and it advances on its own every January with no code change.
  * `parseYear` cannot ask `dataAsOf()` directly (that call is async; a database read on this
  * function's synchronous, pre-page-render path is exactly what the doc comment above rules
- * out), so wall-clock time is the only self-updating signal available to it. */
-function maxValidYear(): number {
+ * out), so wall-clock time is the only self-updating signal available to it.
+ *
+ * Exported for `lib/pivot/bounds.ts` (#52), which bounds `/explore`'s `t` to the same window
+ * and needs this figure to STATE the range in its rejection message -- the range check itself
+ * goes through `parseYear` below rather than re-deriving one. `y` on `/airport/:code` and `t`
+ * on `/explore` are two spellings of one question, and one owner is what stops them
+ * disagreeing about which months this dataset covers. */
+export function maxValidYear(): number {
   return new Date().getUTCFullYear();
 }
 
