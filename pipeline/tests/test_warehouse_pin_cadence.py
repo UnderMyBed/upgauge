@@ -17,9 +17,21 @@ Two mechanisms, and the tests below are split the same way:
   * the gate -- `image-contract.yml` runs the coupling assertion on any PR touching either half,
     so a bot that silently stops working is loud instead of silent.
 
-Every workflow assertion is made against PARSED YAML with `#` comment lines stripped out of
-`run:` scalars. This repo's smoke-needle rule is the same lesson one layer down: a `grep` for
-`image-smoke` is satisfied by a comment mentioning it, and would pass with the gate deleted.
+Workflow assertions are made against PARSED YAML, through one of TWO accessors, and picking the
+wrong one has already opened a hole:
+
+  * `_job_run_scalars` strips `#` lines. Use it for SEMANTIC questions -- does this step invoke
+    `make image-smoke`, is that flag set. This repo's smoke-needle rule is the same lesson one
+    layer down: a `grep` for `image-smoke` is satisfied by a comment mentioning it, and would
+    pass with the gate deleted.
+  * `_raw_run_scalars` keeps them. Use it for anything about the TEXT Actions substitutes into,
+    because a `#` inside a `run:` block is not a comment -- it is part of a YAML scalar, and
+    `${{ }}` is spliced into it before bash ever parses it. The splice assertion ran on the
+    stripped form and `# bumping to ${{ needs.publish.outputs.tag }}` passed it; actionlint
+    exits 0 on that too.
+
+The shell helper every network call goes through is tested by BEHAVIOUR, not text, in
+`test_gh_retry.py` -- five mutants inside it survived this file's structural assertions.
 """
 
 from __future__ import annotations
@@ -269,12 +281,12 @@ def test_the_pr_body_states_that_ci_has_not_run_on_this_pr(tmp_path, monkeypatch
 # --------------------------------------------------------------------------------------
 # Workflow structure
 #
-# Parsed YAML throughout, with `#` lines stripped out of `run:` scalars before matching. A
-# `#` at YAML level is stripped by the parser and never reaches Actions, but a `#` INSIDE a
-# `run:` block is part of the scalar -- so a raw-text `grep` for `image-smoke` is satisfied by
-# any of the nine comments in this repo that merely mention it, and would pass with the gate
-# deleted. Same lesson as CLAUDE.md's smoke-needle rule: assert the property, never the
-# presence of a string something else also produces.
+# Parsed YAML throughout. Semantic assertions use `_job_run_scalars`, which strips `#` lines --
+# a raw-text `grep` for `image-smoke` is satisfied by any of the comments that merely mention
+# it, and would pass with the gate deleted. Assertions about what Actions SUBSTITUTES INTO use
+# `_raw_run_scalars` instead, because a `#` inside a `run:` block is part of the scalar and is
+# spliced into like any other text. See the module docstring: choosing the stripped accessor
+# for the splice check is a hole this file has already had.
 # --------------------------------------------------------------------------------------
 
 WAREHOUSE = WORKFLOWS / "warehouse.yml"
@@ -345,8 +357,9 @@ def test_the_bump_job_gates_on_the_tag_existing_and_can_still_run_after_a_failed
     created the release" is never set again: the release ships, the pin never moves, and the
     only signal is a generic red -- #74's own defect with a bot in front of it.
 
-    So the guard is `always()` plus "does a release with this tag exist", never "did this run
-    go well".
+    So the guard is a status function plus "does a release with this tag exist", never "did this
+    run go well" -- and specifically `!cancelled()`, which differs from `always()` only on a run
+    a human stopped on purpose.
     """
     doc = _doc(WAREHOUSE)
     job_id, job = _bump_job()
@@ -721,14 +734,41 @@ def _outside_quotes(line: str) -> str:
     return re.sub(r"\"[^\"]*\"|'[^']*'", " ", line)
 
 
-RETRIED = ("gh pr create", "gh workflow run", "git push", "gh pr list")
-#: Must never appear in the workflow at all: `git ls-remote --exit-code` returns 2 for
-#: "absent" and 128 for a transport failure, and the obvious `if git ls-remote …; then`
-#: collapses both to "absent". That handling lives in `branch_exists`, once.
+#: Every command in the bump job that touches the network. The rule below is ONE rule -- each
+#: call site is either `retry`-wrapped or `||`-guarded -- because "retried" and "tolerated" is a
+#: property of the CALL SITE, not of the command: `gh pr comment` is polish when it annotates a
+#: superseded PR and is the promised correction when it reports a failed dispatch.
+NETWORK = (
+    "gh pr create",
+    "gh workflow run",
+    "git push",
+    "gh pr list",
+    "gh pr comment",
+    "gh pr edit",
+)
+#: Must never appear in the workflow at all: `git ls-remote --exit-code` returns 2 for "absent"
+#: and 128 for a transport failure, and the obvious `if git ls-remote …; then` collapses both to
+#: "absent". That handling lives in `branch_exists`, once, and is tested there.
 FORBIDDEN = ("git ls-remote",)
-#: Deliberately unretried, and each must be `||`-tolerated so it cannot fail the step: both are
-#: polish on top of a PR that already exists and already mentions the owner.
-TOLERATED = ("gh pr edit", "gh pr comment")
+
+
+def _logical_lines(scalar: str) -> list[str]:
+    """`run:` lines with backslash-continuations joined.
+
+    Line-oriented scanning is how `gh pr \\` + newline + `create` would read as no call at
+    all -- a bare invocation the retry assertion below would never see.
+    """
+    joined, buffer = [], ""
+    for line in scalar.splitlines():
+        buffer += line
+        if buffer.rstrip().endswith("\\"):
+            buffer = buffer.rstrip()[:-1]
+            continue
+        joined.append(buffer)
+        buffer = ""
+    if buffer:
+        joined.append(buffer)
+    return joined
 
 
 def test_every_network_call_in_the_bump_job_is_retried_or_explicitly_tolerated():
@@ -737,31 +777,64 @@ def test_every_network_call_in_the_bump_job_is_retried_or_explicitly_tolerated()
     on every real bump, sat un-retried while two comments and hosting.md both said "every gh
     call is retried". A stated property with no failing test is the one that regresses.
 
-    `gh pr list` and `git ls-remote` must not appear here at all: they live behind
-    `open_pr_for`/`branch_exists`, which is where their retry and their exit-code semantics
-    are."""
+    `git ls-remote` must not appear here at all: it lives behind `branch_exists`, which is
+    where its retry AND its exit-code mapping are. `gh pr list` may appear only through
+    `retry`.
+    """
     _, job = _bump_job()
     for scalar in _job_run_scalars(job):
-        for line in scalar.splitlines():
+        for line in _logical_lines(scalar):
             # Quoted spans are MESSAGES, not call sites -- `--body "… \`gh workflow run\`
             # failed …"` names a command it does not run. Scanned outside the quotes, asserted
             # against the raw line, so `retry "gh pr create" gh pr create …` still reads as one.
             bare = _outside_quotes(line)
-            for command in RETRIED:
+            for command in NETWORK:
                 if command in bare:
-                    assert 'retry "' in line, f"{command} is not retried:\n{line}"
+                    assert 'retry "' in line or "||" in line, (
+                        f"{command} can fail the step: it is neither retried nor `||`-guarded, "
+                        f"so one transient 503 reddens a Warehouse run whose release is "
+                        f"fine:\n{line}"
+                    )
             for command in FORBIDDEN:
                 assert command not in bare, (
                     f"{command} is called directly rather than through the helper, so its "
                     f"exit-code handling is whatever this line does -- and a transport failure "
                     f"reads as 'branch absent':\n{line}"
                 )
-    joined = "\n".join(_job_run_scalars(job))
-    for command in TOLERATED:
-        for chunk in joined.split(command)[1:]:
-            assert "||" in chunk.split("\n\n")[0], (
-                f"{command} can fail the step; it is polish and must be `||`-tolerated"
-            )
+
+
+def test_the_dispatch_failure_comment_is_retried_because_it_is_not_polish():
+    """The one `gh pr comment` that may not be merely `||`-tolerated. It IS the correction the
+    PR body promises, so a single transient 503 leaves exactly the PR this branch exists to
+    prevent -- one that reads as gated and is not. The step is already failing; retries are
+    free."""
+    _, job = _bump_job()
+    step = next(s for s in job["steps"] if "gh workflow run" in _code(s.get("run", "")))
+    line = next(
+        line
+        for line in _logical_lines(_code(step["run"]))
+        if "gh pr comment" in _outside_quotes(line)
+    )
+    assert 'retry "' in line, f"the dispatch-failure correction is not retried:\n{line}"
+
+
+def test_a_failed_dispatch_never_claims_an_annotation_it_may_not_have_made():
+    """Measured with a stub `gh` where both the dispatch and the comment fail: the step printed
+    `could not annotate … the dispatch failure is in this log only` and then, louder and last,
+    `… has been annotated`. Two adjacent contradictory lines with the FALSE one winning, on the
+    exact path the annotation exists to serve."""
+    _, job = _bump_job()
+    step = next(s for s in job["steps"] if "gh workflow run" in _code(s.get("run", "")))
+    code = _code(step["run"])
+    annotated = code.index("has been annotated")
+    branch_at = code.rindex("if retry", 0, annotated)
+    assert "gh pr comment" in code[branch_at:annotated], (
+        "the 'has been annotated' claim is not inside the branch that tests whether the "
+        "comment succeeded"
+    )
+    assert "could not annotate" in code[annotated:], (
+        "there is no else-branch saying the annotation did not land"
+    )
 
 
 def test_the_retry_helper_does_not_sleep_after_its_last_attempt():
@@ -779,7 +852,82 @@ def test_both_network_steps_source_the_one_retry_helper():
     _, job = _bump_job()
     for step in job["steps"]:
         code = _code(step.get("run", "") or "")
-        if any(c in code for c in RETRIED):
+        if any(c in code for c in NETWORK):
             assert "source .github/scripts/gh_retry.sh" in code, (
                 f"step {step.get('name') or step.get('id')} makes a network call without the helper"
             )
+
+
+def test_the_bump_job_announces_supersession_when_an_older_bump_pr_is_still_open():
+    """Two months can be in flight at once -- a human re-measuring needles on last month's PR
+    when this month publishes -- and both branches edit the same `WAREHOUSE_TAG` line. Deleting
+    this block left the whole suite green, so the behaviour had no witness.
+
+    ANNOUNCED, never enforced: closing the older PR would discard that re-measurement, so the
+    older one is told and the human decides which to carry."""
+    _, job = _bump_job()
+    scalars = _job_run_scalars(job)
+    assert any("Superseded by" in s for s in scalars), (
+        "nothing tells an older open bump PR that a newer one exists"
+    )
+    step = next(s for s in scalars if "Superseded by" in s)
+    assert "bot/warehouse-pin-" in step, (
+        "supersession does not scope itself to this bot's own branches"
+    )
+    assert "--state open" in step, "supersession would annotate PRs a human already closed"
+    assert "gh pr close" not in step, (
+        "the older PR is closed rather than annotated -- that discards a human's needle "
+        "re-measurement"
+    )
+
+
+def test_a_closed_bump_pr_is_treated_as_a_deliberate_no():
+    """A human who closes a bump PR without also deleting its branch is saying no. Without this
+    check the next run finds no OPEN PR, finds the branch still there, opens a fresh PR and
+    dispatches a ~30-minute container build -- every day, indefinitely. The next month's tag
+    gets its own branch, so honouring it refuses one bump, never the mechanism."""
+    _, job = _bump_job()
+    step = next(s for s in job["steps"] if "gh pr create" in _code(s.get("run", "")))
+    code = _code(step["run"])
+    early_exit = code[: code.index("gh pr create")]
+    assert "closed_pr_for" in early_exit, (
+        "a closed bump PR is reopened, and its gate rebuilt, on every run forever"
+    )
+    assert early_exit.index("closed_pr_for") < early_exit.index("branch_exists"), (
+        "the closed-PR check runs after the branch check, so the branch path wins first"
+    )
+
+
+#: Worst-case backoff inside one retried call: 5 + 10 + 15 + 20, with no sleep after the fifth
+#: attempt. Kept beside the helper it describes rather than as a literal in the assertion.
+BACKOFF_SECONDS = 5 + 10 + 15 + 20
+
+
+def test_the_bump_jobs_timeout_covers_its_own_worst_case_backoff():
+    """DERIVED from the number of retried calls, not restated. Every retry-backed call can burn
+    a full backoff budget, and a timeout below their sum replaces every crafted `::error::` in
+    this job with a generic "job timed out" -- the one message that explains nothing. Adding a
+    sixth retried call without raising the timeout is the regression this catches."""
+    _, job = _bump_job()
+    # `retry "` is counted on the RAW line -- `_outside_quotes` would erase the label that
+    # follows it. The helper names are counted on the stripped line, so one named inside a
+    # message is not mistaken for a call.
+    retry_backed = sum(
+        line.count('retry "')
+        + sum(
+            _outside_quotes(line).count(fn)
+            for fn in ("open_pr_for", "closed_pr_for", "branch_exists")
+        )
+        for scalar in _job_run_scalars(job)
+        for line in _logical_lines(scalar)
+    )
+    assert retry_backed >= 5, f"only {retry_backed} retry-backed calls found -- the scan broke"
+    # Each helper call is itself a `retry`, so `retry "` inside gh_retry.sh is not double
+    # counted here: this scans the WORKFLOW's own lines only.
+    worst_case = retry_backed * BACKOFF_SECONDS
+    budget = job["timeout-minutes"] * 60
+    assert budget >= worst_case + 120, (
+        f"timeout-minutes={job['timeout-minutes']} leaves {budget}s for {worst_case}s of "
+        f"backoff across {retry_backed} retried calls, plus checkout, mise and every `gh` "
+        f"round trip"
+    )

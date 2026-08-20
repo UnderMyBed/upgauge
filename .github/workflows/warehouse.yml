@@ -292,7 +292,13 @@ jobs:
     # cancelled is the same overreach scheduled-failure.yml's own allow-list refuses.
     if: ${{ !cancelled() && needs.publish.outputs.tag_published == '1' }}
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # DERIVED, not round: every retry-backed call in this job can burn a full 5+10+15+20s
+    # backoff, and the total must fit with room for checkout, mise and every `gh` round trip.
+    # The count is NOT written here -- it moves whenever a call is added, which is exactly the
+    # regression test_the_bump_jobs_timeout_covers_its_own_worst_case_backoff computes from the
+    # job itself. Too low and a slow-but-not-failing `gh` replaces every crafted `::error::`
+    # above with a generic "job timed out", the one message that explains nothing.
+    timeout-minutes: 20
     # Least privilege, and every one of the three is load-bearing:
     #   contents      -- push the bump branch
     #   pull-requests -- open the PR and assign it
@@ -361,6 +367,16 @@ jobs:
             echo "::notice::$open_pr is already open for $BRANCH; leaving it alone"
             exit 0
           fi
+          # A CLOSED PR IS A DELIBERATE NO, and honouring it is a cost control. Without this,
+          # closing a bump PR without also deleting its branch leaves the next run finding no
+          # open PR, finding the branch, opening a fresh one and dispatching a ~30-minute
+          # container build -- every day, indefinitely. The next month's tag gets its own
+          # branch, so this refuses one bump, never the mechanism.
+          closed_pr=$(closed_pr_for "$BRANCH")
+          if [ -n "$closed_pr" ]; then
+            echo "::notice::$closed_pr was closed for $BRANCH; not reopening this bump"
+            exit 0
+          fi
           if branch_exists "$BRANCH"; then
             # Never force-push over it: a human may be re-measuring needles on this branch,
             # which is exactly what a red gate asks them to do.
@@ -393,6 +409,14 @@ jobs:
             }
             echo "::warning::gh pr create reported failure but $url exists; continuing"
           fi
+          # `retry` returns the LAST attempt's stdout, so a command that printed before failing
+          # folds its output into this capture -- and `url=$url` is a bare `k=v` line in
+          # $GITHUB_OUTPUT, the injection shape gha.write_multiline_output exists for. `gh`
+          # writes diagnostics to stderr so this is theoretical today; validating costs a line.
+          case "$url" in
+            https://*) ;;
+            *) echo "::error::gh pr create returned something that is not a URL: $url"; exit 1 ;;
+          esac
           echo "::notice::opened $url"
           echo "### Opened $url" >> "$GITHUB_STEP_SUMMARY"
           echo "url=$url" >> "$GITHUB_OUTPUT"
@@ -412,7 +436,7 @@ jobs:
           # supersession is polish, and `set -o pipefail` would otherwise let a listing failure
           # fail a step whose PR is already open and already correct.
           stale_prs=$(retry "gh pr list" gh pr list --repo "$GITHUB_REPOSITORY" --state open \
-            --json url,headRefName \
+            --limit 100 --json url,headRefName \
             --jq '.[] | select(.headRefName | startswith("bot/warehouse-pin-"))
                       | select(.headRefName != env.BRANCH) | .url') || {
             echo "::warning::could not list open bump PRs; supersession not announced"
@@ -457,8 +481,20 @@ jobs:
           fi
           # THE CORRECTION GOES WHERE THE HUMAN IS. The PR body says the gate is dispatched and
           # points at its runs; if that never happened, saying so only in a red Actions log
-          # leaves a PR that reads as gated and is not. Comment first, then fail.
-          gh pr comment "$PR_URL" --body "The Image contract gate was NOT dispatched on this branch -- \`gh workflow run\` failed five times. Nothing has measured this pin against the needles. Do not merge until the gate has run; dispatch it by hand from the Actions tab." \
-            || echo "::warning::could not annotate $PR_URL -- the dispatch failure is in this log only"
-          echo "::error::could not dispatch the gate on $BRANCH; $PR_URL has been annotated"
+          # leaves a PR that reads as gated and is not.
+          #
+          # RETRIED, not `||`-tolerated: this comment IS the correction the PR body promises, so
+          # it is not polish, and one transient 503 would leave exactly the PR this branch
+          # exists to prevent. The step is already failing, so the retries cost nothing.
+          #
+          # And the final message BRANCHES on whether the comment landed. It used to `||` the
+          # comment and then assert "has been annotated" unconditionally -- two adjacent
+          # contradictory lines with the louder one false, on the one path this code is for.
+          if retry "gh pr comment" gh pr comment "$PR_URL" --body "The Image contract gate was NOT dispatched on this branch -- \`gh workflow run\` failed five times. Nothing has measured this pin against the needles. Do not merge until the gate has run; dispatch it by hand from the Actions tab."; then
+            echo "::error::could not dispatch the gate on $BRANCH; $PR_URL has been annotated"
+          else
+            echo "::error::could not dispatch the gate on $BRANCH, AND could not annotate"
+            echo "::error::$PR_URL -- this log is the only record. That PR reads as gated and"
+            echo "::error::is not. Do not merge it until the gate has run."
+          fi
           exit 1

@@ -390,14 +390,16 @@ current-year asterisk, the covered range) follow from `max(year_month)`; the res
 warehouse queried through the rendered pages, so a rewriter that fixed the derivable four would
 emit a PR that reads as re-measured and is not.
 
-**The bot's guard is `always()` plus "a release with this tag exists", never "this run published
-it" — and that difference is a permanent stall.** `classify` runs after the release is created and
+**The bot's guard is `!cancelled()` plus "a release with this tag exists", never "this run
+published it" — and that difference is a permanent stall.** `classify` runs after the release is created and
 can legitimately throw (a real upstream shape change is exactly when it should), which fails the
 publish job and skips the bump. Every re-dispatch afterwards takes the already-published path, so
 a flag meaning "this run created the release" is never set again: the release ships, the pin never
 moves, and the only signal is a generic red. Keyed on existence instead, the next run repairs it —
 which is why the job runs daily and mostly opens nothing, a checkout and a script rather than a
-single chance per publish. Its failures stay loud (they redden "Warehouse", which
+single chance per publish. `!cancelled()` rather than `always()`: the two differ only on a run a
+human stopped on purpose, and opening a PR out of one is the overreach `scheduled-failure.yml`'s
+own allow-list already refuses. Its failures stay loud (they redden "Warehouse", which
 `scheduled-failure.yml` watches), and the accepted cost of that loudness is that a genuinely
 broken bot also defers `image.yml`'s build until the next push to `main`. **Every network call
 that can fail the job is retried** — five attempts, backoff, no sleep after the last — through the
