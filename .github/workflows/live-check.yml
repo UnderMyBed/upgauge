@@ -9,8 +9,23 @@ name: Live check
 # that shares a fate with the thing it watches is not a check. promote.yml only runs when a
 # human promotes; the site can go wrong on a day nobody deploys.
 on:
-  schedule:
-    - cron: "23 * * * *"
+  # SCHEDULE DISABLED, deliberately and temporarily -- see #77.
+  #
+  # GitHub Actions runners cannot currently read the live site: every request to
+  # `${BASE}/api/health` from a runner comes back as a non-JSON challenge/block page, while the
+  # same request from a residential IP with `-A curl/8.0` returns 200 and valid JSON. So this
+  # workflow fails on every run for a reason that has nothing to do with the site's health, and
+  # `scheduled-failure.yml` files an issue for each failure. An alert that fires every hour
+  # regardless of the site is worse than none: it trains its reader to ignore it, which is the
+  # exact failure this workflow was built to prevent.
+  #
+  # `workflow_dispatch` is kept so #77 can be tested against it.
+  #
+  # RE-ENABLE by restoring the cron below once #77 is resolved. Nothing enforces this -- #77
+  # carries the reminder, and the site is unwatched until then.
+  #
+  # schedule:
+  #   - cron: "23 * * * *"
   workflow_dispatch:
 
 permissions:
