@@ -1441,10 +1441,11 @@ token in `d` or `m` are all bounded at the origin by `app/src/lib/pivot/bounds.t
 **One of `f`'s three axes is bounded, by the render pair rather than by `bounds.ts`.** A filter
 value on a dimension whose fact column is an integer type must be a canonical non-negative decimal
 within that column's width (`app/src/lib/pivot/render.ts` and its mirror `pipeline/pivot.py`); a
-value on a VARCHAR dimension is not checked at all. The type is introspected into
-`meta_pivot_dimensions.value_type` from `duckdb_columns()`, so the bound moves with the column
-instead of with anyone's memory of it, and it costs no extra query — `loadAllowlist()` is the probe
-this branch already makes.
+value on a VARCHAR dimension is not checked at all. The type is introspected from
+`duckdb_columns()` by `sql/03_queries/catalog_dimensions.sql` — by the QUERY, never stored on the
+view, so it ships with the code rather than with the warehouse asset — and the bound moves with the
+column instead of with anyone's memory of it. It costs no extra query: `loadAllowlist()` is the
+probe this branch already makes.
 
 **For the composite `route`, the rule applies to each RAW part — split on `-`, never stripped.**
 The parts were stripped of ASCII whitespace before checking, which left the whole whitespace family

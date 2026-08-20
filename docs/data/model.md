@@ -59,9 +59,10 @@ mart_route_health     one row per (op_airline_id, route_key_low, route_key_high)
                       directly (../architecture/pipeline.md).
 
 meta_pivot_dimensions  key, label, column_expr, grain, join_dim, join_key,
-                       filter_only, filter_mode, value_type
-                      -- The Explorer's dimension vocabulary. Every column is curated
-                      -- EXCEPT value_type, which is introspected from duckdb_columns().
+                       filter_only, filter_mode
+                      -- The Explorer's dimension vocabulary, wholly curated. The filter-value
+                      -- bound also needs each column's TYPE; that is introspected by
+                      -- sql/03_queries/catalog_dimensions.sql rather than stored here.
                       -- See "The Explorer's vocabulary lives in the catalog" below.
 meta_pivot_measures    key, label, is_additive, expr
                       -- The Explorer's measure vocabulary. Same section.
@@ -220,18 +221,25 @@ form buys is a drift guard: `pipeline/tests/test_pivot_allowlist.py` cross-check
 curated `column_expr` against `DESCRIBE` on the fact table(s) its `grain` claims, in both
 directions — a `'segment'`-grain dimension must be absent from `fct_route_month`, and a
 `'both'`-grain dimension must be present on it. A renamed or dropped fact column fails loudly
-instead of silently dropping a dimension from the Explorer at request time — though *which*
-test fires depends on which token went missing, and at which grain. One case does not reach
-that cross-check: a first token missing **on `fct_segment_month`**, because `value_type` INNER
-JOINs on it there (below), so the row is gone before the loop can iterate it and the failure
-surfaces as a row-count and key-set failure instead. The pre-emption is that narrow — the join
-resolves against `fct_segment_month` only, so a first token missing at ROUTE grain still fails
-the cross-check normally. Measured: renaming `origin_city_market_id` on `fct_route_month`
-alone turns it red, along with two of the type guards.
+instead of silently dropping a dimension from the Explorer at request time. Every token is
+checked at every grain the dimension is offered at, with no blind spot: `value_type` is computed
+by the catalog QUERY rather than stored on the view, so the view still carries all fifteen rows
+and a renamed column reaches this loop rather than being filtered out before it. Measured: a
+first-token rename on `fct_segment_month` turns it red, and so does one at route grain.
 
-**`value_type` is the one column that is introspected rather than curated.** It carries the
-DuckDB type of the dimension's underlying fact column, joined live from `duckdb_columns()`
-against the FIRST token of `column_expr`, resolved on `fct_segment_month`. Which dimensions we
+**`value_type` is introspected rather than curated, and it is computed by
+`sql/03_queries/catalog_dimensions.sql` rather than stored on the view.** It carries the DuckDB
+type of the dimension's underlying fact column, joined live from `duckdb_columns()` against the
+FIRST token of `column_expr`, resolved on `fct_segment_month`.
+
+**Where it is computed is a deployment constraint, not a preference.** A column added to the
+view exists only in a warehouse asset rebuilt *after* that change — and `warehouse.yml` publishes
+only when BTS advances a month, while the container copies a prebuilt asset (`WAREHOUSE_TAG`). A
+view-side column therefore makes new app code unrunnable against every already-published asset:
+measured, CI against `warehouse-2026.05` raised `Binder Error: Referenced column "value_type" not
+found in FROM clause!` from three separate jobs. Computing it in the QUERY makes the schema part
+of the code, which is what it is, and `duckdb_columns()` reflects whatever fact tables the asset
+actually carries. Which dimensions we
 offer is a product decision; a column's *width* is a schema fact, and a hand-copied schema fact
 rots. It exists so a filter value can be rejected at render time: a filter compiles to `col IN
 ($p)` with the value bound as a VARCHAR parameter, so an integer column handed a value it

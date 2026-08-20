@@ -53,21 +53,20 @@ def test_all_fifteen_dimensions_are_offered(con):
 
 
 def test_every_offered_dimension_column_actually_exists(con):
-    """The drift guard. A missing column must fail loudly somewhere, and which test fires
-    depends on which token went missing, and AT WHICH GRAIN.
+    """The drift guard. A renamed or dropped fact column must fail loudly HERE, at every grain
+    the dimension is offered at, with no blind spot.
 
-    One case does not reach this loop: a first token missing on `fct_segment_month`
-    specifically. `value_type` INNER JOINs on `split_part(column_expr, ',', 1)` resolved
-    against that object, so the dimension's whole row is gone before this test can iterate it
-    and this test stays GREEN. Measured -- renaming `origin_state` there leaves this green and
-    turns four others red, including test_all_fifteen_dimensions_are_offered. Still loud, just
-    not loud HERE.
+    That was not always true and the history is worth keeping, because the obvious "improvement"
+    would reintroduce it. While `value_type` was a column ON meta_pivot_dimensions, its INNER
+    JOIN resolved `split_part(column_expr, ',', 1)` against fct_segment_month, so a first-token
+    rename there deleted the dimension's whole row before this loop could iterate it and this
+    test stayed GREEN -- loud elsewhere, but not here. Moving the introspection into
+    sql/03_queries/catalog_dimensions.sql (for an unrelated deployment reason: a view column
+    only exists in a warehouse asset rebuilt after the change) left the view carrying all
+    fifteen rows again, and this guard is whole as a result.
 
-    The narrowness matters: the join sees `fct_segment_month` ONLY, so it pre-empts nothing at
-    route grain. Measured -- renaming `origin_city_market_id` on `fct_route_month` alone turns
-    this test RED, with test_every_both_grain_dimension_exists_at_both_grains and
-    test_both_grain_dimensions_carry_the_same_type_at_route_grain. A missing later token, at
-    either grain, likewise keeps the row and fails here.
+    Measured after the move: renaming `origin_state` on fct_segment_month turns this test RED,
+    and so does renaming `origin_city_market_id` on fct_route_month alone
 
     Asserts EVERY referenced token resolves, not merely that one does -- `route`'s expr is
     `route_key_low, route_key_high`, so a heuristic that passes when *any* token matches
@@ -131,6 +130,21 @@ def test_every_both_grain_dimension_exists_at_both_grains(con):
 # here on purpose: a hand-maintained tally in a comment is the rot this repo keeps paying for.)
 
 
+def _catalog_rows(con):
+    """The allowlist as the SERVER sees it -- through sql/03_queries/catalog_dimensions.sql.
+
+    `value_type` is computed by THAT query, not stored on meta_pivot_dimensions, so a test that
+    reads the view directly cannot see it at all. The split is a deployment fact: a column on the
+    view exists only in a warehouse asset rebuilt after the change, and the asset is republished
+    only when BTS advances a month, so a view-side column made new app code unrunnable against
+    every already-published asset. Reading through the query here is also what keeps these tests
+    honest about the thing production actually executes.
+    """
+    sql = (QUERIES_DIR / "catalog_dimensions.sql").read_text()
+    cols = [d[0] for d in con.execute(sql).description]
+    return [dict(zip(cols, r, strict=True)) for r in con.execute(sql).fetchall()]
+
+
 def test_every_dimension_resolves_to_a_value_type(con):
     """The join must produce exactly one TYPED row per dimension.
 
@@ -145,7 +159,7 @@ def test_every_dimension_resolves_to_a_value_type(con):
     * the join predicate matching MORE than one object, duplicating every row it matches --
       a set comparison cannot see duplication at all.
     """
-    rows = con.execute("SELECT key, value_type FROM meta_pivot_dimensions").fetchall()
+    rows = [(r["key"], r["value_type"]) for r in _catalog_rows(con)]
     assert len(rows) == 15, f"expected 15 dimension rows, got {len(rows)}"
     unresolved = sorted(key for key, value_type in rows if value_type is None)
     assert not unresolved, f"no value_type resolved for {unresolved}"
@@ -165,9 +179,9 @@ def test_value_type_is_the_type_of_every_column_the_dimension_reads(con):
     """
     segment_types = {r[0]: r[1] for r in con.execute("DESCRIBE fct_segment_month").fetchall()}
     multi_column = set()
-    for key, expr, value_type in con.execute(
-        "SELECT key, column_expr, value_type FROM meta_pivot_dimensions"
-    ).fetchall():
+    for key, expr, value_type in [
+        (r["key"], r["column_expr"], r["value_type"]) for r in _catalog_rows(con)
+    ]:
         tokens = [t.strip() for t in expr.split(",") if t.strip()]
         assert tokens, f"{key}: empty column_expr"
         if len(tokens) > 1:
@@ -246,11 +260,11 @@ def test_dimension_value_types_are_the_measured_set(con):
     aircraft_type turning into an integer type -- which every structural test above would sail
     straight past, because value_type would still equal the column it read.
     """
-    catalog = dict(con.execute("SELECT key, value_type FROM meta_pivot_dimensions").fetchall())
+    catalog = {r["key"]: r["value_type"] for r in _catalog_rows(con)}
     assert catalog == DIMENSION_VALUE_TYPES
 
 
-def test_value_type_is_introspected_not_hand_written(con):
+def test_value_type_is_introspected_not_hand_written():
     """The property the whole column exists for, and the ONLY test here that can see it.
 
     Every other value_type test compares the catalog against the CURRENT schema, so a
@@ -258,40 +272,37 @@ def test_value_type_is_introspected_not_hand_written(con):
     deleting the duckdb_columns() join and substituting such a CASE leaves every other test in
     this file green.
 
-    A hand-written type that DISAGREES with the schema is not silent -- measured, a CASE
-    saying INTEGER where aircraft_group is SMALLINT reds both of the tests that compare
-    against a live DESCRIBE. So this test is not what makes drift loud. What it adds is that
-    a served build can never carry a bound the schema disagrees with in the first place: it
-    catches the curated value while it still AGREES, which is the only window in which nothing
-    else can.
+    A hand-written type that DISAGREES with the schema is not silent -- a CASE saying INTEGER
+    where aircraft_group is SMALLINT reds both tests that compare against a live DESCRIBE. So
+    this is not what makes drift loud. What it adds is that a served build can never carry a
+    bound the schema disagrees with in the first place: it catches the curated value while it
+    still AGREES, which is the only window in which nothing else can.
 
-    So this asserts on the COMPILED VIEW's own SQL text -- the artifact this repo controls --
-    the same way test_fct_segment_month_view_sets_hive_partitioning_for_pruning pins a config
-    setting that leaves no trace at all in query output.
+    Asserts on the QUERY FILE, because that is where the introspection lives -- the same shape
+    as test_load_allowlist_reads_its_sql_from_files_not_string_literals below, which greps
+    source text for the same reason. Reading the compiled view instead would pin the wrong
+    artifact: meta_pivot_dimensions deliberately does NOT carry value_type, so that the
+    allowlist stays runnable against a warehouse asset published before this rule existed.
+
+    LIMIT, stated rather than implied: this catches every natural way the introspection is
+    removed -- a literal, a per-key CASE override, a lowercase spelling -- and does not catch
+    deliberate obfuscation. `typeof(CAST(NULL AS VARCHAR))` and `'BIG' || 'INT'` both defeat it
+    while keeping the join present. Neither is a plausible accident. The limit is accepted, not
+    overlooked.
     """
-    sql = con.execute(
-        "SELECT sql FROM duckdb_views() WHERE view_name = 'meta_pivot_dimensions'"
-    ).fetchone()[0]
-    # Case-INSENSITIVE on purpose. DuckDB lowercases the table-function name but PRESERVES
-    # the case of a column reference, so `c.DATA_TYPE` -- semantically identical, byte-
-    # identical catalog output, still fully introspected -- would red a case-sensitive check
-    # with a message claiming the opposite. A guard that cries wolf gets deleted.
+    sql = (QUERIES_DIR / "catalog_dimensions.sql").read_text()
+    # Case-INSENSITIVE on purpose: `c.DATA_TYPE` is semantically identical and still fully
+    # introspected, so a case-sensitive check would red with a message claiming the opposite.
+    # A guard that cries wolf gets deleted by whoever hits it next.
     upper = sql.upper()
     assert "DUCKDB_COLUMNS()" in upper, "value_type no longer joins duckdb_columns()"
     assert "DATA_TYPE" in upper, "value_type no longer reads duckdb_columns().data_type"
-    # A QUOTED type name in this view means someone wrote a type down by hand. DuckDB
-    # re-serializes genuine casts with the type UNquoted (CAST('f' AS BOOLEAN)), verified
-    # against the compiled view on this DuckDB version, so this cannot fire on a real cast.
-    #
-    # What this does NOT cover, stated so nobody reads it as airtight: an expression that
-    # keeps the join present while contributing nothing -- typeof(CAST(NULL AS VARCHAR)), or
-    # 'BIG' || 'INT' -- defeats it. Neither is a plausible accident, and every natural
-    # spelling (including lowercase) plus both realistic regressions are caught. The limit is
-    # accepted, not overlooked.
-    hand_written = [
-        t for t in ("VARCHAR", "TINYINT", "SMALLINT", "INTEGER", "BIGINT") if f"'{t}'" in upper
-    ]
-    assert not hand_written, f"type name(s) hand-written into the view: {hand_written}"
+    # A QUOTED type name means someone wrote a type down by hand. Comment lines are stripped
+    # first -- this file's own header NAMES the types it is documenting, and that prose must not
+    # be mistaken for a hand-written bound.
+    body = "\n".join(line for line in upper.splitlines() if not line.strip().startswith("--"))
+    for literal in ("'VARCHAR'", "'TINYINT'", "'SMALLINT'", "'INTEGER'", "'BIGINT'"):
+        assert literal not in body, f"value_type looks hand-written: {literal} appears in the query"
 
 
 def test_measures_split_additive_from_derived(con):

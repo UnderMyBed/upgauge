@@ -57,14 +57,6 @@ WITH required(object_name, column_name) AS (
         ('mart_route_health',      'health_score'),
         ('meta_pivot_dimensions',  'key'),
         ('meta_pivot_dimensions',  'column_expr'),
-        -- value_type is the column most likely to be ABSENT rather than renamed: it arrived
-        -- with the filter-value bound (#87), so any warehouse asset published before that
-        -- commit carries a meta_pivot_dimensions without it. The container copies a PREBUILT
-        -- asset (Dockerfile, WAREHOUSE_TAG), so that pairing is a real deploy state, not a
-        -- hypothetical -- and without this row /api/health answered `ok` while
-        -- catalog_dimensions.sql raised `Binder Error: Referenced column "value_type" not
-        -- found`, taking every entity page and /explore down behind a healthy probe.
-        ('meta_pivot_dimensions',  'value_type'),
         ('meta_pivot_measures',    'key'),
         ('meta_pivot_measures',    'expr')
 )

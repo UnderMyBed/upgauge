@@ -9,8 +9,11 @@
 -- decision, not a schema fact -- fct_segment_month has columns (download_date,
 -- quarantine_reason) that are not Explorer dimensions. A test cross-checks every column_expr
 -- against duckdb_columns(), so a renamed fact column fails loudly instead of silently
--- dropping a dimension. One column is the exception and is introspected: `value_type`, below,
--- which is a schema fact rather than a product decision.
+-- dropping a dimension. The filter-value bound that reads these rows needs each
+-- column's TYPE too; that is a schema fact rather than a product decision, so it is
+-- introspected -- and it is introspected in sql/03_queries/catalog_dimensions.sql rather than
+-- here, because a column added to THIS view only exists in a warehouse asset rebuilt after the
+-- change, while a column computed in the QUERY ships with the code. See that file.
 --
 -- `grain`: 'both' | 'segment' | 'route'. aircraft_type and aircraft_group are segment-only
 -- because fct_route_month drops that grain.
@@ -36,31 +39,7 @@
 -- reason. 'either' is `endpoint_airport_id`, whose two columns are ALTERNATIVES and compile
 -- to an OR. A pair filter and an either filter over the same two columns are different
 -- queries; the mode is what keeps them from being confused.
---
--- `value_type`: the DuckDB type of the dimension's underlying fact column, INTROSPECTED from
--- duckdb_columns() rather than curated. Everything else in this view is a product decision;
--- this one is a schema fact, and a hand-written copy of a schema fact is the thing CLAUDE.md
--- opens by saying rots. If normalize.py ever changes a column's width the bound moves with it
--- and nobody has to remember.
---
--- It exists so a filter VALUE can be rejected before it reaches DuckDB. A filter compiles to
--- `col IN ($p)` with the value bound as a VARCHAR parameter, so an integer column given a value
--- it cannot cast throws a Conversion Error at EXECUTION -- after proxy.ts has already written
--- Cache-Control, which is how an attacker-chosen `f` bought a CDN-cached 500 (issue #87).
--- Measured: op_airline_id='2T (1)' and distance_group='99999' both throw; aircraft_type='2T (1)'
--- returns zero rows. That second case is why the type is READ and never inferred from the key
--- name -- aircraft_type is VARCHAR carrying zero-padded codes ('079'), and a numeric rule
--- applied to it would re-open the zero-padding gotcha invariants.md already documents.
---
--- Resolved against fct_segment_month, which carries every offered column (the five segment-only
--- dimensions exist nowhere else, and every 'both' dimension is propagated to fct_route_month by
--- 100_fct_route_month.sql, which preserves type). A test asserts both grains agree, and that
--- every column of a multi-column column_expr shares one type.
---
--- INNER JOIN on purpose: a renamed fact column drops the dimension row entirely, and
--- test_all_fifteen_dimensions_are_offered then fails on the count. Loud, not silent.
-SELECT t.*, c.data_type AS value_type
-FROM (VALUES
+SELECT * FROM (VALUES
     ('year_month',            'Month',            'year_month',            'both',    NULL,               NULL,             FALSE, NULL),
     ('quarter',               'Quarter',          'quarter',               'both',    NULL,               NULL,             FALSE, NULL),
     ('year',                  'Year',             'year',                  'both',    NULL,               NULL,             FALSE, NULL),
@@ -77,6 +56,3 @@ FROM (VALUES
     ('aircraft_group',        'Aircraft group',   'aircraft_group',        'segment', NULL,               NULL,             FALSE, NULL),
     ('distance_group',        'Distance group',   'distance_group',        'segment', NULL,               NULL,             FALSE, NULL)
 ) AS t(key, label, column_expr, grain, join_dim, join_key, filter_only, filter_mode)
-JOIN duckdb_columns() c
-  ON c.table_name = 'fct_segment_month'
- AND c.column_name = trim(split_part(t.column_expr, ',', 1))
