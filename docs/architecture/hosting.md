@@ -372,14 +372,42 @@ re-verifying `make image-smoke` clean.
 **`WAREHOUSE_TAG` and `app/smoke.sh`'s dataset needles are ONE fixture — bump the pin in the same
 commit that re-measures the needles.** The Makefile pins the tag for reproducibility, but
 `make image-smoke` then runs dataset-month-specific checks against that pinned asset: the two
-chart-window needles (`2015-01 → 2026-04`, on `/route` and `/carrier`), the current-year asterisk
-(`>2026*<` on `/airport`), `2026 is a partial year — filed through April 2026 only.` and `this
-dataset covers 2015–2026`. When BTS publishes 2026-05, `make ingest && make build` moves the local
-database, those needles get re-measured, and **`make app-smoke` goes green while `make image-smoke`
-goes red with no defect present** — it is still building from `warehouse-2026.04`. Whoever meets
-that red beside a green host gate will reach for the needles, which is the wrong end. Same rule as
-CLAUDE.md's "when a renamed value was the fixture for a transform, MOVE the fixture", applied to
-this coupling; stated at the pin itself (`Makefile`, `WAREHOUSE_TAG`) as well as here.
+chart-window needles on `/route` and `/carrier`, the current year's asterisked tick and its
+partial-year sentence on `/airport`, and the covered-range message an out-of-range `?y=` returns
+(`app/smoke.sh`'s `check_dataset` call sites). **Those needle values are not quoted here, and must
+not be** — every one of them moves when BTS publishes, and a copy written into prose rots silently
+while the fixture itself moves on. When BTS publishes, `make ingest && make build` moves the local
+database and those needles get re-measured, so **`make app-smoke` goes green while `make
+image-smoke` goes red with no defect present** — it is still building from the previous pin.
+Whoever meets that red beside a green host gate will reach for the needles, which is the wrong end.
+Same rule as CLAUDE.md's "when a renamed value was the fixture for a transform, MOVE the fixture",
+applied to this coupling; stated at the pin itself (`Makefile`, `WAREHOUSE_TAG`) as well as here.
+
+**Two mechanisms hold the fixture together, and neither is a human remembering.** The bot is
+`warehouse.yml`'s `bump-pin` job: when a release publishes — never on the ~30 daily polls that do
+not — it opens a PR moving the pin, and does **not** touch the needles. Only four of them (the
+partial-year sentence, the chart window, the current-year asterisk, the covered range) follow from
+`max(year_month)`; the rest need the warehouse queried through the rendered pages, so a rewriter
+that fixed the derivable four would emit a PR that reads as re-measured and is not. The gate is
+`image-contract.yml`, which runs `make image-smoke` **with nothing overridden** — the committed
+pin, the needles at their default — on any PR touching either half. That is the only invocation
+that can see the coupling: `image.yml` also runs `make image-smoke`, but resolves the newest
+published release and passes `SMOKE_DATASET_PINNED=0`, so both halves are absent from it by
+construction, and correctly so (a production image is built from the newest release, which the
+committed needles trail between a publish and its bump PR merging). Neither `WAREHOUSE_TAG` nor
+`SMOKE_DATASET_PINNED` may appear in the gate's command **or in an `env:` block at any scope**:
+`WAREHOUSE_TAG ?=` is a conditional assignment, so an environment variable of that name wins over
+the pin, and `app/smoke.sh` reads `${SMOKE_DATASET_PINNED:-1}`.
+
+**The bump PR carries no `pull_request` checks, and the PR says so.** GitHub starts no workflow
+runs from events created by `GITHUB_TOKEN` (the same rule that rules out `release: published` as a
+trigger — see `image.yml`'s `on:` comment), so a PR the bot opens starts neither `ci.yml` nor the
+gate. `workflow_dispatch` is the documented exception, and `bump-pin` uses it to run the gate
+against its own branch; the PR body states plainly that `ci.yml` has not run and links the
+branch-filtered runs. **A reader who merges on a green-looking PR with no checks is the failure
+this caveat exists to prevent.** Setting a `BUMP_PIN_TOKEN` secret removes it — the job already
+reads `secrets.BUMP_PIN_TOKEN || github.token`, so the PR would be authored by a real account and
+every workflow would fire normally. The repo grants no such secret today and nothing requires one.
 
 **`/api/health` carries its own served-build checks, in both modes** — exactly
 `cache-control: no-store`, and no `s-maxage=2592000`. It was the readiness probe and the identity

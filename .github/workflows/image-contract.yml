@@ -1,0 +1,107 @@
+name: Image contract
+
+# `make image-smoke` with NOTHING overridden: the Makefile's pinned WAREHOUSE_TAG, and
+# app/smoke.sh's dataset-pinned needles at their default (on). That combination is the only one
+# that can see the coupling #74 reports -- the pin and the needles are ONE fixture, and moving
+# either alone leaves the container gate asserting last month's dataset or failing against a
+# correct image.
+#
+# NOT A DUPLICATE OF image.yml. That workflow also runs `make image-smoke`, but resolves the
+# NEWEST published release and passes SMOKE_DATASET_PINNED=0 -- correctly, because a production
+# image is built from the newest release and the committed needles trail it between a publish
+# and its bump PR merging. Both halves of the fixture are therefore absent from that invocation
+# by construction. test_image_yml_still_runs_the_needle_free_form pins that difference so the
+# two are never "unified" into one gate that is wrong for both jobs.
+#
+# COST. This builds a container and runs ~338 served checks against it: on the order of 30
+# minutes. CI minutes are free on a public repo, but a 413 MB build is not free of wall clock or
+# of a .gov endpoint's patience, so the trigger is scoped to changes that can actually move the
+# result, and is deliberately NOT `push: branches: [main]` (every path into main here is a PR)
+# and NOT `workflow_run` on "Warehouse".
+#
+# WHY NO RELEASE TRIGGER, given that the drift appears at a release. A `workflow_run` on
+# "Warehouse" would fire on all ~30 daily polls, and on the one day it publishes it would build
+# against the STALE pin with the STALE needles -- agreeing with each other, and green. It cannot
+# see the drift it would exist for. The release reaches this gate the only way that is real:
+# warehouse.yml's `bump-pin` job opens a PR that touches `Makefile`, which matches the filter
+# below, and the run then builds from the NEW pin against the COMMITTED needles. One build, and
+# it asserts the coupling rather than restating that two stale values match.
+on:
+  pull_request:
+    # Every entry is read by `make image` or `make image-smoke`. Deliberately NOT `app/src/**`
+    # or `sql/**`: those are served BEHAVIOUR, already covered on every PR by ci.yml's
+    # `make app-smoke`, and including them would fire a 30-minute container build on nearly
+    # every PR in the repo -- the every-run cost this scoping exists to avoid.
+    #
+    # test_every_path_the_gate_filters_on_exists asserts each of these resolves to a real file.
+    # A typo here does not fail; it silently matches nothing, and a gate that never fires
+    # reports nothing to say so.
+    paths:
+      - Dockerfile          # the image itself
+      - .dockerignore       # the build context, which decides the image's identity
+      - Makefile            # WAREHOUSE_TAG, IMAGE_SHA, and both recipes -- half the fixture
+      - mise.toml           # the node pin the Dockerfile's NODE_VERSION must equal
+      - app/smoke.sh        # the checks, dataset-pinned needles included -- the other half
+      - app/package.json    # deps stage, runtime stage, and smoke.sh's own next-version check
+      - app/package-lock.json
+      - app/next.config.ts  # copied into the runtime stage
+      - .github/workflows/image-contract.yml
+  # Load-bearing, not a convenience. A PR opened with GITHUB_TOKEN starts no `pull_request`
+  # runs (image.yml's `on:` comment documents the rule), so warehouse.yml's bump-pin job
+  # dispatches this workflow explicitly against its own branch. Remove this trigger and every
+  # bot PR ships ungated.
+  workflow_dispatch:
+
+# Reads a public release asset and a public base image. Writes nothing, pushes nothing -- the
+# registry is image.yml's business, and a gate must not be able to reach it.
+permissions:
+  contents: read
+
+# A superseded push must not keep burning a 30-minute container build. Same reasoning as
+# ci.yml's, and the opposite of warehouse.yml's -- nothing here is mid-publish.
+concurrency:
+  group: image-contract-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the Makefile's IMAGE_SHA is `git describe`, not a shallow clone
+
+      - uses: jdx/mise-action@v4
+        with:
+          install: true
+          cache: true
+
+      # app/smoke.sh's FIRST check compares the `next` under app/node_modules against the
+      # version app/package.json declares -- unconditionally, before SMOKE_MODE is read,
+      # because a gate serving a different Next than the build under test certifies nothing.
+      # That needs a real app/node_modules on THIS runner, not only inside the image. image.yml
+      # learned this the hard way on its first-ever run.
+      - run: mise exec -- npm ci --prefix app
+
+      # NO OVERRIDES. Not `WAREHOUSE_TAG=`, not `SMOKE_DATASET_PINNED=`, and neither of them in
+      # an `env:` block either -- `WAREHOUSE_TAG ?=` is a conditional assignment, so an
+      # environment variable of that name silently wins over the committed pin, and smoke.sh
+      # reads `${SMOKE_DATASET_PINNED:-1}`, so an environment variable turns the needles off
+      # just as effectively as a flag would. Both are asserted absent at all three scopes by
+      # test_the_gate_runs_image_smoke_against_the_pin_with_the_needles_on.
+      #
+      # A red here means the pin and the needles disagree. Read the FAIL lines: each names the
+      # needle and the value it still expects. Fix by re-measuring those needles against the
+      # pinned asset in THIS branch -- never by moving the pin to match them, which is the same
+      # drift facing the other way.
+      - name: The pin and the needles are one fixture
+        run: make image-smoke
+
+      - name: Upload the server log on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: image-contract-server-log
+          path: /tmp/upgauge-smoke.log
+          if-no-files-found: warn
