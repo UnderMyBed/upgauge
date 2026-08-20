@@ -114,12 +114,19 @@ const NUMERAL_KEYS: ReadonlySet<string> = new Set(["v", "n"]);
  * spelling, without this module restating a single one of those shapes -- which is the same
  * drifting-duplicate-validator rule that keeps `n`'s lower bound in `render.ts`.
  *
- * `f` is NOT here, and that is the residual, named. `encode()` builds it as
- * `f=${quote(key)}:${values.map(quote).join(",")}`, so percent-encoding is the format's own
- * escape mechanism there -- a filter value legitimately carries `,`, `:`, `&`, `=` and spaces
- * (`2T (1)`, `O'Hare`), and the goldens pin exactly that. Banning `%` in `f` would break shipped
- * permalinks. `docs/architecture/hosting.md` § "What this does not close" carries what that
- * leaves open. */
+ * `f` is NOT here, and that is the residual, named -- narrowed, never closed. `encode()` builds
+ * it as `f=${quote(key)}:${values.map(quote).join(",")}`, so percent-encoding is the format's own
+ * escape mechanism there -- a VARCHAR dimension's value legitimately carries `,`, `:`, `&`, `=`
+ * and spaces (`2T (1)`, `O'Hare`, pinned on `origin_state` by the goldens). Banning `%` in `f`
+ * would break shipped permalinks.
+ *
+ * What this module cannot bound, `render.ts` bounds for the dimensions it can: a filter value on
+ * an integer-typed column must be a canonical whole number within the column's width. That check
+ * lives there rather than here because it needs the catalog's introspected column type, and this
+ * module is deliberately database-free -- the same division that keeps `n`'s lower bound in
+ * `render.ts`. A VARCHAR dimension's value is still arbitrary text, and the number of `f` tokens
+ * is still unbounded. `docs/architecture/hosting.md` § "What this does not close" carries the
+ * rest. */
 const LITERAL_KEYS: ReadonlySet<string> = new Set(["k", "d", "m", "t", "s", "g"]);
 
 /** Is this `YYYY-MM` inside the window this dataset can possibly cover?

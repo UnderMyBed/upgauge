@@ -140,7 +140,7 @@
     },
     {
       "name": "filter_value_reserved_characters",
-      "description": "A filter value containing every character the URL format itself uses as a delimiter or the escape character (',' '&' '%' ':' '=' '+' and a space) -- must percent-encode and round-trip exactly rather than corrupt the structural delimiters or silently reparse into the wrong number of values.",
+      "description": "A filter value containing every character the URL format itself uses as a delimiter or the escape character (',' '&' '%' ':' '=' '+' and a space) -- must percent-encode and round-trip exactly rather than corrupt the structural delimiters or silently reparse into the wrong number of values.\nCarried on origin_state because the escaping under test is a property of the URL codec, not of the dimension: these values are not plain whole numbers, so an integer-typed dimension cannot hold them (see render_pivot's _check_filter_value).",
       "query": {
         "grain": "segment",
         "dimensions": [
@@ -153,7 +153,7 @@
         "time_to": "2015-12",
         "filters": [
           [
-            "origin_airport_id",
+            "origin_state",
             [
               "14,771",
               "13&487",
@@ -170,11 +170,11 @@
         "limit": 100,
         "grouping": "operating"
       },
-      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=origin_airport_id:14%2C771,13%26487,9%255,12%3A34,a%3Db,a%2Bb,a%20b&n=100&g=op"
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=origin_state:14%2C771,13%26487,9%255,12%3A34,a%3Db,a%2Bb,a%20b&n=100&g=op"
     },
     {
       "name": "filter_value_encodeuricomponent_divergence",
-      "description": "Filter values containing ! * ' ( ) -- the characters JS encodeURIComponent leaves literal but Python quote(safe='') percent-encodes. Real data: 119 unique_carrier_code values carry BTS's '(1)' suffix, 163 airport names an apostrophe. Pins the encoding for M3b's TypeScript port.",
+      "description": "Filter values containing ! * ' ( ) -- the characters JS encodeURIComponent leaves literal but Python quote(safe='') percent-encodes. Real data: 119 unique_carrier_code values carry BTS's '(1)' suffix, 163 airport names an apostrophe. Pins the encoding for M3b's TypeScript port.\nCarried on origin_state for the same reason as filter_value_reserved_characters: the divergence under test is in the CODEC, and these values are not plain whole numbers, so no integer-typed dimension can carry them.",
       "query": {
         "grain": "segment",
         "dimensions": [
@@ -187,7 +187,7 @@
         "time_to": "2015-12",
         "filters": [
           [
-            "op_airline_id",
+            "origin_state",
             [
               "2T (1)",
               "O'Hare",
@@ -201,7 +201,7 @@
         "limit": 100,
         "grouping": "operating"
       },
-      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=op_airline_id:2T%20%281%29,O%27Hare,a%21b,c%2Ad&n=100&g=op"
+      "url": "v=1&k=seg&d=op_airline_id&m=seats&t=2015-01:2015-12&f=origin_state:2T%20%281%29,O%27Hare,a%21b,c%2Ad&n=100&g=op"
     },
     {
       "name": "filter_composite_route",

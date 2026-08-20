@@ -622,6 +622,29 @@ describe("proxy /explore value bounds (#52)", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
+  it("does not long-cache /explore when a filter value cannot cast to its column type", async () => {
+    // Issue #87, and the assertion the whole fix exists for. `2T (1)` on op_airline_id (INTEGER)
+    // used to decode cleanly, reach a bound VARCHAR param, and throw a DuckDB Conversion Error at
+    // EXECUTION -- by which point this function had already written HTML_CACHE, so a shared cache
+    // held the 500 for up to an hour for one request. renderPivot now rejects it inside decode(),
+    // which isExploreCacheable() catches.
+    const res = await at(`${BASE}&t=2025-05:2026-04&f=op_airline_id:2T%20%281%29&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("does not long-cache /explore when an all-digits filter value overflows its column", async () => {
+    // The half a digits-only rule cannot see: every character of 99999 is a digit, and
+    // distance_group is SMALLINT (max 32767), so this threw exactly like the case above.
+    const res = await at(`${BASE}&t=2025-05:2026-04&f=distance_group:99999&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("still long-caches /explore when the same filter value is valid for its column", async () => {
+    // The control that stops the two above being vacuous: same key, same shape, castable value.
+    const res = await at(`${BASE}&t=2025-05:2026-04&f=op_airline_id:19790&n=25`);
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
   it("does not long-cache /explore when n is above the ceiling", async () => {
     const res = await at(`${BASE}&t=2025-05:2026-04&n=999999`);
     expect(res.headers.get("Cache-Control")).toBe("no-store");
@@ -663,9 +686,15 @@ describe("proxy /explore value bounds (#52)", () => {
 
   it("still long-caches a permalink whose FILTER value is percent-encoded", async () => {
     // The second control, and the one that would break shipped permalinks: `f` is exempt from
-    // the raw-byte rule because quote() must escape `,`, `:`, `&`, `=` and spaces there. Golden
-    // case 8 is `f=op_airline_id:2T%20%281%29,...`. A blanket "no % anywhere" reddens this.
-    const res = await at(`${BASE}&t=2025-05:2026-04&f=op_airline_id:2T%20%281%29&n=25`);
+    // the raw-byte rule because quote() must escape `,`, `:`, `&`, `=` and spaces there. The
+    // golden filter_value_encodeuricomponent_divergence is
+    // `f=origin_state:2T%20%281%29,...`. A blanket "no % anywhere" reddens this.
+    //
+    // origin_state, not an id column: renderPivot type-checks a filter value against its
+    // dimension's column type, so '2T (1)' on op_airline_id is now a PivotError and this
+    // request would be `no-store` for that reason rather than the percent-encoding one --
+    // which would make this control vacuous instead of red.
+    const res = await at(`${BASE}&t=2025-05:2026-04&f=origin_state:2T%20%281%29&n=25`);
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
 });

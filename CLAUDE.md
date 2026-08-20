@@ -464,8 +464,10 @@ signature element; it does not own these.
   110,592 encodings of one admissible value and `MONTH_RE` constrained none of them. Bounding a
   RANGE alone bounds nothing, on any key. Checked on the RAW bytes; SERVER admission, never the
   codec (`decode()` is pinned to `pipeline/urlstate.py` as an exact port), so all three entry points
-  call `decodeRequest`. `f` is the residual — `%` is its own escape mechanism there, so it is exempt
-  and left to an edge rule matching `/api/` only.
+  call `decodeRequest`. `f` is the residual, NARROWED not closed: an integer-typed dimension's value
+  must be a canonical in-range whole number (`render.ts` + `pivot.py`, #87 — a digits-only rule
+  admits `distance_group=99999`, which 500s). VARCHAR values, `f`'s repeat count and its spelling
+  exemption (`%` is its own escape there) stay open, left to an edge rule matching `/api/` only.
 - **Nothing on the proxy path may throw.** `canonicalize()` threw on a leading `?` as a "wiring
   bug"; `proxy.ts` strips only ONE `?` (non-global regex) and has no try/catch, so `GET /watch??x=1`
   500ed all twelve matcher paths — and no smoke check used a doubled `?`, so both gates missed it.

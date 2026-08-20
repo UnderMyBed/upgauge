@@ -74,15 +74,18 @@ describe("/explore", () => {
   });
 
   it("names a non-numeric composite filter value rather than an unhandled server error", async () => {
-    // End-to-end regression, Important 4 (final whole-branch review): before the render.ts
-    // fix, 'f=route:JFK-LAX' passed decode()'s structural check (two non-empty dash-separated
-    // parts) and only failed deep inside runPivot() with a PivotError this page did not catch
-    // -- an unhandled throw, not a rendered error page. Verified against a running build
-    // before this fix. Proves the OUTCOME (a named error page, not a crash); the next test
-    // proves the SPECIFIC guard this file added, independent of render.ts's own fix.
+    // End-to-end regression: 'f=route:JFK-LAX' clears decode()'s structural check (two
+    // non-empty dash-separated parts) and is rejected by renderPivot's per-part value rule.
+    // Without that rule it reaches a bound param and fails deep inside runPivot() with a
+    // PivotError this page did not catch -- an unhandled throw, not a rendered error page.
+    // Proves the OUTCOME (a named error page, not a crash); the next test proves the SPECIFIC
+    // guard this file added, independent of render.ts's own rule.
+    //
+    // The substring asserted here is the one app/smoke.sh needles on the served build, so this
+    // is also the unit-level proof that the message survives the whole render path.
     const raw = "v=1&k=route&d=route&m=seats&t=2025-05:2026-04&f=route:JFK-LAX&n=5&g=op";
     render(await ExploreView({ rawQuery: raw }));
-    expect(screen.getByText(/two ids joined by/i)).toBeDefined();
+    expect(screen.getByText(/must be a plain whole number/i)).toBeDefined();
     expect(screen.queryAllByRole("row").length).toBe(0);
   });
 

@@ -447,8 +447,9 @@ async function isDataLayerHealthy(): Promise<boolean> {
  * can't be read" as a **200** (`app/src/app/explore/page.tsx`), which the proxy long-cached --
  * measured at 4aa8087, `?d=junk1..N` was an unbounded family of cacheable error pages that no
  * key-level rule can see. `decode()` is exactly what `ExploreView` calls next, on the same raw
- * string, and it ends by running `renderPivot()` to validate identifiers -- so this costs no
- * extra database query beyond the `loadAllowlist()` this branch already made as its probe.
+ * string, and it ends by running `renderPivot()` to validate identifiers and the TYPE of every
+ * filter value (#87) -- so this costs no extra database query beyond the `loadAllowlist()` this
+ * branch already made as its probe.
  *
  * Consequence, accepted deliberately rather than discovered later: **bare `/explore` is
  * `no-store`**, because `decode("")` throws `missing required key 'v'` and that page has always
@@ -459,7 +460,8 @@ async function isDataLayerHealthy(): Promise<boolean> {
  * `docs/architecture/hosting.md` § "The gap" documents, and this task does not change it.
  *
  * `decodeRequest`, not `decode` (#52). The key gate above and `decode()` between them leave the
- * VALUE axis open, and always will: `decode()` validates identifiers, never values, so
+ * VALUE axis open: `decode()` validates identifiers, and (since #87) that each filter value can
+ * cast to its dimension's column type -- but nothing else about a value, so
  * `t=9999-12:0000-01`, `n=999999999` and `n=00000000025` all still decode cleanly -- and until this
  * call they each rendered a distinct, cacheable 200. Three families, and the last two are the ones
  * a range check structurally cannot see: `t` admitted 1.44x10^10 ordered pairs by VALUE; every key
