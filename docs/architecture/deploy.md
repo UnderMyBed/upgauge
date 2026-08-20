@@ -55,6 +55,11 @@ what `/api/health` returns, or compare the index's child.
 The same operation with the previous tag. Measured: **85s** from retag to the older build
 serving.
 
+**The target is a tag you know serves, which is not always the one the box is on.** A promote made
+to *fix* an outage, against a box that then never pulls it, leaves the box running the build that
+is failing — so "the previous tag" there is the outage. `promote.yml`'s mismatch verdict says
+which, because it has read that build's status over the full poll.
+
 ```bash
 gh workflow run promote.yml -f tag=warehouse-2026.05-6ea164b
 curl -sS https://upgauge.shipman.dev/api/health | jq -r .build.sha
@@ -143,17 +148,49 @@ a runner, so that reading argues in neither direction. **The status code never d
 `/api/health` answers 503 with a complete, valid report when the data layer is degraded, and a
 build read from one of those is as real as any other.
 
-**`promote.yml` orders a rollback only when the box reported a build and it was the wrong one.**
-Where no build was read it names what came back instead and hands over the check that separates
-the two readings. Run that check from a network that reaches the site, and act on what it shows,
-not on the failed run:
+**`promote.yml` reads a build AND a status, and each finding earns its own remedy.** A wrong
+build is a promote the box never took; the promoted build under a report that is not `ok` is a
+promote it took and cannot serve (below). Where no build was read at all, it names what came back
+instead and hands over the check that separates the two readings. Run that check from a network
+that reaches the site, and act on what it shows, not on the failed run:
 
 ```bash
 curl -sS -D - https://upgauge.shipman.dev/api/health
 ```
 
-Down, or serving a build other than the promoted one → roll back. Reporting the promoted build →
-the run was blind and the deploy is fine.
+Down, serving a build other than the promoted one, or reporting anything but `ok` → roll back.
+The promoted build under `ok` → the run was blind and the deploy is fine. **A build identity does
+not close it**: `/api/health` serves the promoted pair verbatim under a 503 whenever the data layer
+is degraded (below), so a hand check read for the build alone hands out the same false all-clear
+the poll itself is built to refuse.
+
+### The promoted build, serving 503, is its own verdict
+
+**A build identity is not a health check.** `build.sha` and `build.warehouse` are baked build
+args, so a container whose data layer never opened reports the promoted pair exactly as a healthy
+one does, and `/api/health` serves that report under a 503 with the body unchanged. The poll
+confirms `status: "ok"` as well as the identity, and only `"ok"` — an allow-list, because
+`status` is a string and nothing further is promised about it.
+
+**A degraded box does not stop the poll early.** Promoting a new image is *how* a degraded box
+gets fixed, and that promote's early attempts read the old, still-degraded build; failing fast
+would red the very deploy that repairs the outage. It polls its full budget, then reports.
+
+When the budget elapses on it, the verdict carries the cause `/api/health` named — `data.missing`
+for the catalog probe, `data.error` for the freshness one — and **orders a rollback**. The box has
+reported for five minutes that it cannot answer, which is a measurement, not the blind path above;
+and it does not recover on its own, because a 503 fails the container's own `r.ok` healthcheck, so
+`docker compose up -d --wait` never confirms it and the 30s timer retries the same digest forever.
+
+**The rollback is not promised to fix it.** No data volume is mounted — the dataset is baked into
+the image — and every image passes `make image-smoke` before it can be published, so the cause is
+the image's contents, the pull, or the box. A rollback lands the previous image on the **same
+box**, which is what makes it the discriminator:
+
+| once the previous image is back | subject | do |
+|---|---|---|
+| `/api/health` reports `ok` | the image | stay on the old tag; find what the new one baked |
+| the same cause is reported again | the box | replace it — § Provision, or replace the box |
 
 **`live-check.yml` files its alert either way**, because an alert that cannot read the site is
 the one thing it must never fail silently on. **A body that parsed is not thereby a report** —

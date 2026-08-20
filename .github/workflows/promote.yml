@@ -129,7 +129,7 @@ jobs:
       # verdict after every attempt is exhausted that must not be silently swallowed, and it
       # isn't.
       #
-      # THE STATUS IS MEASURED, NOT ONLY THE BODY, and the final verdict comes from
+      # THE HTTP STATUS IS MEASURED, NOT ONLY THE BODY, and the final verdict comes from
       # `promote_check.py --exhausted` rather than a bare `echo` here. This step used to emit
       # "The tag moved; the deploy did not" and "ROLL BACK NOW" unconditionally; on 2026-08-1x
       # it emitted both against a healthy, correctly-promoted deploy, because all 30 attempts
@@ -137,6 +137,16 @@ jobs:
       # message hardcoded in bash cannot be conditional on the evidence, and a rollback is a real
       # production action -- so the decision lives with the rest of the decisions, in the script.
       # See its `exhausted_report` for which verdict earns the rollback and which does not.
+      #
+      # A MATCHING BUILD IS NOT A DEPLOY (#79). `build.sha`/`build.warehouse` are baked build
+      # args, so a container whose data layer never opened reports the promoted pair exactly as a
+      # healthy one does, and /api/health serves that report under a 503 with the body unchanged.
+      # The poll confirms the report's own `status` as well as the identity, on an allow-list:
+      # only `ok` ends the loop. A degraded box keeps polling for the full budget -- promoting a
+      # new image is HOW a degraded box gets fixed, so failing fast would red the very deploy
+      # that repairs the outage -- and then earns its own verdict, neither a mismatch nor a blind
+      # poll, with its own remedy. See `promote_check.py`'s `exhausted_report`.
+      #
       # 30 attempts x 10s = 300s budget. Where that number comes from, and what part of it is
       # actually measured:
       #
