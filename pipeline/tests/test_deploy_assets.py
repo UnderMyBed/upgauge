@@ -251,7 +251,9 @@ def test_the_deploy_script_exports_the_token_to_its_children(tmp_path):
     # Run the script's real PROLOGUE -- everything before it first touches docker. Selecting
     # only the lines that mention deploy.env would drop the very construct under test.
     lines = (DEPLOY / "upgauge-deploy.sh").read_text().splitlines()
-    cut = next(i for i, ln in enumerate(lines) if "docker" in ln and not ln.lstrip().startswith("#"))
+    cut = next(
+        i for i, ln in enumerate(lines) if "docker" in ln and not ln.lstrip().startswith("#")
+    )
     prologue = "\n".join(lines[:cut])
     assert "deploy.env" in prologue, "the prologue no longer sources deploy.env; premise moved"
 
