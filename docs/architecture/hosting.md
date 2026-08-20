@@ -1623,6 +1623,18 @@ pointed at a deliberately broken database, **before** the probe below:
 RFC 9111 § 3 lets a shared cache store a 500 that carries an explicit `s-maxage`, so this was
 a real exposure on the headline SEO-canonical URL, not a technicality.
 
+**A broken database is not the only way in.** Every row above needs one; the `f` axis does not.
+A filter value that cannot be cast to its dimension's column type — `f=op_airline_id:2T%20%281%29`,
+`f=distance_group:99999`, `f=route:99999999999-99999999999` — decodes cleanly, passes every
+origin-side bound, and throws inside DuckDB at execution time, against a **completely healthy
+database**, from one unauthenticated GET. `proxy.ts` disclaims exactly this case in
+`isExploreCacheable`'s own comment (*"NOT extended to `runPivot()` throwing after `decode()` has
+succeeded"*), and it is the reason a filter value is type-checked at render time rather than left
+to the query: the check runs inside `decode()`, which the proxy already calls, so the throw moves
+from `runPivot()` to `decode()` and the header becomes `no-store` before it is ever written.
+§ "What this does not close" carries the per-type measurements; `app/smoke.sh` § 15b pins the
+behaviour on a served build.
+
 **This is not fixable from the proxy alone.** The same shape is true of `/explore` and of every
 entity page: the proxy cannot see the downstream status, and (see below) a Server Component
 genuinely cannot set a response header — there is no place left that knows both "this is a 5xx"
