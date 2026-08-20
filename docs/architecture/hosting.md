@@ -1020,7 +1020,8 @@ redden independently for either result to mean anything. It does.
 
 The key gate above closes which query KEYS a path reads. It closes nothing about their VALUES, and
 the value axis was the larger of the two (#52). `decode()` validates *identifiers* against the
-catalog through `renderPivot`; it never validates a value. Measured against the real codec before
+catalog through `renderPivot`, and — since #87 — the TYPE of each filter value; it validates
+nothing else about a value. Measured against the real codec before
 the fix, every one of these decoded cleanly and rendered a distinct 200 under `HTML_CACHE`:
 
 | key | what constrained it | family |
@@ -1104,9 +1105,13 @@ The rules, and why each bound is the one it is:
   drifting-duplicate-validator rule that keeps `n`'s lower bound in `render.ts`.
 - **`f` is exempt from that rule, and the exemption is load-bearing.** `encode()` builds it as
   `f=${quote(key)}:${values.map(quote).join(",")}`, so a filter value legitimately carries `,`,
-  `:`, `&`, `=` and spaces — golden case 8 is `f=op_airline_id:2T%20%281%29,O%27Hare,…`. Banning
-  `%` there would break permalinks this product has already shipped. Both `bounds.test.ts` and
-  `app/smoke.sh` assert the exemption, so a blanket "no `%` anywhere" reddens rather than ships.
+  `:`, `&`, `=` and spaces — `filter_value_encodeuricomponent_divergence` is
+  `f=origin_state:2T%20%281%29,O%27Hare,…`. Banning `%` there would break permalinks this product
+  has already shipped. Both `bounds.test.ts` and `app/smoke.sh` assert the exemption, so a blanket
+  "no `%` anywhere" reddens rather than ships. The exemption is from *this module's* spelling rule
+  only — a filter value on an integer-typed dimension is bounded by `render.ts` instead (§ What
+  this does not close). That is why the two reserved-character goldens carry their values on
+  `origin_state`: a VARCHAR dimension is the only kind that can hold them.
 - **No token may repeat in `d` or `m`.** This one is invisible to a spelling rule (every repeat is
   spelled the one legal way) and to a range rule, and it is not a codec question either: `encode()`
   cannot emit one, since a repeated dimension is a duplicate `GROUP BY` key that changes no row and
@@ -1428,30 +1433,86 @@ Two consequences worth stating plainly:
 Written in the same idiom as § The gap, and for the same reason: a permanent doc that reads as if
 `/explore` were finished is worse than one that names what is left.
 
-**Every key but `f` is closed; `f` is not.** `t`'s months and their ordering, `n`'s ceiling,
-one spelling per value on `v`, `n`, `t`, `k`, `d`, `m`, `s` and `g`, and no repeated token in `d`
-or `m` are all bounded at the origin by `app/src/lib/pivot/bounds.ts` — see § "`/explore`'s query
-VALUES" above for the rules, the measurements and the mutants. What remains open is `f`, and it
-is open on **three** axes at once: `parseFilter` accepts any non-empty value list, so
-`f=origin_state:<arbitrary string>` decodes; `f` is legitimately **repeatable**, so the number of
-`f` tokens is unbounded as well as each one's value; and `f` is the one key **exempt from the
-spelling rule**, because `quote()` must escape `,`, `:`, `&`, `=` and spaces inside a filter value,
-so `%` is meaningful there rather than redundant. Every distinct spelling is a distinct 200 under
-`HTML_CACHE` on the most expensive page on the site.
+**Every key but `f` is closed; `f` is narrowed, not closed.** `t`'s months and their ordering,
+`n`'s ceiling, one spelling per value on `v`, `n`, `t`, `k`, `d`, `m`, `s` and `g`, and no repeated
+token in `d` or `m` are all bounded at the origin by `app/src/lib/pivot/bounds.ts` — see §
+"`/explore`'s query VALUES" above for the rules, the measurements and the mutants.
 
-That exemption is not a gap that could be closed by tightening the same rule one key wider: a
-filter value is warehouse text, and there is no canonical byte spelling of it to insist on without
-either a catalog read or a re-implementation of `quote()`'s escaping policy inside the admission
-check. It is named here rather than left implicit, and both `bounds.test.ts` and `app/smoke.sh`
-assert it, so a future "simplification" to a blanket `%` ban reddens instead of shipping.
+**One of `f`'s three axes is bounded, by the render pair rather than by `bounds.ts`.** A filter
+value on a dimension whose fact column is an integer type must be a canonical non-negative decimal
+within that column's width (`app/src/lib/pivot/render.ts` and its mirror `pipeline/pivot.py`); a
+value on a VARCHAR dimension is not checked at all. The type is introspected into
+`meta_pivot_dimensions.value_type` from `duckdb_columns()`, so the bound moves with the column
+instead of with anyone's memory of it, and it costs no extra query — `loadAllowlist()` is the probe
+this branch already makes.
+
+**For the composite `route`, the rule applies to each RAW part — split on `-`, never stripped.**
+The parts were stripped of ASCII whitespace before checking, which left the whole whitespace family
+open on the one dimension every `/route/` page links through: measured on the real warehouse,
+`route:'  12478-12892'`, `route:'12478-12892\t'`, `route:'\n\n 12478-12892 \t'`,
+`route:'12478 - 12892'` and `route:' 12478  -  12892 '` all returned rows identical to
+`route:12478-12892`, and the runs may be any length, so the family is unbounded. Splitting without
+stripping closes it, and removes a latent cross-language divergence with it — JS's `trim()` strips
+U+FEFF where Python's `.strip()` does not, and `.strip()` strips `\x1c`–`\x1f` where `trim()` does
+not, so with no strip on either side there is no whitespace set for the two runtimes to disagree
+about. No production caller is affected: all four build the value from database integers
+(`carrier/[code]/page.tsx`, `airport/[code]/endpoints.ts`, `map/airportNetwork.ts`, `watch.ts`).
+
+That check exists because on `f` the value axis was not merely a cache-key axis: it was a cached
+**500**. A filter compiles to `col IN ($p)` with the value bound as a VARCHAR parameter, so an
+integer column handed a value it cannot cast throws a DuckDB Conversion Error at EXECUTION — after
+the proxy has already resolved cacheability and written `HTML_CACHE`. Measured against the real
+warehouse: `op_airline_id='2T (1)'`, `distance_group='99999'`, `quarter='999'`,
+`op_airline_id='99999999999'`, `year='9223372036854775808'` and `route:99999999999-99999999999`
+every one threw. Note the middle four — **every character of them is a digit**, so a digits-only
+rule (which is what the `route` branch carried) admits all four.
+
+**The rule is permissive on RANGE and strict on SPELLING, and both directions are deliberate.** The
+range bound tracks the column's TYPE, never its content: `year`'s ceiling is INT64's, even though
+every value the column holds is SMALLINT-shaped. Tightening it to fit the data would reject values
+DuckDB accepts and buy nothing, so permissive is correct there. The spelling rule runs the other
+way — deliberately NARROWER than DuckDB's cast, rejecting `+19790`, `19790.0`, `' 19790 '`,
+`1.979e4`, `19_790` and `0019790`, every one of which DuckDB accepts and answers identically (all
+six return the same 328,368 fact rows on `op_airline_id`). The asymmetry is the design: a permissive
+range costs nothing, while a permissive spelling is an unbounded family of cache keys. Do not
+"simplify" either axis into the other, and do not relax the spelling rule to "whatever DuckDB
+takes" — that reopens exactly the family it exists to close.
+
+**On duplicating the engine's type system.** The standing rule here is not to re-implement what
+DuckDB already does. This check does it anyway, for one reason: a cast failure lands at EXECUTION,
+after the proxy has committed a `Cache-Control`, so the engine's own rejection arrives too late to
+be useful. Where the engine can refuse a value before anything is committed, leave it to the
+engine; where it cannot, refuse first. That is the line, and it is why this check is not a
+precedent for validating anything the engine would have caught in time.
+
+Requiring the CANONICAL spelling, not merely a castable one, is the same measurement from the other
+side. DuckDB accepts a wide family of spellings for a single integer, and each is a distinct CDN
+entry for a byte-identical page: `0019790`, `000000019790`, `+19790`, `' 19790 '`, `19790\n`,
+`1.979e4`, `1.9790E4`, `19790.0`, `19790.`, `19_790` and `1_9_7_9_0` each select airline_id 19790
+(DL, 328,368 fact rows) and render `/carrier/DL`'s row. The leading-zero and underscore families
+are unbounded, capped only by URL length. Hex is castable but is **not** one of them — `0x4D5E`
+casts to 19806 (WAQ, 0 fact rows), a different carrier answering an empty page; it widens what the
+canonical rule must exclude rather than duplicating a result. `encode()` emits only canonical integers, and `aircraft_type`'s zero-padded `079` is
+VARCHAR — which this rule never touches — so no permalink this product has shipped can be spelled
+a way it rejects.
+
+**Three axes stay open.** `f` is legitimately **repeatable**, so the NUMBER of `f` tokens is
+unbounded independently of any one value. And a VARCHAR dimension's value is arbitrary warehouse
+text: `f=origin_state:<arbitrary string>` still decodes and still renders a distinct cacheable 200.
+`f` also stays **exempt from `bounds.ts`'s spelling rule**, because `quote()` must escape `,`, `:`,
+`&`, `=` and spaces inside a filter value, so `%` is meaningful there rather than redundant — both
+`bounds.test.ts` and `app/smoke.sh` assert that exemption, so a future "simplification" to a
+blanket `%` ban reddens instead of shipping.
 
 **`f` is left to the edge deliberately, and a key table could not have expressed it anyway.**
 `QUERY_ROWS` maps a path to the *names* it reads. Deciding whether `f=origin_state:XX` names a real
-state is a property of the WAREHOUSE, not of the URL grammar, so checking it means a catalog read on
-the path that runs before every request — which is exactly what `t` and `n` did **not** need, and
-why they were closed at the origin instead: both are decidable by a pure, synchronous,
-database-free function, the same shape as `parseYear`. Do not generalise "values need the catalog"
-from `f` to the others; that reading is what kept `t` and `n` open for a milestone.
+state is a property of the WAREHOUSE — a DATA read — not of the URL grammar. That is a different
+thing from the value's TYPE, which is a property of the CATALOG and is already checked, because
+`loadAllowlist()` runs on this path anyway. `t` and `n` needed neither: both are decidable by a
+pure, synchronous, database-free function, the same shape as `parseYear`, which is why they were
+closed at the origin. Do not generalise "values need the catalog" from `f` to the others; that
+reading is what kept `t` and `n` open for a milestone. Nor read the type check as licence to add a
+data read here — the two costs are not comparable.
 
 **The thresholds `f` is left to, stated plainly rather than assumed.**
 `deploy/cloudflare/rate-limit.json` blocks a source IP past **10 requests per 10 s** per

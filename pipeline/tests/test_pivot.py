@@ -248,21 +248,27 @@ def test_composite_filter_rejects_a_malformed_pair(con):
 
 
 def test_composite_filter_rejects_a_non_numeric_pair(con):
-    """'JFK-LAX' has two non-empty dash-separated parts, so the length/non-empty check alone
-    let it through to a bound string param -- DuckDB then threw an unhandled Conversion Error
-    deep inside execution, which the TypeScript call sites only guarded PivotError against.
-    Fails if the digit check is dropped, or narrowed to reject only non-ASCII digits."""
-    with pytest.raises(PivotError, match="two ids joined by"):
+    """'JFK-LAX' has two non-empty dash-separated parts, so it clears the arity check and is
+    caught by the per-part value rule instead -- which is why its message is the value one.
+    Without a per-part check it reaches a bound string param and DuckDB throws an unhandled
+    Conversion Error deep inside execution, which the TypeScript call sites only guarded
+    PivotError against. Fails if the per-part check is dropped from the pair branch."""
+    with pytest.raises(PivotError, match="must be a plain whole number"):
         render_pivot(q(filters=(("route", ("JFK-LAX",)),)), con)
 
 
-def test_composite_filter_strips_ascii_whitespace(con):
-    """Pins the ASCII whitespace set app/src/lib/pivot/render.ts's stripAsciiWhitespace
-    mirrors -- not bare .strip()/.trim(), which disagree on non-ASCII whitespace (documented,
-    not asserted here: no golden exercises that edge)."""
-    _, params = render_pivot(q(filters=(("route", (" 12478 - 12892\t",)),)), con)
-    assert params["f0_0a"] == "12478"
-    assert params["f0_0b"] == "12892"
+def test_composite_filter_rejects_ascii_whitespace_around_an_id(con):
+    """Same fixture that used to pin the STRIP; it now pins the rejection.
+
+    Stripping made ' 12478 - 12892\t' render rows identical to '12478-12892' -- an unbounded
+    family of distinct CDN keys for one query, on the dimension every /route/ page links
+    through. The parts are split and checked RAW, so whitespace is not a spelling of an id.
+
+    It also removes a latent cross-language divergence: .strip() strips \x1c-\x1f which JS's
+    trim() does not, and trim() strips U+FEFF which .strip() does not. With no strip on either
+    side there is no whitespace set for the two runtimes to disagree about."""
+    with pytest.raises(PivotError, match="must be a plain whole number"):
+        render_pivot(q(filters=(("route", (" 12478 - 12892\t",)),)), con)
 
 
 def test_single_column_filter_is_unchanged(con):
@@ -315,3 +321,214 @@ def test_route_still_compiles_as_a_least_greatest_pair_not_an_or(con):
     sql, params = render_pivot(q(filters=(("route", ("12478-12892",)),)), con)
     assert "least(route_key_low, route_key_high) = $f0_0a" in sql
     assert " OR dest_airport_id IN " not in sql
+
+
+# Issue #87. A filter value is bound as a VARCHAR parameter against the dimension's fact
+# column, so an integer column handed a value it cannot cast throws a DuckDB Conversion Error
+# at EXECUTION -- after proxy.ts has already resolved cacheability and written HTML_CACHE, so
+# the 500 is held by a shared cache for up to an hour at a cost of one attacker request.
+# Rejecting at render time makes it a PivotError the three call sites already handle.
+#
+# The type is READ from the catalog (entry["value_type"]), never inferred from the key name:
+# aircraft_type is VARCHAR carrying zero-padded codes ('079') and a numeric rule guessed from
+# the name would corrupt it. These tests run against a REAL DuckDB connection, so the type
+# every assertion below turns on is the introspected one, not a fixture's copy of it.
+
+_INTEGER_DIMENSION_MAXIMA = (
+    ("quarter", "127", "128"),
+    ("distance_group", "32767", "32768"),
+    ("op_airline_id", "2147483647", "2147483648"),
+    ("year", "9223372036854775807", "9223372036854775808"),
+)
+
+
+def test_filter_value_rejects_a_non_numeric_value_on_an_integer_dimension(con):
+    """Catches: no check at all on the single-column branch. Measured against the real
+    warehouse: op_airline_id='2T (1)' -> Conversion Error, INT32."""
+    with pytest.raises(PivotError, match="must be a plain whole number"):
+        render_pivot(q(filters=(("op_airline_id", ("2T (1)",)),)), con)
+
+
+def test_filter_value_rejects_all_digits_that_overflow_smallint(con):
+    """THE test a digits-only check cannot pass. Every character of '99999' is a digit and it
+    still throws (INT16 max 32767). A rule copied from the old route branch (\\A[0-9]+\\Z)
+    passes a test written with '2T (1)' and leaves this 500 live."""
+    with pytest.raises(PivotError, match="must be a plain whole number"):
+        render_pivot(q(filters=(("distance_group", ("99999",)),)), con)
+
+
+def test_filter_value_rejects_all_digits_that_overflow_tinyint(con):
+    """Same shape one width down: quarter is TINYINT, max 127, and '999' throws."""
+    with pytest.raises(PivotError, match="must be a plain whole number"):
+        render_pivot(q(filters=(("quarter", ("999",)),)), con)
+
+
+def test_filter_value_accepts_each_integer_types_exact_maximum(con):
+    """The bound is inclusive. `>=` instead of `>` would 400 four permalinks that work."""
+    for key, maximum, _over in _INTEGER_DIMENSION_MAXIMA:
+        _, params = render_pivot(q(filters=((key, (maximum,)),)), con)
+        assert params["f0_0"] == maximum
+
+
+def test_filter_value_rejects_each_integer_types_maximum_plus_one(con):
+    """The BIGINT row is why the TypeScript mirror needs BigInt rather than Number: measured,
+    Number('9223372036854775808') <= 9223372036854775807 is True because both sides round to
+    2**63 as doubles. Python's int is arbitrary-precision and has no such trap, which is
+    exactly why this pair must be tested on BOTH sides rather than reasoned across."""
+    for key, _maximum, over in _INTEGER_DIMENSION_MAXIMA:
+        with pytest.raises(PivotError, match="must be a plain whole number"):
+            render_pivot(q(filters=((key, (over,)),)), con)
+
+
+def test_the_rule_agrees_with_duckdb_at_every_integer_boundary(con):
+    """The oracle: the rule's verdict and DuckDB's must agree at each type's exact boundary.
+
+    Three assertions per dimension, and each earns its place:
+      1. render_pivot ACCEPTS `maximum`, and the SQL it renders really executes;
+      2. render_pivot REJECTS `maximum + 1` -- through render_pivot, so the RULE is what runs;
+      3. DuckDB itself throws on `maximum + 1`, which is WHY (2) has to reject it.
+
+    The maxima are the hand-written tuple above; this test does NOT introspect them. What it
+    does is make a wrong one unable to pass: too narrow and (3) stops throwing, too wide and
+    (1) stops executing.
+
+    (3) substitutes the bad value into the params of the ALREADY-RENDERED SQL, which is what
+    makes it a demonstration of the cached 500 rather than a restatement of the rule -- it
+    drives the query the server would have run, against a real database, and inlines no SQL of
+    its own. That route bypasses _check_filter_value entirely, so (3) cannot stand alone: (2)
+    is the assertion that exercises the rule, and without it, widening a maximum in
+    pipeline/pivot.py leaves this test green."""
+    for key, maximum, over in _INTEGER_DIMENSION_MAXIMA:
+        sql, params = render_pivot(q(filters=((key, (maximum,)),)), con)
+        con.execute(sql, params).fetchall()
+
+        with pytest.raises(PivotError, match="must be a plain whole number"):
+            render_pivot(q(filters=((key, (over,)),)), con)
+
+        params["f0_0"] = over
+        with pytest.raises(duckdb.ConversionException):
+            con.execute(sql, params).fetchall()
+
+
+def test_filter_value_leaves_a_varchar_dimension_unchecked(con):
+    """Catches: applying the integer rule to VARCHAR. aircraft_type '079' is a real code and
+    must survive as the STRING '079' -- int-parsing it to 79 breaks the join silently
+    (CLAUDE.md's zero-padding gotcha). This is what proves the type is read, not guessed."""
+    sql, params = render_pivot(q(filters=(("aircraft_type", ("079",)),)), con)
+    assert "aircraft_type IN ($f0_0)" in sql
+    assert params["f0_0"] == "079"
+
+
+def test_filter_value_leaves_a_varchar_dimension_unchecked_for_junk(con):
+    """origin_state='2T (1)' returns zero rows against the real warehouse -- the ordinary
+    no-match shape every query here already handles, not an error."""
+    _, params = render_pivot(q(filters=(("origin_state", ("2T (1)",)),)), con)
+    assert params["f0_0"] == "2T (1)"
+
+
+def test_filter_value_rejects_non_canonical_spellings_duckdb_would_accept(con):
+    """Measured against the real warehouse: every one of these renders the byte-identical
+    /carrier/DL page as canonical '19790', so each is a distinct CDN cache key for the same
+    bytes -- and the leading-zero and underscore families are UNBOUNDED, capped only by URL
+    length. This is the #52 spelling axis, and `f` is where it was left open."""
+    for spelling in (
+        "0019790",
+        "000000019790",
+        "+19790",
+        " 19790 ",
+        "1.979e4",
+        "19790.0",
+        "19790.",
+        "0x4D5E",
+        "19_790",
+        "1_9_7_9_0",
+    ):
+        with pytest.raises(PivotError, match="must be a plain whole number"):
+            render_pivot(q(filters=(("op_airline_id", (spelling,)),)), con)
+
+
+def test_filter_value_rejects_a_trailing_newline(con):
+    """The anchor test, and the reason the pattern is \\A...\\Z and never ^...$. Python's `$`
+    ALSO matches before a trailing newline, so `^...$` admits '19790\\n' -- which DuckDB casts
+    to 19790, making it one more spelling of the same page. JavaScript's `$` (no /m) does not,
+    so ^...$ here would silently diverge from app/src/lib/pivot/render.ts."""
+    with pytest.raises(PivotError, match="must be a plain whole number"):
+        render_pivot(q(filters=(("op_airline_id", ("19790\n",)),)), con)
+
+
+def test_filter_value_rejects_a_negative_value(con):
+    """'-1' casts fine and returns zero rows, so this is the cache-key argument rather than
+    the crash one: an unbounded family of distinct keys for empty results. encode() never
+    emits one."""
+    with pytest.raises(PivotError, match="must be a plain whole number"):
+        render_pivot(q(filters=(("op_airline_id", ("-1",)),)), con)
+
+
+def test_filter_value_checks_every_value_in_the_list(con):
+    """Catches: validating values[0] and binding the rest unchecked -- which passes every
+    single-value test in this file and leaves the 500 reachable with one extra comma."""
+    with pytest.raises(PivotError, match="must be a plain whole number"):
+        render_pivot(q(filters=(("op_airline_id", ("19790", "2T (1)")),)), con)
+
+
+def test_filter_value_error_names_the_value_and_the_key(con):
+    """app/smoke.sh needles assert on the substring 'must be a plain whole number' plus the
+    dimension key, inside the /explore error page's role="alert" region. Both halves are
+    load-bearing, and the message is ASCII only."""
+    with pytest.raises(PivotError) as excinfo:
+        render_pivot(q(filters=(("op_airline_id", ("2T (1)",)),)), con)
+    assert "2T (1)" in str(excinfo.value)
+    assert "op_airline_id" in str(excinfo.value)
+    assert "must be a plain whole number from 0 to 2147483647" in str(excinfo.value)
+
+
+def test_filter_value_rejects_a_bad_value_through_the_either_branch(con):
+    """Catches: the check wired into the single-column branch only. endpoint_airport_id is
+    'either'-mode and takes its own code path, so it needs its own coverage."""
+    with pytest.raises(PivotError, match="must be a plain whole number"):
+        render_pivot(q(filters=(("endpoint_airport_id", ("2T (1)",)),)), con)
+
+
+def test_filter_value_rejects_an_overflowing_id_inside_a_composite_pair(con):
+    """The route branch's OLD check was a digits-only regex per part, so this passed
+    validation and threw inside DuckDB -- a second live 500 of the same class."""
+    with pytest.raises(PivotError, match="must be a plain whole number"):
+        render_pivot(q(filters=(("route", ("99999999999-99999999999",)),)), con)
+
+
+def test_filter_value_rejects_every_shape_of_whitespace_in_a_composite_pair(con):
+    """The measured family, not one example of it. While the strip was in place each of these
+    returned rows identical to route:12478-12892, and the runs may be any length, so the family
+    is unbounded."""
+    for spelling in (
+        "  12478-12892",
+        "12478-12892\t",
+        "\n\n 12478-12892 \t",
+        "12478 - 12892",
+        " 12478  -  12892 ",
+    ):
+        with pytest.raises(PivotError, match="must be a plain whole number"):
+            render_pivot(q(filters=(("route", (spelling,)),)), con)
+
+
+def test_filter_value_rejects_a_digit_string_longer_than_pythons_int_parse_limit(con):
+    """The length guard's own reason, and it is CORRECTNESS here rather than cost.
+
+    `f` values are unbounded in length (bounds.ts exempts `f`), and int() raises
+    ValueError("Exceeds the limit (4300 digits)") above sys.get_int_max_str_digits(). Without
+    the `len(value) > len(str(maximum))` clause this escapes _check_filter_value as a bare
+    ValueError -- not a PivotError -- and sails past the guard at every one of the three call
+    sites, which catch PivotError only. Deleting that clause turns this test red with a
+    ValueError, which is exactly the bug it names.
+
+    The TypeScript mirror has no equivalent failure: BigInt() parses any length, so its own
+    length guard is a parse-COST bound and no unit test can distinguish it. Said plainly in
+    that comment rather than implied to be test-covered."""
+    with pytest.raises(PivotError, match="must be a plain whole number"):
+        render_pivot(q(filters=(("year", ("9" * 4301,)),)), con)
+
+
+def test_filter_value_rejects_a_composite_pair_whose_second_part_is_bad(con):
+    """Catches: checking parts[0] only. The first id here is perfectly valid."""
+    with pytest.raises(PivotError, match="must be a plain whole number"):
+        render_pivot(q(filters=(("route", ("12478-99999999999",)),)), con)

@@ -49,8 +49,9 @@ table" section.
      that both `encode` and a hand-editor can legitimately omit, and applying it is not the
      kind of silent misreading the totality rule targets — a value that *is* present and
      invalid is still rejected the same as any other key. Identifier/structural validation
-     (unknown dimension, measure, sort key, grain, grouping, empty lists, non-positive limit)
-     is reused as-is from `pipeline.pivot.render_pivot` — one allowlist, not two. URL syntax
+     (unknown dimension, measure, sort key, grain, grouping, empty lists, non-positive limit, and
+     a filter value that cannot cast to its dimension's column type) is reused as-is from
+     `pipeline.pivot.render_pivot` — one allowlist, not two. URL syntax
      that `render_pivot` can't see (`v` itself, unknown or duplicate query-string keys, the
      shape of `t` and `f`, `n`/`v` as integers) is validated in the codec.
    - **The SERVER admits less than the codec parses, and that is a separate contract.** The port
@@ -62,7 +63,10 @@ table" section.
      spelling is one more CDN cache entry for an identical page, and the codec cannot see them:
      it unquotes each value before checking its shape, so `n=0025`, `n=%32%35`,
      `t=2015-01%3A2015-12` and `t=%32015-01:2015-12` all decode to something already admissible.
-     **`f` is exempt**, because percent-encoding is that key's own escape mechanism (next bullet).
+     **`f` is exempt from the spelling rule**, because percent-encoding is that key's own escape
+     mechanism (next bullet) — but a filter value on an integer-typed dimension is still bounded, by
+     `render_pivot` rather than by `bounds.ts`: it must be a canonical whole number inside the
+     column's width, or the query is rejected before it can reach DuckDB.
      `/explore` renders all of these as the same named error as any other bad permalink;
      `/api/pivot` answers 400. Nothing `encode()` produces is affected, and no permalink this app
      has ever shipped is — a test decodes all nine goldens and every hardcoded `/explore` href in

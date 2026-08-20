@@ -290,7 +290,7 @@ The pivot returns raw catalog ids (`19790`, `14747`, `612`). Resolution turns th
 `meta_pivot_dimensions`' `join_dim`/`join_key` columns exist for exactly this join, and joining
 `dim_carrier`/`dim_airport` straight into `pivot_segment.sql` / `pivot_route.sql` is the design
 that was rejected. Doing so would change what the pivot templates emit, which reopens the
-contract above: all 17 goldens regenerate, and `pipeline/pivot.py` and the TypeScript renderer
+contract above: every golden regenerates, and `pipeline/pivot.py` and the TypeScript renderer
 have to change in lockstep or silently drift. Resolution is a display concern, not a reason to
 reopen a contract that is verifiable in two languages.
 
@@ -303,7 +303,10 @@ codec, and every golden are untouched; the id stays on the row for sorting, filt
 permalink. Cost: one extra small indexed lookup per dimension present, against an in-process
 DuckDB with no network hop — accepted for keeping the contract frozen.
 
-`make goldens` reproduces all 17 goldens byte-identical, and that is the proof that matters.
+`make goldens` reproduces every golden byte-identical, and that is the proof that matters. The
+counts are asserted in the suites rather than written here — `render.test.ts` and
+`urlstate.test.ts` each open with a fixture-sanity check, so a truncated or reshaped fixture file
+reddens instead of silently emitting zero tests.
 
 ### Four resolver files, one per dimension shape
 

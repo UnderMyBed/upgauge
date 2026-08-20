@@ -12,7 +12,8 @@ incompatible change can migrate a link instead of silently misreading it.
 **Decode is TOTAL.** An unknown query-string key, a duplicate non-`f` key, an unrecognised or
 missing `v`, or anything that fails `render_pivot`'s own allowlist/structural validation
 (unknown dimension/measure/sort key, unknown grain/grouping, empty dimension or measure
-list, a non-positive limit, a filter with no values) is a rejection via `UrlStateError` --
+list, a non-positive limit, a filter with no values, a filter value that could not cast to
+its dimension's column type) is a rejection via `UrlStateError` --
 never a silent drop to a default. A permalink that quietly renders a *different* query than
 the one it encodes still screenshots as authoritative, which is worse than one that errors.
 A duplicate key (`d=a&d=b`) is rejected on the same principle: `encode` never produces one,
@@ -34,7 +35,8 @@ encode.
 **Division of validation labour** (per the project rule against a second, drifting
 validator): identifier and structural validation -- is this dimension/measure/sort key on
 the allowlist, is the grain/grouping recognised, is the limit a positive int, does every
-filter have values -- is reused *as-is* from `pipeline.pivot.render_pivot`, which this module
+filter have values, can every filter value cast to its dimension's column type -- is reused
+*as-is* from `pipeline.pivot.render_pivot`, which this module
 calls purely to validate a candidate `PivotQuery` (its rendered SQL/params are discarded).
 That is the ONE place those rules live.
 

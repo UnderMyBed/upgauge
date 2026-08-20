@@ -14,23 +14,21 @@ this module never rebuilds a measure expression itself, which is what keeps the
 no-averaging rule enforced in exactly one place (the catalog), not two.
 
 Where the validation line is drawn (M3b needs this -- this module IS the spec it ports):
-anything `render_pivot` can reject CHEAPLY as structurally malformed (an identifier not on
-the allowlist, an empty dimension/measure list, a non-positive limit, a filter with no
-values) raises `PivotError`. Anything that is a legitimate value-domain mismatch -- a filter
-value of the wrong type for its column, an out-of-range airline_id -- is left to DuckDB's own
-casting/binding to reject. Duplicating DuckDB's type system in Python would be exactly the
-over-engineering the project's rules forbid elsewhere. The boundary: PivotError for "this
-request could never produce valid SQL," DuckDB for "this request produced valid SQL that
-doesn't match any data."
+anything `render_pivot` can reject CHEAPLY as structurally malformed raises `PivotError` --
+an identifier not on the allowlist, an empty dimension/measure list, a non-positive limit, a
+filter with no values, and a filter VALUE that could not cast to its dimension's column type.
+Whether a well-typed value actually MATCHES anything -- an airline_id in range but absent from
+the data -- is left to DuckDB. The boundary: PivotError for "this request could never produce
+valid SQL," DuckDB for "this request produced valid SQL that doesn't match any data."
 
-One structural check that boundary DOES cover (M4b, final whole-branch review Important 4):
-a composite filter value must be two INTEGER ids joined by '-' -- every composite dimension
-today resolves through an id column (CLAUDE.md: "Key on AIRLINE_ID and AIRPORT_ID"), and the
-error message has always promised "two ids". Rejecting 'JFK-LAX' here is enforcing that
-promise as a format check, not validating whether either id actually exists (that half stays
-DuckDB's job) -- before this, 'route:JFK-LAX' passed this function's checks and only failed
-deep inside DuckDB with an unhandled "Conversion Error", which neither TypeScript call site
-was written to catch since they only guarded against `PivotError`.
+The value check is a TYPE check, never a domain check, and it sits on this side of the line
+because the alternative is a cached 500. A filter compiles to `col IN ($p)` with the value
+bound as a VARCHAR parameter, so an integer column handed a value it cannot cast throws a
+Conversion Error at EXECUTION -- after proxy.ts has resolved cacheability and written
+Cache-Control. `_check_filter_value` reads the column type from the catalog (never from the
+key name) and rejects first. It covers all three filter branches: the single-column IN, the
+`either` OR, and each part of a composite `pair` value -- where the promise "two ids joined
+by '-'" is now enforced by the columns' own type rather than assumed from the dimension.
 """
 
 from __future__ import annotations
@@ -44,14 +42,26 @@ import duckdb
 
 QUERIES_DIR = Path(__file__).parents[1] / "sql" / "03_queries"
 
-# Minor, final whole-branch review: Python's `str.strip()` and JS's `String.trim()` disagree
-# on which characters count as whitespace -- `.strip()` additionally strips \x1c-\x1f (the
-# Unicode separator control codes), which JS's `trim()` does not; `trim()` additionally strips
-# U+FEFF (ZWNBSP/BOM), which `.strip()` does not. An explicit ASCII whitespace set is the only
-# strip both languages can express identically -- mirrored in app/src/lib/pivot/render.ts as
-# `ASCII_WHITESPACE_RE`/`stripAsciiWhitespace`.
-_ASCII_WHITESPACE = " \t\n\r\f\v"
-_INTEGER_RE = re.compile(r"\A[0-9]+\Z")
+#: The DuckDB integer types a filter value may be bound against, and their maxima. Issue #87:
+#: a filter compiles to `col IN ($p)` with the value bound as a VARCHAR parameter, so an integer
+#: column handed a value it cannot cast throws a Conversion Error at EXECUTION -- after
+#: proxy.ts has resolved cacheability and written Cache-Control, which is how an attacker-chosen
+#: `f` bought a shared-cache 500 on /explore. Rejecting here makes it a PivotError instead.
+#:
+#: Any type absent from this map (VARCHAR today) is left unchecked: junk returns zero rows, the
+#: ordinary no-match shape. An UNKNOWN type must never fall back to the integer rule -- that
+#: would start silently rejecting values the moment a column changed type.
+_INTEGER_MAXIMA = {
+    "TINYINT": 127,
+    "SMALLINT": 32767,
+    "INTEGER": 2147483647,
+    "BIGINT": 9223372036854775807,
+}
+#: \A ... \Z, never ^ ... $ -- Python's `$` ALSO matches before a trailing newline, so the ^/$
+#: form admits '19790\n', which DuckDB casts happily to 19790. JavaScript's `$` (no /m flag)
+#: does not, so ^/$ here would silently diverge from app/src/lib/pivot/render.ts's mirror of
+#: this rule. Both languages use an explicit [0-9] rather than \d for the same reason.
+_CANONICAL_UINT_RE = re.compile(r"\A(0|[1-9][0-9]*)\Z")
 MAINLINE_JOIN_PATH = QUERIES_DIR / "pivot_mainline_join.sql"
 GOLDENS_DIR = QUERIES_DIR / "goldens"
 PIVOT_GOLDENS_PATH = GOLDENS_DIR / "pivot.json"
@@ -211,6 +221,62 @@ def _validate_measure(key: str, meas: dict[str, dict]) -> dict:
     return entry
 
 
+def _check_filter_value(value: str, key: str, value_type: str) -> None:
+    """Reject a filter value that could not cast to its dimension's column type.
+
+    The type is READ from the catalog (`entry["value_type"]`, introspected by
+    sql/02_marts/300_meta_pivot_dimensions.sql from duckdb_columns()), never inferred from the
+    key name -- aircraft_type is VARCHAR carrying zero-padded codes ('079'), and a numeric rule
+    guessed from the name would int-parse it to 79 and break the join silently.
+
+    PERMISSIVE ON RANGE, STRICT ON SPELLING -- both directions on purpose. The range bound tracks
+    the column's TYPE and never its content: `year`'s ceiling is INT64's even though every value it
+    holds is SMALLINT-shaped, because tightening it to the data would reject values DuckDB accepts
+    and buy nothing. The spelling rule runs the other way, deliberately NARROWER than the cast. Do
+    not "simplify" either axis into the other.
+
+    This duplicates part of DuckDB's type system on purpose. The standing rule is not to
+    re-implement the engine -- but a cast failure lands at EXECUTION, after the proxy has committed
+    a Cache-Control, so the engine's rejection arrives too late to be useful. Where the engine can
+    refuse a value in time, leave it to the engine; where it cannot, refuse first.
+
+    CANONICAL, not merely castable, is deliberate. DuckDB accepts a wide family of spellings for
+    the SAME integer -- measured against the real warehouse, '0019790', '000000019790', '+19790',
+    "' 19790 '", '19790\\n', '1.979e4', '1.9790E4', '19790.0', '19790.', '19_790' and '1_9_7_9_0'
+    each select airline_id 19790 (DL, 328,368 fact rows), so each is a distinct CDN cache key for
+    a byte-identical page. The leading-zero and underscore families are unbounded, which makes that
+    set unbounded. `encode()` emits only the canonical form, so no shipped permalink is spelled any
+    of those ways, and '079' is VARCHAR, which this rule never touches.
+
+    Hex is castable too but is NOT one of them: '0x4D5E' casts to 19806 (WAQ, 0 fact rows), a
+    different carrier answering an empty page. It widens what the canonical rule must exclude; it
+    is not another spelling of the same result.
+
+    Mirrored in app/src/lib/pivot/render.ts's `checkFilterValue`. The goldens prove the two agree
+    on what they EMIT; nothing proves they agree on what they REJECT, so the pair is kept in step
+    by hand, backed by tests on each side asserting the same accept/reject OUTCOMES. No test on
+    either side asserts the other's message TEXT, and the two do diverge there for non-printable
+    values: this uses !r (a trailing newline prints escaped) while the TypeScript template
+    interpolates the value literally. Same verdict, same bound params, different message bytes.
+    """
+    maximum = _INTEGER_MAXIMA.get(value_type)
+    if maximum is None:
+        return
+    # Length before parse, and not as an optimisation. `f` values are unbounded in length
+    # (app/src/lib/pivot/bounds.ts exempts `f` from its value rules), and int() RAISES above
+    # 4300 digits -- a ValueError, which is not PivotError and would escape every call site's
+    # guard. Canonical form guarantees no leading zeros, so "more digits than the maximum"
+    # settles the comparison without parsing at all.
+    if (
+        not _CANONICAL_UINT_RE.match(value)
+        or len(value) > len(str(maximum))
+        or int(value) > maximum
+    ):
+        raise PivotError(
+            f"filter value {value!r} for {key!r} must be a plain whole number from 0 to {maximum}"
+        )
+
+
 def _dimension_columns(entry: dict) -> list[str]:
     """Split a dimension's `column_expr` into its underlying column name(s).
 
@@ -307,6 +373,7 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
         if len(columns) == 1:
             placeholders = []
             for j, value in enumerate(values):
+                _check_filter_value(value, key, entry["value_type"])
                 pname = f"f{i}_{j}"
                 params[pname] = value
                 placeholders.append(f"${pname}")
@@ -332,6 +399,11 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
                 )
             placeholders = []
             for j, value in enumerate(values):
+                # Both columns of an `either` dimension share one type -- asserted in the
+                # catalog, not assumed here (300_meta_pivot_dimensions.sql resolves value_type
+                # from the FIRST column of column_expr, and a test pins every column of a
+                # multi-column expr to a single type).
+                _check_filter_value(value, key, entry["value_type"])
                 pname = f"f{i}_{j}"
                 params[pname] = value
                 placeholders.append(f"${pname}")
@@ -359,12 +431,38 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
             )
         pair_clauses = []
         for j, value in enumerate(values):
-            parts = [p.strip(_ASCII_WHITESPACE) for p in value.split("-")]
-            if len(parts) != 2 or not all(_INTEGER_RE.match(p) for p in parts):
+            parts = value.split("-")
+            # Arity and value are different failures and keep different messages. '12478' is
+            # not two ids at all, so the promise this error has always made -- "two ids joined
+            # by '-'" -- is still the right thing to state. 'JFK-LAX' and
+            # '99999999999-99999999999' both CLEAR arity and are caught by the per-part rule
+            # below, which names the offending part.
+            if len(parts) != 2:
                 raise PivotError(
                     f"filter value {value!r} for composite dimension {key!r} must be "
                     "two ids joined by '-', e.g. '12478-12892'"
                 )
+            # The rule runs on each RAW part -- split only, never stripped. It cannot run on the
+            # whole value, because '-' is this format's structural separator so the composite is
+            # never itself a plain integer (checking the raw VALUE rejects the
+            # filter_composite_route golden and every /route/ page in production).
+            #
+            # Splitting without stripping is what closes the whitespace family. Measured on the
+            # real warehouse, route:'\n\n 12478-12892 \t' and route:' 12478  -  12892 ' returned
+            # rows identical to route:12478-12892, each a distinct CDN key for one query, on the
+            # dimension every /route/ page links through. No production caller emits whitespace:
+            # all four build the value from database integers.
+            #
+            # Rejecting rather than stripping also removes a latent cross-language divergence:
+            # `.strip()` strips \x1c-\x1f which JS's `trim()` does not, and `trim()` strips
+            # U+FEFF which `.strip()` does not. With no strip on either side, there is no
+            # whitespace set for the two runtimes to disagree about.
+            #
+            # This replaces a digits-only regex that let '99999999999-99999999999' through to
+            # throw inside DuckDB exactly the way 'JFK-LAX' once did: route_key_low/high are
+            # INTEGER, max 2147483647, so "all digits" was never the rule.
+            for part in parts:
+                _check_filter_value(part, key, entry["value_type"])
             lo_name, hi_name = f"f{i}_{j}a", f"f{i}_{j}b"
             params[lo_name] = parts[0]
             params[hi_name] = parts[1]
@@ -755,16 +853,17 @@ _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "A filter value containing every character the URL format itself uses as a "
         "delimiter or the escape character (',' '&' '%' ':' '=' '+' and a space) -- must "
         "percent-encode and round-trip exactly rather than corrupt the structural "
-        "delimiters or silently reparse into the wrong number of values.",
+        "delimiters or silently reparse into the wrong number of values.\n"
+        "Carried on origin_state because the escaping under test is a property of the URL "
+        "codec, not of the dimension: these values are not plain whole numbers, so an "
+        "integer-typed dimension cannot hold them (see render_pivot's _check_filter_value).",
         PivotQuery(
             grain="segment",
             dimensions=("op_airline_id",),
             measures=("seats",),
             time_from="2015-01",
             time_to="2015-12",
-            filters=(
-                ("origin_airport_id", ("14,771", "13&487", "9%5", "12:34", "a=b", "a+b", "a b")),
-            ),
+            filters=(("origin_state", ("14,771", "13&487", "9%5", "12:34", "a=b", "a+b", "a b")),),
         ),
     ),
     (
@@ -772,14 +871,17 @@ _URLSTATE_GOLDEN_CASES: list[tuple[str, str, PivotQuery]] = [
         "Filter values containing ! * ' ( ) -- the characters JS encodeURIComponent leaves "
         "literal but Python quote(safe='') percent-encodes. Real data: 119 "
         "unique_carrier_code values carry BTS's '(1)' suffix, 163 airport names an "
-        "apostrophe. Pins the encoding for M3b's TypeScript port.",
+        "apostrophe. Pins the encoding for M3b's TypeScript port.\n"
+        "Carried on origin_state for the same reason as filter_value_reserved_characters: "
+        "the divergence under test is in the CODEC, and these values are not plain whole "
+        "numbers, so no integer-typed dimension can carry them.",
         PivotQuery(
             grain="segment",
             dimensions=("op_airline_id",),
             measures=("seats",),
             time_from="2015-01",
             time_to="2015-12",
-            filters=(("op_airline_id", ("2T (1)", "O'Hare", "a!b", "c*d")),),
+            filters=(("origin_state", ("2T (1)", "O'Hare", "a!b", "c*d")),),
         ),
     ),
     (
