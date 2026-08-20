@@ -221,10 +221,13 @@ curated `column_expr` against `DESCRIBE` on the fact table(s) its `grain` claims
 directions — a `'segment'`-grain dimension must be absent from `fct_route_month`, and a
 `'both'`-grain dimension must be present on it. A renamed or dropped fact column fails loudly
 instead of silently dropping a dimension from the Explorer at request time — though *which*
-test fires depends on which token went missing. A missing FIRST token never reaches that
-cross-check: `value_type` INNER JOINs on it (below), so the row is gone before the loop can
-iterate it, and the failure surfaces as a row-count and key-set failure instead. A missing
-later token keeps the row and fails the cross-check itself.
+test fires depends on which token went missing, and at which grain. One case does not reach
+that cross-check: a first token missing **on `fct_segment_month`**, because `value_type` INNER
+JOINs on it there (below), so the row is gone before the loop can iterate it and the failure
+surfaces as a row-count and key-set failure instead. The pre-emption is that narrow — the join
+resolves against `fct_segment_month` only, so a first token missing at ROUTE grain still fails
+the cross-check normally. Measured: renaming `origin_city_market_id` on `fct_route_month`
+alone turns it red, along with two of the type guards.
 
 **`value_type` is the one column that is introspected rather than curated.** It carries the
 DuckDB type of the dimension's underlying fact column, joined live from `duckdb_columns()`
@@ -259,9 +262,11 @@ and `aircraft_type`'s zero-padded `079` is VARCHAR, which the numeric rule never
 
 Introspection carries three structural assumptions plus a pinned inventory, each held by
 `pipeline/tests/test_pivot_allowlist.py` because each one fails silently. Every dimension
-resolves to exactly one non-NULL type — a
-`LEFT JOIN` would keep the row and leave the bound NULL, and a join predicate matching two
-objects would duplicate every row it matched, neither of which a set-of-keys test can see.
+resolves to exactly one non-NULL type — a `LEFT JOIN` *combined with* a missing column would
+keep the row and leave the bound NULL, and a join predicate matching two objects would
+duplicate every row it matched, neither of which a set-of-keys test can see. A `LEFT JOIN`
+alone changes nothing and correctly stays green: while every column resolves, LEFT and INNER
+produce identical rows.
 Every column of a multi-column `column_expr` shares one type, since only the first token is
 read: a divergent pair would publish a bound correct for `route_key_low` and wrong for
 `route_key_high`. And a `'both'`-grain dimension carries the same type on `fct_route_month`,
@@ -274,7 +279,11 @@ That the column is introspected at all is itself asserted, against the compiled 
 text, because nothing in the catalog's *output* distinguishes a live `duckdb_columns()` join
 from a hand-written `CASE` carrying today's values — the structural tests above compare
 `value_type` to the current schema, and a literal equal to the current schema satisfies every
-one of them.
+one of them. A curated value that *disagrees* with the schema is not silent: measured, a
+`CASE` saying `INTEGER` where `aircraft_group` is `SMALLINT` reds both tests that compare
+against a live `DESCRIBE`. What the source-text assertion adds is the window where the curated
+value still agrees — the only one in which nothing else can see it — and with it the guarantee
+that a served build never carries a bound the schema disagrees with.
 
 **Two columns and a fifteenth dimension row, `endpoint_airport_id`**, extend the vocabulary
 without changing anything the two renderers emit for the other fourteen. `filter_only`

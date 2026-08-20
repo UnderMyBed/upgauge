@@ -6,7 +6,7 @@ so a drift test cross-checks the curated list against duckdb_columns().
 
 One column is the exception, and is introspected FROM duckdb_columns() rather than checked
 against it: `value_type`, the width a filter value must fit. A column's type is a schema
-fact, not a product decision. Its own four guards are grouped together below.
+fact, not a product decision. Its own guards are grouped together below.
 """
 
 from __future__ import annotations
@@ -53,15 +53,21 @@ def test_all_fifteen_dimensions_are_offered(con):
 
 
 def test_every_offered_dimension_column_actually_exists(con):
-    """The drift guard, for every token AFTER the first. A missing column must fail loudly
-    somewhere, and which test fires depends on WHICH token went missing.
+    """The drift guard. A missing column must fail loudly somewhere, and which test fires
+    depends on which token went missing, and AT WHICH GRAIN.
 
-    A missing FIRST token no longer reaches this loop at all: `value_type` is INNER JOINed on
-    `split_part(column_expr, ',', 1)`, so the dimension's whole row is gone before this test
-    can iterate it, and this test stays GREEN. Measured -- renaming `origin_state` on
-    `fct_segment_month` leaves this green and turns four others red, including
-    test_all_fifteen_dimensions_are_offered and test_every_dimension_resolves_to_a_value_type.
-    Still loud, just not loud HERE. A missing later token keeps the row and fails here.
+    One case does not reach this loop: a first token missing on `fct_segment_month`
+    specifically. `value_type` INNER JOINs on `split_part(column_expr, ',', 1)` resolved
+    against that object, so the dimension's whole row is gone before this test can iterate it
+    and this test stays GREEN. Measured -- renaming `origin_state` there leaves this green and
+    turns four others red, including test_all_fifteen_dimensions_are_offered. Still loud, just
+    not loud HERE.
+
+    The narrowness matters: the join sees `fct_segment_month` ONLY, so it pre-empts nothing at
+    route grain. Measured -- renaming `origin_city_market_id` on `fct_route_month` alone turns
+    this test RED, with test_every_both_grain_dimension_exists_at_both_grains and
+    test_both_grain_dimensions_carry_the_same_type_at_route_grain. A missing later token, at
+    either grain, likewise keeps the row and fails here.
 
     Asserts EVERY referenced token resolves, not merely that one does -- `route`'s expr is
     `route_key_low, route_key_high`, so a heuristic that passes when *any* token matches
@@ -119,9 +125,10 @@ def test_every_both_grain_dimension_exists_at_both_grains(con):
 # fact column, joined live from duckdb_columns() against the FIRST token of column_expr,
 # resolved on fct_segment_month. It exists so a filter value can be rejected at render time
 # rather than throwing a Conversion Error inside DuckDB, after proxy.ts has already resolved
-# cacheability and written Cache-Control. The four tests below hold the four assumptions that
-# introspection makes. Each one, unheld, leaves a bound that does not guard its own column --
-# and does so silently, which is why none of them can be left to review.
+# cacheability and written Cache-Control. The tests below hold the assumptions introspection
+# makes -- three structural, one pinned inventory, and one that the column is introspected at
+# all. Unheld, each leaves a bound that does not guard its own column. (No count is written
+# here on purpose: a hand-maintained tally in a comment is the rot this repo keeps paying for.)
 
 
 def test_every_dimension_resolves_to_a_value_type(con):
@@ -249,9 +256,14 @@ def test_value_type_is_introspected_not_hand_written(con):
     Every other value_type test compares the catalog against the CURRENT schema, so a
     hand-written CASE carrying today's fifteen values satisfies all of them. Measured:
     deleting the duckdb_columns() join and substituting such a CASE leaves every other test in
-    this file green. A curated type is precisely what this column exists to avoid -- it stops
-    tracking the column the moment a width changes in normalize, and the bound silently stops
-    matching what DuckDB will accept.
+    this file green.
+
+    A hand-written type that DISAGREES with the schema is not silent -- measured, a CASE
+    saying INTEGER where aircraft_group is SMALLINT reds both of the tests that compare
+    against a live DESCRIBE. So this test is not what makes drift loud. What it adds is that
+    a served build can never carry a bound the schema disagrees with in the first place: it
+    catches the curated value while it still AGREES, which is the only window in which nothing
+    else can.
 
     So this asserts on the COMPILED VIEW's own SQL text -- the artifact this repo controls --
     the same way test_fct_segment_month_view_sets_hive_partitioning_for_pruning pins a config
@@ -260,12 +272,22 @@ def test_value_type_is_introspected_not_hand_written(con):
     sql = con.execute(
         "SELECT sql FROM duckdb_views() WHERE view_name = 'meta_pivot_dimensions'"
     ).fetchone()[0]
-    assert "duckdb_columns()" in sql, "value_type no longer joins duckdb_columns()"
-    assert "data_type" in sql, "value_type no longer reads duckdb_columns().data_type"
+    # Case-INSENSITIVE on purpose. DuckDB lowercases the table-function name but PRESERVES
+    # the case of a column reference, so `c.DATA_TYPE` -- semantically identical, byte-
+    # identical catalog output, still fully introspected -- would red a case-sensitive check
+    # with a message claiming the opposite. A guard that cries wolf gets deleted.
+    upper = sql.upper()
+    assert "DUCKDB_COLUMNS()" in upper, "value_type no longer joins duckdb_columns()"
+    assert "DATA_TYPE" in upper, "value_type no longer reads duckdb_columns().data_type"
     # A QUOTED type name in this view means someone wrote a type down by hand. DuckDB
     # re-serializes genuine casts with the type UNquoted (CAST('f' AS BOOLEAN)), verified
     # against the compiled view on this DuckDB version, so this cannot fire on a real cast.
-    upper = sql.upper()
+    #
+    # What this does NOT cover, stated so nobody reads it as airtight: an expression that
+    # keeps the join present while contributing nothing -- typeof(CAST(NULL AS VARCHAR)), or
+    # 'BIG' || 'INT' -- defeats it. Neither is a plausible accident, and every natural
+    # spelling (including lowercase) plus both realistic regressions are caught. The limit is
+    # accepted, not overlooked.
     hand_written = [
         t for t in ("VARCHAR", "TINYINT", "SMALLINT", "INTEGER", "BIGINT") if f"'{t}'" in upper
     ]
