@@ -144,6 +144,8 @@ app/         Next.js 16 App Router, TS, Tailwind v4
 data/        gitignored. raw/ is the audit trail
 ```
 
+**Read `node_modules/next/dist/docs/` before writing app code** — Next 16 moved APIs and conventions off what training data assumes. `app/AGENTS.md` holds the full note; compaction drops path-scoped files, so it cannot be the only copy of this instruction.
+
 Charts: Observable Plot. Maps: **not** deck.gl/MapLibre (the original spec) — a from-scratch,
 dependency-free, server-rendered SVG engine (`app/src/lib/map/`, M7 Tasks 4-8), the same
 "in the served HTML, visible with JS off" property the charts have, extended to maps. Natural

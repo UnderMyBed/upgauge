@@ -1,0 +1,12 @@
+[Unit]
+Description=Apply the promoted Upgauge image
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/srv/upgauge/upgauge-deploy.sh
+# Root because it drives the Docker socket, which is root-equivalent either way -- a `docker`
+# group member would be no less privileged, only less obviously so. The SERVED app is not
+# root: the app container runs USER node, --read-only, and publishes no port.
+User=root

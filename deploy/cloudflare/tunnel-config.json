@@ -1,0 +1,8 @@
+{
+  "config": {
+    "ingress": [
+      { "hostname": "upgauge.shipman.dev", "service": "http://app:3000" },
+      { "service": "http_status:404" }
+    ]
+  }
+}

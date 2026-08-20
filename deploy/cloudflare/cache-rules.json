@@ -1,0 +1,16 @@
+{
+  "name": "upgauge-html-cache",
+  "description": "Make text/html cacheable at the edge and respect the origin's own Cache-Control (edge_ttl/browser_ttl: respect_origin). Cloudflare's default cache keys off static file extensions, so HTML is not cached at all without this rule -- the app's own HTML_CACHE (public, s-maxage=3600) and /api/pivot's longer TTL both reach an edge that otherwise ignores them.",
+  "rules": [
+    {
+      "description": "Cache HTML and respect the origin TTL the app already sets",
+      "expression": "(http.host eq \"upgauge.shipman.dev\")",
+      "action": "set_cache_settings",
+      "action_parameters": {
+        "cache": true,
+        "edge_ttl": { "mode": "respect_origin" },
+        "browser_ttl": { "mode": "respect_origin" }
+      }
+    }
+  ]
+}

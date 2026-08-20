@@ -18,6 +18,7 @@ bite you.
 | [data/model.md](data/model.md) | Fact/dim/map tables, measures, the derived-measure rule |
 | [data/invariants.md](data/invariants.md) | The rules that gate the pipeline, each with its evidence |
 | [data/carrier-model.md](data/carrier-model.md) | Operating-carrier grain, the date-ranged mainline map |
+| [architecture/deploy.md](architecture/deploy.md) | **The delivery path** — promote and rollback, the operator credential file, bootstrap |
 | [architecture/hosting.md](architecture/hosting.md) | Deployment shape, cost, the hosting survey, portability test |
 | [architecture/pipeline.md](architecture/pipeline.md) | Repo layout, ingest, **the warehouse catalog and the load-bearing CWD constraint**, the pivot contract, entity resolution, the toolchain |
 | [design/system.md](design/system.md) | **The design system: tokens, components, chart and map encodings, states** |

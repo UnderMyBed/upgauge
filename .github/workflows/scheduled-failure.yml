@@ -33,6 +33,14 @@ on:
       - "Warehouse"
       - "Freshness"
       - "CodeQL"
+      - "Live check"
+      # image.yml has no `schedule:` of its own, but one of its three triggers is
+      # `workflow_run` on "Warehouse", which IS a daily cron -- so a broken image build can run
+      # completely unattended (Warehouse publishes -> Image rebuilds -> Image fails, on a day
+      # nobody touched this repo) and reach nobody. test_every_scheduled_workflow_in_the_repo_
+      # is_watched treats that as the same dark-guard condition a direct `schedule:` trigger is,
+      # not just workflows named in an `on.schedule:` block.
+      - "Image"
     types: [completed]
 
 permissions:

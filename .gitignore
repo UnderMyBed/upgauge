@@ -26,7 +26,10 @@ docs/superpowers/plans/
 docs/superpowers/specs/
 .superpowers/
 
-# Env
+# Env. No leading slash, so this matches at ANY depth -- deploy/.env, the operator's five
+# provisioning credentials, is covered by it. Tightening to /.env would silently expose them;
+# test_the_credential_file_is_gitignored asserts otherwise. deploy/.env.example is the
+# committed template and is deliberately NOT matched.
 .env
 .env.local
 

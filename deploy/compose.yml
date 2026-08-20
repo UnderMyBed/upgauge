@@ -1,0 +1,36 @@
+# Desired state for the box (D8). Applied by cloud-init at provision time and by
+# `make provision` thereafter. Two services and no published ports: cloudflared dials OUT,
+# so nothing reaches the app except through the tunnel.
+services:
+  app:
+    # The GHCR package is intended to be PUBLIC (pending confirmation), so the box pulls
+    # this anonymously and no registry credential is configured anywhere below. If it is
+    # made private instead, this pull would need a credential provisioned onto the box --
+    # not built here, since the decision isn't made yet.
+    image: ghcr.io/undermybed/upguage:deploy
+    restart: unless-stopped
+    read_only: true
+    # No `ports:` -- deliberate, and asserted by test_no_service_publishes_a_port_to_the_host.
+    # cloudflared addresses this service as http://app:3000 over the compose network.
+    environment:
+      # Prefixes every <loc> in /sitemap.xml, the Sitemap: line in /robots.txt, and every
+      # entity page's <link rel="canonical">. Unset, it defaults to http://localhost:3000 --
+      # the page still renders and returns 200, so nothing here or in app-smoke catches it;
+      # a crawler just resolves none of the URLs the site hands it.
+      UPGAUGE_BASE_URL: https://upgauge.shipman.dev
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:?TUNNEL_TOKEN is required -- see docs/architecture/deploy.md}
+    depends_on:
+      app:
+        condition: service_healthy

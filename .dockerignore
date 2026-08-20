@@ -23,3 +23,6 @@ app/next-env.d.ts
 # commit earlier. Two-direction mutant, BUILD_SHA pinned so the ignore entry is the only variable:
 # hosting.md § "The build context must contain only tracked files".
 app/smoke.sh
+# The build does not need it: deploy/ is desired state applied to the box, never copied into
+# the image. No COPY covers it today, so this is convention rather than load-bearing.
+deploy
