@@ -97,3 +97,24 @@ def test_tunnel_ingress_routes_the_production_host_to_the_app_service():
     at Cloudflare's edge -- nothing on the box would ever see it."""
     ingress = _load("tunnel-config.json")["config"]["ingress"]
     assert {"hostname": "upgauge.shipman.dev", "service": "http://app:3000"} in ingress
+
+
+def test_cloudflare_apply_verifies_the_dns_record_points_at_the_tunnel():
+    """MEASURED 2026-08-19: `make cloudflare-apply` reported "desired state applied" while
+    `dig upgauge.shipman.dev` returned nothing. The script PUT cache rules, the rate limit and
+    the tunnel ingress -- and never looked at DNS, though D8's justification claims "DNS is an
+    upsert by name". The tunnel was configured and nothing pointed at it.
+
+    The record is created once by hand (the token carries DNS *read* only, so it can never
+    rewrite another record in this zone), which makes verifying it the script's job. All three
+    properties matter and each fails differently: a missing record does not resolve, a record
+    aimed somewhere other than <tunnel>.cfargotunnel.com resolves to the wrong origin, and an
+    unproxied record bypasses the cache rule and the rate limit entirely while still serving
+    the site -- the silent one."""
+    script = (CLOUDFLARE.parent / "cloudflare-apply.sh").read_text()
+    assert "dns_records" in script, "cloudflare-apply.sh never queries DNS"
+    assert "cfargotunnel.com" in script, "it does not check the record targets the tunnel"
+    assert "proxied" in script, (
+        "it does not check the record is PROXIED -- an unproxied record still serves the site "
+        "but silently bypasses the cache rule and the rate limit"
+    )
