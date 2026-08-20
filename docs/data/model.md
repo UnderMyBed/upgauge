@@ -59,9 +59,10 @@ mart_route_health     one row per (op_airline_id, route_key_low, route_key_high)
                       directly (../architecture/pipeline.md).
 
 meta_pivot_dimensions  key, label, column_expr, grain, join_dim, join_key,
-                       filter_only, filter_mode
-                      -- The Explorer's dimension vocabulary. See "The Explorer's
-                      -- vocabulary lives in the catalog" below.
+                       filter_only, filter_mode, value_type
+                      -- The Explorer's dimension vocabulary. Every column is curated
+                      -- EXCEPT value_type, which is introspected from duckdb_columns().
+                      -- See "The Explorer's vocabulary lives in the catalog" below.
 meta_pivot_measures    key, label, is_additive, expr
                       -- The Explorer's measure vocabulary. Same section.
 ```
@@ -212,14 +213,77 @@ un-driftable: a JSON file next to the code can silently name a column that no lo
 a view built from the same catalog the Explorer queries cannot describe a table that isn't
 there without failing to build at all.
 
-The list itself is still **curated, not introspected** — which dimensions we *offer* is a
+The vocabulary itself is still **curated, not introspected** — which dimensions we *offer* is a
 product decision (`fct_segment_month` carries `download_date` and `quarantine_reason`, which
 are real columns but not Explorer dimensions), not a schema fact. What the catalog-object
 form buys is a drift guard: `pipeline/tests/test_pivot_allowlist.py` cross-checks every
 curated `column_expr` against `DESCRIBE` on the fact table(s) its `grain` claims, in both
 directions — a `'segment'`-grain dimension must be absent from `fct_route_month`, and a
-`'both'`-grain dimension must be present on it. A renamed or dropped fact column fails that
-test loudly instead of silently dropping a dimension from the Explorer at request time.
+`'both'`-grain dimension must be present on it. A renamed or dropped fact column fails loudly
+instead of silently dropping a dimension from the Explorer at request time — though *which*
+test fires depends on which token went missing, and at which grain. One case does not reach
+that cross-check: a first token missing **on `fct_segment_month`**, because `value_type` INNER
+JOINs on it there (below), so the row is gone before the loop can iterate it and the failure
+surfaces as a row-count and key-set failure instead. The pre-emption is that narrow — the join
+resolves against `fct_segment_month` only, so a first token missing at ROUTE grain still fails
+the cross-check normally. Measured: renaming `origin_city_market_id` on `fct_route_month`
+alone turns it red, along with two of the type guards.
+
+**`value_type` is the one column that is introspected rather than curated.** It carries the
+DuckDB type of the dimension's underlying fact column, joined live from `duckdb_columns()`
+against the FIRST token of `column_expr`, resolved on `fct_segment_month`. Which dimensions we
+offer is a product decision; a column's *width* is a schema fact, and a hand-copied schema fact
+rots. It exists so a filter value can be rejected at render time: a filter compiles to `col IN
+($p)` with the value bound as a VARCHAR parameter, so an integer column handed a value it
+cannot cast throws a Conversion Error at EXECUTION — after `proxy.ts` has resolved cacheability
+and written `Cache-Control`. The join is an INNER JOIN deliberately: a renamed fact column
+drops the row entirely and the count test fails, rather than the dimension shipping with no
+bound at all.
+
+**The type is READ, never inferred from the key name.** `aircraft_type` is `VARCHAR` carrying zero-padded codes (`079`), so a rule
+that guessed "this looks like an id" from the name would re-open the `079` → `79` join break
+(`invariants.md`); measured, `aircraft_type = '2T (1)'` returns zero rows where the same value
+on `op_airline_id` throws. `year` is `BIGINT` **because of Hive partitioning, not** because of
+`normalize_t100_segment.sql`'s `CAST(raw.YEAR AS SMALLINT)` — `fct_segment_month` reads its
+Parquet with `hive_partitioning = true`, and the partition-derived column silently wins over
+the content one. Measured: `hive_partitioning = true` → `BIGINT`, `false` → `SMALLINT`.
+
+**Permissive on RANGE, strict on SPELLING — the two axes point opposite ways, deliberately.**
+On range, the ceiling tracks the column TYPE and is never tightened to the column's content:
+do not narrow `year`'s bound to the SMALLINT its values actually fit, because a bound narrower
+than the column rejects values DuckDB accepts. Measured on `fct_segment_month` — `year` accepts
+`40000` and even `9223372036854775807` (0 rows each) and throws only at 2^63. On spelling the
+rule is knowingly NARROWER than DuckDB's cast: every one of `19790`, `' 19790 '`, `'+19790'`,
+`19790.0`, `19790.`, `1.979e4`, `19_790` and `0019790` casts fine and returns the identical
+328,368 rows for `op_airline_id`, and `-1` casts fine and returns none. Each is a distinct CDN
+cache key for a byte-identical page, and the leading-zero and underscore families are
+unbounded, so the canonical form is the only accepted spelling. `encode()` emits exactly that,
+and `aircraft_type`'s zero-padded `079` is VARCHAR, which the numeric rule never touches.
+
+Introspection carries three structural assumptions plus a pinned inventory, each held by
+`pipeline/tests/test_pivot_allowlist.py` because each one fails silently. Every dimension
+resolves to exactly one non-NULL type — a `LEFT JOIN` *combined with* a missing column would
+keep the row and leave the bound NULL, and a join predicate matching two objects would
+duplicate every row it matched, neither of which a set-of-keys test can see. A `LEFT JOIN`
+alone changes nothing and correctly stays green: while every column resolves, LEFT and INNER
+produce identical rows.
+Every column of a multi-column `column_expr` shares one type, since only the first token is
+read: a divergent pair would publish a bound correct for `route_key_low` and wrong for
+`route_key_high`. And a `'both'`-grain dimension carries the same type on `fct_route_month`,
+which `100_fct_route_month.sql` propagates through `any_value()`/`GROUP BY` and this view never
+looks at. The fourth is the inventory: the measured type map is pinned in that test, not
+restated here, because introspection reports a schema move FAITHFULLY and the other three
+therefore cannot see one.
+
+That the column is introspected at all is itself asserted, against the compiled view's SQL
+text, because nothing in the catalog's *output* distinguishes a live `duckdb_columns()` join
+from a hand-written `CASE` carrying today's values — the structural tests above compare
+`value_type` to the current schema, and a literal equal to the current schema satisfies every
+one of them. A curated value that *disagrees* with the schema is not silent: measured, a
+`CASE` saying `INTEGER` where `aircraft_group` is `SMALLINT` reds both tests that compare
+against a live `DESCRIBE`. What the source-text assertion adds is the window where the curated
+value still agrees — the only one in which nothing else can see it — and with it the guarantee
+that a served build never carries a bound the schema disagrees with.
 
 **Two columns and a fifteenth dimension row, `endpoint_airport_id`**, extend the vocabulary
 without changing anything the two renderers emit for the other fourteen. `filter_only`
