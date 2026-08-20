@@ -41,6 +41,35 @@ from bump_pin import PinError, branch_for, bump, current_pin, main  # noqa: E402
 
 MAKEFILE = (REPO / "Makefile").read_text()
 
+#: DERIVED, never restated. Every fixture below is relative to whatever the Makefile pins right
+#: now, because the bot's whole job is to rewrite that line -- a hard-coded `warehouse-2026.05`
+#: would make this suite red the first time the mechanism it tests actually fires, and `ci.yml`
+#: would not catch it: the bot's PR starts no `pull_request` run (that is this feature's own
+#: documented premise), so `make check` never runs on it. A hard-coded FUTURE tag is the same
+#: bug with a fuse on it -- fine until the pin reaches that month, then permanently red.
+PINNED = current_pin(MAKEFILE)
+
+
+def _month_offset(tag: str, months: int) -> str:
+    """`warehouse-YYYY.MM` shifted by whole months, rolling the year correctly."""
+    year, month = (int(part) for part in tag.removeprefix("warehouse-").split("."))
+    total = year * 12 + (month - 1) + months
+    return f"warehouse-{total // 12:04d}.{total % 12 + 1:02d}"
+
+
+NEWER = _month_offset(PINNED, 1)
+OLDER = _month_offset(PINNED, -1)
+
+
+def test_the_month_offset_helper_rolls_the_year():
+    """Guards the fixtures themselves. An off-by-one here would hand `bump()` the tag it is
+    already pinned to and turn the newer/older cases into no-ops that pass for the wrong
+    reason."""
+    assert _month_offset("warehouse-2026.12", 1) == "warehouse-2027.01"
+    assert _month_offset("warehouse-2027.01", -1) == "warehouse-2026.12"
+    assert _month_offset("warehouse-2026.05", 1) == "warehouse-2026.06"
+    assert _month_offset(PINNED, 1) != PINNED
+
 
 # --------------------------------------------------------------------------------------
 # bump_pin.py -- the mechanical half
@@ -55,8 +84,8 @@ def test_only_the_pin_line_changes():
     implemented as a global substitution over the tag SHAPE corrupts the second one -- silently,
     since nothing else reads it -- and a synthetic one-line fixture cannot fail that way.
     """
-    after, previous = bump(MAKEFILE, "warehouse-2027.01")
-    assert previous == "warehouse-2026.05"
+    after, previous = bump(MAKEFILE, NEWER)
+    assert previous == PINNED
 
     changed = [
         line
@@ -66,8 +95,8 @@ def test_only_the_pin_line_changes():
         if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
     ]
     assert changed == [
-        "-WAREHOUSE_TAG ?= warehouse-2026.05",
-        "+WAREHOUSE_TAG ?= warehouse-2027.01",
+        f"-WAREHOUSE_TAG ?= {PINNED}",
+        f"+WAREHOUSE_TAG ?= {NEWER}",
     ], f"more than the pin line moved: {changed}"
 
 
@@ -78,15 +107,15 @@ def test_a_renamed_or_missing_pin_fails_loudly():
         line for line in MAKEFILE.splitlines() if not line.startswith("WAREHOUSE_TAG ?=")
     )
     with pytest.raises(PinError, match="WAREHOUSE_TAG"):
-        bump(without, "warehouse-2027.01")
+        bump(without, NEWER)
 
 
 def test_two_pin_lines_fail_loudly():
     """Rewriting the first of two leaves make reading the SECOND -- a later assignment wins --
     so the bot would report a bump that had no effect on what `make image` actually builds."""
-    doubled = MAKEFILE + "\nWAREHOUSE_TAG ?= warehouse-2026.05\n"
+    doubled = MAKEFILE + f"\nWAREHOUSE_TAG ?= {OLDER}\n"
     with pytest.raises(PinError, match="twice|2 "):
-        bump(doubled, "warehouse-2027.01")
+        bump(doubled, NEWER)
 
 
 @pytest.mark.parametrize(
@@ -115,27 +144,23 @@ def test_the_pin_never_moves_backwards():
     was handed would walk the pin back to an older dataset -- against which the committed
     needles are wrong, so the gate would go red with no defect present."""
     with pytest.raises(PinError, match="backwards|older"):
-        bump(MAKEFILE, "warehouse-2026.04")
+        bump(MAKEFILE, OLDER)
 
 
 def test_an_already_current_pin_is_a_no_op_not_a_failure():
     """A re-dispatch against the already-pinned release must exit 0. "Warehouse" is watched by
     scheduled-failure.yml, so raising here would file a critical issue, @mention and assign the
     owner for a run in which nothing is wrong."""
-    after, previous = bump(MAKEFILE, "warehouse-2026.05")
+    after, previous = bump(MAKEFILE, PINNED)
     assert after == MAKEFILE
-    assert previous == "warehouse-2026.05"
-
-
-def test_current_pin_reads_the_committed_value():
-    assert current_pin(MAKEFILE) == "warehouse-2026.05"
+    assert previous == PINNED
 
 
 def test_the_branch_name_is_derived_from_the_tag():
     """One source for the branch, because the workflow pushes it, `gh pr create` names it as
     the head, and the PR body links the gate's runs filtered by it. Three hand-written copies
     would drift into a PR whose gate link points at a branch that does not exist."""
-    assert branch_for("warehouse-2027.01") == "bot/warehouse-pin-warehouse-2027.01"
+    assert branch_for(NEWER) == f"bot/warehouse-pin-{NEWER}"
 
 
 def _outputs(path: Path) -> dict[str, str]:
@@ -177,7 +202,7 @@ def test_the_pr_body_uses_the_randomized_delimiter(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_REPOSITORY_OWNER", "UnderMyBed")
     monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
 
-    assert main(["warehouse-2027.01"]) == 0
+    assert main([NEWER]) == 0
 
     raw = output.read_text()
     delimiters = re.findall(r"^pr_body<<(.+)$", raw, re.MULTILINE)
@@ -189,9 +214,9 @@ def test_the_pr_body_uses_the_randomized_delimiter(tmp_path, monkeypatch):
 
     parsed = _outputs(output)
     assert parsed["changed"] == "1"
-    assert parsed["previous"] == "warehouse-2026.05"
-    assert parsed["branch"] == "bot/warehouse-pin-warehouse-2027.01"
-    assert makefile.read_text() == bump(MAKEFILE, "warehouse-2027.01")[0]
+    assert parsed["previous"] == PINNED
+    assert parsed["branch"] == f"bot/warehouse-pin-{NEWER}"
+    assert makefile.read_text() == bump(MAKEFILE, NEWER)[0]
 
 
 def test_the_pr_body_states_that_ci_has_not_run_on_this_pr(tmp_path, monkeypatch):
@@ -210,7 +235,7 @@ def test_the_pr_body_states_that_ci_has_not_run_on_this_pr(tmp_path, monkeypatch
     monkeypatch.setenv("GITHUB_REPOSITORY_OWNER", "UnderMyBed")
     monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
 
-    assert main(["warehouse-2027.01"]) == 0
+    assert main([NEWER]) == 0
     body = _outputs(output)["pr_body"]
 
     assert "@UnderMyBed" in body, "the PR notifies nobody without a mention"
@@ -281,37 +306,77 @@ def test_the_warehouse_workflow_opens_the_bump_pr():
     assert any("git push" in s for s in scalars), "the branch is never pushed"
 
 
-def test_the_bump_job_runs_only_when_a_release_was_actually_published():
-    """ "Warehouse" runs DAILY, polling BTS, and publishes only when `max(year_month)` advances
-    -- roughly monthly. Without this gate the bot would open a PR (or churn a branch) on every
-    one of the ~30 no-op days a month."""
+def test_the_bump_job_gates_on_the_tag_existing_and_can_still_run_after_a_failed_run():
+    """THE repair path, and it turns on one word.
+
+    A job with `needs:` is skipped when the needed job fails, unless its `if:` names a status
+    function -- so a bare `needs.publish.outputs.<x> == '1'` carries an implicit `success()`.
+    `classify` runs AFTER the release is created and can legitimately throw (a real upstream
+    shape change is precisely when it should), which fails the publish job and skips the bump.
+    Every re-dispatch afterwards hits the already-published guard, so a flag keyed on "this run
+    created the release" is never set again: the release ships, the pin never moves, and the
+    only signal is a generic red -- #74's own defect with a bot in front of it.
+
+    So the guard is `always()` plus "does a release with this tag exist", never "did this run
+    go well".
+    """
     doc = _doc(WAREHOUSE)
     job_id, job = _bump_job()
+    condition = str(job.get("if", ""))
     assert "publish" in (job.get("needs") or []) or job.get("needs") == "publish"
-    assert "needs.publish.outputs.published" in str(job.get("if", "")), (
-        f"{job_id} does not gate on the publish job's own published output"
+    assert "always()" in condition, (
+        f"{job_id} carries an implicit success(), so a crash anywhere after the release is "
+        "created strands the pin permanently -- no re-dispatch can reach this job"
     )
-    assert "published" in (doc["jobs"]["publish"].get("outputs") or {}), (
-        "the publish job does not declare a `published` output for the bump job to read"
+    assert "needs.publish.outputs.tag_published" in condition, (
+        f"{job_id} does not gate on the tag existing"
     )
+    assert "tag_published" in (doc["jobs"]["publish"].get("outputs") or {})
 
 
-def test_the_publish_step_is_what_declares_published():
-    """The anti-vacuity half of the test above: an `if:` reading an output that is ALWAYS set
-    gates nothing. The output must come from the step that actually creates the release, which
-    is itself guarded by the `SKIP` check -- so on a no-op day the value is never written."""
-    doc = _doc(WAREHOUSE)
-    publish = doc["jobs"]["publish"]
-    step_id = str(publish["outputs"]["published"]).split("steps.")[1].split(".")[0]
-    source = [s for s in publish["steps"] if s.get("id") == step_id]
-    assert source, f"`published` names steps.{step_id}, which does not exist"
-    step = source[0]
-    assert "gh release create" in _code(step["run"]), (
-        "`published` is not written by the step that creates the release"
+def _output_sources(job: dict, name: str) -> dict[str, dict]:
+    """The steps a job output's expression reads, keyed by step id."""
+    ids = re.findall(r"steps\.([A-Za-z0-9_-]+)\.outputs", str(job["outputs"][name]))
+    by_id = {step.get("id"): step for step in job["steps"] if isinstance(step, dict)}
+    missing = [i for i in ids if i not in by_id]
+    assert not missing, f"`{name}` names steps that do not exist: {missing}"
+    return {i: by_id[i] for i in ids}
+
+
+def test_both_steps_that_can_establish_the_release_exists_declare_it():
+    """The other half of the repair path. Two steps in this workflow can establish that the
+    release exists -- the one that creates it, and the guard that finds it already there -- and
+    `tag_published` must read BOTH. Reading only the creating step is the stall above.
+
+    Also the anti-vacuity half: an output that is ALWAYS set gates nothing, so the creating
+    step must still carry its SKIP guard and the finder must still write inside its own
+    conditional branch.
+    """
+    publish = _doc(WAREHOUSE)["jobs"]["publish"]
+    sources = _output_sources(publish, "tag_published")
+    assert len(sources) == 2, (
+        f"`tag_published` reads {len(sources)} step(s), expected 2 -- one source means no "
+        f"re-dispatch can ever set it again: {sorted(sources)}"
     )
-    assert "SKIP" in str(step.get("if", "")), (
-        "the step writing `published` is not guarded by the already-published SKIP check, so "
-        "the flag would be set on every daily no-op run"
+    runs = {i: _code(step["run"]) for i, step in sources.items()}
+    creator = [i for i, run in runs.items() if "gh release create" in run]
+    finder = [i for i, run in runs.items() if "gh release view" in run]
+    assert creator, "no source step creates the release"
+    assert finder, "no source step detects an already-published release"
+
+    assert "SKIP" in str(sources[creator[0]].get("if", "")), (
+        "the creating step lost its already-published guard, so it would run on every no-op day"
+    )
+    # Inside the branch, not merely in the same script. `if gh release view … then` being
+    # present says nothing about where the write landed; a write after the `fi` reports the
+    # release as existing on every run, including ones where the lookup found nothing.
+    finder_run = runs[finder[0]]
+    opened = finder_run.index("if gh release view")
+    closed = finder_run.index("\nfi", opened)
+    written = finder_run.index("already=", opened)
+    assert opened < written < closed, (
+        "the finder writes its flag outside the conditional branch -- it would report the "
+        "release as existing on a run where the lookup failed"
     )
 
 
@@ -369,18 +434,21 @@ def test_no_untrusted_value_is_spliced_into_the_bump_jobs_run_scalars():
     value is source code -- here, in a job holding contents:write, pull-requests:write and
     actions:write. warehouse.yml's own PREVIOUS_TAG comment measured the same rule."""
     _, job = _bump_job()
-    spliceable = (
-        "needs.publish.outputs.tag",
-        "github.repository_owner",
-        "outputs.pr_body",
-        "outputs.branch",
-        "outputs.previous",
-    )
+    # NO ALLOW-LIST, and no whitespace assumption. An earlier form of this test matched the
+    # literal `${{ <name>` with one space, against a hand-maintained tuple of expression names.
+    # GitHub requires neither: `${{needs.publish.outputs.tag}}` and
+    # `${{  github.repository_owner }}` both splice, and both passed that test -- and every new
+    # expression was invisible to it besides. This job legitimately splices NOTHING into a
+    # shell; every value it uses arrives through `env:`. So the property is the absence of the
+    # construct, not the absence of five names.
     for scalar in _job_run_scalars(job):
-        for expression in spliceable:
-            assert f"{{{{ {expression}" not in scalar.replace("${{", "{{"), (
-                f"{expression} is spliced into a run: block; it must arrive through env:"
-            )
+        assert "${{" not in scalar, (
+            "an Actions expression is spliced into a run: block in a job holding contents, "
+            f"pull-requests and actions write. It must arrive through env:\n{scalar}"
+        )
+    for scalar in _job_run_scalars(_doc(GATE)["jobs"]["gate"]):
+        assert "${{" not in scalar, f"the gate splices an expression into a shell:\n{scalar}"
+
     env_values = " ".join(
         str(v)
         for step in job["steps"]
@@ -492,3 +560,84 @@ def test_image_yml_still_runs_the_needle_free_form():
     assert "WAREHOUSE_TAG" in code and "steps.warehouse.outputs.tag" in str(
         (step.get("env") or {}).get("WAREHOUSE_TAG", "")
     ), "image.yml no longer builds against the resolved newest release"
+
+
+def test_the_gate_fires_on_nothing_but_a_pull_request_and_a_dispatch():
+    """The cost scoping, asserted rather than only argued in a comment. This target builds a
+    413 MB container and runs ~338 served checks against it -- on the order of 30 minutes.
+    `push: branches: [main]` reads as harmless and doubles that onto every merge, on top of
+    image.yml's own build; a `schedule:` would put it on a timer the repo explicitly refuses.
+
+    By this repo's own rule a stated property with no failing test is the one that regresses,
+    and both additions survived every other test in this file."""
+    assert set(_triggers(_doc(GATE))) == {"pull_request", "workflow_dispatch"}
+
+
+def test_the_gate_filter_never_widens_to_a_subtree():
+    """`app/src/**` or `sql/**` would make a 30-minute container build fire on nearly every PR
+    in the repo -- the every-run cost the scoping exists to avoid, and both are already covered
+    on every PR by ci.yml's `make app-smoke`. Named files only, so the filter stays a list
+    someone must justify entry by entry."""
+    offenders = [p for p in _triggers(_doc(GATE))["pull_request"]["paths"] if "*" in p]
+    assert not offenders, f"the gate's path filter widened to a subtree: {offenders}"
+
+
+def test_the_gate_never_writes_either_override_into_the_environment():
+    """The third route to the same defect, after the command line and an `env:` block: a step
+    can append to `$GITHUB_ENV`, which becomes the environment of every LATER step -- including
+    the one running `make image-smoke`. `WAREHOUSE_TAG ?=` is a conditional assignment and
+    smoke.sh reads `${SMOKE_DATASET_PINNED:-1}`, so either name arriving that way silently
+    disarms the gate exactly as a flag would."""
+    for scalar in _job_run_scalars(_doc(GATE)["jobs"]["gate"]):
+        for line in scalar.splitlines():
+            if "GITHUB_ENV" in line:
+                assert "WAREHOUSE_TAG" not in line and "SMOKE_DATASET_PINNED" not in line, (
+                    f"the gate disarms itself through $GITHUB_ENV:\n{line}"
+                )
+
+
+def test_the_bump_job_skips_on_an_OPEN_PR_never_merely_on_the_branch_existing():
+    """The repair case this distinction exists for: the push succeeds and `gh pr create` then
+    fails. The branch exists and no PR does -- and a bot keyed on the branch reports success
+    and reopens nothing, every run, forever. Keyed on an open PR instead, the next run opens
+    the PR against the branch already there."""
+    _, job = _bump_job()
+    step = next(s for s in job["steps"] if "gh pr create" in _code(s.get("run", "")))
+    code = _code(step["run"])
+    early_exit = code[: code.index("gh pr create")]
+    assert "gh pr list" in early_exit and "--state open" in early_exit, (
+        "the early exit does not check for an OPEN PR"
+    )
+    branch_check = early_exit.index("git ls-remote")
+    assert early_exit.index("gh pr list") < branch_check, (
+        "the branch check precedes the PR check, so a branch with no PR still exits early"
+    )
+
+
+def test_the_gate_is_dispatched_only_when_a_PR_was_actually_opened():
+    """The dispatch starts a ~30-minute container build. Gated on `changed` alone it would fire
+    on every daily run for as long as an already-open bump PR stayed open, since the step above
+    exits early in exactly that case without opening anything."""
+    _, job = _bump_job()
+    dispatch = next(s for s in job["steps"] if "gh workflow run" in _code(s.get("run", "")))
+    pr_step = next(s for s in job["steps"] if "gh pr create" in _code(s.get("run", "")))
+    condition = str(dispatch.get("if", ""))
+    assert f"steps.{pr_step['id']}.outputs" in condition, (
+        f"the dispatch is gated on {condition!r}, which is true on the early-exit path too"
+    )
+    assert "opened" in _code(pr_step["run"]), (
+        "the PR step never records that it opened one, so the dispatch cannot key on it"
+    )
+
+
+def test_the_gate_uploads_no_log_that_container_mode_never_writes():
+    """`/tmp/upgauge-smoke.log` is written by `serve_next` in app/smoke.sh's HOST branch only.
+    This gate runs `make image-smoke`, which sets `SMOKE_MODE=container` -- and smoke.sh's EXIT
+    trap tears the container down before a later step could reach `docker logs` either. An
+    upload step here publishes nothing and reports it as a yellow `if-no-files-found: warn`
+    annotation: a dead diagnostic path that reads like a live one."""
+    for job in _doc(GATE)["jobs"].values():
+        for step in job.get("steps") or []:
+            assert "upgauge-smoke.log" not in str(step.get("with") or {}), (
+                "the gate uploads a log container mode never writes"
+            )

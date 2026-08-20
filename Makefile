@@ -173,8 +173,10 @@ IMAGE ?= upgauge:local
 # that commit, which is the one thing that gate exists to refuse. /api/health publishes this value
 # as provenance (docs/architecture/hosting.md § UPGAUGE_BUILD_SHA). One variable, referenced by
 # both targets: two copies of the expression could drift and fail identity for a non-reason.
-# `--always` keeps it a bare SHA if no tag describes HEAD, which is the case here (the repo's only
-# tag, warehouse-2026.04, is lightweight, and describe ignores those without --tags).
+# `--always` keeps it a bare SHA if no tag describes HEAD, which is the case here: this repo's
+# tags are the `warehouse-YYYY.MM` release tags, they are lightweight, and describe ignores
+# lightweight tags without --tags. (A count of them is not written here on purpose -- one lands
+# every month.)
 IMAGE_SHA := $(shell git describe --always --dirty --abbrev=7)
 
 image:  ## Build the deployable image from the published warehouse asset

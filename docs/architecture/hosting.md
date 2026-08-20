@@ -384,11 +384,23 @@ Same rule as CLAUDE.md's "when a renamed value was the fixture for a transform, 
 applied to this coupling; stated at the pin itself (`Makefile`, `WAREHOUSE_TAG`) as well as here.
 
 **Two mechanisms hold the fixture together, and neither is a human remembering.** The bot is
-`warehouse.yml`'s `bump-pin` job: when a release publishes — never on the ~30 daily polls that do
-not — it opens a PR moving the pin, and does **not** touch the needles. Only four of them (the
-partial-year sentence, the chart window, the current-year asterisk, the covered range) follow from
-`max(year_month)`; the rest need the warehouse queried through the rendered pages, so a rewriter
-that fixed the derivable four would emit a PR that reads as re-measured and is not. The gate is
+`warehouse.yml`'s `bump-pin` job: it opens a PR moving the pin when the pin is behind, and does
+**not** touch the needles. Only four of those (the partial-year sentence, the chart window, the
+current-year asterisk, the covered range) follow from `max(year_month)`; the rest need the
+warehouse queried through the rendered pages, so a rewriter that fixed the derivable four would
+emit a PR that reads as re-measured and is not.
+
+**The bot's guard is `always()` plus "a release with this tag exists", never "this run published
+it" — and that difference is a permanent stall.** `classify` runs after the release is created and
+can legitimately throw (a real upstream shape change is exactly when it should), which fails the
+publish job and skips the bump. Every re-dispatch afterwards takes the already-published path, so
+a flag meaning "this run created the release" is never set again: the release ships, the pin never
+moves, and the only signal is a generic red. Keyed on existence instead, the next run repairs it —
+which is why the job runs daily and mostly opens nothing, a checkout and a script rather than a
+single chance per publish. Its failures stay loud (they redden "Warehouse", which
+`scheduled-failure.yml` watches), and the accepted cost of that loudness is that a genuinely
+broken bot also defers `image.yml`'s build until the next push to `main`; every `gh` call is
+retried so that a transient wobble is never what triggers it. The gate is
 `image-contract.yml`, which runs `make image-smoke` **with nothing overridden** — the committed
 pin, the needles at their default — on any PR touching either half. That is the only invocation
 that can see the coupling: `image.yml` also runs `make image-smoke`, but resolves the newest

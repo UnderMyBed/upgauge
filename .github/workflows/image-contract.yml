@@ -98,10 +98,10 @@ jobs:
       - name: The pin and the needles are one fixture
         run: make image-smoke
 
-      - name: Upload the server log on failure
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: image-contract-server-log
-          path: /tmp/upgauge-smoke.log
-          if-no-files-found: warn
+      # NO ARTIFACT UPLOAD, deliberately. `/tmp/upgauge-smoke.log` is written by `serve_next`
+      # in app/smoke.sh's HOST branch only (line 364, inside the `else` of the SMOKE_MODE
+      # check); container mode never creates it, and smoke.sh's EXIT trap tears the container
+      # down before any later step could reach `docker logs`. An upload step here would have
+      # published nothing and said so as a yellow `if-no-files-found: warn` annotation -- a
+      # dead diagnostic path that reads like a live one. ci.yml's smoke job uploads it
+      # correctly, because that job runs the host mode that writes it.
