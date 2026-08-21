@@ -350,6 +350,36 @@ describe("/airport/<code> canonical metadata (M5, Task 2)", () => {
   });
 });
 
+// M9 Task 6b (og-cards FINDING 6): same finding as /route's -- `og:title` read "Upgauge" on a
+// served /airport/SEA, not the airport, because generateMetadata returned only
+// `alternates.canonical`.
+describe("/airport/<code> Open Graph metadata (M9 Task 6b)", () => {
+  it("carries the airport code AND name in openGraph.title, not the bare code alone", async () => {
+    // Fix round 1: `title: code` alone matched `.entity .code` (asserted above) but dropped
+    // `.entity .ename` -- a pasted link previewing as bare "SEA" (which is also an ordinary
+    // English word) delivers half the entity, and `og:title` has no second line the way the OG
+    // image's title/subtitle split does. Pinned to the exact string measured against the real
+    // warehouse (dim_airport's own spelling), not a substring match, so a regression back to
+    // the bare code fails here rather than passing on a loose `.toContain`.
+    const meta = await generateMetadata({ params: Promise.resolve({ code: "SEA" }) });
+    expect(meta.openGraph?.title).toBe("SEA — Seattle/Tacoma International");
+  });
+
+  it("states the data view honestly in openGraph.description, without a fare or real-time claim", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ code: "SEA" }) });
+    const description = meta.openGraph?.description ?? "";
+    expect(description).toContain("SEA");
+    expect(description).toMatch(/US DOT T-100/);
+    expect(description).toMatch(/both endpoints/i);
+    expect(description).toMatch(/not fares or real-time/i);
+  });
+
+  it("omits openGraph for a code that cannot resolve at all", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ code: "ZZZZ" }) });
+    expect(meta.openGraph).toBeUndefined();
+  });
+});
+
 // M7 Task 9: `/airport/<code>?y=<year>` selects a calendar year for the network map instead of
 // the default trailing-12 view, and the track of year links that lets a reader move between
 // them. Every figure below is measured against the real warehouse -- asOf is 2026-04 at the

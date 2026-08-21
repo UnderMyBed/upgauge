@@ -258,7 +258,34 @@ export async function generateMetadata({
   const { name: slug } = await params;
   const resolved = await resolveAircraftSlugForRequest(slug);
   if (resolved.kind !== "ok" && resolved.kind !== "redirect") return {};
-  return { alternates: { canonical: `${BASE_URL}/aircraft/${resolved.canonical}` } };
+  const base = { alternates: { canonical: `${BASE_URL}/aircraft/${resolved.canonical}` } };
+
+  // `openGraph` only on "ok" -- "redirect" carries just the uppercased slug, no resolved
+  // `AircraftRef` to build an honest description from, and this page never actually serves
+  // that outcome's HTML (it 308s before rendering). `ambiguous` and `notFound` already fell
+  // through to the empty return above, same as before this task.
+  if (resolved.kind !== "ok") return base;
+
+  // Fix round 1: `title: code` alone (e.g. "B737-8") matched `.entity .code` but dropped
+  // `.entity .ename` -- the page's heading is TWO elements, and `og:title` is the one string a
+  // pasted link previews with. The OG image (Task 6) can drop the name from its own `title`
+  // because it carries a separate `subtitle` line; a flat metadata tag has no second line.
+  // `${code} — ${name}`, em dash with spaces, matching the design spec's own worked example
+  // (docs/superpowers/specs/2026-08-20-og-cards-design.md § Card content: "B737-800") --
+  // `resolved.type.name` is reused verbatim (dim_aircraft_type's own full BTS designation,
+  // "BOEING 737-800" measured, all-caps as filed), never a second phrasing of it. `code` is
+  // still the short_name, never the raw BTS code (M4a's rule).
+  const code = resolved.type.code;
+  const title = `${code} — ${resolved.type.name}`;
+  return {
+    ...base,
+    openGraph: {
+      title,
+      description:
+        `Monthly US DOT T-100 segment filings for ${code} — seats, load factor and ` +
+        `carriers, trailing 12 months. Domestic only, not fares or real-time.`,
+    },
+  };
 }
 
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the four-way

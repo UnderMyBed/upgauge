@@ -202,6 +202,40 @@ describe("/aircraft/<slug> canonical metadata (M5, Task 2)", () => {
   });
 });
 
+// M9 Task 6b (og-cards FINDING 6): same finding as /route's -- `og:title` read "Upgauge" on a
+// served /aircraft/B737-8, not the type, because generateMetadata returned only
+// `alternates.canonical`.
+describe("/aircraft/<slug> Open Graph metadata (M9 Task 6b)", () => {
+  it("carries the short name AND the full designation in openGraph.title, not the code alone", async () => {
+    // Fix round 1: `title: code` alone matched `.entity .code` (asserted above) but dropped
+    // `.entity .ename` -- a pasted link previewing as bare "B737-8" delivers half the entity,
+    // and `og:title` has no second line the way the OG image's title/subtitle split does.
+    // Pinned to the exact string measured against the real warehouse (`dim_aircraft_type`'s
+    // own full BTS designation, all-caps as filed), not a substring match. `code` stays the
+    // short_name, never the raw BTS code (M4a's rule).
+    const meta = await generateMetadata({ params: Promise.resolve({ name: "B737-8" }) });
+    expect(meta.openGraph?.title).toBe("B737-8 — BOEING 737-800");
+  });
+
+  it("states the data view honestly in openGraph.description, without a fare or real-time claim", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ name: "B737-8" }) });
+    const description = meta.openGraph?.description ?? "";
+    expect(description).toContain("B737-8");
+    expect(description).toMatch(/US DOT T-100/);
+    expect(description).toMatch(/not fares or real-time/i);
+  });
+
+  it("omits openGraph for a slug that cannot resolve at all", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ name: "NOPE-1" }) });
+    expect(meta.openGraph).toBeUndefined();
+  });
+
+  it("omits openGraph for an ambiguous slug -- there is no one type to name", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ name: "CE-180" }) });
+    expect(meta.openGraph).toBeUndefined();
+  });
+});
+
 describe("/aircraft/<slug> for a type that has stopped flying", () => {
   // The MD-80: 68 filed months, 2015-01 to 2023-04, and nothing since (measured). The trailing
   // 12-month table is empty and the chart is the only panel on the page with anything in it --

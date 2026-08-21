@@ -478,7 +478,35 @@ export async function generateMetadata({
   const { code: slug } = await params;
   const resolved = await resolveCarrierForRequest(slug);
   if (resolved.kind === "notFound") return {};
-  return { alternates: { canonical: `${BASE_URL}/carrier/${resolved.canonical}` } };
+  const base = { alternates: { canonical: `${BASE_URL}/carrier/${resolved.canonical}` } };
+
+  // `openGraph` only on "ok" -- the "redirect" branch carries just `dim_carrier`'s spelling of
+  // the code, no resolved `CarrierRef` name to build an honest description from, and this page
+  // never actually serves that outcome's HTML (it 308s before rendering).
+  if (resolved.kind !== "ok") return base;
+
+  // Fix round 1: `title: code` alone (e.g. "DL") matched `.entity .code` but dropped
+  // `.entity .ename` -- the page's heading is TWO elements, and `og:title` is the one string a
+  // pasted link previews with. The OG image (Task 6) can drop the name from its own `title`
+  // because it carries a separate `subtitle` line; a flat metadata tag has no second line.
+  // `${code} — ${name}`, em dash with spaces, matching the design spec's own worked example
+  // (docs/superpowers/specs/2026-08-20-og-cards-design.md § Card content: "DL — Delta Air
+  // Lines") -- `resolved.carrier.name` is reused verbatim (dim_carrier's own current spelling,
+  // "Delta Air Lines Inc." measured, not the spec's shortened form), never a second phrasing.
+  const code = resolved.carrier.code;
+  const title = `${code} — ${resolved.carrier.name}`;
+  return {
+    ...base,
+    openGraph: {
+      title,
+      // "Operated flights only" is CLAUDE.md's hard rule stated in the description: a
+      // DL-branded flight operated by Endeavor files as 9E and is counted there, not here. No
+      // fare or real-time claim -- this dataset has neither.
+      description:
+        `Monthly US DOT T-100 segment filings for ${code} — seats, load factor and fleet, ` +
+        `trailing 12 months. Operated flights only, domestic, not fares or real-time.`,
+    },
+  };
 }
 
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the three-way

@@ -327,7 +327,45 @@ export async function generateMetadata({
   const { pair: slug } = await params;
   const resolved = await resolveRoutePairForRequest(slug);
   if (resolved.kind === "notFound") return {};
-  return { alternates: { canonical: `${BASE_URL}/route/${resolved.canonical}` } };
+  const base = { alternates: { canonical: `${BASE_URL}/route/${resolved.canonical}` } };
+
+  // `openGraph` only on "ok" -- the "redirect" outcome (routePair.ts) carries just the
+  // alphabetical `canonical` string, and this page never actually serves that outcome's HTML
+  // (it 308s before rendering), so there is nothing to build an honest per-pair description
+  // from. `alternates.canonical` above is unchanged for either outcome.
+  if (resolved.kind !== "ok") return base;
+
+  // SAME string as this page's own `.entity .code` heading (RouteView, above) and the OG
+  // image's own big title (opengraph-image.tsx's `title = routeTitle(resolved.canonical)`) --
+  // reusing `routeTitle`, not inventing a second phrasing of the pair. Next mirrors
+  // `openGraph.title`/`.description` to the Twitter card automatically.
+  //
+  // Fix round 1: unlike the other three pages this needs no NAME appended -- the pair IS the
+  // name here, and `routeTitle` already reads as one. Order, confirmed: `resolved.canonical` is
+  // ALWAYS the alphabetical pairing (routePair.ts: `[a.code, b.code].sort().join("-")`), which
+  // is also the exact order this page's `.entity .code` AND `.entity .ename` render in --
+  // `RouteView`'s `[a, b] = routeEndpoints(low, high, canonical)` re-pairs BOTH halves of the
+  // heading to `canonical.split("-")`, not to `low`/`high`'s airport-ID order, so the heading
+  // can never disagree with the URL it is the heading of. The 215-of-22,509 CLAUDE.md figure
+  // (id order vs. alphabetical order disagreeing) describes a DIFFERENT rendering site --
+  // composite route-CELL columns built straight from id-ordered `origin_airport_id`/
+  // `dest_airport_id` (or `route_key_low`/`route_key_high`) in other pages' tables, e.g.
+  // /carrier's "Top routes" `routeCode()` and /explore's identically-named local -- neither of
+  // which goes through `routeEndpoints`. This page's own heading is not one of them.
+  const title = routeTitle(resolved.canonical);
+  return {
+    ...base,
+    openGraph: {
+      title,
+      // States what the view IS -- monthly, domestic-only T-100 filings -- and says so by
+      // name rather than by omission, since a pasted link with no caveat reads as a claim of
+      // completeness. No invented superlative, no fare or real-time claim (this dataset has
+      // neither).
+      description:
+        `Monthly US DOT T-100 segment filings for ${title} — seats, load factor and fleet ` +
+        `mix, trailing 12 months. Domestic flights only, not fares or real-time.`,
+    },
+  };
 }
 
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the three-way
