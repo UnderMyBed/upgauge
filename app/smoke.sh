@@ -235,6 +235,55 @@ check_not_re() {
   fi
 }
 
+# The one check in this file that reads BYTES instead of a text haystack, because an OG card is
+# a PNG. Every helper above takes a body that has already been through `$( )`, which mangles a
+# binary payload (NUL bytes dropped, trailing newlines stripped), so a card can only be asserted
+# from a file on disk.
+#
+# THE STATUS CODE AND THE CONTENT-TYPE ARE DELIBERATELY NOT THE ASSERTION. `ImageResponse` builds
+# its body as a lazy ReadableStream (next/dist/server/og/image-response.js), so the headers are
+# committed before Satori and resvg have drawn anything: a route that resolves and then fails to
+# rasterize still answers `200 image/png`. Only the bytes tell a card from an error page wearing
+# a card's headers -- proven by mutant (an OG route returning a 200 with an HTML body keeps this
+# section's header checks green and turns every check_png red; task-9-report.md).
+#
+# The four opengraph-image.test.tsx suites cannot cover this at all: they read `.status` and the
+# content-type off the returned Response without draining it, so no PNG byte exists anywhere in
+# the app suite. This gate is the only thing in the repo that runs the rasterizer.
+#
+# CARD_MIN_BYTES is a FLOOR, not a fixture. The four cards measured 85,274-93,592 bytes on the
+# served build at 7dc9fc6; a blank 1200x630 fill compresses to a couple of KB. What the floor
+# catches is a card that rasterized to an empty frame -- correct signature, correct IHDR, nothing
+# drawn -- which is why it is a floor and not an equality: the byte count moves with the data.
+CARD_MIN_BYTES=20000
+check_png() { # check_png <name> <path>
+  local f code w h size msg=""
+  f="$(mktemp "${TMPDIR:-/tmp}/upgauge-smoke-card-XXXXXX.png")"
+  code=$(curl -s -o "$f" -w '%{http_code}' --max-time 60 "${BASE}${2}")
+  size=$(wc -c <"$f" | tr -d ' ')
+  if [ "$(head -c 8 "$f" | od -An -tx1 | tr -d ' \n')" != "89504e470d0a1a0a" ]; then
+    msg="no PNG signature: HTTP ${code}, ${size} bytes, starts: $(head -c 120 "$f" | tr -c '[:print:]' ' ')"
+  else
+    # IHDR is the first chunk by spec -- 8-byte signature, 4-byte length, the type `IHDR`, then
+    # width and height as big-endian uint32 at byte 16 and byte 20. A truncated file yields ""
+    # here, which fails the comparison rather than passing it.
+    w=$(od -An -tu4 -j16 -N4 --endian=big "$f" | tr -d ' ')
+    h=$(od -An -tu4 -j20 -N4 --endian=big "$f" | tr -d ' ')
+    if [ "$w" != "1200" ] || [ "$h" != "630" ]; then
+      msg="IHDR says ${w:-?}x${h:-?}, want 1200x630 (HTTP ${code}, ${size} bytes)"
+    elif [ "$size" -lt "$CARD_MIN_BYTES" ]; then
+      msg="${size} bytes is under the ${CARD_MIN_BYTES}-byte floor -- a card that rasterized empty"
+    fi
+  fi
+  rm -f "$f"
+  if [ -z "$msg" ]; then
+    printf '  ok   %s\n' "$1"
+  else
+    printf '  FAIL %s\n       %s\n' "$1" "$msg"
+    FAILED=1
+  fi
+}
+
 # Dataset-pinned checks assert values that can CHANGE when the warehouse advances -- totals,
 # counts, rankings ("leads with X"), and window endpoints (the trailing/prior-12 boundary, the
 # current year's own partial-month and asterisk, the dataset's own year range). A production
@@ -2077,6 +2126,112 @@ BODY=$(curl -s                              --max-time 15 "${BASE}/api/pivot?${F
 check     "87: /api/pivot still serves the canonical spelling" "$CODE" '200'
 check     "87: ...under the project's 30-day header"           "$HDRS" "$CACHE_EXPECTED"
 check_not "87: ...with no whole-number error"                  "$BODY" "$MSG87"
+
+# ---------------------------------------------------------------------------------------------
+# 15c. Issue #8: the four OG cards, asserted as PNG BYTES -- and the og:image URL the site's own
+#      pages emit, fetched back exactly as a crawler fetches it.
+#
+# Under section 15 because half of it is the query gate: Next appends a cache-buster to a
+# file-convention OG image URL, so the URL a crawler follows carries a query, and canonicalQuery
+# admits it BY SHAPE on the four OG rows. That admission and the emission of the URL live in
+# different modules with nothing joining them but a request -- which is why the round trip below
+# is the check nothing else in this repo makes. If the admission regresses, proxy.ts 307s the
+# site's own og:image off its buster and every card breaks on every share, with the app suite
+# green.
+#
+# The card checks run in container mode too: a card is served HTML's sibling, not a host-only
+# concern, and nothing here is dataset-pinned (the slugs are section 8/10/11/12's own, the PNG
+# assertions are structural, and CARD_MIN_BYTES is a floor).
+echo "==> OG cards (#8)"
+
+# One card per entity type, on the slugs whose PAGES are already asserted above. A card is a
+# second renderer over the same resolution and the same queries, so a slug that renders a page
+# and not a card is exactly the defect this section exists to find.
+check_png "card: /route/JFK-LAX is a 1200x630 PNG"   "/route/JFK-LAX/opengraph-image"
+check_png "card: /airport/ORD is a 1200x630 PNG"     "/airport/ORD/opengraph-image"
+check_png "card: /carrier/DL is a 1200x630 PNG"      "/carrier/DL/opengraph-image"
+check_png "card: /aircraft/B737-8 is a 1200x630 PNG" "/aircraft/B737-8/opengraph-image"
+
+# ONE HEADER ASSERTION PER MATCHER ROW, not one for the four of them. proxy.ts's matcher comment
+# states the invariant this restores: every row in that list has a served-build header assertion
+# and a served-build no-store assertion here, because nothing else in the repo crosses the
+# matcher at all. A single /route assertion would leave three of the sixteen rows deletable with
+# every gate green -- which is precisely what the check below is written to catch, since the card
+# routes are the first matcher entries that are not pages (#8) and a sweep over "pages" misses
+# them.
+#
+# `max-age=0` names the failure rather than leaving it as "some value other than HTML_CACHE":
+# Next's own header for a card no proxy touched is `public, max-age=0, must-revalidate`, measured
+# on a served build with exactly that mutation (M4, task-9-report.md).
+for C in /route/JFK-LAX /airport/ORD /carrier/DL /aircraft/B737-8; do
+  HDRS=$(curl -s -o /dev/null -D - --max-time 60 "${BASE}${C}/opengraph-image")
+  check     "card: ${C} sets the HTML Cache-Control"                  "$HDRS" "$HTML_CACHE_EXPECTED"
+  check_not "card: ${C} is not under Next's own header (proxy.ts ran)" "$HDRS" 'max-age=0'
+done
+# Once, not per row: `check_png` above already proves each card IS a PNG, so this is the header
+# contract for the type, and a fifth copy of it would assert nothing a fourth did not.
+HDRS=$(curl -s -o /dev/null -D - --max-time 60 "${BASE}/route/JFK-LAX/opengraph-image")
+check     "card: is served as image/png" "$HDRS" 'content-type: image/png'
+
+# THE ROUND TRIP. Next's own cache-buster is 16 hex digits, one per opengraph-image.tsx FILE:
+# every /route/* card shares one, so it is not derivable from the slug and cannot be written as a
+# literal here -- it has to be read off the page, which is also the only form that proves the two
+# halves agree.
+#
+# Measured by mutant: dropping `cacheBuster` from canonicalQuery.ts's /route OG row turns exactly
+# the three checks below red -- 307, `no-store`, and a 30-byte body that is the Location string --
+# while the four bare-path card checks above stay green. That is the whole argument for fetching
+# the emitted URL rather than the one this file could have written down.
+BODY=$(curl -s --max-time 30 "${BASE}/route/JFK-LAX")
+# `grep -oE` and never `-q` (the helpers' own rule). The pattern matches the HTML <meta> only:
+# the same tag recurs further down this body inside the RSC flight payload as JSON-escaped
+# `og:image\",\"content\":\"...`, which this cannot match, so `sed -n 1s` has one line to take.
+OG_IMAGE=$(printf '%s' "$BODY" | grep -oE '"og:image" content="[^"]+"' \
+           | sed -n '1s/.*content="\([^"]*\)".*/\1/p')
+# The buster's PRESENCE is asserted, not assumed. Without this, a Next version that stopped
+# emitting one would silently downgrade the fetch below into a second copy of the bare-path check
+# five lines up -- a check that cannot fail for the reason it claims.
+check_re "card: the page emits an og:image carrying Next's cache-buster" "$OG_IMAGE" \
+  "$(re_escape "/route/JFK-LAX/opengraph-image")\?[0-9a-f]{16}$"
+# Path and query only: the emitted URL is absolute against BASE_URL (lib/siteUrl.ts), which is
+# the deployed host and never this server's bind address.
+OG_PATH="/${OG_IMAGE#*://*/}"
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 60 "${BASE}${OG_PATH}")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 60 "${BASE}${OG_PATH}")
+check     "card: the emitted og:image URL is served, not redirected" "$CODE" '200'
+check     "card: ...under the HTML Cache-Control"                    "$HDRS" "$HTML_CACHE_EXPECTED"
+check_png "card: ...and the bytes at that exact URL are the card"    "$OG_PATH"
+
+# An unknown slug's card 404s and is never cached -- the dataset is rebuilt monthly, so a card
+# 404 pinned in a shared cache outlives the condition that caused it, exactly as the page's does.
+# Again one row of the matcher each, and on the same fixtures their PAGES already use in sections
+# 8, 10 and 11: `ZZZZ` is no airport code at all, `ZZ` is in dim_carrier not at all, and
+# `ZZZZ-LAX` is the route pair built from the first. Verified 404 on a served build before being
+# relied on here, all three with `cache-control: no-store` and an empty body.
+#
+# The needle is the header LINE, not the bare value -- and it is also what proves proxy.ts ran on
+# this path. A card 404 that fell out of the matcher carries NO Cache-Control at all (measured,
+# M4), so a bare `no-store` needle would still be red for the right reason here, but a
+# `must-revalidate` negative of the kind section 16 uses would NOT: there is no header to contain
+# it. What a check can see depends on what the framework emits when the code under test is absent,
+# and on this path it emits nothing.
+for C in /route/ZZZZ-LAX /airport/ZZZZ /carrier/ZZ; do
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}${C}/opengraph-image")
+  HDRS=$(curl -s -o /dev/null -D -            --max-time 30 "${BASE}${C}/opengraph-image")
+  check     "card: ${C} is a 404"                "$CODE" '404'
+  check     "card: ${C}'s 404 card is no-store"  "$HDRS" 'cache-control: no-store'
+  check_not "card: ${C}'s 404 card is never cached" "$HDRS" 's-maxage'
+done
+
+# The ALLOW-LIST, on the card path. `/aircraft/CE-180` is `ambiguous`, not `notFound` (BTS codes
+# 030 and 031 both slug to it), so an OG route written as `!== "notFound"` would rasterize a card
+# for a slug the page 404s -- and proxy.ts would long-cache it. Same fixture, same reason, as the
+# page check in section 12.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/CE-180/opengraph-image")
+HDRS=$(curl -s -o /dev/null -D -            --max-time 30 "${BASE}/aircraft/CE-180/opengraph-image")
+check     "card: the ambiguous slug's card is a 404" "$CODE" '404'
+check     "card: the ambiguous 404 card is no-store" "$HDRS" 'cache-control: no-store'
+check_not "card: the ambiguous 404 card is never cached" "$HDRS" 's-maxage'
 
 # ---------------------------------------------------------------------------------------------
 # 16. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.

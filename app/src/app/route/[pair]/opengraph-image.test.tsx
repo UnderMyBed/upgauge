@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import Image, { alt, contentType, size } from "@/app/route/[pair]/opengraph-image";
+import Image, { alt, contentType, dynamic, size } from "@/app/route/[pair]/opengraph-image";
 
 /** Drives the real route against the real `upgauge.duckdb` -- no mock. A mocked
  * `resolveRoutePair` would return whatever shape the test asked for and would pass against the
@@ -30,6 +30,17 @@ describe("/route/<pair> opengraph-image", () => {
   it("declares 1200x630 and image/png", () => {
     expect(size).toEqual({ width: 1200, height: 630 });
     expect(contentType).toBe("image/png");
+  });
+
+  // THE BUG THIS CATCHES: `export const dynamic = "force-dynamic"` deleted from the route. Next
+  // statically optimizes a file-convention OG image unless the route opts out (its own
+  // convention doc: generated images are "generated at build time and cached" unless they use
+  // request-time APIs or uncached data, and a DuckDB read is neither), so every share of this
+  // card would carry the DATA AS OF and the totals of whenever it was first rasterized. No
+  // served-build gate can see it either: within one run a card frozen at its first render is
+  // byte-identical to a correct one.
+  it("opts out of static optimization", () => {
+    expect(dynamic).toBe("force-dynamic");
   });
 
   // THE BUG THIS CATCHES: no `alt` export, so Next emits an og:image with no og:image:alt --
