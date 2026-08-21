@@ -9,20 +9,25 @@ name: Live check
 # that shares a fate with the thing it watches is not a check. promote.yml only runs when a
 # human promotes; the site can go wrong on a day nobody deploys.
 on:
-  # SCHEDULE DISABLED, deliberately and temporarily -- see #77.
+  # SCHEDULE DISABLED -- see #96. This is a settled decision, not a temporary mute.
   #
-  # GitHub Actions runners cannot currently read the live site: every request to
-  # `${BASE}/api/health` from a runner comes back as a non-JSON challenge/block page, while the
-  # same request from a residential IP with `-A curl/8.0` returns 200 and valid JSON. So this
-  # workflow fails on every run for a reason that has nothing to do with the site's health, and
-  # `scheduled-failure.yml` files an issue for each failure. An alert that fires every hour
-  # regardless of the site is worse than none: it trains its reader to ignore it, which is the
-  # exact failure this workflow was built to prevent.
+  # GitHub Actions runners cannot read the live site: Cloudflare's Bot Fight Mode serves them a
+  # managed challenge, identified by name in the zone's own firewall events (`source=botFight`,
+  # `asn=8075`), while the same request from a residential IP returns 200 and valid JSON. Bot
+  # Fight Mode stays ON -- free-tier protection is an architectural constraint on this project --
+  # and it runs outside the Ruleset Engine, so no WAF rule can exempt this workflow.
   #
-  # `workflow_dispatch` is kept so #77 can be tested against it.
+  # So the cron would fail on every run for a reason that has nothing to do with the site's
+  # health, and `scheduled-failure.yml` would file an issue for each failure. An alert that fires
+  # every hour regardless of the site is worse than none: it trains its reader to ignore it,
+  # which is the exact failure this workflow was built to prevent.
   #
-  # RE-ENABLE by restoring the cron below once #77 is resolved. Nothing enforces this -- #77
-  # carries the reminder, and the site is unwatched until then.
+  # `workflow_dispatch` is kept so a human on a residential connection can still run this, and so
+  # #96's replacement can be tested against it.
+  #
+  # RE-ENABLE only once a vantage point exists that Bot Fight Mode does not challenge -- #96
+  # holds the finding, the blocked-check inventory and three designs. Nothing enforces this;
+  # the site is unwatched on a schedule until then.
   #
   # schedule:
   #   - cron: "23 * * * *"

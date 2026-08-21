@@ -110,7 +110,7 @@ re-asserts rather than duplicates, and it verifies the DNS record it does not ow
 **`make provision` exits 0 even when the box is broken.** cloud-init records package failures
 that nothing reads, and the box is unreachable by design, so provisioning cannot detect them.
 Measured: a box whose `docker-compose` package failed to install provisioned "successfully" and
-served 530 indefinitely. **`live-check.yml` is the detector, and its schedule is muted (#77)** —
+served 530 indefinitely. **`live-check.yml` is the detector, and its schedule is muted (#96)** —
 so after provisioning, confirm the site serves by hand rather than assuming it:
 
 ```bash
@@ -157,7 +157,7 @@ success. Env-var reference for the app itself: [hosting.md](hosting.md).
 | Alert | Meaning | First command |
 |---|---|---|
 | **Freshness** (`freshness.yml`) | `max(year_month)` has not advanced in ~45 days. The site keeps serving; `DATA AS OF` silently stops moving | `gh run list --workflow=warehouse.yml --limit 5` |
-| **Live check** (`live-check.yml`) | The served site is wrong, down, or could not be read — health, sitemap, release freshness or the rate limit. **Runs only on `workflow_dispatch` until #77: a runner is served a challenge page, so nothing is watching the site on a schedule** | `curl -sS https://upgauge.shipman.dev/api/health \| jq .` |
+| **Live check** (`live-check.yml`) | The served site is wrong, down, or could not be read — health, sitemap, release freshness or the rate limit. **Runs only on `workflow_dispatch` (#96): Bot Fight Mode stays on, so a runner is served a challenge page and nothing is watching the site on a schedule** | `curl -sS https://upgauge.shipman.dev/api/health \| jq .` |
 | **Scheduled failure** (`scheduled-failure.yml`) | An unattended workflow failed and nobody was watching | `gh run list --limit 10` |
 
 A live-check failure that is **not** a bad promote and **not** an unreadable body is almost
@@ -172,6 +172,36 @@ An edge challenge page, an HTML error page and an origin that is down are indist
 a runner, so that reading argues in neither direction. **The status code never decides it** —
 `/api/health` answers 503 with a complete, valid report when the data layer is degraded, and a
 build read from one of those is as real as any other.
+
+**What served the challenge is Bot Fight Mode, and it is not configurable.** Identified from the
+zone's own firewall events for the 2026-08-21 16:26Z promote, which name it rather than imply it:
+
+```
+30x  source=botFight  action=managed_challenge  ruleId=bot_fight_mode
+     path=/api/health  asn=8075  ua=curl/8.5.0
+```
+
+Thirty events for thirty poll attempts, from AS8075 (Microsoft/Azure — where GitHub-hosted runners
+live). Not Security Level, which reads `medium`, its default; not Browser Integrity Check, which is
+on but keys on headers and passes every bot-shaped User-Agent tried against it from a residential
+address. **Bot Fight Mode cannot be narrowed to a path or a hostname** — it runs outside the
+Ruleset Engine, where `skip`, `bypass` and `allow` have no effect, so no WAF custom rule or Page
+Rule can exempt `/api/health`, and a custom User-Agent or header cannot be the selector.
+
+**One mechanism does exempt traffic from it: an IP Access Rule with the `Allow` action** — a
+separate legacy product, free on all plans, evaluated ahead of the Ruleset Engine. It matches only
+on network identity (IP, CIDR, ASN), so it selects a *machine*, never a path: allow-listing
+GitHub-hosted runners would mean allow-listing AS8075, all of Azure, zone-wide. `Allow` also
+bypasses rate limiting and WAF Managed Rules for that source. Unverified on this zone, and the
+product is soft-deprecated — Cloudflare advises replacing `Allow` with `Skip`, which for Bot Fight
+Mode does nothing. #96 holds the design that would use it.
+
+**That toggle is dashboard state, and nothing here can assert it.** `/zones/{id}/bot_management`
+refuses this token, and Bot Fight Mode is not a zone setting (`settings/bot_fight_mode` →
+`Undefined zone setting`), so unlike the cache rules, the rate limit and the tunnel config it
+cannot live in `deploy/cloudflare/` and `make cloudflare-apply` cannot re-assert it. If it is
+switched back on, nothing fails loudly — the watchdogs simply go blind again, which is the
+condition this section exists to describe.
 
 **`promote.yml` reads a build AND a status, and each finding earns its own remedy.** A wrong
 build is a promote the box never took; the promoted build under a report that is not `ok` is a
