@@ -386,3 +386,29 @@ describe("/route/<pair> canonical metadata (M5, Task 2)", () => {
     expect(meta.alternates?.canonical).toBeUndefined();
   });
 });
+
+// M9 Task 6b (og-cards FINDING 6): served `/route/JFK-LAX` and read the emitted tags -- `og:title`
+// was "Upgauge" (the root layout's generic site title), not the route, because generateMetadata
+// returned only `alternates.canonical`. The image already carries the entity; a pasted link's
+// title did not.
+describe("/route/<pair> Open Graph metadata (M9 Task 6b)", () => {
+  it("carries the route pair in openGraph.title, matching the page's own heading", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ pair: "JFK-LAX" }) });
+    // Same string routeTitle() produces for `.entity .code` (asserted above) and for the OG
+    // image's own title -- en-dashed, not the raw hyphenated slug.
+    expect(meta.openGraph?.title).toBe("JFK–LAX");
+  });
+
+  it("states the data view honestly in openGraph.description, without a fare or real-time claim", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ pair: "JFK-LAX" }) });
+    const description = meta.openGraph?.description ?? "";
+    expect(description).toContain("JFK–LAX");
+    expect(description).toMatch(/US DOT T-100/);
+    expect(description).toMatch(/not fares or real-time/i);
+  });
+
+  it("omits openGraph for a pair that cannot resolve at all", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ pair: "ZZZZ-LAX" }) });
+    expect(meta.openGraph).toBeUndefined();
+  });
+});

@@ -1,13 +1,6 @@
-import * as Plot from "@observablehq/plot";
 import { renderPlotToSvg } from "@/lib/chart/svg";
-import { findCrossover } from "@/lib/chart/crossover";
-import {
-  toBands,
-  OTHER_TOKEN,
-  BY_AIRCRAFT_TYPE,
-  type MixDimension,
-  type MixRow,
-} from "@/lib/chart/aircraftMix";
+import { BY_AIRCRAFT_TYPE, type MixDimension, type MixRow } from "@/lib/chart/aircraftMix";
+import { buildMixPlotConfig, gapNote, prepareMixPlot } from "@/lib/chart/mixPlotConfig";
 
 /** The project's first chart (docs/design/system.md § Charts, and CLAUDE.md's workflow rule
  * that this one is built before the load-factor chart): a stacked area of monthly seats,
@@ -28,58 +21,10 @@ import {
  * otherwise draw a single band whose gauge ordering encodes nothing. The file keeps its M4c
  * name: three pages import it, and a rename buys nothing a comment cannot say.
  *
- * Synchronous on purpose: `toBands`, `findCrossover` and `renderPlotToSvg` are all pure and
- * blocking, so this can be used as ordinary JSX from an async Server Component (an async
+ * Synchronous on purpose: `prepareMixPlot`, `buildMixPlotConfig` and `renderPlotToSvg` are all
+ * pure and blocking, so this can be used as ordinary JSX from an async Server Component (an async
  * child cannot be, under the renderer this project's page tests use -- see
  * route/[pair]/page.tsx's note on calling `RouteView` directly). */
-
-/** Mirrors docs/design/mockups/entity-route.html's `#mix` block (W=960, H=210). The margins
- * are Plot's, not the mockup's hand-rolled padding: left clears a `~s` seat tick ("1.2M"),
- * bottom clears the year ticks, and top clears the crossover annotation, which sits inside
- * the frame at the top the way the mockup draws it. */
-const WIDTH = 960;
-const HEIGHT = 230;
-const MARGIN = { left: 46, right: 10, top: 18, bottom: 22 };
-
-/** `--panel-2` across 2020-03 -> 2021-06 (docs/design/system.md, "COVID is drawn, not
- * hidden"). The edges land ON those two months' samples rather than bracketing them: every
- * month is plotted at its first day, so 2021-06-01 is where June 2021's seats are drawn, and
- * a band that stopped at 2021-05-31 would visibly fall short of the month it names. */
-const COVID_FROM = "2020-03";
-const COVID_TO = "2021-06";
-const COVID_LABEL = "COVID — in window on purpose.";
-
-/** The z value for the Other bucket. Two leading underscores because the real z values are
- * warehouse ids -- zero-padded BTS `AIRCRAFT_TYPE` digit strings ('079') under the default
- * stack, `AIRLINE_ID` integers under the carrier one, never anything else -- so this cannot
- * collide with one under either. Keyed on CODE and not on the display label for the same
- * reason the pivot is (CLAUDE.md: key on ids, display codes): two types sharing a
- * `short_name` -- CE-180 names two, measured -- would otherwise merge into one band and
- * silently under-count. */
-const OTHER_KEY = "__other";
-
-/** Every month is a point at its first day, UTC. UTC and not local: a local-midnight Date
- * shifts a month's sample across the year boundary west of Greenwich, which would move the
- * COVID band and the annotation rule by a whole tick in some timezones and not others. */
-function monthStart(month: string): Date {
-  return new Date(`${month}-01T00:00:00Z`);
-}
-
-function pct(share: number): string {
-  return `${(share * 100).toFixed(1)}%`;
-}
-
-function plural(n: number, one: string): string {
-  return `${n} ${one}${n === 1 ? "" : "s"}`;
-}
-
-/** One sentence, written once, used on the key AND in the aria-label -- the number is
- * per-subject and two copies of one measurement drift (the same reasoning as Other's share).
- * "no filings", not "no seats": T-100 is a filing, and nobody filing is not the same claim as
- * nobody flying. */
-function gapNote(gaps: number): string {
-  return `${plural(gaps, "month")} with no filings, drawn as gaps rather than interpolated.`;
-}
 
 /** Neither Plot nor jsdom offers a `role` option, and the attribute belongs on the SVG
  * element itself, not on a wrapper: `role="img"` is what makes the subtree presentational, so
@@ -99,14 +44,18 @@ export function AircraftMixChart({
   title: string;
   dimension?: MixDimension;
 }) {
-  const months = [...new Set(rows.map((r) => r.month))].sort();
+  // ONE implementation of the chart, shared with every entity page's `opengraph-image` route
+  // (lib/chart/mixPlotConfig.ts). Nothing about gaps, band membership or band shade is decided
+  // here any more -- a second copy of that reasoning is what would let a social card and the
+  // page it previews draw two different charts from the same rows.
+  const { months, plot } = prepareMixPlot(rows, title, dimension);
 
   // A blank frame under a DATA AS OF badge is the failure /explore and /route already refuse
   // (their empty states state the finding in words). Two cases reach it: nothing filed at
   // all, and a single month -- for which a stacked area has a degenerate x domain and
   // serializes to zero width, and which system.md's sparkline rule already calls out as not a
   // trend. Both say so instead.
-  if (months.length < 2) {
+  if (plot === null) {
     return (
       <Frame title={title} dimension={dimension}>
         <p className="foot">
@@ -118,161 +67,8 @@ export function AircraftMixChart({
     );
   }
 
-  const { bands, other, axis } = toBands(rows);
-  const crossover = findCrossover(rows);
-
-  // BOTTOM FIRST. `bands` already arrives in shade order (`--g1` first), which is stack order
-  // -- lightest at the bottom, darkest on top, so the ramp reads as one gradient rather than
-  // six unrelated greys. Other is lighter still (`--g0`) and therefore sits under everything.
-  // Nothing here re-sorts: shade is assigned by gauge inside toBands, and seat rank decides
-  // only which five types get a band at all. Re-deriving either here is the two-orderings bug
-  // the spec's § Encoding exists to prevent.
-  const stack = [
-    ...(other.typeCount > 0
-      ? [
-          {
-            key: OTHER_KEY,
-            token: OTHER_TOKEN,
-            // Stated on the swatch, not buried: top-5 + Other is a median 94.7% of seats, but
-            // 1,571 of 4,618 multi-type routes fall below 90% and the worst is 48.2%
-            // (measured, spec § "The Other band is not a rounding error"). A chart where half
-            // the area is in the lightest band has to admit it.
-            label: `Other · ${plural(other.typeCount, dimension.unit)} · ${pct(other.seatShare)} of seats`,
-            series: other.series,
-          },
-        ]
-      : []),
-    ...bands.map((b) => ({ key: b.code, token: b.token, label: b.label, series: b.series })),
-  ];
-
-  // GAPS ARE GAPS (docs/design/system.md § Charts). A month the subject did not file has no
-  // point here at all, and each contiguous run of filed months gets its own `z` value, so
-  // Plot emits one path per (band, run) and an absent month leaves a HOLE. `fill` stays keyed
-  // on the band, not on `z`, so a broken band keeps one shade across all its pieces.
-  //
-  // `order` has to be the rank FUNCTION rather than the array of keys it was: the array form
-  // orders the stack by z values, and z is now per-run. Rank is the band's index in `stack`,
-  // which is shade order, so the stack order is unchanged -- lightest at the bottom.
-  const points = stack.flatMap((s, rank) =>
-    s.series.map((p) => ({
-      t: monthStart(p.month),
-      seats: p.seats,
-      k: s.key,
-      z: `${s.key}@${axis.run.get(p.month)}`,
-      rank,
-      solo: axis.solo.has(axis.run.get(p.month)!),
-    })),
-  );
-  const runPoints = points.filter((p) => !p.solo);
-  // A one-month run has no width: filled, it serializes to a degenerate path and disappears.
-  // 41% of route pairs have at least one isolated month (aircraftMix.ts § MonthAxis), and
-  // erasing a filing is the same dishonesty as inventing one, so these are STROKED -- a
-  // hairline column in the band's own shade, at the band's own height in the stack.
-  const soloPoints = points.filter((p) => p.solo);
-
-  const area = (data: typeof points, extra: Record<string, unknown>) =>
-    Plot.areaY(data, {
-      x: "t",
-      y: "seats",
-      z: "z",
-      fill: "k",
-      order: (d: { rank: number }) => d.rank,
-      ...extra,
-    });
-
-  const first = months[0];
-  const last = months[months.length - 1];
-
-  // Clamped to the window, and dropped when the two do not overlap: an unconditional rect
-  // would put a --panel-2 slab at a meaningless x on any chart that starts after 2021.
-  const covidFrom = maxDate(monthStart(COVID_FROM), monthStart(first));
-  const covidTo = minDate(monthStart(COVID_TO), monthStart(last));
-  const covid = covidFrom < covidTo ? { covidFrom, covidTo } : null;
-
-  const crossoverAt = crossover === null ? null : monthStart(`${crossover.year}-01`);
-  // Past the halfway point the label would run off the right edge -- ~30 characters against
-  // the ~10% of the frame a 2025 crossover leaves. Flip the anchor rather than clip the text.
-  const annotationLate =
-    crossoverAt !== null &&
-    crossoverAt.getTime() - monthStart(first).getTime() >
-      (monthStart(last).getTime() - monthStart(first).getTime()) / 2;
-
-  const svg = withImgRole(
-    renderPlotToSvg({
-      className: "plot",
-      width: WIDTH,
-      height: HEIGHT,
-      marginLeft: MARGIN.left,
-      marginRight: MARGIN.right,
-      marginTop: MARGIN.top,
-      marginBottom: MARGIN.bottom,
-      // CLAUDE.md's non-negotiable: all numerics MONOSPACED and tabular. Plot sets
-      // font-variant on its two axis-tick-label groups already, but its root style hardcodes
-      // `font-family: system-ui, sans-serif`, so without the family here the y ticks ("1.2M"),
-      // the year ticks and the annotation's year rendered in the sans face while every other
-      // numeric on the page was Plex Mono -- the mockup has a dedicated `.axl` class doing
-      // exactly this (docs/design/mockups/entity-route.html). `var(--font-mono)` and not a
-      // literal family name: globals.css stays the single source, the same rule the `--g*`
-      // ramp follows.
-      style: { fontFamily: "var(--font-mono)", fontVariantNumeric: "tabular-nums" },
-      ariaLabel: describe({
-        title,
-        dimension,
-        first,
-        last,
-        stack,
-        crossover,
-        gaps: axis.gaps.length,
-      }),
-      x: { type: "utc", label: null, ticks: "1 year", tickFormat: "%Y" },
-      y: { label: "Seats", grid: true, ticks: 4, tickFormat: "~s" },
-      // The tokens go through as-is: Plot passes an ordinal scale's range straight to the
-      // `fill` attribute, so `globals.css` stays the single source for the ramp (verified on
-      // a served build in Task 1, for this scale path specifically -- see
-      // docs/architecture/hosting.md).
-      color: {
-        type: "ordinal",
-        domain: stack.map((s) => s.key),
-        range: stack.map((s) => `var(${s.token})`),
-      },
-      marks: [
-        ...(covid === null
-          ? []
-          : [
-              Plot.rect([covid], { x1: "covidFrom", x2: "covidTo", fill: "var(--panel-2)" }),
-              // Bottom of the frame, because the crossover annotation owns the top.
-              Plot.text([{ t: midpoint(covid.covidFrom, covid.covidTo) }], {
-                x: "t",
-                text: () => COVID_LABEL,
-                frameAnchor: "bottom",
-                dy: -4,
-                fill: "var(--ink-2)",
-              }),
-            ]),
-        area(runPoints, {}),
-        ...(soloPoints.length === 0
-          ? []
-          : [area(soloPoints, { stroke: "k", strokeWidth: 1.5 })]),
-        ...(crossover === null || crossoverAt === null
-          ? []
-          : [
-              Plot.ruleX([crossoverAt], { stroke: "var(--ink)", strokeDasharray: "3 2" }),
-              Plot.text([{ t: crossoverAt }], {
-                x: "t",
-                // Derived, never hand-written (system.md): the whole string comes from
-                // findCrossover, so it cannot rot the first month the data moves.
-                text: () => `${crossover.to} overtakes ${crossover.from} · ${crossover.year}`,
-                frameAnchor: "top",
-                textAnchor: annotationLate ? "end" : "start",
-                dx: annotationLate ? -5 : 5,
-                dy: 2,
-                fill: "var(--ink)",
-                fontWeight: 500,
-              }),
-            ]),
-      ],
-    }),
-  );
+  const { args, stack, gaps } = plot;
+  const svg = withImgRole(renderPlotToSvg(buildMixPlotConfig(args)));
 
   return (
     <Frame title={title} dimension={dimension}>
@@ -299,7 +95,7 @@ export function AircraftMixChart({
         {/* Stated on the chart, not only in the aria-label: a hole in a stacked area is easy
             to read as "flat and small" rather than "not filed", and the count is per-subject
             so the static legend rail cannot carry it. */}
-        {axis.gaps.length > 0 ? <span className="gnum">{gapNote(axis.gaps.length)}</span> : null}
+        {gaps > 0 ? <span className="gnum">{gapNote(gaps)}</span> : null}
       </div>
     </Frame>
   );
@@ -330,54 +126,4 @@ function Frame({
       {children}
     </div>
   );
-}
-
-/** What the chart shows, for a reader who cannot see it: the subject, the window, the series
- * in shade order, what Other hides, and the annotation. Not the word "chart" -- system.md
- * asks for "a real aria-label describing what the series are", and `role="img"` means this
- * string is the ONLY thing announced. */
-function describe({
-  title,
-  dimension,
-  first,
-  last,
-  stack,
-  crossover,
-  gaps,
-}: {
-  title: string;
-  dimension: MixDimension;
-  first: string;
-  last: string;
-  stack: { key: string; label: string }[];
-  crossover: { year: string; from: string; to: string } | null;
-  gaps: number;
-}): string {
-  const types = stack.filter((s) => s.key !== OTHER_KEY).map((s) => s.label);
-  const other = stack.find((s) => s.key === OTHER_KEY);
-  return [
-    `Stacked area of monthly seats by ${dimension.title}, ${title}, ${first} to ${last}.`,
-    `Bands lightest to darkest by seats per departure: ${types.join(", ")}.`,
-    other === undefined ? null : `${other.label}, drawn lightest of all beneath them.`,
-    // A reader who cannot see the holes has to be told they are there, or the label describes
-    // a continuous series the chart deliberately does not draw.
-    gaps === 0 ? null : `${gapNote(gaps)}`,
-    crossover === null
-      ? null
-      : `${crossover.to} overtakes ${crossover.from} in ${crossover.year}.`,
-  ]
-    .filter((s) => s !== null)
-    .join(" ");
-}
-
-function maxDate(a: Date, b: Date): Date {
-  return a > b ? a : b;
-}
-
-function minDate(a: Date, b: Date): Date {
-  return a < b ? a : b;
-}
-
-function midpoint(a: Date, b: Date): Date {
-  return new Date((a.getTime() + b.getTime()) / 2);
 }

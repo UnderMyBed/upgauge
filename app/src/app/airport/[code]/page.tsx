@@ -22,6 +22,7 @@ import { AIRCRAFT_MIX_LIMIT } from "@/lib/chart/aircraftMix";
 import { fetchAirportNetwork } from "@/lib/map/airportNetwork";
 import { EARLIEST_YEAR, parseYear, yearTrack, yearWindow, type ParsedYear } from "@/lib/year";
 import { encode } from "@/lib/pivot/urlstate";
+import { EARLIEST_MONTH, trailing12From } from "@/lib/entityFacts";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
 import type { AirportRef } from "@/lib/resolve";
 import type { Allowlist } from "@/lib/pivot/allowlist";
@@ -32,10 +33,6 @@ import type { PivotQuery } from "@/lib/pivot/types";
 // serving a stale DATA AS OF badge and stale totals to every visitor.
 export const dynamic = "force-dynamic";
 
-// data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- the widest window
-// any query against this database can have. Same constant, same value, as /route and /explore.
-const EARLIEST_MONTH = "2015-01";
-
 // Same reasoning, same pattern, as route/[pair]/page.tsx's identically-named wrapper: dedupes
 // the slug resolution across `generateMetadata` and the default page export -- two separate
 // calls per request in this Next version -- without touching `resolveAirportCode` itself,
@@ -43,15 +40,6 @@ const EARLIEST_MONTH = "2015-01";
 // own copy of this comment; not verifiable by this project's Vitest suite (disclosed in
 // task-2-report.md).
 const resolveAirportCodeForRequest = cache((slug: string) => resolveAirportCode(slug));
-
-/** The trailing-12-month window the table always shows, computed from `asOf` exactly as
- * route/[pair]/page.tsx computes it (and as mart_route_health's own t12 window is): 11 months
- * back from asOf, inclusive of asOf, is 12 months. */
-function trailing12From(asOf: string): string {
-  const [y, m] = asOf.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 - 11, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
 
 const COLUMN_KINDS: [string, ColumnSpec["kind"], boolean][] = [
   ["op_airline_id", "identifier", false],
@@ -455,7 +443,38 @@ export async function generateMetadata({
   const resolved = await resolveAirportCodeForRequest(slug);
   if (resolved.kind === "notFound") return {};
   const canonical = resolved.kind === "redirect" ? resolved.canonical : resolved.airport.code;
-  return { alternates: { canonical: `${BASE_URL}/airport/${canonical}` } };
+  const base = { alternates: { canonical: `${BASE_URL}/airport/${canonical}` } };
+
+  // `openGraph` only on "ok" -- the "redirect" branch above carries just the uppercased code
+  // (no resolved `AirportRef`, so no name to build an honest description from), and this page
+  // never actually serves that outcome's HTML (it 308s before rendering). `alternates.canonical`
+  // is unchanged for either outcome.
+  if (resolved.kind !== "ok") return base;
+
+  // Fix round 1: `title: code` alone (e.g. "SEA") matched `.entity .code` but dropped
+  // `.entity .ename` -- the page's heading is TWO elements, and `og:title` is the one string a
+  // pasted link previews with. The OG image (Task 6) can afford to drop the name from its own
+  // `title` because it carries a separate `subtitle` line; a flat metadata tag has no second
+  // line, so the name has to ride in this one string or it never reaches a reader at all.
+  // `${code} — ${name}`, em dash with spaces, matching the design spec's own worked example
+  // (docs/superpowers/specs/2026-08-20-og-cards-design.md § Card content: "SEA — Seattle/
+  // Tacoma Intl") -- `resolved.airport.name` is reused verbatim (dim_airport's own spelling,
+  // "Seattle/Tacoma International" measured, not the spec's abbreviated "Intl"), never a
+  // second phrasing of it.
+  const code = resolved.airport.code;
+  const title = `${code} — ${resolved.airport.name}`;
+  return {
+    ...base,
+    openGraph: {
+      title,
+      // "Both endpoints" names the one thing about this page's figures a reader could
+      // otherwise get wrong (CLAUDE.md: an origin-only reading is silently about half the
+      // airport). No fare or real-time claim -- this dataset has neither.
+      description:
+        `Monthly US DOT T-100 segment filings at ${code}, both endpoints — seats, load ` +
+        `factor and network, trailing 12 months. Domestic only, not fares or real-time.`,
+    },
+  };
 }
 
 /** The redirect target for a case-normalized airport code, carrying the ORIGINAL raw query

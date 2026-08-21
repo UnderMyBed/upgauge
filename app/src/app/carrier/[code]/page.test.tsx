@@ -290,6 +290,36 @@ describe("/carrier/<code> canonical metadata (M5, Task 2)", () => {
   });
 });
 
+// M9 Task 6b (og-cards FINDING 6): same finding as /route's -- `og:title` read "Upgauge" on a
+// served /carrier/DL, not the carrier, because generateMetadata returned only
+// `alternates.canonical`.
+describe("/carrier/<code> Open Graph metadata (M9 Task 6b)", () => {
+  it("carries the carrier code AND name in openGraph.title, not the bare code alone", async () => {
+    // Fix round 1: `title: code` alone matched `.entity .code` (asserted above) but dropped
+    // `.entity .ename` -- a pasted link previewing as bare "DL" delivers half the entity, and
+    // `og:title` has no second line the way the OG image's title/subtitle split does. Pinned
+    // to the exact string measured against the real warehouse (`dim_carrier`'s current
+    // spelling, "Delta Air Lines Inc." -- with the "Inc.", not the design spec's shortened
+    // worked example), not a substring match.
+    const meta = await generateMetadata({ params: Promise.resolve({ code: "DL" }) });
+    expect(meta.openGraph?.title).toBe("DL — Delta Air Lines Inc.");
+  });
+
+  it("states the data view honestly in openGraph.description, without a fare or real-time claim", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ code: "DL" }) });
+    const description = meta.openGraph?.description ?? "";
+    expect(description).toContain("DL");
+    expect(description).toMatch(/US DOT T-100/);
+    expect(description).toMatch(/operated flights only/i);
+    expect(description).toMatch(/not fares or real-time/i);
+  });
+
+  it("omits openGraph for a code that cannot resolve at all", async () => {
+    const meta = await generateMetadata({ params: Promise.resolve({ code: "ZZ" }) });
+    expect(meta.openGraph).toBeUndefined();
+  });
+});
+
 // `truncated` and its disclosure are reachable only when a carrier's type count hits the
 // limit. The busiest carrier operates 18 types in the trailing 12 months and 23 all-time
 // (measured), nowhere near CARRIER_TYPE_LIMIT, so -- exactly as on /route -- the branch is

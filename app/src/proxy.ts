@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { canonicalize } from "@/lib/canonicalQuery";
+import { canonicalize, ogSlugFromPath } from "@/lib/canonicalQuery";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
-import { RAW_PATH_HEADER, routeSlugFromPath } from "@/lib/rawPath";
+import { RAW_PATH_HEADER, routeSlugFromPath, ROUTE_PREFIX } from "@/lib/rawPath";
 import { resolveRoutePair } from "@/lib/routePair";
-import { airportSlugFromPath } from "@/lib/airport";
+import { airportSlugFromPath, AIRPORT_PREFIX } from "@/lib/airport";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
-import { carrierSlugFromPath, resolveCarrier } from "@/lib/carrier";
-import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
+import { carrierSlugFromPath, resolveCarrier, CARRIER_PREFIX } from "@/lib/carrier";
+import { aircraftSlugFromPath, resolveAircraftSlug, AIRCRAFT_PREFIX } from "@/lib/aircraftSlug";
 import { presetSlugFromPath, presetBySlug } from "@/lib/watch";
 import { parseYear } from "@/lib/year";
 import { decodeRequest } from "@/lib/pivot/bounds";
@@ -348,6 +348,52 @@ export async function proxy(request: NextRequest) {
     );
     return response;
   }
+  // The four OG card routes (`/<entity>/<slug>/opengraph-image`), M8/#8.
+  //
+  // THIS BRANCH MUST STAY ABOVE THE `/airport` BRANCH. Every entity slug reader is a bare prefix
+  // test that does not stop at one segment (`lib/entitySlug.ts`'s header says so deliberately),
+  // so `airportSlugFromPath("/airport/ORD/opengraph-image")` is `"ORD/opengraph-image"`, not
+  // null -- and that branch RETURNS, so from below it every airport card would be answered by
+  // resolving that whole string as an airport code.
+  //
+  // What that mis-resolution produces is NOT the obvious 404, which is why the test that catches
+  // it is a 404 card and not a real one (measured by running the mutant, not by reading the
+  // code): `resolveAirportCode` uppercases before it looks anything up, so a slug ending in
+  // lowercase `opengraph-image` comes back `redirect` -- cacheable -- and `/airport/SEA`'s card
+  // would still ship HTML_CACHE, pointing at a 308 to `/airport/SEA%2FOPENGRAPH-IMAGE`. The
+  // discriminating case is `/airport/LHR/opengraph-image`, where the two branches disagree.
+  //
+  // The `ENTITY_ROUTES` loop below cannot win the same way -- it `break`s rather than returning,
+  // so a later write to the header would overwrite its own. This loop still sits above it, to
+  // avoid paying that loop's warehouse resolution of a slug (`"JFK-LAX/opengraph-image"`) that
+  // exists only to be discarded.
+  //
+  // `HTML_CACHE`, not `PROJECT_CACHE`. A card runs the same live warehouse reads its page does --
+  // `dataAsOf()`, a `runPivot()` and `fetchAircraftMix()`, straight out of `lib/entityFacts.ts`,
+  // by design so the card's numbers cannot disagree with the page's -- so it carries the exact
+  // per-request-resolution risk `HTML_CACHE`'s shortened `s-maxage` exists to bound (#51: the
+  // proxy commits to a header BEFORE the route runs, so a throw afterwards still ships whatever
+  // this line already chose). `PROJECT_CACHE` is for `/sitemap.xml` and `/robots.txt`, which run
+  // fixed catalog queries and carry none of that -- see `HTML_CACHE`'s own doc comment.
+  //
+  // `/airport` REJOINS THE GENERIC SHAPE HERE, and that is deliberate rather than an oversight
+  // in either direction. It is absent from `ENTITY_ROUTES` because its PAGE takes `y=<year>`, a
+  // second cacheability input the generic `isCacheable(entity, slug)` call has no slot for (see
+  // that table's own doc comment and the branch below). A card takes no query at all -- there is
+  // no `y` on `/airport/ORD/opengraph-image`, and `canonicalQuery.ts`'s row for it declares
+  // `NO_KEYS`, so a request carrying one is 307ed away before this line -- which leaves the slug
+  // as the single input, exactly like the other three. Four rows, one loop.
+  //
+  // 404s (an unknown slug, and `/aircraft/CE-180`'s `ambiguous`) take `NO_STORE` through the same
+  // `isCacheable` allow-list every entity page uses: the card route's own `notFound()` mirrors
+  // that allow-list line for line, and the dataset is rebuilt monthly, so a 404 pinned in a
+  // shared cache outlives the condition that caused it.
+  for (const og of OG_ROUTES) {
+    const slug = ogSlugFromPath(pathname, og.prefix);
+    if (slug === null) continue;
+    response.headers.set("Cache-Control", (await isCacheable(og, slug)) ? HTML_CACHE : NO_STORE);
+    return response;
+  }
   // M7 Task 9. `/airport/:code` gained an optional `y=<year>` query param
   // (app/airport/[code]/page.tsx) selecting one calendar year's network map instead of the
   // page's default trailing-12 view. That is a SECOND cacheability input on top of the
@@ -564,6 +610,33 @@ const ENTITY_ROUTES: ReadonlyArray<{
   { slugFromPath: aircraftSlugFromPath, resolve: resolveAircraftSlug },
 ];
 
+/** The same table for the four OG card routes -- ALL FOUR entities, `/airport` included.
+ *
+ * A card is `/<prefix><slug>/opengraph-image` and takes no query, so `slug` is its only
+ * cacheability input and `isCacheable(row, slug)` answers in full. That is precisely the shape
+ * `ENTITY_ROUTES` expresses and precisely why `/airport` is missing from THAT table but present
+ * in this one: what pulled airport out of the generic loop was its PAGE's `y=<year>` param, a
+ * second input the table has no slot for (M7 Task 9, see `ENTITY_ROUTES`'s own comment). The card
+ * has no `y` -- `canonicalQuery.ts` gives it `NO_KEYS` -- so nothing about it needs the special
+ * branch, and copying the omission would have cost `/airport`'s cards their cache header for a
+ * reason that does not apply to them.
+ *
+ * A `prefix` rather than a `slugFromPath`, because `ogSlugFromPath` needs both halves of the
+ * pathname (the prefix AND the `/opengraph-image` suffix) and there is one reader for all four.
+ * It lives in `lib/canonicalQuery.ts` so this branch and that file's four OG rows cannot disagree
+ * about which requests are cards -- the same "these lists must agree" property the matcher
+ * comment at the foot of this file describes, enforced by sharing the predicate instead of by
+ * restating it. */
+const OG_ROUTES: ReadonlyArray<{
+  prefix: string;
+  resolve: (slug: string) => Promise<{ kind: string }>;
+}> = [
+  { prefix: ROUTE_PREFIX, resolve: resolveRoutePair },
+  { prefix: AIRPORT_PREFIX, resolve: resolveAirportCode },
+  { prefix: CARRIER_PREFIX, resolve: resolveCarrier },
+  { prefix: AIRCRAFT_PREFIX, resolve: resolveAircraftSlug },
+];
+
 /** The cacheable outcomes, stated as an ALLOW-list of kinds rather than as `!== "notFound"`.
  *
  * That is not a stylistic preference. `resolveAircraftSlug` has **four** outcomes, not three:
@@ -704,7 +777,8 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // `not-found.tsx` does, still follows the same "every route gets a row" discipline this list
 // exists to enforce rather than becoming the one silent exception.
 //
-// THIS LIST AND `ENTITY_ROUTES` MUST AGREE, with the one carved-out exception each of
+// THIS LIST AND `ENTITY_ROUTES` (plus `OG_ROUTES`, which owns the four `opengraph-image`
+// entries) MUST AGREE, with the one carved-out exception each of
 // `/airport/:code` and `/watch`/`/watch/:preset` already is: those pathnames stay in THIS list
 // (the matcher) but have their own `if` branch above rather than a row in `ENTITY_ROUTES`,
 // because each has a cacheability question the generic table can't express (a live
@@ -735,6 +809,19 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // `/sitemap.xml`, `/robots.txt` and `/watch`. It is the only entry whose branch probes
 // `dataAsOf()` rather than `isDataLayerHealthy()`; see `isFreshnessReadable`'s doc comment for
 // why those two are not interchangeable.
+//
+// SIXTEEN as of #8 -- the four `opengraph-image` routes. Each is TWO segments after its prefix
+// (one dynamic, then the literal `opengraph-image`), so it is a distinct entry from the
+// `/<entity>/:slug` above it and is NOT netted by it: those forward exactly one dynamic segment.
+// The four have one `OG_ROUTES` row each (above) rather than an `ENTITY_ROUTES` row, and
+// `/airport`'s card is in that table even though its page is not -- see `OG_ROUTES`'s own
+// comment. They are the first entries here whose route is NOT a page: an `opengraph-image.tsx`
+// compiles to a route handler, so there is no `not-found.tsx` reading the pathname header on this
+// path and no 404-into-500 failure mode -- the second of the two reasons at the top of this
+// comment does not apply to them. The FIRST one does, and it is the whole reason they are listed:
+// without an entry each card ships `public, max-age=0, must-revalidate` (`ImageResponse`'s own
+// default, measured on a served build) -- uncacheable at the CDN, on 23,780 URLs whose entire
+// traffic is crawlers re-fetching them.
 export const config = {
   matcher: [
     "/",
@@ -744,6 +831,10 @@ export const config = {
     "/airport/:code",
     "/carrier/:code",
     "/aircraft/:name",
+    "/route/:pair/opengraph-image",
+    "/airport/:code/opengraph-image",
+    "/carrier/:code/opengraph-image",
+    "/aircraft/:name/opengraph-image",
     "/search",
     "/sitemap.xml",
     "/robots.txt",

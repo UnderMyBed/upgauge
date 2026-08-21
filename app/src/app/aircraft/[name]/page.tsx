@@ -10,6 +10,12 @@ import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { BY_CARRIER, fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { encode } from "@/lib/pivot/urlstate";
+import {
+  AIRCRAFT_CARRIER_LIMIT,
+  EARLIEST_MONTH,
+  sumTotals,
+  trailing12Query,
+} from "@/lib/entityFacts";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
 import type { AircraftRef } from "@/lib/resolve";
 import type { Allowlist } from "@/lib/pivot/allowlist";
@@ -20,49 +26,12 @@ import type { PivotQuery } from "@/lib/pivot/types";
 // serving a stale DATA AS OF badge and stale totals to every visitor.
 export const dynamic = "force-dynamic";
 
-/** Measured: the most operating carriers any one aircraft type carries is 25 (BTS type 416)
- * over the full window, 7 for the 737-800 this page's tests use. 50 leaves generous headroom so
- * the totals below always cover every carrier; if a future refresh exceeds it the page says so
- * rather than under-reporting -- see `truncated`. */
-const AIRCRAFT_CARRIER_LIMIT = 50;
-
-// data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- the widest window
-// any query against this database can have, matching route/[pair]/page.tsx's constant.
-const EARLIEST_MONTH = "2015-01";
-
 // Same reasoning, same pattern, as route/[pair]/page.tsx's identically-named wrapper: dedupes
 // the slug resolution across `generateMetadata` and the default page export without touching
 // `resolveAircraftSlug` itself, which `proxy.ts` also imports from a non-render context. Full
 // rationale on the route page's own copy of this comment; not verifiable by this project's
 // Vitest suite (disclosed in task-2-report.md).
 const resolveAircraftSlugForRequest = cache((slug: string) => resolveAircraftSlug(slug));
-
-/** The trailing-12-month window this page always shows, computed from `asOf` the same way
- * mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql:
- * `end_m - INTERVAL 11 MONTH`) -- 11 months back from asOf, inclusive of asOf, is 12 months. */
-function trailing12From(asOf: string): string {
-  const [y, m] = asOf.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 - 11, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-/** Ratios of sums, never averages of the rows above (CLAUDE.md). On this page the temptation is
- * sharper than on /route: an aircraft type HAS a nominal seat count, so averaging the carriers'
- * gauges looks like it would recover it. It would not -- it would weight Sun Country's 186-seat
- * 737-800 equally with Southwest's 175-seat one regardless of how many either flew. */
-function aircraftTotals(rows: Record<string, unknown>[]) {
-  const sum = (k: string) => rows.reduce((a, r) => a + Number(r[k] ?? 0), 0);
-  const seats = sum("seats");
-  const passengers = sum("passengers");
-  const departures = sum("departures_performed");
-  return {
-    seats,
-    passengers,
-    departures,
-    loadFactor: seats === 0 ? null : passengers / seats,
-    avgGauge: departures === 0 ? null : seats / departures,
-  };
-}
 
 // fct_segment_month exposes quarantine bookkeeping columns alongside every measure a query
 // asked for -- the stat strip surfaces the count, but they are not pivot-vocabulary columns and
@@ -156,25 +125,20 @@ export async function AircraftView({
 }) {
   const allowlist = await loadAllowlist();
   const asOf = await dataAsOf();
-  const TRAILING_12_FROM = trailing12From(asOf);
 
   // The filter value is the BTS `code` as a STRING -- CLAUDE.md's zero-padding rule. 13
   // fact-present types have a leading zero ('036'), and Number()-ing it here would silently
   // match nothing and render an empty page for a type that flies every day.
   const filters: [string, string[]][] = [["aircraft_type", [type.id]]];
 
-  const query: PivotQuery = {
-    grain: "segment",
+  // The SAME query object this route's `opengraph-image` builds, from the same module, so the
+  // card's stat row cannot disagree with the stat strip below (lib/entityFacts.ts).
+  const query: PivotQuery = trailing12Query({
     dimensions: ["op_airline_id"],
-    measures: ["seats", "passengers", "departures_performed", "load_factor", "avg_gauge"],
-    timeFrom: TRAILING_12_FROM,
-    timeTo: asOf,
     filters,
-    sort: "seats",
-    sortDesc: true,
+    asOf,
     limit,
-    grouping: "operating",
-  };
+  });
 
   // CONCURRENT, not two sequential awaits -- same reasoning and the same measured saving as
   // /route (docs/architecture/hosting.md): the two pivots share nothing, and connect() hands
@@ -197,7 +161,7 @@ export async function AircraftView({
       fetchAircraftMix(filters, EARLIEST_MONTH, asOf, BY_CARRIER),
     ]);
 
-  const totals = aircraftTotals(result.rows);
+  const totals = sumTotals(result.rows);
   const truncated = result.rows.length >= limit;
   const isEmpty = result.rows.length === 0;
   const hasMix = mix.length > 0;
@@ -294,7 +258,34 @@ export async function generateMetadata({
   const { name: slug } = await params;
   const resolved = await resolveAircraftSlugForRequest(slug);
   if (resolved.kind !== "ok" && resolved.kind !== "redirect") return {};
-  return { alternates: { canonical: `${BASE_URL}/aircraft/${resolved.canonical}` } };
+  const base = { alternates: { canonical: `${BASE_URL}/aircraft/${resolved.canonical}` } };
+
+  // `openGraph` only on "ok" -- "redirect" carries just the uppercased slug, no resolved
+  // `AircraftRef` to build an honest description from, and this page never actually serves
+  // that outcome's HTML (it 308s before rendering). `ambiguous` and `notFound` already fell
+  // through to the empty return above, same as before this task.
+  if (resolved.kind !== "ok") return base;
+
+  // Fix round 1: `title: code` alone (e.g. "B737-8") matched `.entity .code` but dropped
+  // `.entity .ename` -- the page's heading is TWO elements, and `og:title` is the one string a
+  // pasted link previews with. The OG image (Task 6) can drop the name from its own `title`
+  // because it carries a separate `subtitle` line; a flat metadata tag has no second line.
+  // `${code} — ${name}`, em dash with spaces, matching the design spec's own worked example
+  // (docs/superpowers/specs/2026-08-20-og-cards-design.md § Card content: "B737-800") --
+  // `resolved.type.name` is reused verbatim (dim_aircraft_type's own full BTS designation,
+  // "BOEING 737-800" measured, all-caps as filed), never a second phrasing of it. `code` is
+  // still the short_name, never the raw BTS code (M4a's rule).
+  const code = resolved.type.code;
+  const title = `${code} — ${resolved.type.name}`;
+  return {
+    ...base,
+    openGraph: {
+      title,
+      description:
+        `Monthly US DOT T-100 segment filings for ${code} — seats, load factor and ` +
+        `carriers, trailing 12 months. Domestic only, not fares or real-time.`,
+    },
+  };
 }
 
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the four-way

@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap dev app-check app-build app-smoke image image-smoke portability provision cloudflare-apply test lint lint-actions fmt fmt-check check check-docs clean
+.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap card-fonts dev app-check app-build app-smoke image image-smoke portability provision cloudflare-apply test lint lint-actions fmt fmt-check check check-docs clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -122,6 +122,9 @@ check-gate-counts:  ## Fail if the committed gate counts no longer match the sui
 
 basemap:  ## Regenerate the pre-projected basemap (app/src/lib/map/basemapPaths.generated.ts) from the two committed inputs, app/geo/ne_110m_us.json and app/geo/ne_50m_car.json
 	$(MISE) node --no-warnings app/scripts/build-basemap.mjs
+
+card-fonts:  ## Regenerate the OG card fonts module (app/src/lib/og/fonts.generated.ts) from the committed app/src/lib/og/fonts/*.ttf sources
+	$(MISE) node --no-warnings app/scripts/build-card-fonts.mjs
 
 dev:  ## Next.js dev server
 	# `next dev app` from the REPO ROOT, not `npm --prefix app run dev`. The --prefix form
