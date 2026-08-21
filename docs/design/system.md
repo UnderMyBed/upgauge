@@ -717,7 +717,14 @@ one — full contract in
 [`../architecture/pipeline.md` § Route slugs](../architecture/pipeline.md#route-slugs-two-orderings-that-are-not-the-same-thing).
 All four entity pages export a `<link rel="canonical">` at that same resolved value — never
 the requested spelling, so `/airport/sea` declares `/airport/SEA` rather than itself, exactly
-the same resolver call the redirect above already makes.
+the same resolver call the redirect above already makes. The canonical tag is not the whole head:
+each page also exports Open Graph metadata — `og:title` naming the entity by **code and name**
+(many surfaces drop the description entirely, and a link previewing as "SEA" has lost the thing
+worth sharing), a description stating what the data view is plus that page's own honesty caveat,
+and the `og:image` pointing at its card (§ The OG card). Open Graph is exported on the `ok`
+outcome alone — a redirect and an ambiguous slug get the canonical tag and nothing more, and a
+404 gets neither. `og:title` is code **and** name where the card's own title is code alone,
+because the card has a subtitle line to put the name on and a flat metadata tag does not.
 
 ### The other three — what each one changes and what it must not
 
@@ -749,6 +756,44 @@ being honest:
 - **`/aircraft`'s ramp means something else, so it says something else.** Covered in
   § Charts above: "less dense cabin" / "denser cabin", never "smaller metal", or the rail is the
   stale "how to read this" it exists to replace.
+
+### The OG card — the same page, rasterized
+
+Every entity page has one, rendered on demand at its `opengraph-image` child route. **The unfurl
+is a different problem from the screenshot and it fires first**: a pasted link unfurls before
+anyone sees the page.
+
+**1200×630.** Top rule: the `UPGAUGE` wordmark left with the deploy's own host beside it in mono
+`--ink-2`, and the `DATA AS OF: YYYY-MM` badge right — `--signal` text inside a `--signal`
+hairline, the same first-class element every data view carries. Beneath it the title block: the
+entity code in **mono, SemiBold, 42px**, the subject line under it in `--ink-2`. Then the stat
+row — the page's own six stats, label in small-caps sans over the value in mono at 26px, ruled
+above and below in `--rule-2`. The chart fills the remaining height. Ground is `--panel`. No
+gradient, no photograph, no chrome.
+
+**The chart is the page's chart, not a redrawing of it.** It arrives as `renderPlotToSvg`'s own
+output with its `var()` tokens resolved to literals, embedded as a data URI, so the gap rules and
+the two orderings (§ Charts) keep exactly one implementation and the card cannot contradict the
+page it decorates. A rasterizer has no CSS-variable resolution and paints an unresolved `var()`
+black — a card that renders successfully in the wrong colours — so the resolver **throws on an
+unknown token** rather than passing it through, and a test parses `globals.css`'s `:root` block
+and asserts the literals still agree with it.
+
+**Numerics stay mono and tabular-figure.** The rule does not lapse at social-preview size: a card
+is a data view, not a marketing asset. Both faces are subset and **baked into a generated
+module** rather than read from disk — the runtime image copies `app/.next` and not `app/src`, so
+a `readFileSync` under `src/` passes every host gate and fails only in the container.
+
+**Derived measures carry the `computed` marker here too.** Load factor and average gauge are
+ratios of summed numerator and denominator; a card that shows the figure without saying so
+presents a computed value as a filed one.
+
+**The unfiled-month count is VISIBLE TEXT, and that is the one thing the card does differently.**
+The page states it twice — in the chart and in the chart's `aria-label` — and **an image has no
+`aria-label`**. Rasterizing the page's chart therefore drops the accessible half of that
+statement, so the count is rendered as a line of type instead. It appears only when there are
+gaps: a card that says "0 unfiled months" is noise, and erasing a filing is the same dishonesty
+as inventing one.
 
 ---
 
@@ -836,19 +881,6 @@ The editorial frame is `.frame`: a left hairline in `--signal`, `--ink` text at 
 The preset index is `.watch-list`: hairline-separated rows, no bullets, the linked title
 carrying the weight and its frame muted to `--ink-2`. Both need a real CSS rule: without one
 the site's only voiced line renders as plain body text beneath its own disclosures.
-
-### OG / social card
-
-1200×630, generated per entity at build time. Same tokens, no webfont dependency at render
-time (subset or draw with the system stack).
-
-Layout: entity code in mono at ~120px top-left · entity name beneath in `--ink-2` · **one
-headline number** with its label · a bare sparkline or the gauge rail across the lower third
-· `DATA AS OF YYYY-MM` bottom-right in `--signal` · `UPGAUGE` wordmark bottom-left. No
-gradient, no photograph, no chrome.
-
-The unfurl is a different problem from the screenshot and it fires first — a pasted link
-unfurls before anyone sees a screenshot.
 
 ---
 

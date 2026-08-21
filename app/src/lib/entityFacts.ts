@@ -122,8 +122,8 @@ export function routeTitle(canonical: string): string {
 
 /** The pair's two airports in the order the CANONICAL SLUG spells them, which is alphabetical
  * by code and is NOT the order `low`/`high` arrive in (that one is by airport id). The two
- * disagree for 154 of 22,420 routes -- BNH-JFK is one: id order is JFK,BNH but the header reads
- * "BNH–JFK". Pairing each half of `canonical` back to its airport BY CODE, rather than assuming
+ * disagree for 215 of 22,509 routes -- IFP-IAH is one: id order is IFP,IAH but the header reads
+ * "IAH–IFP". Pairing each half of `canonical` back to its airport BY CODE, rather than assuming
  * `canonical.split("-")` lines up with `[low, high]`, keeps a displayed name attached to the
  * code it is actually under. A `JFK–LAX`-shaped fixture cannot fail this way, so any test for
  * it needs a disagreeing pair. */

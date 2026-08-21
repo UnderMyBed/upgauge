@@ -621,10 +621,12 @@ being invisible to whoever added a route:
 >
 > **Three lines per page, and all three are load-bearing:** a `matcher` entry, a row in
 > `ENTITY_ROUTES`, and *both* a header assertion and a `no-store` assertion in `app/smoke.sh`.
-> **The matcher holds twelve entries**: `/`, `/explore`, `/api/pivot`, the four entity pages
-> (`/route/:pair`, `/airport/:code`, `/carrier/:code`, `/aircraft/:name`), `/search`,
-> `/sitemap.xml`, `/robots.txt`, `/watch` and `/watch/:preset`. Only the four entity pages and
-> `/watch/:preset` are dynamic segments; the rest are exact paths with no per-slug resolution.
+> **The matcher holds sixteen entries**: `/`, `/explore`, `/api/pivot`, the four entity pages
+> (`/route/:pair`, `/airport/:code`, `/carrier/:code`, `/aircraft/:name`), those four pages'
+> `opengraph-image` children (§ The OG cards, below), `/search`,
+> `/sitemap.xml`, `/robots.txt`, `/watch` and `/watch/:preset`. Only the four entity pages, their
+> four card routes and `/watch/:preset` are dynamic segments; the rest are exact paths with no
+> per-slug resolution.
 > The rule is the same for all of them: a route absent from the matcher gets
 > no `Cache-Control` from this file at all, which for `/search` happens to be harmless (Next's
 > own `no-store` for `dynamic = "force-dynamic"` covers the gap) but for `/sitemap.xml` and
@@ -892,6 +894,11 @@ every row below, and the status on every 308 and 404.
 | `/aircraft/a320-1-2` | 308 | long cache | to the **slug**, never to the unroutable `A320-1/2` |
 | `/aircraft/NOPE-1` | 404 | `no-store` | unknown type |
 | **`/aircraft/CE-180`** | **404** | **`no-store`** | **`ambiguous`, not `notFound` — the allow-list is for this row** |
+| `/route/JFK-LAX/opengraph-image` | 200 | `HTML_CACHE` (1hr) | the card's own `image/png`, under the proxy's header rather than `ImageResponse`'s |
+| `/carrier/DL/opengraph-image?083d…` | 200 | `HTML_CACHE` (1hr) | one 16-hex keyless chunk is the framework's own cache-buster (§ The OG cards) |
+| `/route/ORD-LAX/opengraph-image` | 308 | `HTML_CACHE` (1hr) | the card follows its page's re-ordering, to `/route/LAX-ORD/opengraph-image` |
+| `/route/ZZZZ-LAX/…` · `/airport/ZZZZ/…` · `/carrier/ZZ/…` | 404 | `no-store` | same `isCacheable` allow-list the pages use |
+| **`/aircraft/CE-180/opengraph-image`** | **404** | **`no-store`** | **`ambiguous` — the card mirrors the page's allow-list line for line** |
 | `/watch` | 200 | `HTML_CACHE` (1hr) | allow-list is unconditional (no slug to fail) — gate is the probe alone |
 | `/watch/gauge` | 200 | `HTML_CACHE` (1hr) | known preset, `isDataLayerHealthy()` probe succeeded |
 | `/watch/nope` | 404 | `no-store` | not one of the four `PRESETS` |
@@ -934,6 +941,82 @@ no check** (this repo has shipped exactly one of those). Five mutants, each appl
 
 The last one is the proof that the absence checks are live rather than decorative; the
 fourth is the proof that they are specific.
+
+### The OG cards — a route handler, so the proxy's header lands on top of one it did not write
+
+Each entity page has an `opengraph-image.tsx` child (`/route/:pair/opengraph-image` and its
+three siblings), rendering the social-preview card on demand. They are the **first matcher
+entries whose route is not a page**: an `opengraph-image.tsx` compiles to a route handler, so
+there is no `not-found.tsx` reading the pathname header on these paths and no 404-into-500
+failure mode. The other reason for a matcher entry applies in full, and it is why they are
+listed.
+
+**`ImageResponse` ships its own `Cache-Control`, and the proxy overwrites it.** In a production
+build it constructs the response with `public, max-age=0, must-revalidate`
+(`next/dist/server/og/image-response.js`), which is uncacheable at a CDN — every crawler
+re-fetch would reach the origin and pay a DuckDB query plus a rasterize. Measured on a served
+build, the header on the wire is `public, s-maxage=3600, stale-while-revalidate=86400`: the
+proxy's write wins, so its branch is load-bearing rather than decorative, and `app/smoke.sh`
+asserts both the value that ships and the absence of the framework's.
+
+**`HTML_CACHE`, not `PROJECT_CACHE`.** A card runs the same live warehouse reads its page does —
+`dataAsOf()`, a `runPivot()` and `fetchAircraftMix()`, out of `lib/entityFacts.ts` by design, so
+the card's numbers cannot disagree with the page's. That is exactly the per-request-resolution
+risk `HTML_CACHE`'s shorter `s-maxage` exists to bound (§ The gap: the proxy commits a header
+before the route runs, so a throw afterwards still ships whatever was chosen). `PROJECT_CACHE`
+is for `/sitemap.xml` and `/robots.txt`, which run fixed catalog queries and carry none of it.
+
+**The four rows are one loop, and `/airport` is in it.** What pulls `/airport` out of
+`ENTITY_ROUTES` is its *page*'s `y=<year>` param, a second cacheability input the generic
+`isCacheable(entity, slug)` has no slot for. A card takes no query, so the slug is its only
+input and the generic shape fits: `OG_ROUTES` has all four. **The loop must sit above the
+`/airport` branch**, because every entity slug reader is a bare prefix test that does not stop
+at one segment — `airportSlugFromPath("/airport/ORD/opengraph-image")` returns
+`"ORD/opengraph-image"`, not null. The mis-resolution that causes is not the obvious 404:
+`resolveAirportCode` uppercases before it looks anything up, so a slug ending in lowercase
+`opengraph-image` comes back `redirect`, which is *cacheable*. The discriminating fixture is
+`/airport/LHR/opengraph-image`, where the two branches disagree; a real card cannot fail this
+way.
+
+**The framework appends an unkeyed cache-buster, and the key gate admits it BY SHAPE.** Next
+emits `og:image` as `…/route/JFK-LAX/opengraph-image?083d4242d9090de4` — a query chunk with **no
+key and no `=`**, which is precisely the keyless axis § One canonical key set closes by
+byte-equality. The value is `[contenthash]` over the route file's compiled content, one per
+`opengraph-image.tsx` **file** and not per slug (measured: every `/route/…` card carries
+`083d4242d9090de4` while `/airport`, `/carrier` and `/aircraft` carry three other values), so it
+changes on any edit to that file and cannot be pinned as a literal in this repo or in a test.
+The rule is therefore a shape: **one keyless chunk matching `/^[0-9a-f]{16}$/`, at most one, on
+the four card rows and nowhere else.** Measured on a served build:
+
+| request | status | `Cache-Control` |
+|---|---|---|
+| `…/opengraph-image?0123456789abcdef` | 200 | `HTML_CACHE` |
+| `…/opengraph-image?0123456789abcde` (15 hex) | 307 | `no-store` → the bare URL |
+| `…/opengraph-image?x=1` | 307 | `no-store` → the bare URL |
+| `…/opengraph-image?0123456789abcdef&0123456789abcdef` | 200 | `no-store` — two spellings of one slot, so no canonical form to redirect to |
+
+**Byte-equality alone would have 307ed the site's own `og:image`**, on all four entity pages at
+once, while every unit test stayed green — a card would then cost two origin hits and depend on
+each crawler following redirects. **`exempt` was rejected**: it means only "the proxy does not
+redirect this path" (§ `/api/pivot` closes its own), and taking it here would have reopened the
+whole `?x=1…N` family on four cacheable paths to buy one shape. What the shape does **not**
+close is stated rather than implied — `16^16` strings match it, each a distinct CDN key on a
+cacheable path. That is the same residual class as `f`'s value axis and is left to the same
+place (§ What this does not close).
+
+**`metadataBase` is a requirement, not a nicety.** Every card route emits a *relative* URL, and
+`og:image` must be absolute for a crawler to fetch it, so `app/layout.tsx` sets
+`metadataBase: new URL(BASE_URL)` from `UPGAUGE_BASE_URL` (§ Environment variables). Left at the
+default, every page emits a card URL under `http://localhost:3000` — reachable from nowhere but
+the box that rendered it, with nothing red anywhere.
+
+**The cost this creates, and who bounds it.** One card URL per entity page — the four entity
+families `/sitemap.xml` enumerates, less its `/watch` entries, which have no card — and
+`dynamic = "force-dynamic"`
+means the origin has no warm path: measured against a served build, repeating one card URL six
+times cost 89–114 ms every time, and a card is 74–107 KB of PNG. The CDN is what makes that
+survivable, which is the whole reason these four paths are in the matcher; the edge rate limit
+does not reach them (§ What this does not close — its expression matches `/api/` alone).
 
 ### `y` on `/airport/:code` — a closed set, so validate it rather than blanket `no-store`
 
@@ -1334,18 +1417,20 @@ guaranteed origin miss. Measured on a served build at `4aa8087`, before the gate
 `4aa8087` it had not yet joined `proxy.ts`'s matcher and returned Next's own
 `private, no-cache, no-store, max-age=0, must-revalidate` unconditionally, so a junk query on it
 changed nothing — there was no long-cached response yet for one to corrupt. Once Task 1 landed,
-`/` joined the same exposure the seven rows above demonstrate, for **ten** paths the proxy gates
-(the seven shown, plus `/aircraft/:name` and `/watch/:preset`, both the identical mechanism as a
-row already shown). `/api/pivot` is an **eleventh** cacheable path — its own successful responses
+`/` joined the same exposure the seven rows above demonstrate, for **fourteen** paths the proxy
+gates (the seven shown, plus `/aircraft/:name`, `/watch/:preset` and the four `opengraph-image`
+routes, all the identical mechanism as a row already shown). `/api/pivot` is a **fifteenth**
+cacheable path — its own successful responses
 take the identical `PROJECT_CACHE` value `/sitemap.xml` and `/robots.txt` do — and it is closed by
 its own handler rather than by the proxy (§ `/api/pivot` closes its own, below). `/search` alone is
-never cacheable, gated or not, which makes twelve matcher entries in all.
+never cacheable, gated or not, which makes sixteen matcher entries in all.
 
 `app/src/lib/canonicalQuery.ts` declares the legitimate query keys for every matcher path — the
 third list, alongside `ENTITY_ROUTES`, that the app's cacheable surface depends on. Only agreement
-with `config.matcher` is asserted by its own test (`canonicalQuery.test.ts`): `QUERY_ROWS` (12
+with `config.matcher` is asserted by its own test (`canonicalQuery.test.ts`): `QUERY_ROWS` (16
 rows, one per matcher entry) is a strict superset of `ENTITY_ROUTES` (3 rows), so row-for-row
-agreement with the latter isn't a property that test could assert. An unknown key gets a **307 to
+agreement with the latter isn't a property that test could assert. The four card rows carry
+`NO_KEYS` plus the framework's own cache-buster shape (§ The OG cards). An unknown key gets a **307 to
 the canonical URL under `no-store`**, answered before any database probe: origin cost is ~0 instead
 of a full render, the CDN stores nothing, and a visitor arriving with a tracking param still lands
 on the page. A duplicated key gets `no-store` with **no**
@@ -1384,7 +1469,7 @@ build, first at `d109845` and again in the fix wave by restoring the throw on to
 | `/airport/ORD??y=2019` | **500** | 307 `no-store` → `/airport/ORD?y=2019` |
 | `/sitemap.xml??x=1` | **500** | 307 `no-store` → `/sitemap.xml` |
 
-Reachable on all twelve matcher paths — `/`, `/sitemap.xml` and every entity page included — by any
+Reachable on every matcher path — `/`, `/sitemap.xml` and every entity page included — by any
 client, with no auth and no unusual encoding, and `?x=1…N` behind a doubled `?` is itself an
 unbounded family of origin-hitting 500s: the exact cost shape this branch exists to close, minted
 by the branch itself. At `4aa8087`, before the gate existed, the same URL was an ordinary
@@ -1411,7 +1496,7 @@ trailing `&`, `&&`, `&&&` and a *leading* `&` all returned 200 under
 this path exactly as on `/explore` and not closed by any of this.
 
 So `exempt` now means only **"the proxy does not redirect this path"**. The rules apply to every
-row: `queryVerdict()` evaluates them for all twelve, and `canonicalize()` — the proxy's entry point
+row: `queryVerdict()` evaluates them for all sixteen, and `canonicalize()` — the proxy's entry point
 and only that — answers `clean` for an exempt row. `app/api/pivot/route.ts` calls `queryVerdict()`
 itself and answers **400 + `no-store`**, the same as it already does for an unknown key. It does
 not 307: a redirect is a worse answer to an XHR than a named error, and that ruling is unchanged.
@@ -1505,6 +1590,14 @@ text: `f=origin_state:<arbitrary string>` still decodes and still renders a dist
 `bounds.test.ts` and `app/smoke.sh` assert that exemption, so a future "simplification" to a
 blanket `%` ban reddens instead of shipping.
 
+**A fourth axis, on the four card paths: the cache-buster's own value.** It is admitted by shape
+(§ The OG cards), so `16^16` spellings of it are canonical per card path, each a distinct CDN key
+on a cacheable URL. Nothing at the origin bounds it: the value is a content hash this repo cannot
+pin, so there is no literal to compare against and no pure function that decides one. It is a
+strict narrowing over the alternative — without a row at all, every card path admits every query
+key there is — and the residual goes to the same place `f`'s does, below. Do not read the shape as
+licence to widen this pattern to a row whose value set the app does not itself generate.
+
 **`f` is left to the edge deliberately, and a key table could not have expressed it anyway.**
 `QUERY_ROWS` maps a path to the *names* it reads. Deciding whether `f=origin_state:XX` names a real
 state is a property of the WAREHOUSE — a DATA read — not of the URL grammar. That is a different
@@ -1523,7 +1616,10 @@ it are easy to get wrong and both matter here:
 - **Its expression is `starts_with(http.request.uri.path, "/api/")`.** `/explore` is not under
   `/api/`, so **the residual `f` axis on `/explore` has no edge rate limit at all today.** The rule
   covers `/api/pivot`, where the same `f` axis rides the *thirty-day* `PROJECT_CACHE`; it does not
-  cover the HTML page. Whether to extend it is its own question and is not answered here.
+  cover the HTML page. **Nor the four card paths**, which are not under `/api/` either and are the
+  most expensive uncovered thing on the site — a DuckDB query plus a rasterize per request, with no
+  warm path at the origin (§ The OG cards). Whether to extend it is its own question and is not
+  answered here.
 - **A rate limit caps rate, not cardinality.** Even where it applies, 1 req/s is 86,400 distinct
   cache entries per day per IP, each a full pivot render. It bounds how fast the space can be
   walked, never how large the space is.
@@ -1961,10 +2057,12 @@ have taken this with them.
 ## Environment variables
 
 The server (`app/src/lib/db.ts`) reads two, and a third — read through the one shared
-`app/src/lib/siteUrl.ts` module, not re-declared per call site — backs both the sitemap
-(`app/src/app/sitemap.ts`, `app/src/app/robots.ts`) and the four entity pages' canonical
+`app/src/lib/siteUrl.ts` module, not re-declared per call site — backs the sitemap
+(`app/src/app/sitemap.ts`, `app/src/app/robots.ts`), the four entity pages' canonical
 `<link>` tags (`app/src/app/route/[pair]/page.tsx` and its `/airport`, `/carrier`, `/aircraft`
-siblings). Two more, read by `app/src/lib/health.ts`'s `identity()`, carry no functional
+siblings), the `metadataBase` those pages resolve their `og:image` against
+(`app/src/app/layout.tsx`), and the host printed on the card itself
+(`app/src/lib/og/card.tsx`'s wordmark). Two more, read by `app/src/lib/health.ts`'s `identity()`, carry no functional
 behaviour at all — they only label `/api/health`'s `build` field with which image and which
 warehouse asset produced it. All five are optional — production sets none and gets the
 defaults below, which are what the Portability test and the WORKDIR contract assume for the
@@ -1974,7 +2072,7 @@ first three, and what a local `next start` reports unchanged for the last two.
 |---|---|---|---|
 | `UPGAUGE_ROOT` | `process.cwd()` | The directory containing `data/` and `sql/` — anchors both `upgauge.duckdb`'s default location and every `.sql` file read (`sql/03_queries/*.sql`). Also passed to DuckDB as `file_search_path`, so the catalog's relative Parquet globs (`read_parquet('data/parquet/...')`) resolve against it regardless of the process's actual OS working directory. | Set to the wrong directory: every `.sql` file read fails with ENOENT, and every query against a Parquet-backed view fails with `IO Error: No files found that match the pattern "data/parquet/..."` — the exact failure the Portability test section above describes, just triggered by a bad env var instead of a bad `WORKDIR`. |
 | `UPGAUGE_DB` | `${UPGAUGE_ROOT}/upgauge.duckdb` | Overrides the `.duckdb` file path directly, independent of `UPGAUGE_ROOT` — for a deploy that keeps the database file somewhere other than the repo-root default (e.g. a mounted volume). | Set to a path that doesn't exist or isn't a valid DuckDB file: `DuckDBInstance.create()` rejects and every route handler 500s. Note this does NOT relocate `data/parquet/` — that's still resolved via `UPGAUGE_ROOT`'s `file_search_path`, so pointing `UPGAUGE_DB` at a database file whose Parquet tree lives elsewhere still needs `UPGAUGE_ROOT` set to match. |
-| `UPGAUGE_BASE_URL` | `http://localhost:3000` | The scheme+host every fully-qualified URL this app emits is prefixed with: every `<loc>` in `/sitemap.xml`, the `Sitemap:` line in `/robots.txt`, **and** every entity page's self-referential `<link rel="canonical">`. The sitemap protocol requires a fully-qualified URL, `sitemapEntries()` (`app/src/lib/sitemap.ts`) and the entity resolvers alike only ever return a site-relative path or a bare code, on purpose (CLAUDE.md's portability rule: no hardcoded hostname, Docker + env vars only) — a hardcoded `https://upgauge.shipman.dev` here is a Critical defect, not a shortcut. | Left at the default in a real deploy: the sitemap validates and crawls fine locally, and every entity page still renders, but every submitted `<loc>` and every canonical `<link>` points at `localhost`, so a crawler resolves none of them and every canonical tag is wrong for wherever this is actually served. |
+| `UPGAUGE_BASE_URL` | `http://localhost:3000` | The scheme+host every fully-qualified URL this app emits is prefixed with: every `<loc>` in `/sitemap.xml`, the `Sitemap:` line in `/robots.txt`, every entity page's self-referential `<link rel="canonical">`, **and** `app/layout.tsx`'s `metadataBase` — which is what turns each `opengraph-image` route's relative URL into the absolute `og:image` a crawler can fetch, and is a requirement rather than a nicety for exactly that reason. The card's own wordmark prints this host too, so a fork or a staging deploy shows its own. The sitemap protocol requires a fully-qualified URL, `sitemapEntries()` (`app/src/lib/sitemap.ts`) and the entity resolvers alike only ever return a site-relative path or a bare code, on purpose (CLAUDE.md's portability rule: no hardcoded hostname, Docker + env vars only) — a hardcoded `https://upgauge.shipman.dev` here is a Critical defect, not a shortcut. | Left at the default in a real deploy: the sitemap validates and crawls fine locally, and every entity page still renders, but every submitted `<loc>`, every canonical `<link>` and every `og:image` points at `localhost` — so a crawler resolves none of them, every canonical tag is wrong for wherever this is actually served, and every social preview resolves to a host only the rendering box can reach. Nothing goes red: the pages, the sitemap and the cards all still serve. |
 | `UPGAUGE_BUILD_SHA` | `dev` | The git SHA the image was built from — `git describe --always --dirty --abbrev=7`, so an image built from a modified tree is labelled `a2020f0-dirty` and cannot pass itself off as the commit (`git rev-parse --short HEAD` reported the clean SHA regardless, and `image-smoke` compared against the same expression, so identity passed for an image whose contents were not that commit). One `IMAGE_SHA` variable in the Makefile feeds both the build arg and the expectation. Baked in as a Docker build arg and read by `app/src/lib/health.ts`'s `identity()`, reported verbatim in `/api/health`'s `build.sha` field. `dev` is also what a plain `next start` reports, unchanged, so local runs and the unit tests (`route.test.ts`'s `{ sha: "dev", warehouse: "dev" }` assertion) keep working without setting anything. | Left unset or wrong on a real deploy: `/api/health` still returns 200/`ok` — this var carries no correctness signal for the health check itself — but `make image-smoke`'s identity assertion (#15) now passes against a container that is not the build under test, which is the exact failure that gate exists to catch. A stale or blank SHA reported as healthy is indistinguishable from the right one until someone diffs it by hand. |
 | `UPGAUGE_WAREHOUSE_TAG` | `dev` | The release tag (`warehouse-YYYY.MM`) whose `warehouse-YYYY.MM.tar.zst` asset (`upgauge.duckdb` + `data/parquet/`) is baked into this image, read the same way as `UPGAUGE_BUILD_SHA` and reported in `/api/health`'s `build.warehouse` field. | Wrong on a real deploy: `/api/health` reports a dataset provenance the image does not actually carry — a container built from `warehouse-2026.03` claiming `warehouse-2026.04` looks fresh to anyone reading the healthcheck, even though `DATA AS OF` on the served pages (read from the data itself, never this var) tells the truth regardless. This var is a label on the artifact, not a source of freshness — the freshness alert reads release `publishedAt` and the data's own `max(year_month)`, never this string ([pipeline.md § The freshness alert](pipeline.md#the-freshness-alert--the-thing-that-notices-exited-0-forever)). |
 
