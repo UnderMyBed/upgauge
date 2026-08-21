@@ -173,6 +173,28 @@ a runner, so that reading argues in neither direction. **The status code never d
 `/api/health` answers 503 with a complete, valid report when the data layer is degraded, and a
 build read from one of those is as real as any other.
 
+**What served the challenge is Bot Fight Mode, and it is not configurable.** Identified from the
+zone's own firewall events for the 2026-08-21 16:26Z promote, which name it rather than imply it:
+
+```
+30x  source=botFight  action=managed_challenge  ruleId=bot_fight_mode
+     path=/api/health  asn=8075  ua=curl/8.5.0
+```
+
+Thirty events for thirty poll attempts, from AS8075 (Microsoft/Azure — where GitHub-hosted runners
+live). Not Security Level, which reads `medium`, its default; not Browser Integrity Check, which is
+on but keys on headers and passes every bot-shaped User-Agent tried against it from a residential
+address. **Bot Fight Mode cannot be narrowed to a path, a hostname, or an IP** — it runs outside the
+Ruleset Engine, where `skip`, `bypass` and `allow` have no effect, so no WAF rule, Page Rule or IP
+Access Rule can exempt `/api/health`. The only control is the zone-wide toggle.
+
+**That toggle is dashboard state, and nothing here can assert it.** `/zones/{id}/bot_management`
+refuses this token, and Bot Fight Mode is not a zone setting (`settings/bot_fight_mode` →
+`Undefined zone setting`), so unlike the cache rules, the rate limit and the tunnel config it
+cannot live in `deploy/cloudflare/` and `make cloudflare-apply` cannot re-assert it. If it is
+switched back on, nothing fails loudly — the watchdogs simply go blind again, which is the
+condition this section exists to describe.
+
 **`promote.yml` reads a build AND a status, and each finding earns its own remedy.** A wrong
 build is a promote the box never took; the promoted build under a report that is not `ok` is a
 promote it took and cannot serve (below). Where no build was read at all, it names what came back
