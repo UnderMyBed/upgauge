@@ -28,16 +28,36 @@ when each alert fires.
 ## Promote
 
 ```bash
+make promote
+```
+
+Prints every promotable build newest-first, marks the one the box is serving, dispatches
+`promote.yml` with the row you pick, and watches the run. `make promote TAG=warehouse-2026.05-9cf20ab`
+skips the picker. The underlying dispatch, for a machine that has no checkout:
+
+```bash
 gh workflow run promote.yml -f tag=warehouse-2026.05-eb4da0d
 ```
 
-Tags are listed by the registry, anonymously — the image is public, and this is the same path
-the box uses, so it needs no `gh` package scope:
+**The registry cannot answer "which of these is newest", and it cannot answer "which is live".**
+`GET /v2/.../tags/list` returns tags unordered, and they differ only by a 7-character sha —
+`deploy/promote.py` orders them from the Packages API's `created_at` and reads the live sha from
+`/api/health`, because `:deploy` is a version of its own here rather than a co-tag on the build it
+points at (see below). Neither question has a registry-only answer, and neither is optional —
+measured 2026-08-21, before this target existed: the box was serving a build with **11 newer
+promotable images** sitting in the registry behind it.
+
+The anonymous list still works and needs no `gh` package scope — the image is public and this is
+the path the box itself uses — but it is unordered, so it answers only "does this tag exist":
 
 ```bash
 TOK=$(curl -sS "https://ghcr.io/token?scope=repository:undermybed/upguage:pull&service=ghcr.io" | jq -r .token)
 curl -sS -H "Authorization: Bearer $TOK" https://ghcr.io/v2/undermybed/upguage/tags/list | jq -r '.tags[]'
 ```
+
+`make promote` reads `/user/packages/container/upguage/versions`, which does need a `gh` token
+carrying package read scope; a token without it 404s exactly like a deleted package, so that
+failure names the scope rather than the status.
 
 Confirm the box picked it up (measured: **55s** from retag to serving):
 
@@ -61,9 +81,14 @@ is failing — so "the previous tag" there is the outage. `promote.yml`'s mismat
 which, because it has read that build's status over the full poll.
 
 ```bash
-gh workflow run promote.yml -f tag=warehouse-2026.05-6ea164b
+make promote TAG=warehouse-2026.05-6ea164b
 curl -sS https://upgauge.shipman.dev/api/health | jq -r .build.sha
 ```
+
+`make promote`'s picker shows a rollback target as `-N` and a forward one as `+N`, from
+`git rev-list --left-right`. The one-sided `rev-list --count live..candidate` reports **0** for
+every build older than the live one, which is the same figure it reports for the live build
+itself — so a picker built on it prints `+0` beside the tag an operator is reaching for mid-outage.
 
 ## Provision, or replace the box
 
