@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap card-fonts dev app-check app-build app-smoke image image-smoke portability provision cloudflare-apply test lint lint-actions fmt fmt-check check check-docs clean
+.PHONY: help install fetch fetch-reference normalize warehouse verify ingest build goldens stats gate-counts check-gate-counts basemap card-fonts dev app-check app-build app-smoke image image-smoke portability promote provision cloudflare-apply test lint lint-actions fmt fmt-check check check-docs clean
 
 # Every runtime comes from mise (mise.toml pins python, node and uv). Going through
 # `mise exec` means the documented commands work in a shell that has NOT run
@@ -347,6 +347,12 @@ portability: image  ## Prove the WORKDIR/data contract by breaking it three ways
 	esac; \
 	[ $$fail -eq 0 ]
 	@echo "  portability: all three negative cases reproduced their documented failure ... ok"
+
+# stdlib only, so `mise exec -- python` rather than `uv run` -- this must work in a clone
+# that has never run `make install`, which is the state an operator rolling back at 3am is in.
+# TAG= skips the picker for exactly that case.
+promote:  ## Promote a built image to :deploy (picker; TAG=... to skip it). Dispatches promote.yml and watches it
+	$(MISE) python deploy/promote.py $(TAG)
 
 provision:  ## Create or re-assert the Hetzner box from deploy/cloud-init.yaml (creds: deploy/.env, see .env.example)
 	./deploy/provision.sh
