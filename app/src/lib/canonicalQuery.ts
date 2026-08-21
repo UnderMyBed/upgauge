@@ -1,8 +1,9 @@
 import { ALLOWED_KEYS } from "@/lib/pivot/urlstate";
-import { routeSlugFromPath } from "@/lib/rawPath";
-import { airportSlugFromPath } from "@/lib/airport";
-import { carrierSlugFromPath } from "@/lib/carrier";
-import { aircraftSlugFromPath } from "@/lib/aircraftSlug";
+import { entitySlugFromPath } from "@/lib/entitySlug";
+import { routeSlugFromPath, ROUTE_PREFIX } from "@/lib/rawPath";
+import { airportSlugFromPath, AIRPORT_PREFIX } from "@/lib/airport";
+import { carrierSlugFromPath, CARRIER_PREFIX } from "@/lib/carrier";
+import { aircraftSlugFromPath, AIRCRAFT_PREFIX } from "@/lib/aircraftSlug";
 import { presetSlugFromPath } from "@/lib/watch";
 
 /** One canonical KEY SET per cacheable URL.
@@ -76,6 +77,76 @@ const AIRPORT_KEYS: ReadonlySet<string> = new Set(["y"]);
  * proxy does not redirect this path", never "the rules do not exist for it". */
 const SEARCH_KEYS: ReadonlySet<string> = new Set(["q"]);
 
+/** The segment Next appends to an entity route for its `opengraph-image.tsx` file convention.
+ *
+ * One dynamic segment, then this literal -- `/route/JFK-LAX/opengraph-image`. There is no
+ * `/[id]` segment and no content-hash PATH segment: `generateImageMetadata` is what would add
+ * one, and none of the four cards uses it (each route's own `alt` comment says why). Measured
+ * on the served production build, `next start` on :3251. */
+export const OG_SUFFIX = "/opengraph-image";
+
+/** The `<slug>` half of a `/<prefix>/<slug>/opengraph-image` pathname, or null if this is not
+ * an OG card route.
+ *
+ * Shared by `proxy.ts`'s OG cache branch and the four OG rows below, for the same reason
+ * `routeSlugFromPath` is shared by `proxy.ts` and `not-found.tsx`: the cache branch and the
+ * query gate must never disagree about which requests are OG cards or about where the slug
+ * starts. `proxy.ts` imports it from here rather than the reverse because that file already
+ * imports `canonicalize` from this one, and a second edge back would be a cycle.
+ *
+ * Delegates the decode to `lib/entitySlug.ts` rather than carrying its own `decodeURIComponent`
+ * guard -- that guard existed in four copies once and M5 Task 6 collapsed it; a fifth copy here
+ * would be the same defect re-introduced. The suffix comes off the RAW pathname first, so a
+ * malformed escape inside the slug (`%zz`) still falls back to raw text without taking the
+ * suffix test with it.
+ *
+ * Two extra rejections beyond the prefix test, both matching what `config.matcher`'s
+ * `/<entity>/:slug/opengraph-image` shape actually forwards: an empty slug (`/route//
+ * opengraph-image`) and a slug containing `/` (more than one dynamic segment). Without them this
+ * reader would claim pathnames the matcher never sends here, and the branch that resolves them
+ * would answer for a request that does not exist. */
+export function ogSlugFromPath(pathname: string, prefix: string): string | null {
+  if (!pathname.endsWith(OG_SUFFIX)) return null;
+  const slug = entitySlugFromPath(pathname.slice(0, -OG_SUFFIX.length), prefix);
+  if (slug === null || slug === "" || slug.includes("/")) return null;
+  return slug;
+}
+
+/** Next's own cache-buster on a file-convention OG image URL, admitted BY SHAPE.
+ *
+ * Measured on the served production build rather than assumed, because getting this wrong 307s
+ * the site's own `og:image` on all four entity pages at once. Next emits
+ *
+ *     <meta property="og:image" content="http://.../route/JFK-LAX/opengraph-image?083d4242d9090de4"/>
+ *
+ * -- a query chunk with **no key and no `=`**, which is exactly the axis rule 4 exists to catch
+ * (`splitPairs` skips an empty chunk; a keyless one has no key to look up). Sixteen lowercase hex
+ * digits, one per `opengraph-image.tsx` FILE and not per slug: `/route/JFK-LAX`, `/route/ORD-LAX`
+ * and `/route/HNL-ITO` all carried `083d4242d9090de4`, while `/airport`, `/carrier` and
+ * `/aircraft` carried three other values. It is `[contenthash]` over the route file's compiled
+ * content (`next/dist/build/webpack/loaders/next-metadata-image-loader.js:60,64` --
+ * `interpolateName(this, "[contenthash]")`, whose loader-utils default digest is xxhash64 in
+ * lowercase hex, 16 characters), so its VALUE changes on any edit to that file and cannot be
+ * pinned as a literal here or in a test.
+ *
+ * Why admitted rather than stripped: this is a shape THIS APP EMITS, the same argument
+ * `EXPLORE_REPEATABLE` makes for a repeated `f=`. A rule that does not admit it turns every
+ * social-card fetch into a 307 to the bare URL -- uncached, since a `strip` is `no-store` -- so
+ * every card costs two origin hits and depends on each crawler following redirects.
+ *
+ * What it does NOT close, stated rather than implied: 16^16 strings match this shape, and each
+ * is a distinct CDN cache key on a cacheable path. That is the same residual class as `f`'s
+ * value axis (see this file's header) and it is left to the same place -- the edge rate limit,
+ * `docs/architecture/hosting.md` § "What this does not close". It is still a strict NARROWING:
+ * without a row at all every OG path admits every query key there is, and with `keys: NO_KEYS`
+ * plus this shape a query is canonical only if it is empty or one 16-hex-digit chunk. `f`'s
+ * exemption is the precedent for accepting a bounded-but-large residual on a shape the app
+ * itself generates; it is not a licence to widen this pattern to a row whose value set the app
+ * does not emit.
+ *
+ * Non-global regex, so `.test()` carries no `lastIndex` state between calls. */
+const OG_CACHE_BUSTER = /^[0-9a-f]{16}$/;
+
 export type QueryRow = {
   /** The literal `proxy.ts` matcher entry this row answers for. The agreement test keys on it. */
   matcher: string;
@@ -84,6 +155,12 @@ export type QueryRow = {
   keys: ReadonlySet<string>;
   /** The subset of `keys` that may appear more than once. */
   repeatable: ReadonlySet<string>;
+  /** Set only where the FRAMEWORK appends a keyless chunk this app cannot suppress -- today the
+   * four OG rows and nothing else (`OG_CACHE_BUSTER` above has the measurement and the residual
+   * it leaves open). A keyless chunk matching this pattern is kept; at most ONE may appear, and
+   * a second is `reject`ed rather than stripped, because two spellings of one slot have no
+   * canonical form for the same reason a duplicated key does not. */
+  cacheBuster?: RegExp;
   /** Set when the PROXY must not redirect this path. The rules still apply to it -- `queryVerdict`
    * evaluates every row, exempt or not -- but `canonicalize`, which is the proxy's entry point and
    * only that, answers `clean` here, and whoever owns the path answers for itself. Set this and
@@ -98,6 +175,46 @@ export const QUERY_ROWS: ReadonlyArray<QueryRow> = [
     matches: (p) => p === "/explore",
     keys: ALLOWED_KEYS,
     repeatable: EXPLORE_REPEATABLE,
+  },
+  // THE FOUR OG ROWS SIT ABOVE THE FOUR ENTITY ROWS, AND THE ORDER IS LOAD-BEARING.
+  // `canonicalize`/`queryVerdict` take the FIRST row whose predicate fires, and every entity
+  // reader is a bare prefix test that does not stop at one segment: `routeSlugFromPath
+  // ("/route/JFK-LAX/opengraph-image")` is `"JFK-LAX/opengraph-image"`, not null (lib/
+  // entitySlug.ts's header states that non-opinion deliberately). So `/route/:pair` would claim
+  // every route card, answer it with `keys: NO_KEYS`, and 307 the cache-buster off the URL this
+  // site puts in its own `og:image` tag. The "row %s is the first to claim %s" case in
+  // canonicalQuery.test.ts is what makes a reorder red instead of silent.
+  //
+  // An OG card takes no query of its own -- no `y` even on airport, which is why `/airport`'s
+  // card can share this shape with the other three (see proxy.ts's OG branch) -- so `NO_KEYS`
+  // plus the framework's own cache-buster is the whole key set.
+  {
+    matcher: "/route/:pair/opengraph-image",
+    matches: (p) => ogSlugFromPath(p, ROUTE_PREFIX) !== null,
+    keys: NO_KEYS,
+    repeatable: NONE_REPEATABLE,
+    cacheBuster: OG_CACHE_BUSTER,
+  },
+  {
+    matcher: "/airport/:code/opengraph-image",
+    matches: (p) => ogSlugFromPath(p, AIRPORT_PREFIX) !== null,
+    keys: NO_KEYS,
+    repeatable: NONE_REPEATABLE,
+    cacheBuster: OG_CACHE_BUSTER,
+  },
+  {
+    matcher: "/carrier/:code/opengraph-image",
+    matches: (p) => ogSlugFromPath(p, CARRIER_PREFIX) !== null,
+    keys: NO_KEYS,
+    repeatable: NONE_REPEATABLE,
+    cacheBuster: OG_CACHE_BUSTER,
+  },
+  {
+    matcher: "/aircraft/:name/opengraph-image",
+    matches: (p) => ogSlugFromPath(p, AIRCRAFT_PREFIX) !== null,
+    keys: NO_KEYS,
+    repeatable: NONE_REPEATABLE,
+    cacheBuster: OG_CACHE_BUSTER,
   },
   {
     matcher: "/airport/:code",
@@ -206,6 +323,10 @@ export type Canonical =
  *    `decode()` carries its own `splitPairs`: decoding before the structural delimiters have done
  *    their job corrupts a percent-encoded `,` or `&` inside a filter value, which is the bug
  *    `skipProxyUrlNormalize` and `proxy.ts` exist to prevent.
+ * 2a. On a row carrying a `cacheBuster` (the four OG rows, and only those), a KEYLESS chunk
+ *    matching that pattern is kept rather than looked up in `keys` -- Next appends one to every
+ *    file-convention `og:image` URL and it has no key to declare. At most one; a second is
+ *    `reject`, never `strip`, for rule 3's reason. See `OG_CACHE_BUSTER`.
  * 3. A key in `keys` but not in `repeatable`, appearing twice: `reject`, immediately. Checked
  *    during the walk so it outranks stripping regardless of where in the query it sits -- a
  *    `strip` would silently resolve the duplicate by dropping one occurrence.
@@ -233,7 +354,7 @@ export type Canonical =
  *
  * The walk itself lives in `applyRules` below, taking an already-resolved `row` rather than
  * re-finding it. `queryVerdict` and `canonicalize` each match `QUERY_ROWS` exactly once per call
- * -- twelve `matches` predicates, five of them `startsWith` + `decodeURIComponent`, are not free,
+ * -- sixteen `matches` predicates, nine of them `startsWith` + `decodeURIComponent`, are not free,
  * and this path is the one every gated request runs. Before this split, `canonicalize` found its
  * own row AND called `queryVerdict`, which found it again: two walks of `QUERY_ROWS` per gated
  * request for one answer. */
@@ -242,10 +363,26 @@ function applyRules(row: QueryRow | undefined, pathname: string, rawQuery: strin
 
   const kept: string[] = [];
   const seen = new Set<string>();
+  let sawCacheBuster = false;
   for (const chunk of rawQuery.replace(/^\?+/, "").split("&")) {
     if (chunk === "") continue;
     const i = chunk.indexOf("=");
     const key = i === -1 ? chunk : chunk.slice(0, i);
+    // Rule 2a. Ahead of the `keys` lookup because a cache-buster HAS no key -- `key` here is the
+    // whole chunk, and no row declares a hex digest as a key.
+    if (i === -1 && row.cacheBuster !== undefined && row.cacheBuster.test(chunk)) {
+      if (sawCacheBuster) {
+        return {
+          kind: "reject",
+          reason:
+            `two cache-busters on ${pathname}: they are two spellings of one slot, so ` +
+            "keeping either one would answer for a URL the request did not ask for",
+        };
+      }
+      sawCacheBuster = true;
+      kept.push(chunk);
+      continue;
+    }
     if (!row.keys.has(key)) continue;
     if (seen.has(key) && !row.repeatable.has(key)) {
       return {

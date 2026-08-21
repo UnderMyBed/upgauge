@@ -398,6 +398,168 @@ describe("proxy", () => {
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
 
+  // #8. The four OG card routes. Before this they were absent from the matcher entirely, so each
+  // shipped `ImageResponse`'s own default -- measured on a served build, `next start` on :3251:
+  // `cache-control: public, max-age=0, must-revalidate`, which forbids a shared cache from
+  // serving the card without revalidating, on 23,780 URLs whose only traffic is crawlers
+  // re-fetching them.
+  //
+  // HTML_CACHE, not PROJECT_CACHE: a card runs the same live warehouse reads its page does
+  // (dataAsOf, runPivot, fetchAircraftMix, out of lib/entityFacts.ts by design), so it carries
+  // the per-request-resolution risk the shortened s-maxage exists to bound -- see proxy.ts's
+  // HTML_CACHE doc comment and its OG branch.
+  it.each([
+    ["a real route", "/route/JFK-LAX/opengraph-image"],
+    ["a real airport", "/airport/SEA/opengraph-image"],
+    ["a real carrier", "/carrier/DL/opengraph-image"],
+    ["a real aircraft type", "/aircraft/B737-8/opengraph-image"],
+  ])("gives the OG card for %s HTML_CACHE", async (_label, path) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  // THE ORDERING TEST for the `/airport` branch, and it has to be a 404 card rather than a real
+  // one. Every entity slug reader is a bare prefix test that does not stop at one segment, so
+  // `airportSlugFromPath("/airport/SEA/opengraph-image")` is `"SEA/opengraph-image"` -- and with
+  // the OG loop moved BELOW the airport branch, that branch claims the request and hands that
+  // string to `resolveAirportCode`, which UPPERCASES BEFORE IT LOOKS ANYTHING UP: the lowercase
+  // `opengraph-image` in the slug makes it answer `redirect`, which `isCacheable` allows. So the
+  // real card above still gets HTML_CACHE under the mutant -- the right header for entirely the
+  // wrong reason, pointing at a 308 to `/airport/SEA%2FOPENGRAPH-IMAGE`. MUTANT RUN: moving the
+  // OG loop below the airport branch leaves every "real card" case green and reddens exactly the
+  // 404 cards, because `LHR/opengraph-image` is a `redirect` too and the correct answer for a
+  // non-domestic code is `no-store`. This is CLAUDE.md's rule about asserting the outcome a buggy
+  // implementation also produces, met head-on: the discriminating input is the one where the two
+  // branches DISAGREE, not the one where both happen to say CACHE.
+  it("resolves an airport CARD from the OG branch, not from the /airport branch below it", async () => {
+    const res = await proxy(new NextRequest("http://localhost/airport/LHR/opengraph-image"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // A card takes no query of its own -- not even `y`, which its PAGE reads. The airport row in
+  // canonicalQuery.ts declares NO_KEYS for the card, so `?y=2019` is redirected away before the
+  // OG branch runs. A row that reused AIRPORT_KEYS for the card would make `?y=1..N` an unbounded
+  // family of long-cached card renders instead.
+  it("307s a page-only query key off an airport card", async () => {
+    const res = await proxy(new NextRequest("http://localhost/airport/SEA/opengraph-image?y=2019"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("Location")).toBe("http://localhost/airport/SEA/opengraph-image");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it.each([
+    ["an unknown route code", "/route/ZZZZ-LAX/opengraph-image"],
+    ["a self-route", "/route/LAX-LAX/opengraph-image"],
+    ["an unknown airport code", "/airport/ZZZZ/opengraph-image"],
+    ["a carrier code nothing has filed under", "/carrier/ZZ/opengraph-image"],
+    ["an unknown aircraft slug", "/aircraft/NOPE-1/opengraph-image"],
+  ])("does not long-cache the OG card 404 from %s", async (_label, path) => {
+    // Same rule as every entity page's 404: the dataset is rebuilt monthly, so a 404 pinned in a
+    // shared cache outlives the condition that caused it. The card route's own `notFound()` uses
+    // the identical allow-list, so this header and that status cannot disagree.
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // THE M4d TRAP AGAIN, one level down, and the reason the OG branch reuses `isCacheable` rather
+  // than growing its own predicate. `resolveAircraftSlug` has FOUR outcomes: `/aircraft/CE-180`
+  // is `ambiguous` (BTS 030 CESSNA 180 and 031 CESSNA 180A/B share one short name), the card
+  // route renders it as a 404, and a `!== "notFound"` test -- the obvious shape -- would pin that
+  // 404 in a shared CDN cache for HTML_CACHE's full s-maxage. MUTANT RUN: widening the OG branch
+  // to `kind !== "notFound"` turns exactly this test red.
+  it("does not long-cache the ambiguous-slug OG card 404, which is not a 'notFound'", async () => {
+    const res = await proxy(new NextRequest("http://localhost/aircraft/CE-180/opengraph-image"));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("caches a card whose slug 308s, because its target is derived from the slug alone", async () => {
+    // The card route `permanentRedirect`s a non-canonical slug to the canonical card, exactly as
+    // the page does. A redirect derived from the slug alone cannot be invalidated by an ingest,
+    // so it stays cacheable -- and a status-shaped rule that exempted "anything not a 200" would
+    // wrongly drop it.
+    const res = await proxy(new NextRequest("http://localhost/route/LAX-JFK/opengraph-image"));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it("sets no Cache-Control on the bare /opengraph-image suffix, which belongs to no entity", async () => {
+    // A reader that tested the suffix without also requiring a non-empty slug under a known
+    // prefix would send `""` into a resolver here. The other shapes the reader must refuse --
+    // two dynamic segments, an empty slug -- are asserted in canonicalQuery.test.ts against
+    // `QUERY_ROWS.find`, because at THIS layer they fall through to the entity branches and get
+    // `no-store` either way, so the assertion could not discriminate.
+    const res = await proxy(new NextRequest("http://localhost/opengraph-image"));
+    expect(res.headers.get("Cache-Control")).toBeNull();
+  });
+
+  // The landmine, and the one assertion here that a green unit suite could not have found on its
+  // own: Next appends a KEYLESS content hash to every file-convention og:image URL. Measured on
+  // the served production build --
+  // `<meta property="og:image" content=".../route/JFK-LAX/opengraph-image?083d4242d9090de4"/>`,
+  // one hash per opengraph-image.tsx FILE (all three of /route/JFK-LAX, /route/ORD-LAX and
+  // /route/HNL-ITO carried `083d4242d9090de4`). A keyless chunk is exactly the axis rule 4 of
+  // lib/canonicalQuery.ts exists to catch, so without the `cacheBuster` declaration the proxy
+  // would 307 the site's own card URL on all four entity pages. The SHAPE is pinned here, never
+  // the literal: the hash is `[contenthash]` over the compiled route file and changes whenever
+  // that file is edited.
+  it.each([
+    ["/route/JFK-LAX/opengraph-image"],
+    ["/airport/SEA/opengraph-image"],
+    ["/carrier/DL/opengraph-image"],
+    ["/aircraft/B737-8/opengraph-image"],
+  ])("serves %s with its cache-buster instead of redirecting it", async (path) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}?083d4242d9090de4`));
+    expect(res.status).not.toBe(307);
+    expect(res.headers.get("Location")).toBeNull();
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it("307s a keyless chunk on a card that is not cache-buster-shaped", async () => {
+    // The bound. Admitting EVERY keyless chunk would pass the four tests above and re-open the
+    // unbounded cache-key family on 23,780 URLs -- `?x`, `?xx`, `?xxx`, ... each a distinct CDN
+    // entry for a byte-identical PNG.
+    const res = await proxy(new NextRequest("http://localhost/route/JFK-LAX/opengraph-image?zz"));
+    expect(res.status).toBe(307);
+    expect(res.headers.get("Location")).toBe("http://localhost/route/JFK-LAX/opengraph-image");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("307s a doubled '?' on a card instead of 500ing on it", async () => {
+    // CLAUDE.md's rule, re-run against the new predicates: `rawQuery` is
+    // `.search.replace(/^\?/, "")`, NON-global, and proxy() has no try/catch, so a doubled `?`
+    // reaching a throwing predicate is a 500 on every matcher path at once. `ogSlugFromPath`
+    // delegates its decode to lib/entitySlug.ts's guard for the same reason.
+    const res = await proxy(
+      new NextRequest("http://localhost/route/JFK-LAX/opengraph-image??083d4242d9090de4"),
+    );
+    expect(res.status).toBe(307);
+    expect(res.headers.get("Location")).toBe(
+      "http://localhost/route/JFK-LAX/opengraph-image?083d4242d9090de4",
+    );
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("copies the pathname for an OG card request", async () => {
+    // An opengraph-image.tsx compiles to a route handler, so there is no not-found.tsx on this
+    // path and no MissingRawPathError to trigger -- but the header rides the same
+    // NextResponse.next({request:{headers}}) every matcher path gets, and a branch that built a
+    // fresh response would silently drop it for a future reader of it.
+    const res = await proxy(new NextRequest("http://localhost/route/JFK-LAX/opengraph-image"));
+    expect(getReqHeader(res, RAW_PATH_HEADER)).toBe("/route/JFK-LAX/opengraph-image");
+  });
+
+  it("lists all four OG card routes in the matcher", async () => {
+    // proxy() takes a request, not a matcher, so every test above passes just as well with the
+    // matcher entries missing -- and then NOTHING in this file runs in production, because the
+    // proxy is never invoked for those paths. Only `app/smoke.sh` sees the real thing; this is
+    // the cheapest guard short of it. MUTANT RUN: removing "/route/:pair/opengraph-image" from
+    // config.matcher turns this red, and canonicalQuery.test.ts's agreement test with it.
+    const { config } = await import("@/proxy");
+    expect(config.matcher).toContain("/route/:pair/opengraph-image");
+    expect(config.matcher).toContain("/airport/:code/opengraph-image");
+    expect(config.matcher).toContain("/carrier/:code/opengraph-image");
+    expect(config.matcher).toContain("/aircraft/:name/opengraph-image");
+  });
+
   it("deliberately leaves /api/health out of the matcher", async () => {
     const { config } = await import("@/proxy");
     // Not a style preference. The matcher grants cacheability; the healthcheck must never be

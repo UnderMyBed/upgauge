@@ -119,6 +119,78 @@ describe("canonicalize", () => {
     });
   });
 
+  // #8, and the landmine this row exists for. Next appends a KEYLESS content hash to every
+  // file-convention `og:image` URL -- measured on the served production build:
+  // `<meta property="og:image" content=".../route/JFK-LAX/opengraph-image?083d4242d9090de4"/>`.
+  // A keyless chunk is exactly the axis rule 4 was written for (`?&`, `?&&`), so with
+  // `keys: NO_KEYS` alone the proxy would 307 the site's OWN card URL on all four entity pages
+  // and every share would cost two origin hits with the redirect itself `no-store`.
+  //
+  // The SHAPE is pinned, never the literal: the hash is `[contenthash]` over the compiled
+  // `opengraph-image.tsx`, so it changes on any edit to that file and a pinned literal would be
+  // red on a commit that broke nothing.
+  it.each([
+    ["/route/JFK-LAX/opengraph-image"],
+    ["/airport/ORD/opengraph-image"],
+    ["/carrier/DL/opengraph-image"],
+    ["/aircraft/B737-8/opengraph-image"],
+  ])("leaves the framework's own cache-buster on %s alone", (pathname) => {
+    expect(canonicalize(pathname, "083d4242d9090de4")).toEqual({ kind: "clean" });
+  });
+
+  it("leaves a bare OG path alone too", () => {
+    // The control for the pair above: a row that called every OG query canonical would satisfy
+    // those four, and this one is what a row that redirected every OG request would fail.
+    expect(canonicalize("/route/JFK-LAX/opengraph-image", "")).toEqual({ kind: "clean" });
+  });
+
+  it("strips an ordinary key off an OG path, cache-buster or not", () => {
+    // The card takes no query of its own. `?y=2019` is the discriminating case for `/airport`:
+    // its PAGE reads `y`, its CARD does not, so a row that reused AIRPORT_KEYS here would leave
+    // `?y=1..N` an unbounded family of long-cached card renders.
+    expect(canonicalize("/airport/ORD/opengraph-image", "y=2019")).toEqual({
+      kind: "strip",
+      location: "/airport/ORD/opengraph-image",
+    });
+    expect(canonicalize("/route/JFK-LAX/opengraph-image", "083d4242d9090de4&utm_source=x")).toEqual(
+      { kind: "strip", location: "/route/JFK-LAX/opengraph-image?083d4242d9090de4" },
+    );
+  });
+
+  it.each([
+    ["too short", "083d4242d9090de"],
+    ["too long", "083d4242d9090de44"],
+    ["upper-case hex", "083D4242D9090DE4"],
+    ["not hex", "083d4242d9090dez"],
+    ["a keyed chunk of the same bytes", "x=083d4242d9090de4"],
+  ])("strips a keyless chunk that is %s, rather than admitting any keyless chunk", (_l, q) => {
+    // The bound, not just the admission. A rule that kept EVERY keyless chunk on an OG path
+    // would pass every test above and re-open the unbounded cache-key family on 23,780 URLs.
+    const result = canonicalize("/route/JFK-LAX/opengraph-image", q);
+    expect(result).toEqual({ kind: "strip", location: "/route/JFK-LAX/opengraph-image" });
+  });
+
+  it("rejects two cache-busters rather than picking one", () => {
+    // Bounds the slot to ONE. Admitting a second would make `?<hash>&<hash>&...` a cache-key
+    // family multiplied by itself, which is worse than the single-chunk residual, not equal to
+    // it. Same answer shape as a duplicated key: there is no canonical form to redirect to.
+    expect(
+      canonicalize("/route/JFK-LAX/opengraph-image", "083d4242d9090de4&5392b506f6d84764").kind,
+    ).toBe("reject");
+    expect(
+      canonicalize("/route/JFK-LAX/opengraph-image", "083d4242d9090de4&083d4242d9090de4").kind,
+    ).toBe("reject");
+  });
+
+  it("does not admit a cache-buster on a row that never declared one", () => {
+    // The `cacheBuster` field is per-row, not a global loosening of rule 4. A 16-hex keyless
+    // chunk on an entity PAGE is just junk.
+    expect(canonicalize("/route/JFK-LAX", "083d4242d9090de4")).toEqual({
+      kind: "strip",
+      location: "/route/JFK-LAX",
+    });
+  });
+
   it("rejects a duplicated non-repeatable key instead of picking one", () => {
     // `?y=2019&y=2020` is cacheable at 4aa8087 because parseYear reads the FIRST y
     // (proxy.ts:208), which makes the second an unbounded cache-key axis. There is no canonical
@@ -168,6 +240,14 @@ describe("canonicalize", () => {
     ["/explore", "f=".repeat(500)],
     ["//evil.com", "x=1"],
     ["", ""],
+    // #8. The OG rows add a regex to the walk and a new reader to the predicates, on the same
+    // no-try/catch path -- so the same corpus, aimed at them. The doubled `?` is the shape that
+    // 500ed all twelve matcher paths at d109845.
+    ["/route/JFK-LAX/opengraph-image", "?083d4242d9090de4"],
+    ["/route/%zz/opengraph-image", "083d4242d9090de4"],
+    ["/aircraft/%/opengraph-image", "?%"],
+    ["/opengraph-image", "x=1"],
+    ["/airport//opengraph-image", "??"],
   ])("never throws on (%s, %s)", (pathname, rawQuery) => {
     expect(() => canonicalize(pathname, rawQuery)).not.toThrow();
     expect(() => queryVerdict(pathname, rawQuery)).not.toThrow();
@@ -202,6 +282,11 @@ describe("canonicalize", () => {
     ["/airport/ORD", "??y=2019"],
     ["/aircraft/B737%2D8", "x=1"],
     ["/explore", `${RESERVED}&utm_source=twitter`],
+    // #8. The OG rows are the first to KEEP a chunk that carries no key, so a location built from
+    // them is the first that could fail to reproduce itself under a second walk.
+    ["/route/JFK-LAX/opengraph-image", "083d4242d9090de4&utm_source=x"],
+    ["/route/JFK-LAX/opengraph-image", "?083d4242d9090de4"],
+    ["/airport/ORD/opengraph-image", "y=2019"],
   ])("the location it redirects %s?%s to is itself clean", (pathname, rawQuery) => {
     const first = canonicalize(pathname, rawQuery);
     expect(first.kind).toBe("strip");
@@ -261,7 +346,7 @@ describe("QUERY_ROWS", () => {
   it("has exactly one row per proxy matcher entry", () => {
     // The third list that must agree with config.matcher -- and with THAT list only. This comment
     // used to name ENTITY_ROUTES as well, which the assertion below does not check and could not:
-    // QUERY_ROWS (12 rows, one per matcher entry) is a strict superset of ENTITY_ROUTES (3), so
+    // QUERY_ROWS (one row per matcher entry) is a strict superset of ENTITY_ROUTES (3), so
     // row-for-row agreement with the latter is not a property that holds. docs/architecture/
     // hosting.md § "One canonical key set per cacheable URL" states the same thing. A row missing
     // here ships a path with no query protection; a matcher entry missing ships a page with no
@@ -282,10 +367,36 @@ describe("QUERY_ROWS", () => {
     ["/robots.txt", "/robots.txt"],
     ["/api/pivot", "/api/pivot"],
     ["/search", "/search"],
+    // #8. These four are the ones the ordering actually decides, and they are why the OG rows sit
+    // ABOVE the entity rows in QUERY_ROWS. Every entity slug reader is a bare prefix test that
+    // does not stop at one segment, so `routeSlugFromPath("/route/JFK-LAX/opengraph-image")` is
+    // `"JFK-LAX/opengraph-image"` -- below the entity rows, `/route/:pair` claims every card,
+    // answers it with NO_KEYS and no cache-buster, and 307s the URL this site emits in its own
+    // `og:image` tag. This case goes red on a reorder; nothing else in the file does.
+    ["/route/:pair/opengraph-image", "/route/JFK-LAX/opengraph-image"],
+    ["/airport/:code/opengraph-image", "/airport/ORD/opengraph-image"],
+    ["/carrier/:code/opengraph-image", "/carrier/DL/opengraph-image"],
+    ["/aircraft/:name/opengraph-image", "/aircraft/B737-8/opengraph-image"],
   ])("row %s is the first to claim %s", (matcher, pathname) => {
     // Agreement on names is not agreement on behaviour: a row could carry the right `matcher`
     // string and a predicate that never fires, or fire on a path an earlier row should own.
     expect(QUERY_ROWS.find((r) => r.matches(pathname))?.matcher).toBe(matcher);
+  });
+
+  it.each([
+    ["more than one dynamic segment", "/route/JFK-LAX/extra/opengraph-image"],
+    ["an empty slug", "/route//opengraph-image"],
+    ["the bare suffix", "/opengraph-image"],
+    ["the suffix in the middle", "/route/JFK-LAX/opengraph-image/x"],
+  ])("no OG row claims %s", (_label, pathname) => {
+    // `config.matcher` forwards `/<entity>/:slug/opengraph-image` -- exactly ONE dynamic segment.
+    // A row claiming more would describe traffic the proxy never sees, and `proxy.ts`'s OG branch
+    // shares this same reader, so it would resolve a slug like `"JFK-LAX/extra"` against the
+    // warehouse on a request that cannot reach it. (These pathnames still fall to the entity
+    // rows' own prefix tests, which is unchanged pre-existing behaviour and unreachable for the
+    // same matcher reason -- what is asserted here is only that no OG row takes them.)
+    const row = QUERY_ROWS.find((r) => r.matches(pathname));
+    expect(row?.matcher.endsWith("/opengraph-image") ?? false).toBe(false);
   });
 
   it("never declares a repeatable key it does not also allow", () => {
