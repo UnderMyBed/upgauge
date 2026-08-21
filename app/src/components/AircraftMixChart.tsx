@@ -1,20 +1,6 @@
 import { renderPlotToSvg } from "@/lib/chart/svg";
-import { findCrossover } from "@/lib/chart/crossover";
-import {
-  toBands,
-  OTHER_TOKEN,
-  BY_AIRCRAFT_TYPE,
-  type MixDimension,
-  type MixRow,
-} from "@/lib/chart/aircraftMix";
-import {
-  buildMixPlotConfig,
-  gapNote,
-  plural,
-  COVID_FROM,
-  COVID_TO,
-  OTHER_KEY,
-} from "@/lib/chart/mixPlotConfig";
+import { BY_AIRCRAFT_TYPE, type MixDimension, type MixRow } from "@/lib/chart/aircraftMix";
+import { buildMixPlotConfig, gapNote, prepareMixPlot } from "@/lib/chart/mixPlotConfig";
 
 /** The project's first chart (docs/design/system.md § Charts, and CLAUDE.md's workflow rule
  * that this one is built before the load-factor chart): a stacked area of monthly seats,
@@ -35,21 +21,10 @@ import {
  * otherwise draw a single band whose gauge ordering encodes nothing. The file keeps its M4c
  * name: three pages import it, and a rename buys nothing a comment cannot say.
  *
- * Synchronous on purpose: `toBands`, `findCrossover` and `renderPlotToSvg` are all pure and
- * blocking, so this can be used as ordinary JSX from an async Server Component (an async
+ * Synchronous on purpose: `prepareMixPlot`, `buildMixPlotConfig` and `renderPlotToSvg` are all
+ * pure and blocking, so this can be used as ordinary JSX from an async Server Component (an async
  * child cannot be, under the renderer this project's page tests use -- see
  * route/[pair]/page.tsx's note on calling `RouteView` directly). */
-
-/** Every month is a point at its first day, UTC. UTC and not local: a local-midnight Date
- * shifts a month's sample across the year boundary west of Greenwich, which would move the
- * COVID band and the annotation rule by a whole tick in some timezones and not others. */
-function monthStart(month: string): Date {
-  return new Date(`${month}-01T00:00:00Z`);
-}
-
-function pct(share: number): string {
-  return `${(share * 100).toFixed(1)}%`;
-}
 
 /** Neither Plot nor jsdom offers a `role` option, and the attribute belongs on the SVG
  * element itself, not on a wrapper: `role="img"` is what makes the subtree presentational, so
@@ -69,14 +44,18 @@ export function AircraftMixChart({
   title: string;
   dimension?: MixDimension;
 }) {
-  const months = [...new Set(rows.map((r) => r.month))].sort();
+  // ONE implementation of the chart, shared with every entity page's `opengraph-image` route
+  // (lib/chart/mixPlotConfig.ts). Nothing about gaps, band membership or band shade is decided
+  // here any more -- a second copy of that reasoning is what would let a social card and the
+  // page it previews draw two different charts from the same rows.
+  const { months, plot } = prepareMixPlot(rows, title, dimension);
 
   // A blank frame under a DATA AS OF badge is the failure /explore and /route already refuse
   // (their empty states state the finding in words). Two cases reach it: nothing filed at
   // all, and a single month -- for which a stacked area has a degenerate x domain and
   // serializes to zero width, and which system.md's sparkline rule already calls out as not a
   // trend. Both say so instead.
-  if (months.length < 2) {
+  if (plot === null) {
     return (
       <Frame title={title} dimension={dimension}>
         <p className="foot">
@@ -88,93 +67,8 @@ export function AircraftMixChart({
     );
   }
 
-  const { bands, other, axis } = toBands(rows);
-  const crossover = findCrossover(rows);
-
-  // BOTTOM FIRST. `bands` already arrives in shade order (`--g1` first), which is stack order
-  // -- lightest at the bottom, darkest on top, so the ramp reads as one gradient rather than
-  // six unrelated greys. Other is lighter still (`--g0`) and therefore sits under everything.
-  // Nothing here re-sorts: shade is assigned by gauge inside toBands, and seat rank decides
-  // only which five types get a band at all. Re-deriving either here is the two-orderings bug
-  // the spec's § Encoding exists to prevent.
-  const stack = [
-    ...(other.typeCount > 0
-      ? [
-          {
-            key: OTHER_KEY,
-            token: OTHER_TOKEN,
-            // Stated on the swatch, not buried: top-5 + Other is a median 94.7% of seats, but
-            // 1,571 of 4,618 multi-type routes fall below 90% and the worst is 48.2%
-            // (measured, spec § "The Other band is not a rounding error"). A chart where half
-            // the area is in the lightest band has to admit it.
-            label: `Other · ${plural(other.typeCount, dimension.unit)} · ${pct(other.seatShare)} of seats`,
-            series: other.series,
-          },
-        ]
-      : []),
-    ...bands.map((b) => ({ key: b.code, token: b.token, label: b.label, series: b.series })),
-  ];
-
-  // GAPS ARE GAPS (docs/design/system.md § Charts). A month the subject did not file has no
-  // point here at all, and each contiguous run of filed months gets its own `z` value, so
-  // Plot emits one path per (band, run) and an absent month leaves a HOLE. `fill` stays keyed
-  // on the band, not on `z`, so a broken band keeps one shade across all its pieces.
-  //
-  // `order` has to be the rank FUNCTION rather than the array of keys it was: the array form
-  // orders the stack by z values, and z is now per-run. Rank is the band's index in `stack`,
-  // which is shade order, so the stack order is unchanged -- lightest at the bottom.
-  const points = stack.flatMap((s, rank) =>
-    s.series.map((p) => ({
-      t: monthStart(p.month),
-      seats: p.seats,
-      k: s.key,
-      z: `${s.key}@${axis.run.get(p.month)}`,
-      rank,
-      solo: axis.solo.has(axis.run.get(p.month)!),
-    })),
-  );
-  const runPoints = points.filter((p) => !p.solo);
-  // A one-month run has no width: filled, it serializes to a degenerate path and disappears.
-  // 41% of route pairs have at least one isolated month (aircraftMix.ts § MonthAxis), and
-  // erasing a filing is the same dishonesty as inventing one, so these are STROKED -- a
-  // hairline column in the band's own shade, at the band's own height in the stack.
-  const soloPoints = points.filter((p) => p.solo);
-
-  const first = months[0];
-  const last = months[months.length - 1];
-
-  // Clamped to the window, and dropped when the two do not overlap: an unconditional rect
-  // would put a --panel-2 slab at a meaningless x on any chart that starts after 2021.
-  const covidFrom = maxDate(monthStart(COVID_FROM), monthStart(first));
-  const covidTo = minDate(monthStart(COVID_TO), monthStart(last));
-  const covid = covidFrom < covidTo ? { covidFrom, covidTo } : null;
-
-  const crossoverAt = crossover === null ? null : monthStart(`${crossover.year}-01`);
-  // Past the halfway point the label would run off the right edge -- ~30 characters against
-  // the ~10% of the frame a 2025 crossover leaves. Flip the anchor rather than clip the text.
-  const annotationLate =
-    crossoverAt !== null &&
-    crossoverAt.getTime() - monthStart(first).getTime() >
-      (monthStart(last).getTime() - monthStart(first).getTime()) / 2;
-
-  const svg = withImgRole(
-    renderPlotToSvg(
-      buildMixPlotConfig({
-        title,
-        dimension,
-        first,
-        last,
-        stack,
-        axis,
-        crossover,
-        covid,
-        runPoints,
-        soloPoints,
-        crossoverAt,
-        annotationLate,
-      }),
-    ),
-  );
+  const { args, stack, gaps } = plot;
+  const svg = withImgRole(renderPlotToSvg(buildMixPlotConfig(args)));
 
   return (
     <Frame title={title} dimension={dimension}>
@@ -201,7 +95,7 @@ export function AircraftMixChart({
         {/* Stated on the chart, not only in the aria-label: a hole in a stacked area is easy
             to read as "flat and small" rather than "not filed", and the count is per-subject
             so the static legend rail cannot carry it. */}
-        {axis.gaps.length > 0 ? <span className="gnum">{gapNote(axis.gaps.length)}</span> : null}
+        {gaps > 0 ? <span className="gnum">{gapNote(gaps)}</span> : null}
       </div>
     </Frame>
   );
@@ -232,12 +126,4 @@ function Frame({
       {children}
     </div>
   );
-}
-
-function maxDate(a: Date, b: Date): Date {
-  return a > b ? a : b;
-}
-
-function minDate(a: Date, b: Date): Date {
-  return a < b ? a : b;
 }

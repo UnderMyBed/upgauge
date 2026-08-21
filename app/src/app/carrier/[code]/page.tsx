@@ -10,6 +10,13 @@ import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { encode } from "@/lib/pivot/urlstate";
+import {
+  CARRIER_TYPE_LIMIT,
+  EARLIEST_MONTH,
+  sumTotals,
+  trailing12From,
+  trailing12Query,
+} from "@/lib/entityFacts";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
 import { resolutionKey, displayValue, type CarrierRef, type Resolved } from "@/lib/resolve";
 import { routeHrefFromCodes } from "@/lib/entityLink";
@@ -22,49 +29,12 @@ import type { PivotQuery } from "@/lib/pivot/types";
 // cached /carrier/DL would keep serving a stale DATA AS OF badge and stale totals forever.
 export const dynamic = "force-dynamic";
 
-/** Measured: the busiest carrier operates 18 distinct aircraft types over a trailing 12
- * months and 23 all-time. 100 clears both by 4x. If a future refresh ever exceeds it the page
- * says so rather than under-reporting -- see `truncated` below. */
-const CARRIER_TYPE_LIMIT = 100;
-
-// data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- the widest window
-// any query against this database can have, matching the identically-named constants in
-// explore/page.tsx and route/[pair]/page.tsx.
-const EARLIEST_MONTH = "2015-01";
-
 // Same reasoning, same pattern, as route/[pair]/page.tsx's identically-named wrapper: dedupes
 // the slug resolution across `generateMetadata` and the default page export without touching
 // `resolveCarrier` itself, which `proxy.ts` also imports from a non-render context. Full
 // rationale on the route page's own copy of this comment; not verifiable by this project's
 // Vitest suite (disclosed in task-2-report.md).
 const resolveCarrierForRequest = cache((slug: string) => resolveCarrier(slug));
-
-/** The trailing-12-month window this page always shows, computed from `asOf` the same way
- * mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql). */
-function trailing12From(asOf: string): string {
-  const [y, m] = asOf.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 - 11, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-/** Ratios of sums, never averages of the rows above -- CLAUDE.md's hard rule. Measured for
- * Delta over 2025-06..2026-05: the correct load factor is 82.87% and the mean of the 17
- * per-type load factors is 83.33%; the correct gauge is 163.6 and the mean of the rows is
- * 194.7. Both wrong answers look entirely plausible on screen, which is why page.test.tsx
- * asserts the right figures AND the absence of these two. */
-function carrierTotals(rows: Record<string, unknown>[]) {
-  const sum = (k: string) => rows.reduce((a, r) => a + Number(r[k] ?? 0), 0);
-  const seats = sum("seats");
-  const passengers = sum("passengers");
-  const departures = sum("departures_performed");
-  return {
-    seats,
-    passengers,
-    departures,
-    loadFactor: seats === 0 ? null : passengers / seats,
-    avgGauge: departures === 0 ? null : seats / departures,
-  };
-}
 
 // Quarantine bookkeeping columns ride along with every segment-grain result; the stat strip
 // surfaces the count, but they are not pivot-vocabulary columns and must never become table
@@ -284,21 +254,18 @@ export async function CarrierView({
   // display carrier_code). `filterValue` is `String(airline_id)`; lib/carrier.ts owns that
   // conversion and lib/carrier.test.ts pins it.
   //
-  // `grouping: "operating"` is not a default falling through -- it is this page's subject.
-  // The mainline rollup would fold Endeavor into Delta and change what /carrier/DL means; the
-  // caveat below says outright that this page does not do that.
-  const query: PivotQuery = {
-    grain: "segment",
+  // `grouping: "operating"` (inside `trailing12Query`) is not a default falling through -- it
+  // is this page's subject. The mainline rollup would fold Endeavor into Delta and change what
+  // /carrier/DL means; the caveat below says outright that this page does not do that.
+  //
+  // The SAME query object this route's `opengraph-image` builds, from the same module, so the
+  // card's stat row cannot disagree with the stat strip below (lib/entityFacts.ts).
+  const query: PivotQuery = trailing12Query({
     dimensions: ["aircraft_type"],
-    measures: ["seats", "passengers", "departures_performed", "load_factor", "avg_gauge"],
-    timeFrom: TRAILING_12_FROM,
-    timeTo: asOf,
     filters: [["op_airline_id", [filterValue]]],
-    sort: "seats",
-    sortDesc: true,
+    asOf,
     limit,
-    grouping: "operating",
-  };
+  });
 
   // The Top-N builder's first two callers (M6 Task 4, lib/topn.ts). `topNQuery` sorts on
   // measures[0] descending and defaults grouping to "operating" -- the same subject-is-the-
@@ -358,7 +325,7 @@ export async function CarrierView({
     runPivot(topNQuery(originsSpec)),
   ]);
 
-  const totals = carrierTotals(result.rows);
+  const totals = sumTotals(result.rows);
   const truncated = result.rows.length >= limit;
   const isEmpty = result.rows.length === 0;
   const hasMix = mix.length > 0;

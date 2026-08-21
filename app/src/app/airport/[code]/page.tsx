@@ -22,6 +22,7 @@ import { AIRCRAFT_MIX_LIMIT } from "@/lib/chart/aircraftMix";
 import { fetchAirportNetwork } from "@/lib/map/airportNetwork";
 import { EARLIEST_YEAR, parseYear, yearTrack, yearWindow, type ParsedYear } from "@/lib/year";
 import { encode } from "@/lib/pivot/urlstate";
+import { EARLIEST_MONTH, trailing12From } from "@/lib/entityFacts";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
 import type { AirportRef } from "@/lib/resolve";
 import type { Allowlist } from "@/lib/pivot/allowlist";
@@ -32,10 +33,6 @@ import type { PivotQuery } from "@/lib/pivot/types";
 // serving a stale DATA AS OF badge and stale totals to every visitor.
 export const dynamic = "force-dynamic";
 
-// data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- the widest window
-// any query against this database can have. Same constant, same value, as /route and /explore.
-const EARLIEST_MONTH = "2015-01";
-
 // Same reasoning, same pattern, as route/[pair]/page.tsx's identically-named wrapper: dedupes
 // the slug resolution across `generateMetadata` and the default page export -- two separate
 // calls per request in this Next version -- without touching `resolveAirportCode` itself,
@@ -43,15 +40,6 @@ const EARLIEST_MONTH = "2015-01";
 // own copy of this comment; not verifiable by this project's Vitest suite (disclosed in
 // task-2-report.md).
 const resolveAirportCodeForRequest = cache((slug: string) => resolveAirportCode(slug));
-
-/** The trailing-12-month window the table always shows, computed from `asOf` exactly as
- * route/[pair]/page.tsx computes it (and as mart_route_health's own t12 window is): 11 months
- * back from asOf, inclusive of asOf, is 12 months. */
-function trailing12From(asOf: string): string {
-  const [y, m] = asOf.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 - 11, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
 
 const COLUMN_KINDS: [string, ColumnSpec["kind"], boolean][] = [
   ["op_airline_id", "identifier", false],

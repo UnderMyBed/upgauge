@@ -1,6 +1,13 @@
 import * as Plot from "@observablehq/plot";
-import type { Crossover } from "@/lib/chart/crossover";
-import type { MixDimension, MonthAxis, SeriesPoint } from "@/lib/chart/aircraftMix";
+import { findCrossover, type Crossover } from "@/lib/chart/crossover";
+import {
+  toBands,
+  OTHER_TOKEN,
+  type MixDimension,
+  type MixRow,
+  type MonthAxis,
+  type SeriesPoint,
+} from "@/lib/chart/aircraftMix";
 
 /** The mix chart's Plot config: everything `renderPlotToSvg` (lib/chart/svg.ts) needs to draw
  * the stacked area, and nothing else. `AircraftMixChart` calls this to render the chart it
@@ -233,5 +240,149 @@ export function buildMixPlotConfig(args: MixPlotArgs): Plot.PlotOptions {
             }),
           ]),
     ],
+  };
+}
+
+/** THE WHOLE CHART, from mix rows to a `MixPlotArgs`, in one place.
+ *
+ * `AircraftMixChart` and every entity page's `opengraph-image` route both call this, and that
+ * is the point: the two honesty rules this chart is built around -- gaps drawn as gaps, and
+ * band MEMBERSHIP by seats against band SHADE by gauge -- are decided here, once. A card that
+ * re-derived either from the same rows would be a second implementation free to drift from the
+ * page it previews, which is exactly the failure `buildMixPlotConfig`'s own header refuses one
+ * level down.
+ *
+ * `plot` is null when a stacked area cannot honestly be drawn: fewer than two filed months. Two
+ * cases reach it -- nothing filed at all, and a single month, for which a stacked area has a
+ * degenerate x domain and serializes to zero width. `months` is returned either way so the
+ * caller can say WHICH of the two it is; a blank frame under a DATA AS OF badge is the failure
+ * /explore and /route already refuse. */
+export interface PreparedMix {
+  /** Every distinct filed month, ascending. Zero-padded YYYY-MM, so lexical order IS
+   * chronological. */
+  months: string[];
+  plot: {
+    args: MixPlotArgs;
+    /** Bottom-of-stack first, which is shade order -- the caller's legend reverses it. */
+    stack: StackEntry[];
+    /** Unfiled months inside the drawn window. Stated on the chart AND in its aria-label. */
+    gaps: number;
+  } | null;
+}
+
+/** Every month is a point at its first day, UTC. UTC and not local: a local-midnight Date
+ * shifts a month's sample across the year boundary west of Greenwich, which would move the
+ * COVID band and the annotation rule by a whole tick in some timezones and not others. */
+function monthStart(month: string): Date {
+  return new Date(`${month}-01T00:00:00Z`);
+}
+
+function pct(share: number): string {
+  return `${(share * 100).toFixed(1)}%`;
+}
+
+function maxDate(a: Date, b: Date): Date {
+  return a > b ? a : b;
+}
+
+function minDate(a: Date, b: Date): Date {
+  return a < b ? a : b;
+}
+
+export function prepareMixPlot(
+  rows: MixRow[],
+  title: string,
+  dimension: MixDimension,
+): PreparedMix {
+  const months = [...new Set(rows.map((r) => r.month))].sort();
+  if (months.length < 2) return { months, plot: null };
+
+  const { bands, other, axis } = toBands(rows);
+  const crossover = findCrossover(rows);
+
+  // BOTTOM FIRST. `bands` already arrives in shade order (`--g1` first), which is stack order
+  // -- lightest at the bottom, darkest on top, so the ramp reads as one gradient rather than
+  // six unrelated greys. Other is lighter still (`--g0`) and therefore sits under everything.
+  // Nothing here re-sorts: shade is assigned by gauge inside toBands, and seat rank decides
+  // only which five types get a band at all. Re-deriving either here is the two-orderings bug
+  // the spec's § Encoding exists to prevent.
+  const stack: StackEntry[] = [
+    ...(other.typeCount > 0
+      ? [
+          {
+            key: OTHER_KEY,
+            token: OTHER_TOKEN,
+            // Stated on the swatch, not buried: top-5 + Other is a median 94.7% of seats, but
+            // 1,571 of 4,618 multi-type routes fall below 90% and the worst is 48.2%
+            // (measured, spec § "The Other band is not a rounding error"). A chart where half
+            // the area is in the lightest band has to admit it.
+            label: `Other · ${plural(other.typeCount, dimension.unit)} · ${pct(other.seatShare)} of seats`,
+            series: other.series,
+          },
+        ]
+      : []),
+    ...bands.map((b) => ({ key: b.code, token: b.token, label: b.label, series: b.series })),
+  ];
+
+  // GAPS ARE GAPS (docs/design/system.md § Charts). A month the subject did not file has no
+  // point here at all, and each contiguous run of filed months gets its own `z` value, so
+  // Plot emits one path per (band, run) and an absent month leaves a HOLE. `fill` stays keyed
+  // on the band, not on `z`, so a broken band keeps one shade across all its pieces.
+  //
+  // `order` has to be the rank FUNCTION rather than the array of keys it was: the array form
+  // orders the stack by z values, and z is now per-run. Rank is the band's index in `stack`,
+  // which is shade order, so the stack order is unchanged -- lightest at the bottom.
+  const points: AreaPoint[] = stack.flatMap((s, rank) =>
+    s.series.map((p) => ({
+      t: monthStart(p.month),
+      seats: p.seats,
+      k: s.key,
+      z: `${s.key}@${axis.run.get(p.month)}`,
+      rank,
+      solo: axis.solo.has(axis.run.get(p.month)!),
+    })),
+  );
+
+  const first = months[0];
+  const last = months[months.length - 1];
+
+  // Clamped to the window, and dropped when the two do not overlap: an unconditional rect
+  // would put a --panel-2 slab at a meaningless x on any chart that starts after 2021.
+  const covidFrom = maxDate(monthStart(COVID_FROM), monthStart(first));
+  const covidTo = minDate(monthStart(COVID_TO), monthStart(last));
+
+  const crossoverAt = crossover === null ? null : monthStart(`${crossover.year}-01`);
+  // Past the halfway point the label would run off the right edge -- ~30 characters against
+  // the ~10% of the frame a 2025 crossover leaves. Flip the anchor rather than clip the text.
+  const annotationLate =
+    crossoverAt !== null &&
+    crossoverAt.getTime() - monthStart(first).getTime() >
+      (monthStart(last).getTime() - monthStart(first).getTime()) / 2;
+
+  return {
+    months,
+    plot: {
+      stack,
+      gaps: axis.gaps.length,
+      args: {
+        title,
+        dimension,
+        first,
+        last,
+        stack,
+        axis,
+        crossover,
+        covid: covidFrom < covidTo ? { covidFrom, covidTo } : null,
+        // A one-month run has no width: filled, it serializes to a degenerate path and
+        // disappears. 41% of route pairs have at least one isolated month (aircraftMix.ts §
+        // MonthAxis), and erasing a filing is the same dishonesty as inventing one, so these
+        // are STROKED by the caller -- a hairline column in the band's own shade, at the
+        // band's own height in the stack.
+        runPoints: points.filter((p) => !p.solo),
+        soloPoints: points.filter((p) => p.solo),
+        crossoverAt,
+        annotationLate,
+      },
+    },
   };
 }

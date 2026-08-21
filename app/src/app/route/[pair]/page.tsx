@@ -10,6 +10,14 @@ import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { encode } from "@/lib/pivot/urlstate";
+import {
+  EARLIEST_MONTH,
+  ROUTE_CARRIER_LIMIT,
+  routeEndpoints,
+  routeTitle,
+  sumTotals,
+  trailing12Query,
+} from "@/lib/entityFacts";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
 import type { AirportRef } from "@/lib/resolve";
 import { AIRPORT_PREFIX } from "@/lib/airport";
@@ -21,17 +29,6 @@ import type { PivotQuery } from "@/lib/pivot/types";
 // export of this constant: a statically-cached /route/JFK-LAX would keep serving a stale
 // DATA AS OF badge and stale totals to every visitor.
 export const dynamic = "force-dynamic";
-
-/** Measured: the busiest route carries 16 distinct operating carriers over a trailing 12
- * months, 99th percentile 8. 50 leaves generous headroom so the totals below always cover
- * every carrier. If a future refresh exceeds it the page says so rather than under-reporting
- * -- see `truncated` below. */
-const ROUTE_CARRIER_LIMIT = 50;
-
-// data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- the widest window
-// any query against this database can have, matching explore/page.tsx's own constant of the
-// same name and value.
-const EARLIEST_MONTH = "2015-01";
 
 /** Memoizes the slug resolution FOR THE DURATION OF ONE REQUEST's render. Next invokes
  * `generateMetadata` and the default page export as two separate calls for the same request
@@ -58,32 +55,6 @@ const EARLIEST_MONTH = "2015-01";
  * test harness, not the dedup. Disclosed, not silently assumed, in task-2-report.md;
  * `make app-smoke` against a served build is what would measure it. */
 const resolveRoutePairForRequest = cache((slug: string) => resolveRoutePair(slug));
-
-/** The trailing-12-month window this page always shows, computed from `asOf` the same way
- * mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql:
- * `end_m - INTERVAL 11 MONTH`) -- 11 months back from asOf, inclusive of asOf, is 12 months. */
-function trailing12From(asOf: string): string {
-  const [y, m] = asOf.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 - 11, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-/** Ratios of sums, never averages of the rows above. CLAUDE.md's rule: compute derived
- * measures from summed numerator and denominator. Averaging the per-carrier load factors in
- * the table would be the classic T-100 error this project exists not to make. */
-function routeTotals(rows: Record<string, unknown>[]) {
-  const sum = (k: string) => rows.reduce((a, r) => a + Number(r[k] ?? 0), 0);
-  const seats = sum("seats");
-  const passengers = sum("passengers");
-  const departures = sum("departures_performed");
-  return {
-    seats,
-    passengers,
-    departures,
-    loadFactor: seats === 0 ? null : passengers / seats,
-    avgGauge: departures === 0 ? null : seats / departures,
-  };
-}
 
 // fct_segment_month exposes quarantine bookkeeping columns alongside every measure a query
 // asked for (same as explore/page.tsx's identical constant) -- the stat strip surfaces the
@@ -194,20 +165,16 @@ export async function RouteView({
 }) {
   const allowlist = await loadAllowlist();
   const asOf = await dataAsOf();
-  const TRAILING_12_FROM = trailing12From(asOf);
 
-  const query: PivotQuery = {
-    grain: "segment",
+  // The SAME query object this route's `opengraph-image` builds, from the same module -- the
+  // card's stat row and this page's stat strip are one set of numbers or they are two that can
+  // disagree (lib/entityFacts.ts).
+  const query: PivotQuery = trailing12Query({
     dimensions: ["op_airline_id"],
-    measures: ["seats", "passengers", "departures_performed", "load_factor", "avg_gauge"],
-    timeFrom: TRAILING_12_FROM,
-    timeTo: asOf,
     filters: [["route", [filterValue]]],
-    sort: "seats",
-    sortDesc: true,
+    asOf,
     limit,
-    grouping: "operating",
-  };
+  });
 
   // CONCURRENT, not two sequential awaits. These two pivots share nothing -- different
   // windows, different dimensions, and `connect()` hands each one its own DuckDBConnection
@@ -231,7 +198,7 @@ export async function RouteView({
       fetchAircraftMix([["route", [filterValue]]], EARLIEST_MONTH, asOf),
     ]);
 
-  const totals = routeTotals(result.rows);
+  const totals = sumTotals(result.rows);
   const truncated = result.rows.length >= limit;
   const isEmpty = result.rows.length === 0;
   const hasMix = mix.length > 0;
@@ -255,20 +222,14 @@ export async function RouteView({
 
   const columns = buildColumns(allowlist, result.columns);
 
-  // canonical is ALPHABETICAL (routePair.ts); low/high are ordered by ID and can disagree
-  // with it (154 of 22,420 routes do -- 0.69%, excluding the 530 same-airport "routes" that
-  // are not routes). Pairing each half of `canonical` back to its airport
-  // by CODE, rather than assuming canonical.split("-") lines up with [low, high], keeps the
-  // displayed name attached to the code it is actually under even when the two orderings
-  // differ.
-  const [codeA, codeB] = canonical.split("-");
-  const airports = [low, high];
-  const a = airports.find((x) => x.code === codeA) ?? low;
-  const b = airports.find((x) => x.code === codeB) ?? high;
+  // canonical is ALPHABETICAL (routePair.ts); low/high are ordered by ID and can disagree with
+  // it. `routeEndpoints` owns that pairing, and the card imports the same function -- see its
+  // doc comment in lib/entityFacts.ts for the measurement and the fixture it needs.
+  const [a, b] = routeEndpoints(low, high, canonical);
 
-  // The subject line, shared by the entity header and the chart's own subtitle so the two can
-  // never name the pair differently. En dash, matching the header the chart sits under.
-  const title = canonical.replace("-", "–");
+  // The subject line, shared by the entity header, the chart's own subtitle and the card's
+  // title so the three can never name the pair differently.
+  const title = routeTitle(canonical);
 
   return (
     <div className="wrap">
