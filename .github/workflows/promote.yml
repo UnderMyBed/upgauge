@@ -61,7 +61,7 @@ jobs:
           set -euo pipefail
           mise exec -- python .github/scripts/promote_check.py --validate "$TAG"
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
