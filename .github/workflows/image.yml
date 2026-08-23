@@ -178,7 +178,7 @@ jobs:
             IMAGE_SHA="$IMAGE_SHA" \
             SMOKE_DATASET_PINNED=0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@v4
         if: env.SKIP != '1'
         with:
           registry: ghcr.io
