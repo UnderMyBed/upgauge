@@ -125,6 +125,22 @@ def test_rate_limit_does_not_reach_the_cached_pages_or_the_static_assets():
         assert not _covered(expression, path), f"{path} must not be rate limited: {why}"
 
 
+def test_rate_limit_keeps_the_name_the_zone_actually_holds():
+    """MEASURED 2026-08-24, applying #83: a PUT to the http_ratelimit phase entrypoint updates
+    the ruleset's `description` and its rules, and SILENTLY IGNORES `name`. The rule's expression
+    went from `/api/` alone to the three-path disjunction and the description changed with it --
+    `version` bumped 1 -> 2 -- while `name` stayed exactly as it was. The API returned
+    `success: true` and reported no error about the field it dropped.
+
+    So `name` is not desired state on this endpoint, however much the rest of this file is: it is
+    fixed at creation. Renaming it here to match the widened scope would have left the repo
+    asserting something about the zone that no `make cloudflare-apply` could ever make true --
+    the exact "committed file IS the config" claim these tests exist to keep honest. It stays at
+    the creation-time name, which no longer describes the scope, and that is why this test says
+    so rather than leaving the next person to rename it and believe it applied."""
+    assert _load("rate-limit.json")["name"] == "upgauge-api-rate-limit"
+
+
 def test_rate_limit_expression_has_no_client_controlled_escape_hatch():
     """Guards the evaluator above AND a real bug that was drafted into this rule and caught
     before it shipped: excluding React's own prefetches with

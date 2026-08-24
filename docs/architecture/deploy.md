@@ -262,6 +262,14 @@ setting that is fine.
 
 ## Rate limiting
 
+**One field in those files is not desired state: a ruleset's `name`.** MEASURED 2026-08-24, on
+the `http_ratelimit` phase entrypoint: a PUT applies the `description` and the rules and silently
+drops `name`, returning `success: true` with no error about the field it ignored — the expression
+and description changed (`version` 1 → 2) while the name stayed at its creation-time value. So the
+rate limit is still named `upgauge-api-rate-limit` though #83 widened it past `/api/`, and
+renaming it in the committed file would assert something no `make cloudflare-apply` could make
+true. `pipeline/tests/test_cloudflare_desired_state.py` pins the name for that reason.
+
 **The thresholds are `deploy/cloudflare/rate-limit.json`, not a sentence here.** That file is the
 record and is applied verbatim. Note the plan constrains both numbers: the window must be 10s and
 the mitigation timeout must be 10s, so the sustained rate is 1 req/s per IP on `/api/` and a
