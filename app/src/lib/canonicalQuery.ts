@@ -26,7 +26,8 @@ import { presetSlugFromPath } from "@/lib/watch";
  * it. What remains genuinely open is `f`, on both of its axes -- its value set is the warehouse's,
  * and percent-encoding is its own escape mechanism, so it is exempt from the spelling rule too:
  * `docs/architecture/hosting.md` § "What this does not close" has that residual and the
- * rate-limit thresholds it is left to.
+ * rate-limit thresholds it is left to -- which cover `/explore` as well as `/api/` only since
+ * #83; before that, this sentence deferred to an edge rule that did not match this page.
  *
  * Measured on a served build at 4aa8087, before this file existed: every cacheable path accepted
  * arbitrary unknown query keys and still returned the long cache header -- `/watch?x=1`,
@@ -137,7 +138,10 @@ export function ogSlugFromPath(pathname: string, prefix: string): string | null 
  * What it does NOT close, stated rather than implied: 16^16 strings match this shape, and each
  * is a distinct CDN cache key on a cacheable path. That is the same residual class as `f`'s
  * value axis (see this file's header) and it is left to the same place -- the edge rate limit,
- * `docs/architecture/hosting.md` § "What this does not close". It is still a strict NARROWING:
+ * `docs/architecture/hosting.md` § "What this does not close", whose expression matches these
+ * four paths by `ends_with(http.request.uri.path, "/opengraph-image")` since #83. Cloudflare's
+ * `uri.path` excludes the query string, so the 16-hex chunk this row admits does not affect the
+ * match. It is still a strict NARROWING:
  * without a row at all every OG path admits every query key there is, and with `keys: NO_KEYS`
  * plus this shape a query is canonical only if it is empty or one 16-hex-digit chunk. `f`'s
  * exemption is the precedent for accepting a bounded-but-large residual on a shape the app

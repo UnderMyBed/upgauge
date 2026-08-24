@@ -1523,7 +1523,8 @@ check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize 
 # `d`/`m` may not repeat a token. `f` is the residual -- percent-encoding is its own escape
 # mechanism, so it is exempt from the spelling rule and left to the edge instead
 # (docs/architecture/hosting.md § "What this does not close" carries it, with the thresholds -- and
-# with the fact that today's rate-limit rule matches `/api/` only).
+# with the rule's expression, which since #83 covers `/explore` as well as `/api/`, so the path
+# this exemption is stated on is now actually one the edge limits).
 #
 # Cloudflare's default cache key includes the full query string, so before this gate `?x=1..N`
 # minted an unbounded family of long-cached entries on every cacheable path -- measured on a
