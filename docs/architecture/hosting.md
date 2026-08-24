@@ -1658,6 +1658,16 @@ it are easy to get wrong and both matter here:
   *unconditionally*, so every request reaches the origin, over an attacker-chosen unbounded `q`.
   It is cheap per request — one resolver query, no render — which is why it was not folded in
   here, but it is the one remaining path with no cache in front of it and no limit on it.
+- **The three path groups share ONE counter, not one each.** A rate-limiting rule counts per
+  (rule, characteristics), and this is a single rule keyed on `(ip.src, cf.colo.id)` — so
+  `/api/pivot`, `/explore` and a card all draw on the same 10-per-10 s bucket. MEASURED
+  2026-08-24 against the served site: 14 requests to `/route/JFK-LAX/opengraph-image` went
+  `200`×9 then `429`×5, and the very next request — to `/airport/SEA/opengraph-image`, a
+  different path — was `429` on its first try. That is the intended reading (one uncached-origin
+  budget per IP, not one per surface), but it is a real behaviour change on `/explore`, whose
+  page loads did not previously count against `/api/pivot`'s allowance. A visitor changing
+  filters fast enough to make ten origin requests in ten seconds now trips a rule that used to
+  see only the API half of that traffic.
 - **A rate limit caps rate, not cardinality.** Even where it applies, 1 req/s is 86,400 distinct
   cache entries per day per IP, each a full pivot render. It bounds how fast the space can be
   walked, never how large the space is.
