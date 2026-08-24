@@ -19,7 +19,7 @@ const R = Math.PI / 180;
  * (lat, lon) directly.
  *
  * `om < 1e-9` guards coincident (or antipodal-adjacent) endpoints, where `sin(om) === 0` would
- * otherwise divide by zero and produce NaN for every point on the path. 359 of 1,045 airports
+ * otherwise divide by zero and produce NaN for every point on the path. 359 of 1,047 airports
  * have same-airport rows upstream (excluded before this module by Task 6, but this function
  * itself must stay safe regardless of what calls it).
  */

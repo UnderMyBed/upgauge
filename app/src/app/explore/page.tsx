@@ -63,7 +63,7 @@ function routeColumns(allowlist: Allowlist): string[] {
 /** The two resolved codes for a route row, in the order the columns hold them (airport-id
  * order). The DISPLAY joins these with an en dash; the HREF must re-sort them alphabetically
  * by code -- routeHrefFromCodes owns that, because the two orderings disagree for 154 of
- * 22,420 pairs and reusing the display order is wrong for every one of them. Shared with
+ * 22,509 pairs and reusing the display order is wrong for every one of them. Shared with
  * `routeHref` below so the display string and the link read the same two `displayValue()`
  * calls rather than two independently maintained copies. */
 function routeCodes(
@@ -90,7 +90,7 @@ function routeCode(
  * itself can tell "unresolved" apart from "resolved".
  *
  * Also `null` when both halves resolve to the SAME code: `fct_route_month` really carries
- * same-airport rows (530 distinct pairs, real filed traffic -- ORD alone 73,082 seats over the
+ * same-airport rows (532 distinct pairs, real filed traffic -- ORD alone 73,082 seats over the
  * trailing 12 months, docs/data/invariants.md § Route identity), but `routePair.ts`'s
  * `resolveRoutePair` refuses "ORD to itself is not a route between two airports" as a named
  * 404. Without this guard the cell links straight into that 404 -- `sitemap_routes.sql`

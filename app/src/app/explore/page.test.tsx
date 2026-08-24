@@ -259,7 +259,7 @@ describe("/explore route cell links to the canonical, code-alphabetical /route/<
   });
 
   // Final whole-branch review, F1: a route-grain row where both halves are the SAME airport
-  // (route_key_low == route_key_high) is real, filed traffic -- 530 distinct pairs, 12,738
+  // (route_key_low == route_key_high) is real, filed traffic -- 532 distinct pairs, 12,995
   // fct_segment_month rows -- not a data error, but routePair.ts's resolveRoutePair() names
   // "'ORD' to itself is not a route between two airports" and 404s it (routePair.ts:33). A
   // routeHref that doesn't special-case a===b links straight into that 404. ORD (airport_id

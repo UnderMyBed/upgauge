@@ -74,7 +74,7 @@ def test_reverse_lookup_selects_exactly_the_fact_present_current_airports(con):
              (SELECT count(*) FROM reference)
     """).fetchone()
     # Guards the vacuous pass: a predicate that filters EVERYTHING out also has no collisions
-    # and no rows the reference lacks. 1,045 airports carry T-100 Segment traffic in-window.
+    # and no rows the reference lacks. 1,047 airports carry T-100 Segment traffic in-window.
     assert reference_n > 1000
     assert (only_shipped, only_reference) == (0, 0)
 

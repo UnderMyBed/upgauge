@@ -262,12 +262,12 @@ great circle has zero length. The unbolded column is what the naive `count(disti
 far_endpoint)` returns.
 
 **A fixture built on an airport with no same-airport rows cannot catch this** — but 359 of the
-1,045 fact-present airports have at least one in the trailing 12 window (the `359` in the table
+1,047 fact-present airports have at least one in the trailing 12 window (the `359` in the table
 above), so the population that can catch it is a third of all airports, not a curiosity. SEA and
 ORD are both in it.
 
 **Route storage order (by airport ID) and the alphabetical order a person would type
-disagree for 154 of 22,420 routes (0.69%, excluding the 530 same-airport "routes" just
+disagree for 215 of 22,509 routes (0.96%, excluding the 532 same-airport "routes" just
 above, which are not routes)** — e.g. `HPN` (12197) and `BNH` (16954): id order is
 `HPN-BNH`, but the alphabetical form — used as `/route/<pair>`'s canonical URL — is `BNH-HPN`.
 `/route/<pair>` (`app/src/lib/routePair.ts`) computes both explicitly rather than assuming one
@@ -550,21 +550,21 @@ is the tell that it was re-scanning the fact table rather than probing a hash ta
 *Exactly* the same is the load-bearing half, and it is measured rather than argued:
 `test_reverse_lookup_selects_exactly_the_fact_present_current_airports` runs the shipped
 `.sql` file over **every** `is_latest` code and diffs its result set against the `EXISTS`
-form's in both directions (1,045 airports, 0 either way). Both forms are equivalent by
+form's in both directions (1,047 airports, 0 either way). Both forms are equivalent by
 construction — membership in `origin ∪ dest` *is* what that `EXISTS` tests, NULLs included —
 but the same test rejects a plausible near-miss: an `origin`-only predicate loses 50
 destination-only airports. Two other rewrites were measured and rejected: `id IN (origins) OR
 id IN (dests)` is 80 ms (two mark joins, no shared scan), and `UNION ALL` in place of `UNION`
-is 21–22 ms (6.7 M probe values instead of 1,045 distinct ones).
+is 21–22 ms (6.7 M probe values instead of 1,047 distinct ones).
 
 ### Airport coordinates, and the six that are east of the antimeridian
 
-Measured 2026-08-01 against the 1,045 fact-present airports (`fct_segment_month`'s origin ∪
+Measured 2026-08-01 against the 1,047 fact-present airports (`fct_segment_month`'s origin ∪
 dest, joined on `is_latest`). Recorded here because anything that places an airport
 geographically depends on both facts, and neither is guessable from the schema.
 
 **Every fact-present airport has coordinates.** `lat` and `lon` are NULL for **0** of the
-1,045. A geographic view needs no "not drawn, coordinates missing" disclosure, which is
+1,047. A geographic view needs no "not drawn, coordinates missing" disclosure, which is
 otherwise exactly the kind of gap this repo insists on stating.
 
 **Six carry a POSITIVE longitude**, and a naive `lon < some_western_bound` test silently
@@ -652,7 +652,7 @@ be an arbitrary, confident answer about the wrong airline. `app/src/lib/carrier.
 114 fact-present airlines last filed before 2025-05** (measured, 39%) — Virgin America's last
 month is 2018-03 — which is why `/carrier/<code>` renders the full-window chart independently
 of the trailing-12 table and names the range the chart can actually draw. Same shape as the
-12,062-of-22,950 route pairs recorded under § Route identity.
+12,115-of-23,041 route pairs recorded under § Route identity.
 
 **For aircraft the filter is not enough, and this is where the airport result stops
 generalising.** 12 `short_name`s map to more than one `code` across `dim_aircraft_type`;

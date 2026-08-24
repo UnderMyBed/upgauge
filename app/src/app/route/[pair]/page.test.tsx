@@ -39,8 +39,8 @@ describe("/route/<pair>", () => {
   // Final whole-branch review, F5: the spec required "both airport names in the title block
   // -> /airport/<code>", and it was never carried in -- `{a.name} ↔ {b.name}` rendered as
   // plain text. Measured consequence: no page in the product links to /airport/ or /route/ at
-  // all, so 23,465 of the sitemap's 23,689 URLs at the time (23,694 as of M6 Task 7, whose
-  // five `/watch` pages do not change this 23,465 numerator) (/airport 1,045 + /route 22,420) have zero
+  // all, so 23,556 of the sitemap's 23,780 URLs at the time (23,785 as of M6 Task 7, whose
+  // five `/watch` pages do not change this 23,556 numerator) (/airport 1,047 + /route 22,509) have zero
   // inbound internal links. This is the fix at the one place that can carry it: both airport
   // halves of the title block link to their own /airport/<code>.
   it("links both airport names in the title block to their own /airport/<code>", async () => {
@@ -144,7 +144,7 @@ describe("/route/<pair>", () => {
   });
 
   it("names the airports in the empty state in the same order as the header, not id order", async () => {
-    // Minor, final whole-branch review: BNH-JFK is one of the 154 routes where id order
+    // Minor, final whole-branch review: BNH-JFK is one of the 215 routes where id order
     // (JFK's airport_id is lower, so low=JFK/high=BNH) disagrees with the alphabetical
     // canonical order the header uses (BNH first). The empty-state prose used to be built
     // from low/high (id order), so it read "...John F Kennedy (JFK) and ... (BNH)" directly
@@ -330,7 +330,7 @@ describe("/route/<pair> aircraft-mix chart", () => {
   });
 
   it("still draws the history when the trailing-12 table is empty", async () => {
-    // ATL-CAK: 67 months of filings, none since 2022-06 (measured). 12,062 of this database's
+    // ATL-CAK: 67 months of filings, none since 2022-06 (measured). 12,115 of this database's
     // route pairs last filed before the current trailing-12 window, so this is over half of
     // them, not an oddity. Gating the chart on `!isEmpty` -- the obvious way to write the
     // mount -- would blank the only panel on the page with anything in it, and would pass

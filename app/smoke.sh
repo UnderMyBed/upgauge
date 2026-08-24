@@ -708,7 +708,7 @@ check_dataset check "chart: a route with one gets the derived annotation (ATL-MC
 # labels "COVID -- in window on purpose." The shipped M4c built its x domain from the months
 # PRESENT in the pivot result, so those six were not on the axis and Plot drew one straight
 # edge from 37,441 seats down to 6,804 across them; a reader read roughly 30k, 22k, 15k seats
-# for months that filed nothing. 14,198 of 22,950 route pairs (62%) have such a gap.
+# for months that filed nothing. 14,293 of 23,041 route pairs (62%) have such a gap.
 #
 # Two claims, because the sentence alone would be satisfied by a chart that says "6 months"
 # and still draws across them: the page STATES the absence, and the darkest band arrives as
@@ -1171,7 +1171,7 @@ check "cross-link: /carrier/DL links an aircraft cell to /aircraft/B737-8" "$BOD
 
 # The milestone's sharpest trap (docs/design/system.md § The data table): /explore's route cell
 # displays the two codes in AIRPORT-ID order but must LINK to the code-alphabetical canonical
-# /route/ URL, and the two orderings disagree for 154 of 22,420 pairs. IFP/IAH is the fixture
+# /route/ URL, and the two orderings disagree for 215 of 22,509 pairs. IFP/IAH is the fixture
 # explore/page.test.tsx and DataTable.test.tsx already use for exactly this reason -- a
 # JFK-LAX-shaped fixture cannot catch this class of bug, because JFK-LAX's two orderings agree.
 BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=route&d=route&m=seats&t=2015-01:2016-12&f=route:10590-12266&s=-seats&n=5&g=op")

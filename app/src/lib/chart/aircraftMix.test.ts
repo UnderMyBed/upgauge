@@ -328,8 +328,8 @@ describe("toBands against a real route that stopped filing mid-window", () => {
   // HNL is AIRPORT_ID 12173, LAS is 12889. Measured against the built upgauge.duckdb: the pair
   // filed in 130 of the window's 136 months and nothing at all for 2020-04..2020-09 -- six
   // months inside the --panel-2 band the chart itself labels "COVID -- in window on purpose."
-  // 7.07 M seats over the window, so this is a page someone loads, not a corner case; 14,198 of
-  // 22,950 route pairs (62%) have at least one interior gap.
+  // 7.07 M seats over the window, so this is a page someone loads, not a corner case; 14,293 of
+  // 23,041 route pairs (62%) have at least one interior gap.
   const HNL_LAS: [string, string[]][] = [["route", ["12173-12889"]]];
 
   it("names the six months HNL-LAS filed nothing in, and puts them in no series", async () => {

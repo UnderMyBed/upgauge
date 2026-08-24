@@ -41,6 +41,12 @@ SELECT count(DISTINCT route_key_low)
 FROM fct_segment_month
 WHERE route_key_low = route_key_high;
 
+-- name: same_airport_filings
+-- ROWS, not pairs: how much real traffic the same-airport filings carry. Quoted wherever the
+-- decision to EXCLUDE them is justified (pivot.py, render.ts, explore/page.tsx) -- the point
+-- being that they are dropped because they are not routes, not because they are empty.
+SELECT count(*) FROM fct_segment_month WHERE route_key_low = route_key_high;
+
 -- name: route_pairs_with_same_airport
 SELECT count(*) FROM (
     SELECT DISTINCT route_key_low, route_key_high FROM fct_segment_month);

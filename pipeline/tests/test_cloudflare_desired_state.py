@@ -40,7 +40,7 @@ def test_rate_limit_holds_one_request_per_second_per_ip_in_a_period_the_plan_all
 
     -- so the 60-requests-per-60s the design asked for is not expressible here. The RATE is
     what carries the intent (a human on /explore makes a handful of /api/pivot calls a minute;
-    a scraper walking 22,420 route pages does not fit inside 1/s), so it is preserved at
+    a scraper walking 22,509 route pages does not fit inside 1/s), so it is preserved at
     1 req/s and the window is the one the plan permits. Asserting the ratio rather than a bare
     threshold is what keeps this honest if the window ever changes again.
 

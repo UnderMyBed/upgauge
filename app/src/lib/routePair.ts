@@ -15,10 +15,10 @@ export type RoutePairResult =
  *                              database.
  *   filterValue (the query) -- by AIRPORT ID, matching route_key_low/route_key_high.
  *
- * They disagree for 154 of 22,420 routes (0.69%, excluding the 530 same-airport "routes"
+ * They disagree for 215 of 22,509 routes (0.96%, excluding the 532 same-airport "routes"
  * that are not routes -- docs/data/invariants.md § Route identity) -- verified: HPN (12197)
  * and BNH (16954), so id order is HPN-BNH while the alphabetical canonical is BNH-HPN.
- * Conflating them would query the wrong route for that 0.69%, or mint a URL nobody would
+ * Conflating them would query the wrong route for that 0.96%, or mint a URL nobody would
  * type. */
 export async function resolveRoutePair(slug: string): Promise<RoutePairResult> {
   const parts = slug.split("-");

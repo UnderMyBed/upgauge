@@ -25,11 +25,11 @@ export const dynamic = "force-dynamic";
  * (`watchEntries()`'s own header explains why a dataset-wide leaderboard has no per-entity
  * filing date to anchor to).
  *
- * **23,694** URLs, quarantine-inclusive throughout (`sql/03_queries/sitemap_routes.sql`'s
+ * **23,785** URLs, quarantine-inclusive throughout (`sql/03_queries/sitemap_routes.sql`'s
  * header: a quarantined row is still a real filing and a real 200-serving page) --
- * `docs/product/scope.md` § D2 records the entity-page breakdown: 22,420 routes + 1,045
- * airports + 114 carriers + 110 aircraft (23,689), plus M6 Task 7's `/watch` + its four
- * presets (+5) = 23,694. Well under Google's 50,000-URL-per-sitemap limit, so one sitemap file
+ * `docs/product/scope.md` § D2 records the entity-page breakdown: 22,509 routes + 1,047
+ * airports + 114 carriers + 110 aircraft (23,780), plus M6 Task 7's `/watch` + its four
+ * presets (+5) = 23,785. Well under Google's 50,000-URL-per-sitemap limit, so one sitemap file
  * is enough and `generateSitemaps()`'s multi-file split is not needed. */
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const [routes, airports, carriers, aircraft, watch] = await Promise.all([

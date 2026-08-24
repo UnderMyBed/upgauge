@@ -46,6 +46,7 @@ _SCALAR = frozenset(
         # Page cardinality (#91). Every one of these was stated in prose and generated nowhere.
         "sitemap_routes",
         "same_airport_pairs",
+        "same_airport_filings",
         "route_pairs_with_same_airport",
         "sitemap_airports",
         "sitemap_carriers",

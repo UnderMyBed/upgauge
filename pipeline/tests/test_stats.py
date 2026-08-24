@@ -64,10 +64,9 @@ def test_aircraft_short_names_are_sorted_and_carry_their_code(con):
 
 
 def test_page_cardinality_measures_are_generated():
-    """#91: these figures were stated in 27 files and generated in NONE, so the 2026-08-07 BTS
-    refresh moved every one of them (22,420 route pairs -> 22,509, 1,045 airports -> 1,047) and
-    nothing anywhere went red. Each must now come from the artifact so a refresh reddens
-    `make stats` at the producer instead of drifting silently in prose."""
+    """#91: these figures were stated across 27 files and generated in NONE, so a BTS refresh
+    moved every one of them and nothing anywhere went red. Each must now come from the artifact,
+    so a refresh reddens `make stats` at the producer instead of drifting silently in prose."""
     measures = json.loads(STATS_PATH.read_text())["measures"]
     for key in (
         "sitemap_routes",
