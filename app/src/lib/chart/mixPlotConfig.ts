@@ -39,7 +39,7 @@ const COVID_LABEL = "COVID — in window on purpose.";
  * reason the pivot is (CLAUDE.md: key on ids, display codes): two types sharing a
  * `short_name` -- CE-180 names two, measured -- would otherwise merge into one band and
  * silently under-count. */
-export const OTHER_KEY = "__other";
+const OTHER_KEY = "__other";
 
 export function plural(n: number, one: string): string {
   return `${n} ${one}${n === 1 ? "" : "s"}`;

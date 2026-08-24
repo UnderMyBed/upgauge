@@ -253,17 +253,14 @@ export function CardFrame(input: CardInput): React.ReactElement {
   );
 }
 
-// Satori's own FontOptions types `weight` as the literal union `100 | 200 | ... | 900`;
-// loadCardFonts() (lib/og/fonts.ts, not owned by this task) types it as the broader `number`.
-// The runtime values (600, 400) are already valid members of that union -- IBM Plex's real
-// weights -- so this narrows a type declared more loosely upstream rather than papering over a
-// mismatch. Derived structurally from ImageResponse's own constructor so it can never disagree
-// with whatever Satori version next/og vendors.
-type CardFonts = NonNullable<ConstructorParameters<typeof ImageResponse>[1]>["fonts"];
-
+// No assertion on `fonts`. `loadCardFonts()` (lib/og/fonts.ts) narrows `weight` to Satori's own
+// `100 | 200 | ... | 900` at the literals, so the array is already assignable here. An `as` here
+// would be worse than redundant: that union is a subtype of `number`, and an assertion to a
+// subtype is always permitted -- so a typo'd `550` upstream would have type-checked exactly as
+// happily as `600` and failed only inside Satori, at rasterize time, in production.
 export function renderEntityCard(input: CardInput): ImageResponse {
   return new ImageResponse(CardFrame(input), {
     ...CARD_SIZE,
-    fonts: loadCardFonts() as CardFonts,
+    fonts: loadCardFonts(),
   });
 }

@@ -1,5 +1,5 @@
 import { ALLOWED_KEYS } from "@/lib/pivot/urlstate";
-import { entitySlugFromPath } from "@/lib/entitySlug";
+import { ogSlugFromPath } from "@/lib/entitySlug";
 import { routeSlugFromPath, ROUTE_PREFIX } from "@/lib/rawPath";
 import { airportSlugFromPath, AIRPORT_PREFIX } from "@/lib/airport";
 import { carrierSlugFromPath, CARRIER_PREFIX } from "@/lib/carrier";
@@ -61,7 +61,7 @@ import { presetSlugFromPath } from "@/lib/watch";
  * served build at d109845, and re-measured by restoring the throw on top of the fix: `/watch?x=1`
  * 307, `/watch??x=1` **500**. A leading `?` is not a wiring
  * bug, it is one more non-canonical spelling, and rule 0 below treats it as one.
- * `entitySlugFromPath` already catches `decodeURIComponent`'s throw on a malformed escape (`%zz`)
+ * `lib/entitySlug.ts` already catches `decodeURIComponent`'s throw on a malformed escape (`%zz`)
  * and falls back to the raw text, so every `matches` predicate below is total for the same
  * reason: on the proxy path an uncaught throw is a 500 on a request that was only ever going to
  * be a redirect. */
@@ -77,41 +77,6 @@ const AIRPORT_KEYS: ReadonlySet<string> = new Set(["y"]);
  * Declared truthfully even though nothing consumes this row's verdict today: `exempt` means "the
  * proxy does not redirect this path", never "the rules do not exist for it". */
 const SEARCH_KEYS: ReadonlySet<string> = new Set(["q"]);
-
-/** The segment Next appends to an entity route for its `opengraph-image.tsx` file convention.
- *
- * One dynamic segment, then this literal -- `/route/JFK-LAX/opengraph-image`. There is no
- * `/[id]` segment and no content-hash PATH segment: `generateImageMetadata` is what would add
- * one, and none of the four cards uses it (each route's own `alt` comment says why). Measured
- * on the served production build, `next start` on :3251. */
-export const OG_SUFFIX = "/opengraph-image";
-
-/** The `<slug>` half of a `/<prefix>/<slug>/opengraph-image` pathname, or null if this is not
- * an OG card route.
- *
- * Shared by `proxy.ts`'s OG cache branch and the four OG rows below, for the same reason
- * `routeSlugFromPath` is shared by `proxy.ts` and `not-found.tsx`: the cache branch and the
- * query gate must never disagree about which requests are OG cards or about where the slug
- * starts. `proxy.ts` imports it from here rather than the reverse because that file already
- * imports `canonicalize` from this one, and a second edge back would be a cycle.
- *
- * Delegates the decode to `lib/entitySlug.ts` rather than carrying its own `decodeURIComponent`
- * guard -- that guard existed in four copies once and M5 Task 6 collapsed it; a fifth copy here
- * would be the same defect re-introduced. The suffix comes off the RAW pathname first, so a
- * malformed escape inside the slug (`%zz`) still falls back to raw text without taking the
- * suffix test with it.
- *
- * Two extra rejections beyond the prefix test, both matching what `config.matcher`'s
- * `/<entity>/:slug/opengraph-image` shape actually forwards: an empty slug (`/route//
- * opengraph-image`) and a slug containing `/` (more than one dynamic segment). Without them this
- * reader would claim pathnames the matcher never sends here, and the branch that resolves them
- * would answer for a request that does not exist. */
-export function ogSlugFromPath(pathname: string, prefix: string): string | null {
-  if (!pathname.endsWith(OG_SUFFIX)) return null;
-  const slug = entitySlugFromPath(pathname.slice(0, -OG_SUFFIX.length), prefix);
-  if (slug === null || slug === "" || slug.includes("/")) return null;
-  return slug;
-}
 
 /** Next's own cache-buster on a file-convention OG image URL, admitted BY SHAPE.
  *

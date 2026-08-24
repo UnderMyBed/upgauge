@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { canonicalize, ogSlugFromPath } from "@/lib/canonicalQuery";
+import { canonicalize } from "@/lib/canonicalQuery";
+import { ogSlugFromPath } from "@/lib/entitySlug";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { RAW_PATH_HEADER, routeSlugFromPath, ROUTE_PREFIX } from "@/lib/rawPath";
 import { resolveRoutePair } from "@/lib/routePair";
@@ -623,10 +624,10 @@ const ENTITY_ROUTES: ReadonlyArray<{
  *
  * A `prefix` rather than a `slugFromPath`, because `ogSlugFromPath` needs both halves of the
  * pathname (the prefix AND the `/opengraph-image` suffix) and there is one reader for all four.
- * It lives in `lib/canonicalQuery.ts` so this branch and that file's four OG rows cannot disagree
- * about which requests are cards -- the same "these lists must agree" property the matcher
- * comment at the foot of this file describes, enforced by sharing the predicate instead of by
- * restating it. */
+ * It lives in `lib/entitySlug.ts`, beside the decode guard it wraps, so this branch and
+ * `lib/canonicalQuery.ts`'s four OG rows cannot disagree about which requests are cards -- the
+ * same "these lists must agree" property the matcher comment at the foot of this file describes,
+ * enforced by sharing the predicate instead of by restating it. */
 const OG_ROUTES: ReadonlyArray<{
   prefix: string;
   resolve: (slug: string) => Promise<{ kind: string }>;
