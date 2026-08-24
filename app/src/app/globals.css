@@ -688,3 +688,81 @@ svg.plot {
 .empty-state a {
   color: var(--signal);
 }
+
+/* ---------- the airport network map (M7 Tasks 4-9) ---------- */
+/* The THIRD instance of the gap this file already records twice -- `.search-results`, and
+   `.frame`/`.watch-list` at the /watch block above. Here the consequence was not a font size.
+   The generated basemap paths carry NO presentation attributes at all --
+   `<path data-panel="us" data-name="AL" d="..."/>` (basemapPaths.generated.ts) -- and
+   networkMap.ts's <svg> root sets no `fill` either, so every state polygon fell back to SVG's
+   initial fill, which is BLACK. Arcs are stroked var(--ink) (#15181A) directly on top of that,
+   so the conterminous panel served near-black on black. Measured on the live page: 209 fills
+   and 201 strokes of var(--ink) over an unstyled, therefore black, landmass.
+
+   Land is --panel-2, not --field: the arcs, the destination dots and the labels are all
+   --ink, and the land has to sit one step off the page ground to read as land at all.
+
+   Measured contrast against the arc stroke, which is the whole point of the fix:
+
+       --ink arc on the black default    1.18:1   <- shipped today
+       --ink arc on --panel-2 land      14.45:1
+       --ink-3 floor arc on --panel-2    4.22:1
+       (WCAG's minimum for a graphical object is 3.0:1)
+
+   The border is --rule-2, NOT --rule: the committed geometry is per-STATE (`data-name="AL"`),
+   so the borders are what render the shape of the country, and --rule against --panel-2 is
+   1.14:1 -- invisible, which would leave the land a single undifferentiated blob. --rule-2
+   measures 2.86:1 against the same land. It stays a 0.5px hairline for the opposite reason:
+   at 1px, 53 state outlines become a cage over the exact area the arcs occupy, a second
+   contradictory signal of the kind arcs.ts already refuses when it declines to dash a
+   below-floor arc by load factor.
+
+   Colour is not the sole channel for anything here: it is the ground the existing width/dash
+   encoding is read against, and that encoding is untouched. */
+.map {
+  margin-bottom: 22px;
+}
+.map svg {
+  max-width: 100%;
+  height: auto;
+}
+.map svg path[data-panel] {
+  fill: var(--panel-2);
+  stroke: var(--rule-2);
+  stroke-width: 0.5;
+}
+
+/* ---------- the network map's year track (M7 Task 9) ---------- */
+/* Thirteen anchors are emitted ADJACENT -- `Trailing 12 months</a><a ...>2015</a><a
+   ...>2016</a>` in the served bytes, with no whitespace and no separator character anywhere
+   between them (page.tsx's own comment explains why the year and its partial-year `*` are one
+   expression rather than two). So the gap IS the separator: there is no character to fall back
+   on, and without this rule the whole control renders as
+   `Trailing 12 months201520162017...`.
+
+   `aria-current="page"` already marks the showing view for assistive tech; --signal plus the
+   weight change is the visible half of the same fact, never colour alone. */
+.year-track {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  margin: 0 0 22px;
+  padding-top: 2px;
+}
+.year-track a {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+.year-track a:hover {
+  color: var(--signal);
+}
+.year-track a[aria-current="page"] {
+  color: var(--signal);
+  font-weight: 600;
+  text-decoration: none;
+}

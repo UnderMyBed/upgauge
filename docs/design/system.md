@@ -570,6 +570,21 @@ from `albers.ts` rather than imported) was updated to match — the two tables d
 mean the drawn frame border no longer matches the rectangle the coastline was actually fit
 to.
 
+**The generated paths carry no presentation attributes, so the paint is a stylesheet rule and
+must stay one.** `basemapPaths.generated.ts` emits geometry alone — `<path data-panel="us"
+data-name="AL" d="…"/>` — and `networkMap.ts`'s `<svg>` root sets no `fill`, so an unstyled
+basemap inherits SVG's initial `fill`, which is **black**. `globals.css`'s
+`.map svg path[data-panel]` supplies it: land `--panel-2`, border `--rule-2`, `stroke-width`
+0.5.
+
+The border is `--rule-2` and not `--rule` because the committed geometry is per-STATE
+(`data-name="AL"`), so the borders are what render the shape of the country; `--rule` measures
+1.14:1 against `--panel-2` land and disappears, while `--rule-2` measures 2.86:1. It stays a
+hairline for the opposite reason — at 1px, 53 state outlines become a cage over the same area
+the arcs occupy. Measured contrast for the arcs themselves: `--ink` on `--panel-2` is 14.45:1
+and an `--ink-3` floor arc is 4.22:1, against WCAG's 3.0:1 minimum for a graphical object.
+
+
 ### Arc encoding
 
 | Channel | Encodes |
