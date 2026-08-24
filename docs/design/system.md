@@ -176,7 +176,7 @@ The `<abbr>` carrying the name nests **inside** the `<a>` rather than being repl
 it is the only place a keyboard user reaches the expansion, linked cell or not.
 
 **A fourth case, and it is not a dimension property: a `route` cell whose two halves are the
-same airport does not link.** `fct_segment_month` carries 530 such pairs with real traffic
+same airport does not link.** `fct_segment_month` carries 532 such pairs with real traffic
 (ORD alone is 76,236 seats over the trailing 12), but `/route/ORD-ORD` is a 404 by design —
 `resolveRoutePair` answers *"'ORD' to itself is not a route between two airports"*, and
 `sitemap_routes.sql` excludes them for the same reason. The link path is the easiest place to
@@ -202,10 +202,10 @@ the same component, calls per row for any non-dimension identifier column that s
 **The href is the code-alphabetical pair, never the displayed (airport-id) order**: `/explore`
 renders `route_key_low, route_key_high` — airport-id order — and `routeHrefFromCodes` re-sorts
 alphabetically by code before building `/route/<pair>`, because the two orderings disagree for
-154 of 22,420 pairs (measured; `CLAUDE.md`). Reusing the displayed order would be wrong
-for every one of those 154 — IFP/IAH is one of them: airport-id order displays `IFP–IAH`, but
+215 of 22,509 pairs (measured; `CLAUDE.md`). Reusing the displayed order would be wrong
+for every one of those 215 — IFP/IAH is one of them: airport-id order displays `IFP–IAH`, but
 the canonical `/route/` URL is `/route/IAH-IFP`, the reverse. A fixture built on an
-order-agreeing pair like JFK–LAX (22,266 of 22,420) cannot catch that class of bug — both
+order-agreeing pair like JFK–LAX (22,294 of 22,509) cannot catch that class of bug — both
 orderings produce the same, coincidentally correct, href.
 
 ### The gauge rail — signature, 1 of 3
@@ -435,7 +435,7 @@ below — it binds every time-series mark, not only lines.
   seats) filed nothing for **2020-04 … 2020-09** and the chart drew one edge from 37,441 seats
   down to 6,804 across all six — inside the `--panel-2` band the same chart labels *"COVID —
   in window on purpose."* The one feature whose stated purpose is refusing to smooth COVID
-  away was smoothing away the actual COVID shutdown. **14,198 of 22,950 route pairs (62%) have
+  away was smoothing away the actual COVID shutdown. **14,293 of 23,041 route pairs (62%) have
   at least one interior gap**; `LGB–SJC` has a 21-month one.
 
   Three consequences for any chart built here:
@@ -461,7 +461,7 @@ below — it binds every time-series mark, not only lines.
   *requested* window and read `chart: the full window · 2015-01 → 2026-04` above a chart that
   stopped in 2022 — on `/route/ATL-CAK`, which filed 67 months, 2015-01 → 2022-06, and nothing
   since (measured). The `aria-label` was already correct, so only the text a sighted reader
-  sees was wrong, which is the worse half. 12,062 of 22,950 route pairs last filed before the
+  sees was wrong, which is the worse half. 12,115 of 23,041 route pairs last filed before the
   current trailing-12 window, so this is over half of them rather than a corner case. It is the
   same fabrication as interpolating across a gap, and the exact inverse of the mistake the
   two-window line exists to prevent: claiming a window you are not drawing. `page.test.tsx`
@@ -531,7 +531,7 @@ The committed basemap (`app/geo/ne_110m_us.json` → `app/scripts/build-basemap.
 src/lib/map/basemapPaths.generated.ts`) is Natural Earth **1:110m**, which has no polygon at
 all for Guam/CNMI/American Samoa/Midway (`pac`) or Puerto Rico/the USVI (`car`), which on its
 own leaves both insets empty. Measured against the real warehouse (trailing 12 months): 74
-of 1,045 fact-present airports reach `car`, 6 reach `pac` — `/airport/SJU` alone drew 65 arcs
+of 1,047 fact-present airports reach `car`, 6 reach `pac` — `/airport/SJU` alone drew 65 arcs
 inside a labelled Caribbean frame with no landmass under it, and San Juan is a major airport,
 not an edge case.
 
@@ -583,7 +583,7 @@ Never hue. Thin arcs draw first so heavy ones sit on top. Destination nodes are 
 (1.3px `--ink-3` below floor); the origin is a 4.5px `--field` disc ringed in `--signal`.
 
 **A same-airport row is never an arc, on any page, standing rule.** `fct_segment_month`
-really carries rows whose origin and destination are the same airport — 359 of 1,045
+really carries rows whose origin and destination are the same airport — 359 of 1,047
 fact-present airports have at least one over the trailing 12 months; ORD alone is 53 rows,
 76,236 seats. Such a row's great circle has zero angular length, and `greatCircle`'s own
 degenerate-endpoint branch (`om < 1e-9`) would emit `steps + 1` identical points — several
@@ -699,7 +699,7 @@ JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
   table's trailing 12. The two windows differ because a twelve-point fleet-mix stack shows
   nothing, and **the page states both**: a decade drawn under a line reading "Trailing 12
   months" claims a window it is not showing. It is drawn whenever the *full* window has
-  filings, including when the trailing-12 table below is empty (12,062 of 22,950 pairs last
+  filings, including when the trailing-12 table below is empty (12,115 of 23,041 pairs last
   filed before the current trailing-12 window — the majority, not an edge case); when neither
   window has anything, no chart is drawn and the empty state below carries the finding alone.
 - **Table.** The standard data table, one row per operating carrier, trailing 12 months,

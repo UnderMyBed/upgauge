@@ -21,7 +21,7 @@ describe("resolveRoutePair", () => {
   });
 
   it("orders the filter value by ID even when that disagrees with the alphabet", async () => {
-    // 154 of 22,950 routes have id order != alphabetical order. Verified: HPN is 12197 and
+    // 215 of 23,041 routes have id order != alphabetical order. Verified: HPN is 12197 and
     // BNH is 16954, so id order is HPN-BNH while the alphabetical canonical is BNH-HPN.
     // The slug follows the alphabet; the filter value follows the ids. Pinned to the exact
     // expected string, not just an ordering check -- an ordering check alone would still
@@ -69,7 +69,7 @@ describe("resolveRoutePair", () => {
   });
 
   it("404s a route from an airport to itself", async () => {
-    // Same-airport filings exist (12,738 across 530 airports, full window, quarantined
+    // Same-airport filings exist (12,995 across 532 airports, full window, quarantined
     // included) but they are not a route
     // between two places, and /route/XXX-XXX would render a page about a non-route. This is
     // checked before the lookup (rawA === rawB, both known or not), so it fails for the

@@ -22,7 +22,7 @@
 -- route_key_high`) are excluded -- CLAUDE.md / routePair.ts: those are not routes.
 --
 -- `lo_code`/`hi_code` come back in AIRPORT-ID order, NOT the alphabetical order the sitemap
--- URL needs -- they disagree for 154 of 22,420 pairs (routePair.ts's own header; HPN/BNH is
+-- URL needs -- they disagree for 215 of 22,509 pairs (routePair.ts's own header; HPN/BNH is
 -- the measured example: id order is HPN-BNH, alphabetical is BNH-HPN). Re-sorting into the
 -- canonical URL is app/src/lib/sitemap.ts's job, via routeHrefFromCodes -- the same function
 -- /explore's route cells link through (entityLink.ts) -- so there is exactly one place in the

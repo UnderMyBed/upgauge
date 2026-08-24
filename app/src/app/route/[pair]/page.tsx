@@ -204,7 +204,7 @@ export async function RouteView({
   const hasMix = mix.length > 0;
   // The range the chart can DRAW, which is not the range it was fetched over. The fetch asks
   // for EARLIEST_MONTH -> asOf; a subject that stopped filing in 2022 yields an x axis ending
-  // in 2022, and 12,062 of 22,950 route pairs last filed before the current trailing-12 window,
+  // in 2022, and 12,115 of 23,041 route pairs last filed before the current trailing-12 window,
   // so this is over half of them rather than a corner case. Naming the requested window in the
   // line below put "2015-01 → 2026-04" over a chart stopping in 2022 -- the same fabrication as
   // interpolating across a gap, and the exact inverse of what the comment above warns about.
@@ -265,7 +265,7 @@ export async function RouteView({
             {/* Above the table, in the content column, mirroring
                 docs/design/mockups/entity-route.html. Rendered whenever there is anything to
                 draw -- INCLUDING when the trailing-12 table below is empty, which is not a
-                corner case: 12,062 of the 22,950 route pairs in this database last filed
+                corner case: 12,115 of the 23,041 route pairs in this database last filed
                 before 2025-05 (measured), so for over half of them the chart is the only thing
                 on the page with anything in it, and the empty state under it is what says the
                 service has stopped. When there is nothing in the full window either (BNH-JFK),
@@ -275,7 +275,7 @@ export async function RouteView({
             {hasMix ? <AircraftMixChart rows={mix} title={title} /> : null}
             {isEmpty ? (
               // `a`/`b` (alphabetical, same order as the header above), NOT `low`/`high`
-              // (id order) -- Minor, final whole-branch review: for the 154 routes where the
+              // (id order) -- Minor, final whole-branch review: for the 215 routes where the
               // two orderings disagree (BNH-JFK is one: id order is JFK,BNH but the header
               // reads "BNH–JFK"), passing low/high here made the empty-state prose name the
               // airports in the OPPOSITE order from the header immediately above it.

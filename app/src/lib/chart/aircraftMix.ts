@@ -221,7 +221,7 @@ export interface SeriesPoint {
  * axis says which contiguous stretch each of those months belongs to; the renderer draws one
  * area per stretch, so an absent month leaves a hole rather than an edge.
  *
- * Measured over the built warehouse: 14,198 of 22,950 route pairs (62%) have at least one
+ * Measured over the built warehouse: 14,293 of 23,041 route pairs (62%) have at least one
  * interior gap, and HNL-LAS -- 7.07 M seats -- has six consecutive absent months
  * (2020-04..2020-09) INSIDE the COVID band the chart labels "in window on purpose".
  *

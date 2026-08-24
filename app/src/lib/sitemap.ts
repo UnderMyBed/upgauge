@@ -57,7 +57,7 @@ async function routesEntries(): Promise<SitemapEntry[]> {
     // alphabetical URL order for 215 of 22,509 pairs (its own header; HPN/BNH is the
     // measured example). routeHrefFromCodes -- the same function /explore's route cells link
     // through -- is what re-sorts; reusing the SQL's own id order here would silently mint
-    // 154 sitemap URLs that /route/<pair> itself 308s away from.
+    // 215 sitemap URLs that /route/<pair> itself 308s away from.
     return {
       url: routeHrefFromCodes(loCode, hiCode),
       lastModified: parseLastmod(r.lastmod, `route ${loCode}-${hiCode}`),

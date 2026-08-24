@@ -55,7 +55,7 @@ export interface NetworkMapInput {
   arcs: ArcDatum[];
   window: string;
   /** Seats from rows whose origin and destination are the same airport as `origin.code`
-   * (359 of 1,045 fact-present airports carry at least one; ORD alone is 53 rows / 73,082
+   * (359 of 1,047 fact-present airports carry at least one; ORD alone is 53 rows / 73,082
    * seats over the trailing 12 months -- docs/data/invariants.md § Route identity). Such a
    * row cannot be an arc: its great circle has zero length, and `greatCircle`'s degenerate
    * branch would emit `steps + 1` identical points, several hundred bytes drawing an

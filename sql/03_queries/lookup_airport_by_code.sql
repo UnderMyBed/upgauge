@@ -35,7 +35,7 @@
 -- file against the real database and diffs its result set against the EXISTS form's, over
 -- every is_latest code rather than a sampled pair. Variants tried and rejected, same method:
 -- `id IN (origins) OR id IN (dests)` 80 ms (two mark joins, no shared scan); `UNION ALL`
--- instead of `UNION` 21-22 ms (6.7 M probe values instead of 1,045 distinct ones).
+-- instead of `UNION` 21-22 ms (6.7 M probe values instead of 1,047 distinct ones).
 --
 -- Codes are matched case-insensitively so /route/jfk-lax resolves; the caller uppercases for
 -- the canonical URL.

@@ -100,11 +100,11 @@ excluded, trailing 12 (2025-05 → 2026-04) and all-time (2015-01 → 2026-04):
 sitemap** — do not quote them as "how many entity pages exist." A quarantined row
 (`load_factor > 1.0`, CLAUDE.md) is still a real filing and its page still 200s, so excluding it
 silently undercounts. `docs/product/scope.md` § D2 has the number that answers "how many entity
-pages get indexed" — `/sitemap.xml`, **quarantine-INCLUDED**: 1,045 airports, 114 carriers, 110
-aircraft, 22,420 routes, **23,694** total (which includes `/watch` and its four presets — not
+pages get indexed" — `/sitemap.xml`, **quarantine-INCLUDED**: 1,047 airports, 114 carriers, 110
+aircraft, 22,509 routes, **23,785** total (which includes `/watch` and its four presets — not
 entity pages, and not part of this table's breakdown).
 
-Airports and carriers happen to land close to those figures (1,041 vs. 1,045; 114 both ways — no
+Airports and carriers happen to land close to those figures (1,041 vs. 1,047; 114 both ways — no
 fact-present carrier's entire row history is quarantined). **Aircraft types' `110` here is a
 different count entirely, and its match to the sitemap's `110` is coincidence, not agreement:**
 this row counts distinct BTS `aircraft_type` CODES, quarantine excluded (112 all-time, 110 once
@@ -116,13 +116,13 @@ the moment either side changes.
 
 The three page types together are ~1,265 all-time URLs, three orders of magnitude below the
 20,000-file cap above and nowhere near a build-time problem. Route pages are the set that is not
-finite in the same sense — **22,420** undirected pairs — which is why the split is entity pages
+finite in the same sense — **22,509** undirected pairs — which is why the split is entity pages
 static, routes served.
 
-**22,420 and 22,950 are both real and answer different questions.** 22,950 is
-same-airport-INCLUSIVE; 22,420 excludes the 530 same-airport pairs (`docs/data/invariants.md`
+**22,509 and 23,041 are both real and answer different questions.** 23,041 is
+same-airport-INCLUSIVE; 22,509 excludes the 532 same-airport pairs (`docs/data/invariants.md`
 § Route identity). A same-airport "route" has no `/route/<pair>` page at all — `routePair.ts`
-404s it as "not a route between two airports" — so only 22,420 belongs in a count of pages.
+404s it as "not a route between two airports" — so only 22,509 belongs in a count of pages.
 
 **Count airports at both endpoints, or the number is wrong by a third.** Origin-only gives 741
 / 993, and that is not a rounding difference: it is the same silent halving
@@ -300,7 +300,7 @@ layer again for every commit whose layers did not actually change.
 
 **Measured image size: ≈413 MB / 394 MiB** — `docker inspect upgauge:local --format='{{.Size}}'`
 reports 412,715,491 bytes, cross-checked against `docker save upgauge:local | wc -c`
-(412,738,560 bytes; the ~23 KB difference is tar-format overhead) and against the 13 layers in
+(412,995,560 bytes; the ~23 KB difference is tar-format overhead) and against the 13 layers in
 `docker inspect --format '{{len .RootFS.Layers}}'`. Both figures come from **two consecutive builds
 of the same commit that agreed exactly**, every step `CACHED` — a number that moves on a second
 identical build is not worth writing down. **Quote ≈413 MB, not the byte count.** Every

@@ -365,7 +365,7 @@ Two dimensions do not name a single column, and each needs its own compilation r
 
 The obvious workaround for "filter to the route between a and b" —
 `origin_airport_id IN (a,b) AND dest_airport_id IN (a,b)` — is not equivalent: it also matches
-same-airport filings (`a→a`, `b→b`), which are not a curiosity. 12,738 of them exist across 530
+same-airport filings (`a→a`, `b→b`), which are not a curiosity. 12,995 of them exist across 532
 airports (full window 2015-01 → 2026-04, quarantined rows included;
 `docs/data/invariants.md` § Route identity tabulates all four window × quarantine answers). On
 JFK–LAX that workaround inflates seats by 18,895 under a `DATA AS OF` badge. Full measurement:
@@ -401,7 +401,7 @@ dest's group. The catalog row and its two columns are owned by
 ```
 
 `app/src/lib/routePair.ts`'s `resolveRoutePair` computes two orderings of the same pair
-explicitly, because they disagree for **154 of 22,420 routes (0.69%, excluding the 530
+explicitly, because they disagree for **215 of 22,509 routes (0.96%, excluding the 532
 same-airport "routes" that are not routes)**:
 
 - **`canonical` (the URL)** — alphabetical by code. Storage order is an implementation

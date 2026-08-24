@@ -24,7 +24,7 @@ describe("greatCircle", () => {
 
   it("handles coincident endpoints without dividing by zero", () => {
     // Catches: NaN from sin(0) in the interpolation. Same-airport rows are excluded
-    // upstream (Task 6), but 359 of 1,045 airports have them, so this must be safe.
+    // upstream (Task 6), but 359 of 1,047 airports have them, so this must be safe.
     const path = greatCircle({ lat: 47.45, lon: -122.31 }, { lat: 47.45, lon: -122.31 }, 8);
     expect(path.every((p) => Number.isFinite(p.lat) && Number.isFinite(p.lon))).toBe(true);
   });

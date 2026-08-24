@@ -67,7 +67,7 @@ function monthRange(from: string, to: string): string[] {
 }
 
 /** `skip` is the months the SUBJECT filed nothing in -- no row for any type, which is what a
- * real absence looks like in a pivot result (14,198 of 22,950 route pairs have at least one).
+ * real absence looks like in a pivot result (14,293 of 23,041 route pairs have at least one).
  * Not the same thing as a type with zero seats in a month it did fly. */
 function rows(
   types: TypeSpec[],
