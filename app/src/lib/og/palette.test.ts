@@ -7,7 +7,7 @@ import { OG_PALETTE } from "./palette";
  * Deliberately a dumb regex over the FIRST :root block: globals.css is ours, its shape is
  * stable, and a parser that silently tolerated a shape change would defeat the point. */
 function rootTokens(): Record<string, string> {
-  // ROOT is the REPO root, not app/ -- vitest.config.ts:20 sets UPGAUGE_ROOT to
+  // ROOT is the REPO root, not app/ -- vitest.config.ts:19 sets UPGAUGE_ROOT to
   // path.resolve(__dirname, ".."), and every existing consumer anchors the same way
   // (lib/db.ts:18, lib/sitemap.ts:12, lib/watch.ts:11). Hence the "app" segment.
   const ROOT = process.env.UPGAUGE_ROOT ?? process.cwd();

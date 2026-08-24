@@ -23,7 +23,7 @@ describe("loadCardFonts", () => {
   });
 
   it("does not read the font from disk", () => {
-    // ROOT is the REPO root (vitest.config.ts:20 sets UPGAUGE_ROOT), hence the "app" segment.
+    // ROOT is the REPO root (vitest.config.ts:19 sets UPGAUGE_ROOT), hence the "app" segment.
     const ROOT = process.env.UPGAUGE_ROOT ?? process.cwd();
     const src = readFileSync(path.join(ROOT, "app", "src", "lib", "og", "fonts.ts"), "utf8");
     // THE BUG THIS CATCHES: a "simplification" back to readFileSync. app/src does not ship in
