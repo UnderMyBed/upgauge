@@ -101,17 +101,17 @@ which gate figures are generated and which are still by hand, and why; the ones 
 are in this table and must be re-measured when quoted.
 
 **Numbers in this repo rot, and the rot is not cosmetic.** Every milestone closeout from M4c on
-found a figure written into a permanent doc and never re-measured — `/carrier/DL`'s page weight
-was documented at half its real value; the design spec's ORD arc-byte prediction (132,178) was
-carried into a code comment when the real figure is 64,287. The 2026-08-07 BTS refresh then
-moved `6,177` city markets to `6,181` and **renamed aircraft type 699 out from under the entire
-`/aircraft` slug fixture set**. Re-measure before quoting, and prefer generating a figure to
-restating it (tracker: "Stop measured numbers drifting").
+found a figure written into a permanent doc and never re-measured, and a BTS refresh **renamed
+aircraft type 699 out from under the entire `/aircraft` slug fixture set**. Generate a figure
+rather than restating it. **Page-cardinality figures are generated (`stats_counts.sql`) and every
+place stating one is bound to the artifact BOTH ways by `test_stated_counts.py`: a stated figure
+must be current, and a file stating one must be registered.** State a count in a new file without
+registering it and the gate fails — which is the only reason a sweep of 27 files stays swept.
 ## Outstanding work lives in GitHub Issues, not here
 
-**<https://github.com/UnderMyBed/upguage/issues>** — 12 epics across four milestones
-(`M8 — Public launch`, `M9 — Post-launch surfaces`, `Engineering health`, `v1+`), each epic a
-chunk that can be handed to a swarm, each child task self-contained enough for one agent.
+**<https://github.com/UnderMyBed/upguage/issues>** — each epic a chunk that can be handed to a
+swarm, each child task self-contained enough for one agent. **The milestone list and the epic
+count live there, never here**: both were stated here and both went stale.
 
 **Never grow a backlog here again.** A hand-maintained one states the same item three ways in
 three files and drifts independently: the either-endpoint filter was described as missing in
