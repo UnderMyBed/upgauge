@@ -139,8 +139,10 @@ appear as destinations.
   at the app host (CNAME + provisioned cert) with Cloudflare in front. If `shipman.dev`'s
   nameservers aren't already on Cloudflare, either move them or use a partial (CNAME) setup
   — the free CDN in front is what makes the numbers work.
-- **Basic rate limiting** at the Cloudflare edge (free tier) on the API routes — enough to
-  stop a scraper from waking the box constantly. No app-level auth.
+- **Basic rate limiting** at the Cloudflare edge (free tier) on the paths that reach the origin
+  uncached — `/api/`, `/explore` and the OG cards — enough to stop a scraper from waking the box
+  constantly (§ What this does not close for the expression and what it deliberately omits). No
+  app-level auth.
 - **Nothing private ever goes in it.** All data is public DOT filings; keep it that way.
 
 ## The actual cost control is caching, not the tier
@@ -853,8 +855,10 @@ A crawler walking random lower-case strings therefore creates an attacker-contro
 30-day CDN entries. Nothing is *wrong*: each response is correct, and each is the cheapest
 response in the app (no DB work at all, § What the proxy's query actually costs). The other
 three resolvers consult the dataset first, so an unknown slug there gets `no-store` regardless
-of case and has no equivalent. Cloudflare's rate limiting is the mitigation and is already in
-the architecture; this is recorded so nobody discovers the shape from a cache-fill graph.
+of case and has no equivalent. **The edge rate limit is not the mitigation here** — `/airport/`
+is outside its expression on purpose (§ What this does not close) — so what bounds this is that
+each entry costs no database work at all and is served from the edge thereafter. Recorded so
+nobody discovers the shape from a cache-fill graph, and so nobody assumes a rule covers it.
 
 At most **one** resolution runs per request: every `slugFromPath` is a prefix test and the loop
 breaks on the first match, so four entity pages cost what one did.
@@ -1015,8 +1019,9 @@ families `/sitemap.xml` enumerates, less its `/watch` entries, which have no car
 `dynamic = "force-dynamic"`
 means the origin has no warm path: measured against a served build, repeating one card URL six
 times cost 89–114 ms every time, and a card is 74–107 KB of PNG. The CDN is what makes that
-survivable, which is the whole reason these four paths are in the matcher; the edge rate limit
-does not reach them (§ What this does not close — its expression matches `/api/` alone).
+survivable, which is the whole reason these four paths are in the matcher — and since #83 the
+edge rate limit reaches them too, matched by `ends_with(http.request.uri.path,
+"/opengraph-image")` (§ What this does not close).
 
 ### `y` on `/airport/:code` — a closed set, so validate it rather than blanket `no-store`
 
@@ -1333,8 +1338,13 @@ file's result set against the `EXISTS` form's, both directions, and a mutation t
 only destination-only airports fails it by 50 rows.
 
 **It is still the largest single query on the route path**, and a 404 runs it twice (proxy,
-then `not-found.tsx`'s reason) with no CDN absorption, over an unbounded URL space.
-Cloudflare rate limiting is the front door for that (CLAUDE.md § Architecture). Do not
+then `not-found.tsx`'s reason) with no CDN absorption, over an unbounded URL space. **Nothing at
+the edge bounds that today**: `/route/` is deliberately outside the rate limit's expression
+(§ What this does not close), because the rule cannot see the response status — it is evaluated
+before the origin answers, so limiting the unbounded 404 space means limiting the 200s with it,
+and Cloudflare's rate-limiting phase counts cache HITs, which is a real visitor clicking through
+route pages. The bound here is the query's own cost, which is why the rewrite above matters. Do
+not
 "optimise" it by dropping the fact-presence filter: that filter is what takes colliding
 airport codes from 36 to 0, and `AUS` resolves to an airport closed since 1999 without it
 ([invariants.md § Entity resolution](../data/invariants.md)).
@@ -1613,13 +1623,51 @@ data read here — the two costs are not comparable.
 `(ip.src, cf.colo.id)`, with a 10 s mitigation timeout — a sustained **1 req/s**. Two things about
 it are easy to get wrong and both matter here:
 
-- **Its expression is `starts_with(http.request.uri.path, "/api/")`.** `/explore` is not under
-  `/api/`, so **the residual `f` axis on `/explore` has no edge rate limit at all today.** The rule
-  covers `/api/pivot`, where the same `f` axis rides the *thirty-day* `PROJECT_CACHE`; it does not
-  cover the HTML page. **Nor the four card paths**, which are not under `/api/` either and are the
-  most expensive uncovered thing on the site — a DuckDB query plus a rasterize per request, with no
-  warm path at the origin (§ The OG cards). Whether to extend it is its own question and is not
-  answered here.
+- **Its expression covers `/api/`, `/explore` and the four `*/opengraph-image` paths — and
+  nothing else** (#83).
+
+  ```
+  (starts_with(http.request.uri.path, "/api/")
+   or starts_with(http.request.uri.path, "/explore")
+   or ends_with(http.request.uri.path, "/opengraph-image"))
+  ```
+
+  Those three are what reaches the origin uncached. `/api/pivot` and `/explore` carry the
+  identical residual `f` axis — the API route behind the *thirty-day* `PROJECT_CACHE`, the HTML
+  page behind an hour of `HTML_CACHE` — and a card is a DuckDB query plus a rasterize with no warm
+  path at all (§ The OG cards). It shipped matching `/api/` alone, so for a milestone `/explore`
+  had no edge limit while this same file said the `f` axis was left to the edge *deliberately*:
+  the reasoning was load-bearing on a rule that did not cover the path it named.
+
+  **What is left out is left out on purpose, and widening is the mutant to fear.** The entity
+  pages sit behind an hour of `HTML_CACHE` and `/_next/` assets are immutable, so a walk of either
+  is answered at the edge and never reaches the box; a single real page load asks for more static
+  chunks than 1 req/s allows, so `starts_with(path, "/")` would throttle every genuine visitor
+  while still passing any check that merely looks for `"/api/"` in the string.
+  `pipeline/tests/test_cloudflare_desired_state.py` therefore *evaluates* the expression against
+  named paths in both directions rather than matching substrings of it.
+
+  **The exclusion that must never be added back:** narrowing the rule by anything the client
+  chooses is a bypass, not an exemption. `and not any(http.request.headers["rsc"][*] == "1")` —
+  drafted to spare React's own prefetches — is `curl -H 'RSC: 1'` away from disabling the rule
+  outright, the same reasoning this file already records for `_rsc`. It is also unnecessary: every
+  link to `/explore` in the app is a raw `<a href>`, and `TopBar` sets `prefetch={false}` on the
+  two `<Link>`s a data page renders, with `TopBar.test.tsx` asserting it.
+
+  **Still uncovered, and named rather than implied: `/search`.** It is `no-store`
+  *unconditionally*, so every request reaches the origin, over an attacker-chosen unbounded `q`.
+  It is cheap per request — one resolver query, no render — which is why it was not folded in
+  here, but it is the one remaining path with no cache in front of it and no limit on it.
+- **The three path groups share ONE counter, not one each.** A rate-limiting rule counts per
+  (rule, characteristics), and this is a single rule keyed on `(ip.src, cf.colo.id)` — so
+  `/api/pivot`, `/explore` and a card all draw on the same 10-per-10 s bucket. MEASURED
+  2026-08-24 against the served site: 14 requests to `/route/JFK-LAX/opengraph-image` went
+  `200`×9 then `429`×5, and the very next request — to `/airport/SEA/opengraph-image`, a
+  different path — was `429` on its first try. That is the intended reading (one uncached-origin
+  budget per IP, not one per surface), but it is a real behaviour change on `/explore`, whose
+  page loads did not previously count against `/api/pivot`'s allowance. A visitor changing
+  filters fast enough to make ten origin requests in ten seconds now trips a rule that used to
+  see only the API half of that traffic.
 - **A rate limit caps rate, not cardinality.** Even where it applies, 1 req/s is 86,400 distinct
   cache entries per day per IP, each a full pivot render. It bounds how fast the space can be
   walked, never how large the space is.

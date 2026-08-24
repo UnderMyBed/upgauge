@@ -14,6 +14,7 @@ actual value catches that.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 CLOUDFLARE = Path(__file__).parents[2] / "deploy" / "cloudflare"
@@ -60,13 +61,105 @@ def test_rate_limit_holds_one_request_per_second_per_ip_in_a_period_the_plan_all
     assert ratelimit["mitigation_timeout"] == 10
 
 
-def test_rate_limit_targets_api_paths_only():
-    """A rule that matches everything (or nothing) still parses and still applies -- this
-    catches the expression drifting off `/api/` and silently rate-limiting the whole site, or
-    silently rate-limiting nothing."""
-    rule = _load("rate-limit.json")["rules"][0]
-    assert '"/api/"' in rule["expression"]
-    assert "starts_with" in rule["expression"]
+# The rule's expression is a disjunction of path predicates, so it can be EVALUATED rather than
+# string-matched. That distinction is the point: `assert '"/api/"' in expression` passes for an
+# expression that also matches every other path on the site, and passes for one whose operator
+# is wrong. Extracting (operator, literal) pairs and running real paths through them is what
+# makes each assertion below fail for the reason it names.
+_PATH_CLAUSE = re.compile(r'(starts_with|ends_with)\(http\.request\.uri\.path,\s*"([^"]+)"\)')
+
+
+def _covered(expression: str, path: str) -> bool:
+    clauses = _PATH_CLAUSE.findall(expression)
+    assert clauses, f"no http.request.uri.path predicate in {expression!r}"
+    return any(
+        path.startswith(literal) if op == "starts_with" else path.endswith(literal)
+        for op, literal in clauses
+    )
+
+
+# Every surface that reaches the origin on every request, with the cost each one carries.
+COVERED = (
+    ("/api/pivot", "a DuckDB aggregation, and the residual `f` axis rides the 30-day cache"),
+    ("/explore", "the same `f` axis on the HTML page, which no key or value bound closes"),
+    ("/route/JFK-LAX/opengraph-image", "a DuckDB query plus a rasterize, with no warm path"),
+    ("/airport/SEA/opengraph-image", "same"),
+    ("/carrier/DL/opengraph-image", "same"),
+    ("/aircraft/B737-8/opengraph-image", "same"),
+)
+
+# Deliberately outside the rule. Each of these is either cheap, cached at the edge for long
+# enough that a walk does not reach the origin, or would break something legitimate if limited.
+UNCOVERED = (
+    ("/", "static, and the entry point every real visitor lands on"),
+    ("/route/JFK-LAX", "HTML_CACHE: an s-maxage=3600 edge hit, so a walk does not reach us"),
+    ("/carrier/DL", "same"),
+    ("/watch/gauge", "four closed slugs, so the whole surface is four cacheable documents"),
+    ("/sitemap.xml", "PROJECT_CACHE for 30 days, and crawlers are supposed to fetch it"),
+    ("/robots.txt", "same, and limiting it teaches a crawler nothing"),
+    ("/_next/static/chunks/main.js", "immutable assets: a real page load asks for a dozen"),
+)
+
+
+def test_rate_limit_covers_every_surface_that_reaches_the_origin_uncached():
+    """Issue #83. Before this, the expression was `/api/` alone -- so `/explore` had no edge
+    rate limit at all, though it carries the identical residual `f` axis that
+    `lib/canonicalQuery.ts` and `lib/pivot/bounds.ts` deliberately leave open BECAUSE an edge
+    limit was said to cover it. The four card paths were uncovered too, and they are the most
+    expensive thing on the site per request: a DuckDB query plus a rasterize, no warm path.
+
+    Asserting coverage path by path is what distinguishes this from the check it replaces --
+    that one asserted the string `"/api/"` appeared, which an expression matching only `/api/`
+    satisfies just as well as one matching everything."""
+    expression = _load("rate-limit.json")["rules"][0]["expression"]
+    for path, why in COVERED:
+        assert _covered(expression, path), f"{path} is not rate limited, and it costs: {why}"
+
+
+def test_rate_limit_does_not_reach_the_cached_pages_or_the_static_assets():
+    """The other half, and the one a careless widening breaks: `starts_with(path, "/")` covers
+    every path in COVERED and would pass the test above while rate-limiting the entire site at
+    1 req/s -- a single real page load asks for more static chunks than that."""
+    expression = _load("rate-limit.json")["rules"][0]["expression"]
+    for path, why in UNCOVERED:
+        assert not _covered(expression, path), f"{path} must not be rate limited: {why}"
+
+
+def test_rate_limit_keeps_the_name_the_zone_actually_holds():
+    """MEASURED 2026-08-24, applying #83: a PUT to the http_ratelimit phase entrypoint updates
+    the ruleset's `description` and its rules, and SILENTLY IGNORES `name`. The rule's expression
+    went from `/api/` alone to the three-path disjunction and the description changed with it --
+    `version` bumped 1 -> 2 -- while `name` stayed exactly as it was. The API returned
+    `success: true` and reported no error about the field it dropped.
+
+    So `name` is not desired state on this endpoint, however much the rest of this file is: it is
+    fixed at creation. Renaming it here to match the widened scope would have left the repo
+    asserting something about the zone that no `make cloudflare-apply` could ever make true --
+    the exact "committed file IS the config" claim these tests exist to keep honest. It stays at
+    the creation-time name, which no longer describes the scope, and that is why this test says
+    so rather than leaving the next person to rename it and believe it applied."""
+    assert _load("rate-limit.json")["name"] == "upgauge-api-rate-limit"
+
+
+def test_rate_limit_expression_has_no_client_controlled_escape_hatch():
+    """Guards the evaluator above AND a real bug that was drafted into this rule and caught
+    before it shipped: excluding React's own prefetches with
+
+        and not any(http.request.headers["rsc"][*] == "1")
+
+    reads as a correctness fix and is a total bypass -- `curl -H 'RSC: 1'` opts any client out
+    of the limit. `docs/architecture/hosting.md` already records the same reasoning for the
+    `_rsc` query param: it is attacker-choosable. Nothing about a request that a client picks
+    may narrow this rule, so the expression stays a pure disjunction of path predicates.
+
+    (It needs no such exclusion: every link to `/explore` in the app is a raw `<a href>`, and
+    `TopBar` sets `prefetch={false}` on the two `<Link>`s a data page renders.)"""
+    expression = _load("rate-limit.json")["rules"][0]["expression"]
+    for operator in (" and ", " not ", "http.request.headers"):
+        assert operator not in expression, (
+            f"{operator!r} narrows the rule; if it reads a client-supplied header or query "
+            "param, the narrowing is a bypass, not an exemption"
+        )
 
 
 def test_cache_rule_makes_html_cacheable_and_respects_origin_ttl():

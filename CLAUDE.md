@@ -119,10 +119,10 @@ three files and drifts independently: the either-endpoint filter was described a
 what is TRUE about the system; the tracker says what is PLANNED.
 
 **M8 was the gap between "built" and "reachable", and its code is landed:** the deploy artifact
-and portability test (#1), the ingest and freshness alert this file has required since M1 (#2),
-cache correctness (#3), and launch configuration (#4). What is left is Cloudflare configuration
-only: the rate limit matches `/api/` alone (#83), and **Bot Fight Mode stays on** so nothing
-watches the site on a schedule (#96). Everything in M9 is a surface the product works without.
+and portability test (#1), ingest and freshness alerting (#2), cache correctness (#3), launch
+configuration (#4), and an edge rate limit on every path that reaches the origin uncached (#83).
+What is left is Cloudflare configuration only: **Bot Fight Mode stays on**, so nothing watches
+the site on a schedule (#96). Everything in M9 is a surface the product works without.
 
 One finding worth keeping here rather than only in the tracker, because it is a rule:
 
