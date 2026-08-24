@@ -6,7 +6,8 @@ because every value was hand-pinned. This module emits those values as one commi
 diff-gated artifact instead, the same shape as app/src/lib/map/basemapPaths.generated.ts --
 a pattern `make verify` already gates and which has never drifted.
 
-Query logic lives in sql/03_queries/stats_reference.sql, per CLAUDE.md's hard rule.
+Query logic lives in sql/03_queries/stats_reference.sql and stats_counts.sql, per CLAUDE.md's
+hard rule.
 """
 
 from __future__ import annotations
@@ -18,7 +19,12 @@ from typing import Any
 
 import duckdb
 
-SQL_PATH = Path(__file__).parents[1] / "sql" / "03_queries" / "stats_reference.sql"
+_SQL_DIR = Path(__file__).parents[1] / "sql" / "03_queries"
+# Two files, one namespace. stats_reference.sql holds WAREHOUSE-shape figures; stats_counts.sql
+# holds PAGE-cardinality ones (#91). They are merged rather than nested so the artifact stays
+# one flat `measures` map -- callers should not need to know which file a measure came from --
+# and a name colliding ACROSS the two is rejected, not silently resolved by file order.
+SQL_PATHS = (_SQL_DIR / "stats_reference.sql", _SQL_DIR / "stats_counts.sql")
 STATS_PATH = Path(__file__).parent / "reference" / "stats.generated.json"
 DB_PATH = Path("upgauge.duckdb")
 
@@ -37,12 +43,23 @@ _SCALAR = frozenset(
         "dim_aircraft_type_rows",
         "city_markets",
         "fact_present_aircraft_codes",
+        # Page cardinality (#91). Every one of these was stated in prose and generated nowhere.
+        "sitemap_routes",
+        "same_airport_pairs",
+        "route_pairs_with_same_airport",
+        "sitemap_airports",
+        "sitemap_carriers",
+        "sitemap_aircraft",
+        "route_order_disagreeing_pairs",
+        "route_order_agreeing_pairs",
+        "route_pairs_with_a_gap_month",
+        "route_pairs_stale_vs_trailing_12",
     }
 )
 
 
-def measures_sql(path: Path = SQL_PATH) -> dict[str, str]:
-    """Split the SQL file into {measure name: statement} on its `-- name:` markers.
+def measures_sql(path: Path) -> dict[str, str]:
+    """Split ONE SQL file into {measure name: statement} on its `-- name:` markers.
 
     Two authoring mistakes are rejected rather than silently swallowed:
 
@@ -55,8 +72,7 @@ def measures_sql(path: Path = SQL_PATH) -> dict[str, str]:
       `collect()`'s `_SCALAR` guard only checks the returned SHAPE, and a second
       `count(...)`-shaped statement passes that check, so this is the only line of defense.
     """
-    text = path.read_text()
-    parts = _NAME.split(text)
+    parts = _NAME.split(path.read_text())
     # parts[0] is the header comment; then alternating name, body.
     out: dict[str, str] = {}
     for name, body in zip(parts[1::2], parts[2::2], strict=True):
@@ -76,10 +92,57 @@ def measures_sql(path: Path = SQL_PATH) -> dict[str, str]:
     return out
 
 
+def all_measures_sql(paths: tuple[Path, ...] = SQL_PATHS) -> dict[str, str]:
+    """Merge every measure file into one flat namespace.
+
+    A name colliding ACROSS the two files is rejected rather than resolved by file order --
+    `measures_sql` can only see duplicates within its own file, so without this check a measure
+    copy-pasted from stats_reference.sql into stats_counts.sql would silently shadow the
+    original and one of the two would vanish from the artifact with no signal.
+    """
+    out: dict[str, str] = {}
+    for path in paths:
+        for name, statement in measures_sql(path).items():
+            if name in out:
+                raise ValueError(
+                    f"{name}: duplicate '-- name:' marker across {', '.join(q.name for q in paths)}"
+                )
+            out[name] = statement
+    return out
+
+
+def _derive(measures: dict[str, Any]) -> None:
+    """Totals that are ARITHMETIC over other measures, not queries of their own.
+
+    Derived here rather than as more SQL so each is a sum of the SAME values the artifact
+    reports beside it. A separate `count(*)` could legitimately return a different number from
+    the measures it sits next to -- a slightly different join, a filter that drifted -- and
+    nothing would notice, which is the failure mode this whole module exists to remove.
+
+    `+ 5` is /watch and its four presets: entity pages that appear in the sitemap but have no OG
+    card, and therefore the one asymmetry between the two totals.
+
+    Nothing else belongs here. `route_order_agreeing_pairs` was derived this way and had to be
+    moved back into SQL: computing it as `sitemap_routes - disagreeing` made the identity that
+    checks the pair vacuous, and reversing the comparison in the disagreeing measure left every
+    test green. If a value can be measured, measure it -- a derived value cannot cross-check
+    the thing it was derived from.
+    """
+    entity = sum(
+        measures[k]
+        for k in ("sitemap_routes", "sitemap_airports", "sitemap_carriers", "sitemap_aircraft")
+    )
+    measures["sitemap_entity_urls"] = entity
+    measures["sitemap_urls_total"] = entity + 5
+    measures["sitemap_route_and_airport_urls"] = (
+        measures["sitemap_routes"] + measures["sitemap_airports"]
+    )
+
+
 def collect(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
     """Run every measure and return a JSON-ready dict."""
     measures: dict[str, Any] = {}
-    for name, statement in measures_sql().items():
+    for name, statement in all_measures_sql().items():
         cur = con.execute(statement)
         rows = cur.fetchall()
         if name in _SCALAR:
@@ -98,6 +161,7 @@ def collect(con: duckdb.DuckDBPyConnection) -> dict[str, Any]:
         n = sum(row["short_name"].count(c) for c in ("/", " "))
         counts[str(n)] = counts.get(str(n), 0) + 1
     measures["aircraft_slug_separators"] = dict(sorted(counts.items()))
+    _derive(measures)
     return {"measures": measures}
 
 
@@ -108,7 +172,8 @@ def write_stats(db_path: Path = DB_PATH, out: Path = STATS_PATH) -> None:
     finally:
         con.close()
     payload["_generated"] = (
-        "GENERATED by `make stats` from sql/03_queries/stats_reference.sql. Do not hand-edit. "
+        "GENERATED by `make stats` from sql/03_queries/stats_reference.sql and "
+        "stats_counts.sql. Do not hand-edit. "
         "A diff here means the upstream BTS dataset moved -- read it, then re-pin whatever "
         "depended on the old value in the SAME commit."
     )
