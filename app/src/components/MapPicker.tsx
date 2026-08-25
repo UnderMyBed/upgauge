@@ -94,8 +94,22 @@ export function MapPicker({
                   o.label
                 )}
                 {/* The quantity the list is ORDERED by, stated rather than left to be inferred.
-                    Monospaced and tabular so the column of figures reads as a column. */}
-                <span className="mp-seats">{formatSeats(o.seats)}</span>
+                    Monospaced and tabular so the column of figures reads as a column.
+
+                    NULL IS NOT ZERO AND IS NOT A DASH HERE. `seats` is a FILTERed sum
+                    (`301_meta_pivot_measures.sql:23`), so NULL means every filing behind this
+                    option was quarantined and the total is unknowable -- `/carrier/F4`'s types
+                    `489` and `201` are live examples. `0` would be a measurement claim about
+                    absent data; a bare "—" beside a column of figures reads as zero at a glance
+                    and says nothing about what the reader gets for clicking. The word does both:
+                    it marks the absence AND names its cause, which is the count-plus-reason form
+                    CLAUDE.md requires of quarantine everywhere else in this app. The map behind
+                    the link says the same thing at greater length. */}
+                {o.seats === null ? (
+                  <span className="mp-seats mp-absent">quarantined</span>
+                ) : (
+                  <span className="mp-seats">{formatSeats(o.seats)}</span>
+                )}
               </a>
             </li>
           ))}

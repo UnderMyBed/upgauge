@@ -101,6 +101,42 @@ describe("MapPicker", () => {
     expect(abbr?.getAttribute("title")).toBe("CANADAIR RJ-700");
   });
 
+  it("renders an absent seat total differently from a genuine zero", () => {
+    // The two are different FACTS -- `650` was filed and not flown (0 is a measurement), `489`
+    // had every filing quarantined (null is absence) -- so they must not read the same. A
+    // fixture with 0 for both cannot see this: `?? 0` produces identical markup for them.
+    const container = render(
+      <MapPicker
+        options={[
+          { value: "650", label: "650", title: null, seats: 0, href: "/carrier/F4?type=650", selected: false },
+          { value: "489", label: "489", title: null, seats: null, href: "/carrier/F4?type=489", selected: false },
+        ]}
+        filter={{ kind: "none" }}
+        legend="Aircraft type"
+        truncated={false}
+      />,
+    ).container;
+    const cells = [...container.querySelectorAll(".mp-seats")].map((el) => el.textContent);
+    expect(cells).toEqual(["0", "quarantined"]);
+    // And the absence is marked as absence, not merely worded differently.
+    expect(container.querySelectorAll(".mp-absent")).toHaveLength(1);
+  });
+
+  it("never prints a zero for a total it does not have", () => {
+    const container = render(
+      <MapPicker
+        options={[{ value: "489", label: "489", title: null, seats: null, href: "/carrier/F4?type=489", selected: false }]}
+        filter={{ kind: "none" }}
+        legend="Aircraft type"
+        truncated={false}
+      />,
+    ).container;
+    expect(container.querySelector(".mp-seats")?.textContent).not.toBe("0");
+    // Still a live link: the map behind it carries a real quarantine disclosure, and hiding it
+    // would suppress exactly what carrierTypeNetwork.ts:429-442 built that view to show.
+    expect(container.querySelector("a")?.getAttribute("href")).toBe("/carrier/F4?type=489");
+  });
+
   it("says so plainly when there is nothing to pick", () => {
     const container = pick({ options: [], filter: { kind: "none" } });
     expect(container.querySelectorAll("a")).toHaveLength(0);

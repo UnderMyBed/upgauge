@@ -16,7 +16,22 @@ export interface PickerOption {
    *  (`DataTable.tsx:73-77`) -- a picker whose only label is "OO" is opaque, and the name is
    *  already in the Map the page awaited, so surfacing it costs no query. */
   title: string | null;
-  seats: number;
+  /** NULL IS ABSENCE, ZERO IS A MEASUREMENT (`format.ts:1`), and this field must keep them
+   *  apart. `seats` is `SUM(seats) FILTER (WHERE NOT is_quarantined)`
+   *  (`301_meta_pivot_measures.sql:23`), and a SUM over zero passing rows returns NULL, not 0 --
+   *  so a group whose every filing was quarantined arrives here with NULL. `?? 0` would turn
+   *  that into a seat total of zero: a measurement claim about data that is absent, rendered on
+   *  the page and sorted as though the type flew nothing.
+   *
+   *  LIVE, not theoretical. `/carrier/F4` (Air Charter, Inc d/b/a Air Flamenco, airline_id
+   *  21615) has exactly this over the trailing 12 to 2026-05: type `489` (5 quarantined filings)
+   *  and type `201` (2), both NULL, beside type `131`'s real 24,289. `render.ts` emits no
+   *  `HAVING` and no `IS NOT NULL`, so these rows reach the picker.
+   *
+   *  `carrierTypeNetwork.ts:180-196` reaches the identical conclusion at the route grain and is
+   *  the pattern this follows; issue #114 is the same coercion left standing in
+   *  `airportNetwork.ts:145-147`. */
+  seats: number | null;
   href: string;
   selected: boolean;
 }
@@ -51,6 +66,15 @@ export interface PickerOption {
  *
  * Values stay STRINGS. `AIRCRAFT_TYPE` 079 becomes 79 if int-parsed and the join breaks
  * silently (CLAUDE.md, Data gotchas).
+ *
+ * A NULL-SEAT OPTION IS STILL OFFERED, deliberately. `fetchCarrierTypeNetwork` returns a real
+ * map for such a group rather than null -- `carrierTypeNetwork.ts:429-442` names `F4` x `489` as
+ * the case its three-category rule exists for, because gating on `totalRoutes` alone would
+ * "suppress exactly the disclosures the other two fields exist to carry". The destination states
+ * "5 quarantined routes not drawn -- failed an invariant, never clamped." Dropping the link
+ * would hide that, which inverts CLAUDE.md's rule that quarantined rows are surfaced with count
+ * and reason because showing the dirt is a trust feature. So the link stays and the OPTION is
+ * honest about what the reader will get.
  */
 export function pickerOptions(args: {
   rows: PivotResult["rows"];
@@ -77,11 +101,54 @@ export function pickerOptions(args: {
         value,
         label: displayValue(hit, value),
         title: hit?.name ?? null,
-        seats: Number(row.seats ?? 0),
+        seats: seatsOf(row),
         href: `${basePath}?${filterKey}=${encodeURIComponent(value)}`,
         selected: value === selected,
       };
     })
     .filter((o) => o.value.length > 0)
-    .sort((a, b) => b.seats - a.seats || a.value.localeCompare(b.value));
+    .sort(bySeatsAbsentLast);
+}
+
+/** The row's seat sum, keeping SQL NULL as `null`.
+ *
+ * A MISSING COLUMN THROWS rather than reading as absence. `undefined` means the caller's pivot
+ * never selected `seats` -- a wiring bug -- and coercing it to null would render every option on
+ * the page as quarantined, which is a louder lie than the one this function exists to stop. SQL
+ * NULL arrives as `null`, never `undefined` (verified against the live pivot: `/carrier/F4`'s
+ * two quarantined types come back `seats: null`, `typeof "object"`). Both page pivots go through
+ * `trailing12Query`, whose measures always include `seats` (`entityFacts.ts:106`). */
+function seatsOf(row: Record<string, unknown>): number | null {
+  const raw = row.seats;
+  if (raw === undefined) {
+    throw new Error(
+      "pickerOptions: rows carry no `seats` column -- the page's pivot must select the measure " +
+        "the picker orders by. Reading a missing column as absence would mark every option " +
+        "quarantined.",
+    );
+  }
+  if (raw === null) return null;
+  return Number(raw);
+}
+
+/**
+ * Seats descending, ABSENT LAST, `value` ascending as a total tiebreak -- including among the
+ * absent ones, so a page with two null-seat options renders them in the same order every load.
+ *
+ * Written out rather than left as `b.seats - a.seats`, which with a null yields `NaN`. A NaN
+ * comparator does not merely sort wrongly: it is inconsistent, so the result depends on the
+ * engine's sort implementation and input order, and this repo's whole byte-stability property
+ * (`make verify`, the `/airport` golden) rests on renders being a function of the DATA.
+ *
+ * Absent LAST rather than first because the list is a ranking by seats and an unknowable total
+ * cannot outrank a measured one -- the same reason `segmentMap.ts` sorts a type that flew
+ * nothing last rather than lightest.
+ */
+function bySeatsAbsentLast(a: PickerOption, b: PickerOption): number {
+  if (a.seats === null || b.seats === null) {
+    if (a.seats !== b.seats) return a.seats === null ? 1 : -1;
+  } else if (a.seats !== b.seats) {
+    return b.seats - a.seats;
+  }
+  return a.value.localeCompare(b.value);
 }

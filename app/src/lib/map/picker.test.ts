@@ -184,6 +184,90 @@ describe("pickerOptions", () => {
   });
 });
 
+/**
+ * REAL, and named so it resists the drift this repo has already paid for (a BTS refresh renamed
+ * aircraft type 699 out from under a whole fixture set). `/carrier/F4` -- Air Charter, Inc d/b/a
+ * Air Flamenco, airline_id 21615 -- over the trailing 12 to 2026-05 returns exactly these three
+ * rows from the page's own pivot, verified against `upgauge.duckdb`:
+ *
+ *     type=131  seats=24289  deps=2987  quarantined_rows=2
+ *     type=489  seats=NULL   deps=NULL  quarantined_rows=5
+ *     type=201  seats=NULL   deps=NULL  quarantined_rows=2
+ *
+ * `seats` is `SUM(seats) FILTER (WHERE NOT is_quarantined)`, so a group whose every filing was
+ * quarantined sums to NULL. `render.ts` emits no `HAVING` and no `IS NOT NULL`, so they arrive.
+ */
+const F4_ROWS = [
+  { aircraft_type: "131", seats: 24_289 },
+  { aircraft_type: "489", seats: null },
+  { aircraft_type: "201", seats: null },
+];
+
+describe("pickerOptions with an absent seat total", () => {
+  it("keeps a NULL seat sum null instead of calling it zero", () => {
+    // `format.ts:1`: null is absence, zero is a measurement, never render one as the other.
+    // `?? 0` makes /carrier/F4 state a seat total of 0 for two types whose total is unknowable.
+    const out = pickerOptions({
+      rows: F4_ROWS, resolved: new Map(), dimKey: "aircraft_type",
+      basePath: "/carrier/F4", filterKey: "type", selected: null,
+    });
+    expect(out.map((o) => [o.value, o.seats])).toEqual([
+      ["131", 24_289],
+      ["201", null],
+      ["489", null],
+    ]);
+  });
+
+  it("sorts an absent total AFTER a genuine zero, not alongside it", () => {
+    // THE MUTANT-KILLING FIXTURE, and both halves are real cases this codebase documents:
+    //   `650` -- DL x 650 over 2015, five pairs, every one zero seats on zero performed
+    //            departures. FILED AND GENUINELY NOT FLOWN: 0 is a measurement.
+    //   `489` -- F4 x 489, five filings, every one quarantined. UNKNOWABLE: null is absence.
+    //
+    // The order is what distinguishes them, and the values are chosen so it MOVES: under
+    // `?? 0` both are 0, the tiebreak runs, and "489".localeCompare("650") puts the absent one
+    // FIRST. A fixture using seats: 0 for both, or values sorting the other way, would produce
+    // the identical array under the bug and prove nothing.
+    const out = pickerOptions({
+      rows: [
+        { aircraft_type: "489", seats: null },
+        { aircraft_type: "650", seats: 0 },
+      ],
+      resolved: new Map(), dimKey: "aircraft_type",
+      basePath: "/carrier/F4", filterKey: "type", selected: null,
+    });
+    expect(out.map((o) => o.value)).toEqual(["650", "489"]);
+    expect(out.map((o) => o.seats)).toEqual([0, null]);
+  });
+
+  it("orders two absent totals deterministically, so two loads agree", () => {
+    // A NaN comparator is not merely wrong, it is INCONSISTENT -- the result can depend on the
+    // engine's sort and on input order, against the byte-stability this repo rests on. Fed in
+    // both orders, the output must be identical.
+    const rows = [
+      { aircraft_type: "489", seats: null },
+      { aircraft_type: "201", seats: null },
+    ];
+    const args = { resolved: new Map(), dimKey: "aircraft_type", basePath: "/carrier/F4", filterKey: "type", selected: null };
+    const forward = pickerOptions({ rows, ...args }).map((o) => o.value);
+    const reversed = pickerOptions({ rows: [...rows].reverse(), ...args }).map((o) => o.value);
+    expect(forward).toEqual(["201", "489"]);
+    expect(reversed).toEqual(forward);
+  });
+
+  it("throws when the page's pivot never selected `seats`", () => {
+    // `undefined` is a WIRING bug, not absence. Reading it as null would mark every option on
+    // the page quarantined -- a louder lie than the one this guard exists to stop. Both page
+    // pivots go through `trailing12Query`, whose measures always include `seats`.
+    expect(() =>
+      pickerOptions({
+        rows: [{ aircraft_type: "673" }], resolved: new Map(), dimKey: "aircraft_type",
+        basePath: "/carrier/OO", filterKey: "type", selected: null,
+      }),
+    ).toThrow(/no `seats` column/);
+  });
+});
+
 describe("pickerOptions against a real pivot result", () => {
   it("resolves labels from the Map runPivot actually returns", async () => {
     // The shape assertion the hand-built fixture above cannot make: this takes `rows` and

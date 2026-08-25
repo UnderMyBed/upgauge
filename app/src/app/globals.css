@@ -864,3 +864,10 @@ svg.plot {
 .mp-note {
   margin-top: 7px;
 }
+/* An unknowable seat total, never a zero and never a bare dash: the option is offered because
+   its map still carries a real quarantine disclosure, so the picker names the reason rather than
+   printing a figure it does not have. --limit is the same channel the refusal above uses. */
+.mp-absent {
+  font-style: italic;
+  color: var(--limit);
+}
