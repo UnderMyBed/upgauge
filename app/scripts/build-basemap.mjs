@@ -162,6 +162,52 @@ function rdp(points, epsilonDeg) {
 
 const RDP_EPSILON_DEG = 0.05;
 
+/**
+ * A SECOND epsilon, for `ne_50m_pac.json` only, and the reason it exists rather than the
+ * shared one being lowered.
+ *
+ * 0.05 deg is ~5.5km, which is ~1.93px at `pac`'s k of 2211. Four of the six Northern Mariana
+ * rings are islands smaller than that tolerance, so RDP did not merely thin them -- it
+ * collapsed each to `M a L b L a Z`, a two-point segment with ZERO ENCLOSED AREA. A hairline
+ * with no fill, where the map claims an island. Measured, unsimplified vs drawn at 0.05:
+ * Agrihan 4.92 -> 0, Anatahan 4.61 -> 0, Pagan 5.88 -> 0, and ROTA 8.23 -> 0.
+ *
+ * Rota is the one that makes this a defect rather than a rounding note. It is ~19km across,
+ * it is inhabited, `ROP` files 4,672 seats GUM-ROP and 16,270 SPN-ROP over the trailing 12,
+ * it has its own `/airport/ROP` page, and it is one of the four airports the whole `pac` rect
+ * redesign exists to keep 6px apart -- so the map was drawing its destination dot on top of a
+ * hairline. An earlier version of this file's own comment asserted the opposite ("the reason
+ * is not RDP ... a per-input epsilon would buy nothing") and named the four rings wrongly,
+ * putting Farallon de Pajaros (which is not in this file at all) where Rota actually was.
+ *
+ * 0.01 deg is ~0.39px at that k. Measured at it: every MP ring regains real fill (Rota 7.98
+ * of its unsimplified 8.23, the smallest ring 4.40), and Tutuila keeps all 8 of its source
+ * vertices instead of 5. Finer buys almost nothing -- 0.005 moves Rota by 0.25px^2 and costs
+ * Saipan four more points.
+ *
+ * PER INPUT, never global: lowering `RDP_EPSILON_DEG` would rewrite every `us`/`ak`/`hi`/`car`
+ * path, and those four panels' bytes are pinned (`basemap.test.ts`). This is the same shape as
+ * the decision to add a second, finer SOURCE for one panel in M7 Task 7b -- one panel's
+ * geometry needed something the shared setting could not give it, so that panel got its own.
+ *
+ * It does NOT move any fit: `loadReferencePointsAndFits` builds `referencePoints` from the RAW
+ * rings, before any simplification, so `k`/`ox`/`oy` and every projected airport are identical
+ * either way. Only the drawn `d` attributes change.
+ */
+const PAC_RDP_EPSILON_DEG = 0.01;
+
+/** Which epsilon each committed input's features are simplified at. Keyed by `postal`, which
+ * is unique across all three files, and read with a THROW rather than a default -- a feature
+ * whose input is not listed here is a wiring bug, and silently simplifying it at 0.05 is
+ * exactly the kind of default-for-missing this project refuses. */
+function epsilonIndex(inputs) {
+  const byPostal = new Map();
+  for (const { features, epsilonDeg } of inputs) {
+    for (const feature of features) byPostal.set(feature.properties.postal, epsilonDeg);
+  }
+  return byPostal;
+}
+
 // GeoJSON rings are CLOSED -- the first coordinate is repeated as the last, so the plain
 // `rdp` above (which measures perpendicular distance from the chord between a ring's own
 // first and last point) sees a zero-length chord for every ring: `dx = dy = 0`, so the
@@ -231,6 +277,11 @@ export function loadReferencePointsAndFits() {
   const raw = JSON.parse(readFileSync(GEO_PATH, "utf8"));
   const rawCar = JSON.parse(readFileSync(CAR_GEO_PATH, "utf8"));
   const rawPac = JSON.parse(readFileSync(PAC_GEO_PATH, "utf8"));
+  const epsilonByPostal = epsilonIndex([
+    { features: raw.features, epsilonDeg: RDP_EPSILON_DEG },
+    { features: rawCar.features, epsilonDeg: RDP_EPSILON_DEG },
+    { features: rawPac.features, epsilonDeg: PAC_RDP_EPSILON_DEG },
+  ]);
   // Three committed inputs, two resolutions (110m for the 51 US states/DC, 50m for the 2
   // Caribbean and 3 Pacific territories -- see this file's header for why the 110m file
   // carries none of the five). Concatenated BEFORE sorting so the merged array is ordered
@@ -272,11 +323,11 @@ export function loadReferencePointsAndFits() {
   }
 
   const fits = fitPanels(referencePoints);
-  return { features, referencePoints, fits };
+  return { features, referencePoints, fits, epsilonByPostal };
 }
 
 function main() {
-  const { features, referencePoints, fits } = loadReferencePointsAndFits();
+  const { features, referencePoints, fits, epsilonByPostal } = loadReferencePointsAndFits();
 
   /** @type {Record<string, string[]>} */
   const pathsByPanel = { us: [], ak: [], hi: [], pac: [], nwhi: [], car: [], sam: [] };
@@ -290,9 +341,14 @@ function main() {
     const panel = regionOf(lat0, normalizeLon(lon0));
     if (!fits.has(panel)) continue; // no fit for this panel; shouldn't happen if it has points
 
+    const epsilonDeg = epsilonByPostal.get(feature.properties.postal);
+    if (epsilonDeg === undefined) {
+      throw new Error(`no RDP epsilon registered for feature ${feature.properties.postal}`);
+    }
+
     const dParts = [];
     for (const ring of rings) {
-      const simplified = rdpRing(ring, RDP_EPSILON_DEG);
+      const simplified = rdpRing(ring, epsilonDeg);
       const screenPts = simplified.map(([lon, lat]) => project(lat, lon, fits));
       const [first, ...rest] = screenPts;
       const M = `M${fmt(first[0])},${fmt(first[1])}`;

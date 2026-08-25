@@ -90,6 +90,31 @@ describe("albersRaw", () => {
   });
 });
 
+describe("PANEL_PARAMS", () => {
+  it("centres `sam` on Tutuila's own meridian, so the island is not drawn sheared", () => {
+    // `albersRaw`'s `th = n * (lon - lam0)` rotates a feature by the meridian convergence at
+    // its longitude, and that is the ONLY thing `PANEL_PARAMS.sam` exists to prevent -- the
+    // island is 30km across, so conic distortion over it is irrelevant. Under `pac`'s lam0 of
+    // -214.7 the convergence at Tutuila is n * 44 = 10.65 degrees at its worst; under `sam`'s
+    // own it is 0.03.
+    //
+    // This is the assertion, rather than a projected-position one, because swapping
+    // `PANEL_PARAMS.sam` for `PANEL_PARAMS.pac` leaves the orientation test below GREEN: north
+    // still maps up and east still right under `pac`'s positive `n`. Only the convergence
+    // distinguishes them, so only the convergence can gate the swap.
+    const worstConvergence = (p: typeof PANEL_PARAMS.sam, lon: number) => {
+      const n = (Math.sin((p.p1 * Math.PI) / 180) + Math.sin((p.p2 * Math.PI) / 180)) / 2;
+      return Math.abs(n * (lon - p.lam0));
+    };
+    // Tutuila's committed longitude span (app/geo/ne_50m_pac.json), both ends.
+    for (const lon of [-170.8205, -170.5681]) {
+      expect(worstConvergence(PANEL_PARAMS.sam, lon)).toBeLessThan(1);
+    }
+    // And the mutant this exists to kill, stated so the margin is visible rather than implied.
+    expect(worstConvergence(PANEL_PARAMS.pac, -170.8205)).toBeGreaterThan(10);
+  });
+});
+
 describe("fitPanels", () => {
   it("omits a panel with no points", () => {
     // Catches: drawing an empty inset frame. Most airports never touch the

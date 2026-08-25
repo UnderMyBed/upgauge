@@ -543,11 +543,25 @@ a sighted reader, once for a screen reader.
 The committed basemap (`app/geo/*.json` → `app/scripts/build-basemap.mjs` → `app/src/lib/map/
 basemapPaths.generated.ts`) starts at Natural Earth **1:110m**, which has no polygon at all for
 Guam/CNMI/American Samoa/Midway or Puerto Rico/the USVI, which on its own leaves those insets
-empty. Measured against the real warehouse (trailing 12 months): 79 of 1,047 fact-present
-airports reach `car` and 7 reach a Pacific panel (GUM, HNL, PPG, ROP, SFO, SPN, TIQ) —
+empty. Measured against the real warehouse over the trailing 12 months, in which **757**
+airports are fact-present: **79** of them reach `car` and **7** reach a Pacific panel (GUM, HNL,
+PPG, ROP, SFO, SPN, TIQ). 757 is the denominator these two are shares of — 1,047 is the
+fact-present population across the *whole* window and is the wrong one to read them against.
 `/airport/SJU` alone drew 65 arcs inside a labelled Caribbean frame with no landmass under it,
-and San Juan is a major airport, not an edge case. Neither figure is generated; both must be
-re-measured when quoted.
+and San Juan is a major airport, not an edge case. None of 757, 79 or 7 is generated; all three
+must be re-measured when quoted.
+
+**Two panels are simplified at their own RDP epsilon, and one is the reason.** The shared
+0.05° (~5.5 km) is ~1.93px at `pac`'s scale — wider than four of the six Northern Mariana
+islands — so RDP collapsed each of those rings to a two-point segment enclosing **zero area**: a
+hairline where the map claims an island. One of them is **Rota**, ~19 km across, inhabited, with
+its own `/airport/ROP` page and 4,672 + 16,270 seats over the trailing 12 — so its destination
+dot sat on top of a hairline. `ne_50m_pac.json` is therefore simplified at **0.01°** (~0.39px),
+at which every ring regains real fill (Rota 7.80 px² of its unsimplified 8.23) and Tutuila keeps
+all 8 of its source vertices instead of 5. Per input, never global: lowering the shared value
+would rewrite every `us`/`ak`/`hi`/`car` path, and those are pinned. It moves no fit — the
+generator builds its reference points from the raw rings, before simplification — so every
+projected airport is identical either way.
 
 **A second, finer input carries every territory** (Natural Earth 1:50m Admin-0 Countries, same
 mirror): `app/geo/ne_50m_car.json` (`NAME in ('Puerto Rico', 'U.S. Virgin Is.')` — 2 features)

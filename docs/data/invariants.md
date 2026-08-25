@@ -607,7 +607,10 @@ reason — the fallback branch catches whatever the two explicit tests miss:
   (1892.5, 1102.0) and MDY at (1367.6, −429.7), both off a 960×500 canvas. Those two are
   counterfactuals under one specific rect: `fitPanels`'s `ox`/`oy` move with it, so re-derive
   them rather than carrying them forward. Three panels, not
-  one: `pac` (west of the antimeridian, `lon < −200`), `sam` (`lat < 0`) and `nwhi` (Midway).
+  one: `pac` (`lon < −200`), `sam` (`lat < 0`) and `nwhi` (Midway). Note that `lon < −200` is
+  raw longitude east of **160°E**, not the antimeridian — the band between them falls to `nwhi`,
+  which is labelled MIDWAY. Nothing in this dataset is there, but `dim_airport` carries AWK, KWA
+  and MAJ, and `albers.ts` records why the boundary is left where it is.
   Their union is exactly the one `lat < 30 AND lon < −160` test they replace, which is what makes
   the split unable to move a point into or out of any other panel. Encoding and rects:
   `docs/design/system.md` § The map.

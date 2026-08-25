@@ -74,8 +74,23 @@ export function normalizeLon(lon: number): number {
  *     `lon < -150 && lat < 30` Hawai'i test from also catching it, which used to stretch a
  *     "Hawai'i" panel across 42 degrees of latitude when Hawai'i itself spans 2.3.
  *   - `pac` is the Marianas -- Guam/Rota/Tinian/Saipan (normalized lon ~ -214 to -215, lat
- *     13.5-15.1) plus the uninhabited northern islands, i.e. everything WEST of the
- *     antimeridian. That is what `lon < -200` says.
+ *     13.5-15.1) plus the uninhabited northern islands. `lon < -200` is NOT "everything past
+ *     the antimeridian", which is what an earlier draft of this line claimed: normalized, it
+ *     is raw longitude east of 160E, not east of 180E. The band between them (raw 160E-180E,
+ *     lat < 30) falls through to `nwhi` and would render inside a frame labelled MIDWAY.
+ *     Nothing is there today -- all 1,047 fact-present airports were classified to check --
+ *     but `dim_airport` already carries AWK (Wake), KWA and MAJ, so the boundary is left where
+ *     it is DELIBERATELY rather than tightened to -180 on hypothetical data: at -180 those
+ *     three would instead take `pac`'s baked Marianas fit and project off the canvas entirely,
+ *     which is a worse failure than a wrong label. Either way the prose now matches the code.
+ *   - More generally, `regionOf`'s predicates are far wider than the extents the baked fits
+ *     cover, and that gap changed character when `pac` and `sam` gained geometry: before, a
+ *     far-Pacific newcomer got a subject-derived fit and landed inside its frame; now it takes
+ *     a fit scaled to the Marianas or to Tutuila and lands wherever that puts it. A
+ *     counterfactual Chuuk (TKK, 7.46 / 151.84) would draw at (315.7, 465.4) -- a
+ *     plausible-looking dot in the Gulf of
+ *     Mexico rather than an obvious absence. Not reachable on today's data; worth knowing
+ *     before adding a Pacific airport.
  *   - `nwhi` is the Northwestern Hawaiian Islands: Midway (MDY, lat 28.2, lon -177.4) and Kure.
  *     It has NO committed coastline and deliberately keeps none -- Natural Earth carries Midway
  *     only inside a feature that also spans the Caribbean (`app/geo/ne_50m_pac.json`'s own
@@ -142,7 +157,9 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
   // American Samoa: Tutuila spans lat -14.36 to -14.26, lon -170.82 to -170.57. Its own
   // parallels, not `pac`'s, and not because of distortion over a 30 km island: under `pac`'s
   // lam0 of -214.7 Samoa sits 44 degrees off the central meridian, and `albersRaw`'s
-  // `th = n * (lon - lam0)` term then rotates it about 13 degrees. A sheared island is a
+  // `th = n * (lon - lam0)` term then rotates it by n * 44 = 10.6 degrees (n = 0.24133 for
+  // `pac`'s parallels; 10.62 at the panel's nominal longitude, 10.65 worst across Tutuila's
+  // own span). Under `sam`'s own lam0 the same quantity is 0.03 degrees. A sheared island is a
   // drawing of somewhere else. Southern standard parallels give a negative `n`; the resulting
   // orientation was checked rather than assumed (north maps to smaller screen y, east to
   // larger x -- `albers.test.ts`'s "puts a northern point above a southern one" pair is
@@ -152,11 +169,13 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
 };
 
 // Canvas 960x500 (mockup's W/H), 16px outer pad. us/ak/hi rects are the mockup's own,
-// unchanged. `nwhi` (368-408), `car` (424-720) and `sam` (736-918) sit in the bottom inset
+// unchanged. `nwhi` (368-408), `car` (424-720) and `sam` (736-917) sit in the bottom inset
 // tray with ak (36-176) and hi (192-292), left to right, all five ending on the tray's shared
-// 468 baseline with the mockup's own 16px rect-to-rect gutter. Frames are drawn at rect +/- 6px
-// (`networkMap.ts`), so a 16px gutter leaves 4px between neighbouring frames -- which is what
-// hi and nwhi measure. `pac` is the one inset NOT in the tray; see below for why.
+// 468 baseline. Frames are drawn at rect +/- 6px (`networkMap.ts`), so the mockup's own 16px
+// rect-to-rect gutter leaves 4px between neighbouring frames: ak->hi, nwhi->car and car->sam
+// all measure it. hi->nwhi does NOT -- that gap is 76px, because it is where `pac` used to sit
+// before it left the tray, and nothing was moved up to close it. `pac` is the one inset NOT in
+// the tray; see below for why.
 //
 // `car`'s width was widened by M7 Task 7b once real geometry existed to check the original
 // 100x76 square against (Task 4/7's own open item -- there was nothing to measure it
@@ -201,7 +220,10 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
 //
 // Height, not width, is what this rect is really buying, and the number is forced rather than
 // chosen. `dy` is the chain's latitude span in radians, which no projection parameter can
-// change, so `k` is capped at `h / 0.096983` however wide the rect gets (to bind on width
+// change, so `k` is capped at `h / 0.096978` however wide the rect gets (that is the extent
+// over the ROUNDED `BASEMAP_FIT_POINTS` `fitPanels` actually reads, not the raw 4-decimal
+// 0.096983 -- immaterial here, but it is the same distinction the `sam` paragraph below
+// exists to correct) (to bind on width
 // instead you would need `h >= 4.873w`, the same constraint again). Tinian and Saipan are
 // 0.002819 raw units apart -- 18 km, and an undirected route filing 78,420 seats over the
 // trailing 12 (`fct_route_month`; the directed segment halves are 39,908 and 38,512) --
@@ -229,13 +251,15 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
 // 182; off the rounded points it is 2.3801 and says 181. At 181 height binds at k=42272.46 and
 // the extent fills 180.9 x 76.0, one tenth of a pixel of slack. At 182 the same k leaves 1.1px.
 //
-// Known limitation, stated rather than hidden: Natural Earth's 1:50m Tutuila is 8 vertices, of
-// which RDP keeps 5, so this frame draws about 48.5px of outline per source vertex against the
-// 6-10px `hi` and `car` manage. The shape is coarse at this scale, and visibly so: the drawn
-// outline spans 180.5 x 62.2px inside an extent fitted to 180.9 x 76.0, because the vertex that
-// defined Tutuila's northern edge is one of the three RDP drops. It is sized for the tray
-// anyway because the frame has to hold PPG's 2px node and its 9px label, and a fidelity-matched
-// box would be about 30x13px -- smaller than the word printed on top of it.
+// Known limitation, stated rather than hidden, and now purely a SOURCE limitation: Natural
+// Earth's 1:50m Tutuila is 8 vertices, and at `PAC_RDP_EPSILON_DEG` all 8 survive, so this
+// frame draws 50.5px of outline per source vertex against the 4.4px `hi` and 6.0px `car`
+// manage on that same denominator (drawn perimeter over source vertices -- mixing it with a
+// drawn-vertex denominator is what produced an earlier "6-10px" band here). The shape is
+// coarse at this scale because the source is, not because anything was thrown away: the drawn
+// outline spans 180.5 x 75.6px inside an extent fitted to 180.9 x 76.0. It is sized for the
+// tray anyway because the frame has to hold PPG's 2px node and its 9px label, and a
+// fidelity-matched box would be about 30x13px -- smaller than the word printed on top of it.
 //
 // `nwhi` is 40x76 and has no geometry at all; a single-point subject fit degenerates to
 // `k = min(w, h)` and centres Midway in the frame, which is exactly what it did inside `pac`

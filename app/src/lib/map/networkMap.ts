@@ -132,7 +132,7 @@ export const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, 
   sam: [736, 392, 917, 468],
 };
 
-/** Order and label text for the four insets. `us` never gets a frame -- it is the base map
+/** Order and label text for the six insets. `us` never gets a frame -- it is the base map
  * itself, not an inset of it, matching the mockup, which only ever framed `ak`/`hi`. "An
  * inset that isn't labelled is a lie" is the mockup's own comment; system.md states it as a
  * standing rule, not a note about one page. */

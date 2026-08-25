@@ -9,7 +9,7 @@
  */
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { fitPanels, PANEL_RECTS, project } from "./albers";
+import { albersRaw, fitPanels, normalizeLon, PANEL_PARAMS, PANEL_RECTS, project, regionOf } from "./albers";
 import { basemapPathsFor, BASEMAP_FIT_POINTS } from "./basemap";
 // The generator's OWN function, not a re-implementation of it -- see build-basemap.mjs's
 // `loadReferencePointsAndFits` doc comment for why this is exported rather than kept
@@ -252,20 +252,26 @@ describe("the Pacific panels' committed geometry (#111)", () => {
   // its OWN single repeated point, so every check is per-subpath, never over a feature's
   // combined coordinate set.
   //
-  // WHAT IS DIFFERENT HERE, AND WHY THERE IS NO 20 px^2 / 10 px^2 THRESHOLD FOR MP: at
-  // RDP_EPSILON_DEG = 0.05 the four northern Mariana rings (Farallon de Pajaros, Anatahan,
-  // Agrihan, Pagan) measure 1.20, 1.40, 3.20 and 3.91 px^2. There is no threshold above ~1
-  // px^2 that clears them, and inventing one that happens to pass is worse than having none.
-  // The reason is not RDP: those islands are 2-4 km across, and at `pac`'s k of 2211 they are
-  // 2.3-4.2px wide UNSIMPLIFIED -- RDP costs them about 1.5px of height on an already
-  // sub-pixel feature. A per-input epsilon would buy nothing and is a code path M7 Task 7b
-  // explicitly refused.
+  // ENCLOSED AREA, NOT BOUNDING BOX, and that distinction is the whole finding here. An
+  // earlier revision of this block asserted only "two distinct coordinate pairs and a non-zero
+  // box in both dimensions", on the reasoning that the four small Mariana rings were sub-pixel
+  // islands RDP could not meaningfully damage. Both halves were wrong. At the shared 0.05 deg
+  // epsilon (~1.93px at `pac`'s k of 2211, wider than the islands themselves) RDP collapsed
+  // each of them to `M a L b L a Z` -- a two-point segment enclosing ZERO area, a 0.5px
+  // hairline where the map claims an island -- and a diagonal segment satisfies "non-zero box
+  // in both dimensions" perfectly. The guard could never have reddened for it.
   //
-  // So the per-subpath assertion is the EXACT statement of the bug instead of a proxy for it:
-  // the collapse emits `M x,y L x,y Z` -- ONE distinct coordinate pair, and a bounding box
-  // that is exactly 0 in BOTH dimensions. Two distinct pairs and a non-zero box in both
-  // dimensions is what real geometry has and what a collapsed ring cannot. Real thresholds go
-  // where they are defensible: GU and AS below.
+  // One of the four was ROTA, misidentified in that comment as an uninhabited northern islet.
+  // It is ~19km across, `ROP` files 4,672 seats GUM-ROP and 16,270 SPN-ROP over the trailing
+  // 12, it has its own page, and it is one of the four airports `PANEL_RECTS.pac` exists to
+  // keep 6px apart -- so its destination dot was being drawn on top of a hairline. (Farallon
+  // de Pajaros, also named there, is not in the committed file at all; the northernmost ring
+  // is Agrihan at 18.81.)
+  //
+  // `build-basemap.mjs`'s `PAC_RDP_EPSILON_DEG` is the fix and its header carries the
+  // reasoning. This asserts the property that decides it: every ring encloses real area.
+  // Shoelace, per subpath -- a collapsed ring is exactly 0 regardless of what the other five
+  // rings do.
   function pathDataFor(dataName: string, panelName: "pac" | "sam"): string {
     const panel = basemapPathsFor([panelName]);
     const match = panel.match(new RegExp(`data-name="${dataName}" d="([^"]*)"`));
@@ -286,6 +292,16 @@ describe("the Pacific panels' committed geometry (#111)", () => {
     );
   }
 
+  /** Enclosed area, by the shoelace formula. A ring RDP collapsed to a two-point segment has
+   *  exactly 0 however far apart its two points are, which is what makes this the right
+   *  measure and a bounding box the wrong one. */
+  function fillAreaOf(subpath: string): number {
+    const c = coordsOf(subpath);
+    let twice = 0;
+    for (let i = 0; i < c.length - 1; i++) twice += c[i][0] * c[i + 1][1] - c[i + 1][0] * c[i][1];
+    return Math.abs(twice) / 2;
+  }
+
   function boxOf(subpath: string): { w: number; h: number; distinct: number } {
     const coords = coordsOf(subpath);
     const xs = coords.map((c) => c[0]);
@@ -297,48 +313,52 @@ describe("the Pacific panels' committed geometry (#111)", () => {
     };
   }
 
-  it("the Northern Marianas' six rings each survive simplification", () => {
-    // Ground truth against the current generated artifact: 6 subpaths, measured bounding
-    // boxes 3.91 / 1.40 / 3.20 / 1.20 / 27.54 / 15.95 px^2, with 2 or 4 distinct coordinate
-    // pairs each. A ring collapsed by the closed-ring RDP bug has exactly 1 distinct pair and
-    // a box that is 0 x 0 -- regardless of what the other five rings do.
+  it("the Northern Marianas' six rings each enclose real area", () => {
+    // Ground truth against the current generated artifact, ring order as committed:
+    // Agrihan 4.52, Anatahan 4.42, ROTA 7.80, Pagan 6.07, Saipan 13.44, Tinian 9.61 px^2 of
+    // enclosed area, against unsimplified values of 4.92 / 4.61 / 8.23 / 5.88 / 14.10 / 9.65.
+    // Threshold 3 px^2 sits between 0 -- what a collapsed ring encloses, whatever its bounding
+    // box says -- and the smallest real ring at 4.42, a 1.5x margin. It is tighter than VA's
+    // 3.7x and PR's 3.9x because these islands genuinely are 2-4px across; the assertion
+    // carrying the weight is `> 0`, and 3 is the honest headroom above it rather than a number
+    // chosen to look comfortable.
+    //
+    // At the shared 0.05 deg epsilon the first four of these were 0.00 and this test is what
+    // reddens for that -- run it against `PAC_RDP_EPSILON_DEG = 0.05` to see all four fail.
     const subpaths = subpathsOf(pathDataFor("MP", "pac"));
     expect(subpaths).toHaveLength(6);
     for (const subpath of subpaths) {
-      const { w, h, distinct } = boxOf(subpath);
-      expect(distinct).toBeGreaterThanOrEqual(2);
-      expect(w).toBeGreaterThan(0);
-      expect(h).toBeGreaterThan(0);
+      expect(fillAreaOf(subpath)).toBeGreaterThan(3);
+      expect(boxOf(subpath).distinct).toBeGreaterThanOrEqual(3);
     }
   });
 
   it("Guam's committed geometry", () => {
-    // Ground truth: ONE subpath, 10.9 x 14.1px, area ~153.7 px^2. Threshold 50 px^2 -- a 3.1x
-    // margin, the same spirit as VA's 3.7x and PR's 3.9x above. Don't raise it without
-    // re-measuring Guam's own ring first.
+    // Ground truth: ONE subpath, 10 points, bounding box 10.9 x 14.1px and 57.89 px^2 of
+    // enclosed area. Both are asserted -- the box at 50 (a 3.1x margin on 153.69, the same
+    // spirit as VA's 3.7x and PR's 3.9x above) and the fill at 20 (2.9x on 57.89), because a
+    // box alone cannot see a collapse and a fill alone cannot see a shrink.
     const subpaths = subpathsOf(pathDataFor("GU", "pac"));
     expect(subpaths).toHaveLength(1);
     const { w, h } = boxOf(subpaths[0]);
     expect(w * h).toBeGreaterThan(50);
+    expect(fillAreaOf(subpaths[0])).toBeGreaterThan(20);
   });
 
   it("American Samoa's committed geometry", () => {
-    // Ground truth: ONE subpath (Tutuila), 180.5 x 62.2px, area 11,227.10 px^2. Threshold
-    // 3000 px^2 -- a 3.7x margin, matching VA's.
+    // Ground truth: ONE subpath (Tutuila), all 8 source vertices kept, bounding box
+    // 180.5 x 75.6px and 5,303.87 px^2 of enclosed area. Thresholds 3000 on the box (4.5x) and
+    // 1500 on the fill (3.5x).
     //
-    // The drawn box is 62.2 tall inside a fit whose extent fills 76.0 (`PANEL_RECTS.sam`'s
-    // comment), and the difference is not a bug: the fit is taken on all 8 source vertices
-    // while the path is drawn from the 5 RDP keeps, and one of the three drops is the vertex
-    // defining Tutuila's northern edge. Known limitation, recorded rather than hidden --
-    // Natural Earth's 1:50m Tutuila is 8 vertices, so `sam` draws about 48.5px of outline per
-    // source vertex (387.9px of drawn perimeter over 8) against the 6-10px `hi` and `car`
-    // manage. The shape is coarse at this scale. It is sized for the tray anyway because the
-    // frame has to hold PPG's 2px node and its 9px label; a fidelity-matched box would be
-    // about 30x13px, narrower than the word printed on top of it.
+    // The drawn box is 75.6 tall inside a fit whose extent fills 76.0 (`PANEL_RECTS.sam`'s
+    // comment); the 0.4px is the ring's own curvature between vertices, not a dropped one. At
+    // the shared 0.05 deg epsilon it was 62.2 -- RDP was taking Tutuila's northernmost AND
+    // southernmost vertices, 13.7px off the top and 6.5px off the bottom.
     const subpaths = subpathsOf(pathDataFor("AS", "sam"));
     expect(subpaths).toHaveLength(1);
     const { w, h } = boxOf(subpaths[0]);
     expect(w * h).toBeGreaterThan(3000);
+    expect(fillAreaOf(subpaths[0])).toBeGreaterThan(1500);
   });
 });
 
@@ -409,6 +429,48 @@ describe("every Pacific-reaching airport lands inside its own inset (#111)", () 
         );
       }
     }
+  });
+});
+
+describe("the three rects derived from their own geometry still fit it", () => {
+  // THE GATE FOR THIS EPIC'S MOST-REPEATED DEFECT. Three times now a panel rect has been
+  // sized from an extent and then drifted from it: `car` shipped at 100x76 against 3.89:1
+  // geometry in M7 Task 7, and `sam` shipped at 163 wide from an aspect measured under the
+  // WRONG PANEL'S parallels before landing at 181. Both were caught by review, not by a test,
+  // and the failure is silent -- one dimension binds alone and the coastline letterboxes
+  // inside a frame that still looks deliberate.
+  //
+  // Neither existing gate can see it. The area thresholds do not: at `sam` 163 the drawn box
+  // is still ~9,120 px^2, far above any floor worth setting. The frame-overlap and land tests
+  // do not: the rect is legal, just wrongly proportioned.
+  //
+  // EXACTLY THREE PANELS, and this must not be generalised -- `ak` fills 74.2% of its height
+  // and `hi` 92.9%, because those are the mockup's own rects, chosen for layout rather than
+  // derived from the geometry inside them. `us` fills 72.0% of its width for the same reason.
+  // Only `pac`, `car` and `sam` were sized FROM their extent, so only they owe it a fit.
+  // Measured today: pac 100.0% x 99.3%, car 99.8% x 100.0%, sam 99.9% x 100.0%. The failure
+  // message carries the live pair, so a red names the drift rather than just the panel.
+  it.each(["pac", "car", "sam"] as const)("%s's fitted extent fills its rect", (panel) => {
+    const raw = BASEMAP_FIT_POINTS.filter(
+      (p) => regionOf(p.lat, normalizeLon(p.lon)) === panel,
+    ).map((p) => albersRaw(p.lat, normalizeLon(p.lon), PANEL_PARAMS[panel]));
+    expect(raw.length).toBeGreaterThan(0);
+
+    const xs = raw.map((p) => p[0]);
+    const ys = raw.map((p) => p[1]);
+    const dx = Math.max(...xs) - Math.min(...xs);
+    const dy = Math.max(...ys) - Math.min(...ys);
+    const [x0, y0, x1, y1] = PANEL_RECTS[panel];
+    const w = x1 - x0;
+    const h = y1 - y0;
+    // `fitPanels`'s own k, recomputed rather than imported, so this reads as the arithmetic it
+    // is checking rather than as a restatement of the implementation.
+    const k = Math.min(w / dx, h / dy);
+    const fillW = (100 * dx * k) / w;
+    const fillH = (100 * dy * k) / h;
+    expect(
+      `${panel} fills ${fillW.toFixed(1)}% x ${fillH.toFixed(1)}%: ${fillW >= 98 && fillH >= 98}`,
+    ).toBe(`${panel} fills ${fillW.toFixed(1)}% x ${fillH.toFixed(1)}%: true`);
   });
 });
 

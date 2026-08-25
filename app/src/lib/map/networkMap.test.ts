@@ -15,6 +15,13 @@ const COORDS = {
   // below, to extend the SUBJECT's bounding box without changing which panel ("us") any of
   // these airports land in.
   MIA: { lat: 25.79, lon: -80.29 },
+  // One airport per remaining panel, so a single fixture can reach all six insets and the
+  // label test below can be a claim about EVERY label rather than about Hawai'i's.
+  ANC: { lat: 61.17, lon: -149.99 }, // ak
+  GUM: { lat: 13.48, lon: 144.8 }, // pac -- positive longitude, regionOf normalizes first
+  MDY: { lat: 28.2, lon: -177.38 }, // nwhi
+  SJU: { lat: 18.44, lon: -66.0 }, // car
+  PPG: { lat: -14.33, lon: -170.71 }, // sam -- southern hemisphere
 } as const;
 
 function originArc(code: keyof typeof COORDS): ArcDatum {
@@ -217,8 +224,11 @@ describe("renderNetworkMap", () => {
     // left this assertion naming the old string, which made it unreachable for any input --
     // `grep -c PACIFIC networkMap.ts` returns 0 -- so this test proved only its `hi` half.
     // Demonstrated rather than argued: making the inset loop draw `pac` unconditionally leaves
-    // the old `not.toContain("PACIFIC")` GREEN and reddens the list below. Any future label
-    // rename must break this test, so the literals are spelled out rather than paraphrased.
+    // the old `not.toContain("PACIFIC")` GREEN and reddens the list below.
+    //
+    // A `not.toContain` over a fixture that draws NO insets cannot gate a rename -- renaming
+    // only makes it likelier to pass. The rename gate is the POSITIVE test below, which is
+    // where the claim belongs and where it is now made.
     const svg = renderNetworkMap(conterminousOnlyFixture());
     expect(svg).not.toContain("HAWAI");
     expect(svg).not.toContain("MARIANAS");
@@ -240,9 +250,29 @@ describe("renderNetworkMap", () => {
   });
 
   it("labels every inset it does draw", () => {
-    // An inset that isn't labelled is a lie -- the mockup's own comment.
-    const svg = renderNetworkMap(fixtureReachingHawaii());
-    expect(svg).toContain("HAWAI");
+    // An inset that isn't labelled is a lie -- the mockup's own comment. This asserted only
+    // `HAWAI` until #111, which meant a network reaching five other insets could draw five
+    // unlabelled frames and nothing would notice; it also meant the rename gate the negative
+    // test above claimed to be was nowhere in the suite. Mutant-verified: renaming ALASKA to
+    // AK, or CARIBBEAN to PR-USVI, left the whole 99-test suite green before this.
+    //
+    // One origin and one destination per panel, so every INSETS entry is exercised at once.
+    const svg = renderNetworkMap({
+      origin: originArc("ORD"),
+      arcs: [
+        destArc("ANC"),
+        destArc("HNL"),
+        destArc("GUM"),
+        destArc("MDY"),
+        destArc("SJU"),
+        destArc("PPG"),
+      ],
+      window: "2025-05 → 2026-04",
+      sameAirportSeats: 0,
+    });
+    for (const label of ["ALASKA", "HAWAI", "MARIANAS", "MIDWAY", "CARIBBEAN", "AMERICAN SAMOA"]) {
+      expect(`${label}: ${svg.includes(label)}`).toBe(`${label}: true`);
+    }
   });
 
   it("carries an accessible role and label", () => {
