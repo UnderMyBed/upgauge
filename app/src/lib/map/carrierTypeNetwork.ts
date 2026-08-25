@@ -35,11 +35,15 @@ export interface DrawableRoute {
 }
 
 export interface DrawableView {
-  /** Ranked, same-airport pairs removed, floor applied. Length is the TRUE uncapped total. */
+  /** Ranked, same-airport pairs removed, floor applied, quarantined groups removed. */
   routes: DrawableRoute[];
   /** Seats on same-airport groups that passed the floor -- kept out of `routes`, disclosed by
    * the renderer's footer rather than dropped. */
   sameAirportSeats: number;
+  /** Groups whose every filing was quarantined, so their sums are NULL. Not drawable, but the
+   * carrier DID serve them, so they belong in the denominator and in the disclosure -- never
+   * dropped without trace. */
+  quarantinedRoutes: number;
 }
 
 /** The ceiling the pivot's `LIMIT` is set to, and the reason this file can state a true total
@@ -116,7 +120,10 @@ export function carrierTypeNetworkQuery(
  * This is not defensive tidiness. `render.ts:301` emits `ORDER BY <col> DESC` with NO secondary
  * key, and ties land exactly on the cut: measured over the trailing 12, 31 of the 36 views that
  * exceed 400 have a seats tie at `row_number() = 400`, worst `DL` x type `614` with 164 pairs
- * all tied at exactly 160.0 seats (`OO` x `530`: 232 tied at 50.0). "Top 400 by seats" is
+ * all tied at exactly 160.0 seats (`OO` x `530`: 211 tied at 50.0). Both figures are measured
+ * on the DRAWABLE population this comparator actually ranks -- quarantined and same-airport
+ * groups already removed. On the raw grouped population `OO` x `530` reads 232 instead, which
+ * is the figure the plan's F19 carried; `DL` x `614`'s 164 is the same in both. "Top 400" is
  * therefore non-deterministic on the SQL side -- which 164 get drawn could change between two
  * runs or two DuckDB versions. Ranking here instead of in SQL makes the result independent of
  * the engine's row order entirely, which is strictly stronger than a SQL tiebreak, and needs no
@@ -154,20 +161,28 @@ function bySeatsThenRouteKey(a: DrawableRoute, b: DrawableRoute): number {
  *     signature has no slot for one.
  *  3. The floor and the same-airport split are assertable here without a warehouse round trip.
  *
- * THE FLOOR: a group is drawable only if it PERFORMED departures in the window. The predicate
- * `departures_performed > 0` is applied here, on the pivot's group sums, because the pivot
- * template has no HAVING -- it is exactly `HAVING sum(departures_performed) > 0`, nothing else.
- * Measured at this grain over the trailing 12: 57 of 41,212 groups have zero-or-NULL performed
- * departures, and ALL 57 carry zero seats (groups with `deps = 0 AND seats > 0`: zero). So the
- * floor never moves a seat figure -- it removes pairs that were FILED and never flown, which
- * would otherwise draw a line between two airports for service that did not operate and, worse,
- * inflate the denominator of the map's own "N of M" disclosure. Two whole views consist of
- * nothing else (`F4` x `489` is 3 groups, all of them phantom).
+ * NULL AND ZERO ARE DIFFERENT FACTS, and this function's shape follows from that. Every measure
+ * is a FILTERed sum (`301_meta_pivot_measures.sql:22-24`), so a group arrives in one of two
+ * very different states:
  *
- * Group-level, never row-level, and that is a deliberate trade: a row-level filter would drop a
- * never-flown MONTH from a pair that flew in other months, making this map's seat figures
- * disagree with `/explore`'s for the identical filter set -- and every insight row on this site
- * is one click from the raw rows that produced it.
+ *   departures IS NULL  every filing on the pair was quarantined, so the sums are unknowable --
+ *                       NOT zero. Measured over the trailing 12 at this grain: 34 such groups,
+ *                       and every one of them PERFORMED departures before quarantine. They are
+ *                       `zero_seats` and `load_factor_gt_1` filings, which means a passenger
+ *                       aircraft flew and filed an impossible seat count. THEY FLEW. Counted in
+ *                       `quarantinedRoutes` and surfaced, never silently discarded.
+ *   departures = 0      the pair was filed and genuinely not flown -- 23 such groups. Neither
+ *                       drawn nor counted: an arc would claim service that did not operate, and
+ *                       the carrier did not serve the pair, so it is not in the denominator.
+ *
+ * An earlier version of this file collapsed both into one `departures <= 0` branch and called
+ * all 57 "filed and never flown". That was false for 34 of them, and reading their NULL as zero
+ * is exactly the coercion `CarrierTypeRouteRow` above forbids.
+ *
+ * THE FLOOR is group-level, never row-level, and that is a deliberate trade: a row-level filter
+ * would drop a never-flown MONTH from a pair that flew in other months, making this map's seat
+ * figures disagree with `/explore`'s for the identical filter set -- and every insight row on
+ * this site is one click from the raw rows that produced it.
  *
  * The rollup codes and the passenger-config filter that issue #105 also lists are deliberately
  * NOT restated: `normalize_t100_segment.sql:71-72` applies `CLASS = 'F'` and
@@ -196,26 +211,43 @@ export function drawableRoutes(
 
   const routes: DrawableRoute[] = [];
   let sameAirportSeats = 0;
+  let quarantinedRoutes = 0;
 
   for (const row of rows) {
-    const departures = row.departures_performed;
-    if (departures === null || departures === undefined || departures <= 0) continue;
+    const departures = row.departures_performed ?? null;
+    const seats = row.seats ?? null;
+    const passengers = row.passengers ?? null;
 
-    // Unreachable on today's data and asserted rather than assumed: both sums carry the SAME
-    // quarantine FILTER, so a group with passing departures has passing rows, and measured,
-    // no group has `deps > 0` with NULL or zero seats. If that ever changes, a silent `?? 0`
-    // would draw a zero-seat arc as though it were a measurement.
-    const seats = row.seats;
-    const passengers = row.passengers;
-    if (seats === null || seats === undefined || passengers === null || passengers === undefined) {
-      throw new Error(
-        `drawableRoutes: route ${row.route_key_low}-${row.route_key_high} for airline ` +
-          `${airlineId} x type '${aircraftTypeCode}' performed ${departures} departures but ` +
-          "has a NULL seats or passengers sum -- the quarantine FILTER's own invariant no " +
-          "longer holds.",
-      );
+    if (departures === null || seats === null || passengers === null) {
+      // ONE null means ALL null: the three measures carry the IDENTICAL quarantine FILTER, so
+      // they go null together or not at all. Asserted rather than assumed -- were that FILTER
+      // ever dropped from one measure and not the others, the mismatch would otherwise surface
+      // as a silently wrong seat figure instead of a stack trace. This is the branch that would
+      // fire, and it is why the check sits HERE and not after the floor, where a partially-null
+      // group could never reach it.
+      if (departures !== null || seats !== null || passengers !== null) {
+        throw new Error(
+          `drawableRoutes: route ${row.route_key_low}-${row.route_key_high} for airline ` +
+            `${airlineId} x type '${aircraftTypeCode}' has a PARTIALLY null measure sum ` +
+            `(departures=${departures}, seats=${seats}, passengers=${passengers}) -- the three ` +
+            "measures no longer share one quarantine FILTER.",
+        );
+      }
+      // Every filing quarantined: untrustworthy, NOT unflown. Surfaced rather than dropped.
+      // This also counts the one same-airport group in that state (measured: exactly one over
+      // the trailing 12) -- its seats are unknowable, so `sameAirportSeats` has nowhere to put
+      // it and a silent discard is the failure this counter exists to end.
+      quarantinedRoutes += 1;
+      continue;
     }
 
+    // Filed, genuinely not flown. Neither drawn nor counted -- the carrier did not serve this
+    // pair on this type, so it is not part of the network the disclosure describes.
+    if (departures <= 0) continue;
+
+    // BELOW the floor deliberately: a same-airport pair that never flew contributes no seats.
+    // Hoisting this branch above it is a real mutant -- those seats would reach the footer --
+    // so the fixture guarding the order carries seats AND zero departures, never zero seats.
     if (row.route_key_low === row.route_key_high) {
       sameAirportSeats += seats;
       continue;
@@ -231,7 +263,7 @@ export function drawableRoutes(
   }
 
   routes.sort(bySeatsThenRouteKey);
-  return { routes, sameAirportSeats };
+  return { routes, sameAirportSeats, quarantinedRoutes };
 }
 
 /** A ratio of sums, or null when the denominator is zero -- never an average, and never 0.0 for
@@ -278,14 +310,39 @@ export async function fetchCarrierTypeNetwork(
   timeTo: string,
   limit: number = NETWORK_ARC_CAP,
 ): Promise<SegmentMapInput | null> {
+  // Mirrors `render.ts:141-143`, which rejects a non-positive limit rather than emitting one.
+  // A zero or negative cap here would slice to nothing and return the empty panel this module
+  // exists to refuse, wearing a `totalRoutes` that says the routes are there. No caller passes
+  // one today; that is a reason to state the rule, not to leave it to chance.
+  if (!Number.isInteger(limit) || limit <= 0) {
+    throw new Error(`fetchCarrierTypeNetwork: limit must be a positive integer, got ${limit}`);
+  }
+
   const result = await runPivot(
     carrierTypeNetworkQuery(airlineId, aircraftTypeCode, timeFrom, timeTo, NETWORK_FETCH_CEILING),
   );
   const rows = result.rows as unknown as CarrierTypeRouteRow[];
-  if (rows.length === 0) return null;
+  const { routes, sameAirportSeats, quarantinedRoutes } = drawableRoutes(
+    rows,
+    airlineId,
+    aircraftTypeCode,
+  );
 
-  const { routes, sameAirportSeats } = drawableRoutes(rows, airlineId, aircraftTypeCode);
-  if (routes.length === 0) return null;
+  // ONE null rule, and it is "there is nothing to say", not "there is nothing to draw".
+  //
+  // Quarantine alone must NOT suppress the map: `F4` x `489` is three pairs whose every filing
+  // was quarantined, and returning null there hides a data-quality fact behind a missing panel
+  // -- the reader is told nothing at all rather than told the count. Same-airport seats alone
+  // must not suppress it either: `8E` x `340` is a single same-airport filing carrying 5 seats,
+  // and segmentMap.ts's own contract says those seats reach the reader. `fetchAirportNetwork`
+  // gates on `rows.length === 0` for the same reason -- "no drawable arcs" is a different
+  // question from "nothing filed".
+  //
+  // What DOES return null: nothing filed in the window, and the case where everything filed was
+  // genuinely never flown (no view on today's data is only that, so this arm is stated for the
+  // case rather than left to chance -- the empty-window test drives the branch itself).
+  const totalRoutes = routes.length + quarantinedRoutes;
+  if (totalRoutes === 0 && sameAirportSeats === 0) return null;
 
   const drawn = routes.slice(0, limit);
   const coords = await fetchCoords([
@@ -323,9 +380,13 @@ export async function fetchCarrierTypeNetwork(
     segments,
     window: `${timeFrom} → ${timeTo}`,
     drawnRoutes,
-    // The TRUE count before the cap, which is the whole reason this file fetches past it.
-    // Returning `segments.length` here makes the disclosure read "400 of 400".
-    totalRoutes: routes.length,
+    // The TRUE count before the cap, which is the whole reason this file fetches past it, PLUS
+    // the pairs excluded as quarantined -- the carrier served those, so the denominator has to
+    // describe the network it actually served. Returning `segments.length` makes the disclosure
+    // read "400 of 400"; omitting the quarantined pairs makes it describe a smaller network
+    // than the one on file.
+    totalRoutes,
     sameAirportSeats,
+    quarantinedRoutes,
   };
 }

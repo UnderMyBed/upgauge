@@ -63,6 +63,20 @@ export interface SegmentMapInput {
    *  Measured at (carrier, aircraft type, undirected pair) grain over the trailing 12: 759
    *  such groups carrying 598,829 seats. */
   sameAirportSeats?: number;
+  /** Route pairs excluded because EVERY filing on them was quarantined, so their measure sums
+   *  are NULL rather than zero. Counted in `totalRoutes` -- the carrier did serve them -- and
+   *  kept out of `segments`, because an arc drawn from a NULL sum would be a fabricated
+   *  measurement. Rendered beside `sameAirportSeats`, never silently dropped: quarantined rows
+   *  are excluded from aggregates but surfaced with a count, and showing the dirt is a trust
+   *  feature (CLAUDE.md).
+   *
+   *  NULL IS NOT ZERO, and here the difference is the whole point. Measured over the trailing
+   *  12 at (carrier, aircraft type, undirected pair) grain: 34 such groups, and every one of
+   *  them PERFORMED departures -- they are `zero_seats` and `load_factor_gt_1` filings, so a
+   *  passenger aircraft flew and filed an impossible seat count. Reading their NULL as "never
+   *  flew" is the coercion this field exists to prevent. Separately, 23 groups performed a real
+   *  zero departures; those are not counted here and not drawn. */
+  quarantinedRoutes?: number;
   /** Optional caption under the window line -- the diff map's per-panel label. */
   title?: string;
   basemapPaths?: string;
