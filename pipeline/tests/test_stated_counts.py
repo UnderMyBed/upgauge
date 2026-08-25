@@ -133,6 +133,7 @@ STATED: dict[str, tuple[str, ...]] = {
         "app/src/components/AircraftMixChart.test.tsx",
         "app/src/lib/chart/aircraftMix.test.ts",
         "app/src/lib/chart/aircraftMix.ts",
+        "app/src/lib/map/carrierTypeNetwork.ts",
         "app/src/lib/routePair.test.ts",
         "docs/architecture/hosting.md",
         "docs/data/invariants.md",

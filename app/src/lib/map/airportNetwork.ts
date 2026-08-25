@@ -72,7 +72,8 @@ export function airportNetworkQuery(
   };
 }
 
-interface AirportCoords {
+/** Exported alongside `fetchCoords` below, for map/carrierTypeNetwork.ts. */
+export interface AirportCoords {
   id: number;
   code: string;
   name: string;
@@ -84,8 +85,14 @@ interface AirportCoords {
  * and return coordinates keyed by id. Mirrors `resolve.ts`'s `{{IDS}}` substitution discipline,
  * but for a numeric id set rather than uppercased code slugs -- there is no dedup-by-code
  * concern here (an airport_id is already a key, not a slug that can collide). Empty input
- * returns without opening a connection, the same guard `resolve.ts`'s `runSlugLookup` has. */
-async function fetchCoords(ids: number[]): Promise<Map<number, AirportCoords>> {
+ * returns without opening a connection, the same guard `resolve.ts`'s `runSlugLookup` has.
+ *
+ * EXPORTED for map/carrierTypeNetwork.ts, which needs BOTH endpoints of every row rather than
+ * one far end, and which must not re-derive the `{{IDS}}` substitution discipline or open
+ * `map_airport_coords.sql` a second way. It stays here rather than moving to a module of its
+ * own only because that is the smaller diff; if a third caller appears (#109's diff query
+ * needs the same thing), lifting these two into `map/airportCoords.ts` is a pure move. */
+export async function fetchCoords(ids: number[]): Promise<Map<number, AirportCoords>> {
   const out = new Map<number, AirportCoords>();
   const distinct = [...new Set(ids)];
   if (distinct.length === 0) return out;
