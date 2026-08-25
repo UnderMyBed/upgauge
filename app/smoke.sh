@@ -136,7 +136,7 @@ BASE="http://127.0.0.1:${PORT}"
 CACHE_EXPECTED="public, s-maxage=2592000, stale-while-revalidate=86400"
 # M5 Task 7, Part B split proxy.ts's one 30-day CACHE constant into two: /api/pivot (its own
 # route.ts, untouched) and, as of M5 Task 8, /sitemap.xml and /robots.txt keep CACHE_EXPECTED
-# above; /explore and every ENTITY_ROUTES page (/route, /airport, /carrier, /aircraft) -- both
+# above; /explore and all four entity pages (/route, /airport, /carrier, /aircraft) -- both
 # their 200s and their 308s -- get the shorter HTML_CACHE instead (docs/architecture/hosting.md
 # § "The gap": bounding a 5xx's cache exposure to an hour rather than a month, since the
 # route-handler fix that would have closed the gap outright turned out not to be reachable).
@@ -1442,7 +1442,7 @@ check_re "db: proxy, page and API share ONE DuckDBInstance (open handles = 1)" "
 # ---------------------------------------------------------------------------------------------
 # 14. M6 Task 8: /watch and the four Top-N leaderboard presets. proxy.ts's matcher grew to
 #     ELEVEN entries for this (M6 Task 7) -- `/watch` (exact path, same shape as `/search`) and
-#     `/watch/:preset` (dynamic segment, same shape as the four ENTITY_ROUTES rows, but gated by
+#     `/watch/:preset` (dynamic segment, the same shape an entity page's slug has, but gated by
 #     a static slug registry plus `isDataLayerHealthy()` rather than a per-slug resolve()). This
 #     is the section that closes the one gap M5's own whole-branch review left explicit in
 #     hosting.md: "unit-verified only, not yet smoke-curled" -- proxy.test.ts calls proxy()

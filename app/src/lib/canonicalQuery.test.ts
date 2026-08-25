@@ -402,7 +402,9 @@ describe("QUERY_ROWS", () => {
   it("has exactly one row per proxy matcher entry", () => {
     // The third list that must agree with config.matcher -- and with THAT list only. This comment
     // used to name ENTITY_ROUTES as well, which the assertion below does not check and could not:
-    // QUERY_ROWS (one row per matcher entry) is a strict superset of ENTITY_ROUTES (3), so
+    // QUERY_ROWS (one row per matcher entry) is a strict superset of ENTITY_ROUTES (1 row since
+    // #106 -- `/route/:pair` alone; the other three entity pages each grew a second cacheability
+    // input and moved to their own proxy branch), so
     // row-for-row agreement with the latter is not a property that holds. docs/architecture/
     // hosting.md § "One canonical key set per cacheable URL" states the same thing. A row missing
     // here ships a path with no query protection; a matcher entry missing ships a page with no

@@ -165,13 +165,22 @@ describe("resolveCarrierFilter", () => {
     expect(new Set(f.holders).size).toBe(3);
   });
 
-  it("names holders that do NOT share a name, where PA's two Pan Am rows do", async () => {
-    // A second live ambiguous code, and it tests the FORMATTING differently from `PA`. `PA`'s
-    // first two holders are byte-identical by name, so a formatter that dropped the id would
-    // still produce three entries there and only the `new Set(...).size` assertion above would
-    // notice. `2T` is held by airline_id 20116 (Canada 3000 Airlines Ltd.) and 22146
-    // (BermudAir) -- visibly distinct airlines, so this pins that the NAMES reach the caller
-    // rather than a list of ids that happens to be the right length.
+  it("refuses a code with EXACTLY TWO holders -- the `> 1` threshold, which PA cannot pin", async () => {
+    // WHAT THIS ACTUALLY CATCHES, corrected after review: not the formatting. Traced against
+    // both formatting mutants, `2T` stays GREEN for each -- ids-only reddens `PA`'s
+    // `toContain("Florida Coastal")` and names-only reddens `PA`'s `Set(...).size === 3`, and
+    // `PA` alone is sufficient for both.
+    //
+    // Its discriminating power is the THRESHOLD. Mutate `holders.length > 1` to `> 2` and `PA`
+    // (three holders) stays ambiguous while this goes `unknown`; `02Q` above pins the other
+    // side (one holder must NOT be ambiguous). Between them the boundary is closed on both
+    // edges, which nothing did before -- `PA` and `02Q` alone leave `> 2` passing.
+    //
+    // FIXTURE RISK, stated because this repo has been bitten by exactly this: `2T`'s second
+    // holder is airline_id 22146, BermudAir, which is currently operating. One T-100 filing
+    // makes it fact-present, `resolveCarrier` then resolves `2T` to it, and this test goes red
+    // rather than silently weakening -- fail-loud, which is why it is acceptable. An
+    // all-defunct pair would be stabler if that day comes.
     const f = await resolveCarrierFilter("2T");
     if (f.kind !== "ambiguous") throw new Error(`expected ambiguous, got ${f.kind}`);
     expect(f.holders.length).toBe(2);
@@ -265,11 +274,19 @@ describe("the value bounds against the live catalog", () => {
     // the ones an over-tight alphabet loses, and losing them is invisible: the page still
     // renders, the filter just never applies. Asserted as a population, not one fixture, since
     // BTS renamed type 699 out from under this repo's separator fixture set once already.
+    //
+    // Exercised THROUGH THE RESOLVER, per this block's header. An earlier version re-stated
+    // `/^[A-Z0-9-]{1,12}$/` here as a literal -- a second copy of the rule, hand-synced to the
+    // first, which is the drifting-duplicate-validator failure `mapFilter.ts` itself complains
+    // about: tightening `TYPE_FILTER_VALUE` left it green.
     const names = await factPresentDisplayValues("aircraft_type");
-    const separated = names.map(slugFor).filter((s) => s.includes("-"));
+    const separated = names.filter((n) => slugFor(n).includes("-"));
     expect(separated.length).toBeGreaterThan(50);
-    for (const slug of separated) {
-      expect(/^[A-Z0-9-]{1,12}$/.test(slug)).toBe(true);
+    const refused: string[] = [];
+    for (const name of separated) {
+      const kind = (await resolveTypeFilter(slugFor(name))).kind;
+      if (kind !== "ok") refused.push(`${slugFor(name)}:${kind}`);
     }
+    expect(refused).toStrictEqual(["CE-180:ambiguous", "CE-180:ambiguous"]);
   });
 });

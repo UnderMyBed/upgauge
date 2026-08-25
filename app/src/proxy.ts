@@ -816,8 +816,9 @@ async function isFilterCacheable(
   }
 }
 
-/** The HTML page routes' Cache-Control -- `/explore`, every `ENTITY_ROUTES` page, and (M6 Task
- * 7) `/watch` plus every `/watch/:preset` -- and ONLY those. `/watch`'s pages belong here for
+/** The HTML page routes' Cache-Control -- `/explore`, all four entity pages (whether answered
+ * by an `ENTITY_ROUTES` row or by their own branch), the four OG cards, and (M6 Task 7)
+ * `/watch` plus every `/watch/:preset` -- and ONLY those. `/watch`'s pages belong here for
  * the identical reason `/explore` does: each preset page reads live `mart_route_health` state
  * per request (`WatchPresetView`'s `runPreset()`), not a fixed catalog query the way
  * `/sitemap.xml`/`robots.txt` do, so it carries the same per-request-resolution risk this
@@ -880,12 +881,19 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // exists to enforce rather than becoming the one silent exception.
 //
 // THIS LIST AND `ENTITY_ROUTES` (plus `OG_ROUTES`, which owns the four `opengraph-image`
-// entries) MUST AGREE, with the one carved-out exception each of
-// `/airport/:code` and `/watch`/`/watch/:preset` already is: those pathnames stay in THIS list
-// (the matcher) but have their own `if` branch above rather than a row in `ENTITY_ROUTES`,
-// because each has a cacheability question the generic table can't express (a live
-// `mart_route_health` read for `/watch`; the `y` query param for `/airport`, M7 Task 9). Absent
-// their own branch OR their matcher entry, the same two failure modes below still apply. A row
+// entries) MUST AGREE -- but `ENTITY_ROUTES` IS NO LONGER THE MAIN MECHANISM, and an author
+// adding a fifth entity page must not read it as one. There are now FOUR carve-outs:
+// `/airport/:code` (the `y` query param, M7 Task 9), `/carrier/:code` and `/aircraft/:name`
+// (the `type`/`carrier` map filters, #106), and `/watch`/`/watch/:preset` (a live
+// `mart_route_health` read). Each stays in THIS list but has its own `if` branch above rather
+// than a row in `ENTITY_ROUTES`, because each has a cacheability question the generic table
+// cannot express -- the table's `isCacheable(entity, slug)` has exactly ONE input slot.
+// `/route/:pair` is the only row left in it.
+//
+// So the rule for a new page is: a matcher entry HERE, always -- plus EITHER an `ENTITY_ROUTES`
+// row (if the slug is its only cacheability input) OR its own branch (if anything else feeds
+// the decision). Absent a matcher entry, or absent both of those, the same two failure modes
+// below still apply. A row
 // here without a row (or branch) there ships an entity page that is long-cached on its 404s; a
 // row there without a row here ships a page with no Cache-Control at all AND turns each of its
 // 404s into a 500 (`not-found.tsx` throws `MissingRawPathError` when the pathname header is

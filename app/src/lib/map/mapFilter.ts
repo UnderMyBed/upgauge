@@ -25,16 +25,23 @@ import { resolveAircraftSlug } from "@/lib/aircraftSlug";
  * An unfiltered request pays nothing, which is every crawler hit and every one of the entity
  * URLs in `sitemap.xml`. A filtered one pays one extra resolve on top of the slug's. MEASURED
  * here rather than quoting `proxy.ts:679-698`'s 3.6/4.6 ms, which are `isCacheable`'s lookup and
- * not this one -- warm, in-process, mean of 10 calls each:
+ * not this one -- warm, in-process, mean of 30 calls, BOTH SIDES UNDER THE ONE PROTOCOL:
  *
- *     carrier  ok  (DL)       7.1 ms      type  ok  (B737-8)     9.5 ms
- *     carrier  unknown (ZZ)  10.8 ms      type  unknown (NOPE-1) 9.5 ms
- *     carrier  ambiguous (PA) 9.7 ms
+ *     resolveCarrierFilter  ZZ (unknown)    9.42 ms  ->  7.32 ms
+ *     resolveCarrierFilter  PA (ambiguous)  9.37 ms  ->  7.65 ms
  *
- * The refused carrier path was 47.1 ms until the holders it needs stopped being fetched twice:
- * `resolveCarrier` already calls `carrierHoldersByCode` to word its own `reason`, so they now
- * ride on `CarrierResult.notFound` (`carrier.ts`) instead of being re-queried here. A refused
- * `?carrier=` cost FOUR proxy-side queries where the pre-#106 path cost one; it now costs two.
+ * The saving is one `carrierHoldersByCode`, which costs 1.40 ms measured alone -- and that is
+ * the whole of it. `resolveCarrier` already makes that call to word its own `reason`, so the
+ * holders now ride on `CarrierResult.notFound` (`carrier.ts`) instead of being re-queried here.
+ *
+ * COUNTED STATICALLY, because the milliseconds above are the weaker claim: a refused
+ * `?carrier=` ran THREE carrier queries inside this function (`lookup_carrier_by_code`, then
+ * `lookup_carrier_code_exists` twice) and now runs TWO. Across the whole proxy path for
+ * `/aircraft/<slug>?carrier=<refused>`, including the slug's own resolve, that is four queries
+ * down to three; the pre-#106 path ran one, because the key did not exist. Two is the FLOOR,
+ * not a target missed: the refusal needs both carrier lookups -- one to learn the code is not
+ * fact-present, one to learn who holds it -- so "where one would do" is structurally impossible
+ * and was never true.
  *
  * The alternative -- a structural bound only -- makes an unresolvable filter a CACHEABLE 200,
  * which is the precise failure this module exists to refuse. What it does NOT close, and what
@@ -238,7 +245,9 @@ export async function resolveTypeFilter(raw: string | null): Promise<MapFilter<s
  *
  * So: more than one holder is `ambiguous`; zero or one is `unknown`. One holder is NOT
  * ambiguous -- there is a single airline, it simply has never filed a T-100 Segment row, which
- * is the COMMON carrier 404 (1,543 of `dim_carrier`'s distinct codes, `carrier.ts:52-63`) and
+ * is the COMMON carrier 404 (1,544 of `dim_carrier`'s 1,658 distinct codes -- measured, and
+ * pinned by this module's own test; `carrier.ts:52-63` states 1,543/1,657, one lower on both,
+ * which is a pre-existing staleness in four files rather than a disagreement with this one) and
  * is honestly "nothing to filter by", not "we refuse to choose".
  *
  * `holders` name the airline AND its id, because the two Pan Am rows are BYTE-IDENTICAL by
@@ -281,9 +290,8 @@ export async function resolveCarrierFilter(raw: string | null): Promise<MapFilte
 
   // `resolveCarrier` ALREADY made this query -- it needs the holders to word its `reason` --
   // so they ride on the result (`carrier.ts`) rather than being fetched again here. The first
-  // version of this function called `carrierHoldersByCode` a second time, which cost 47.1 ms
-  // per refused code and made a refused `?carrier=` four proxy-side queries where the
-  // pre-#106 path made one.
+  // version called `carrierHoldersByCode` a second time: three carrier queries per refused code
+  // where two is the floor, measured at 9.42 ms against this version's 7.32 ms (see the header).
   const holders = resolved.holders;
   if (holders.length > 1) {
     return {

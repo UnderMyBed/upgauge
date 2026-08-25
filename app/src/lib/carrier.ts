@@ -10,8 +10,11 @@ export type CarrierResult =
    *  below words. It rides on the result rather than being left for the caller to re-derive:
    *  this function has already paid for the query (it needs the holders to word `reason`), and
    *  a caller that wants them otherwise has to make the SAME `carrierHoldersByCode` call a
-   *  second time -- measured at 47.1 ms per refused code for `/aircraft/:name?carrier=`'s
-   *  filter, which ran four proxy-side queries where one would do. Exactly the precedent
+   *  second time -- which is what `/aircraft/:name?carrier=`'s filter did, running THREE carrier
+   *  queries per refused code where two is the floor (the refusal needs one lookup to learn the
+   *  code is not fact-present and one to learn who holds it). Measured under one protocol, warm,
+   *  mean of 30: 9.42 ms before, 7.32 ms after -- the removed `lookup_carrier_code_exists` costs
+   *  1.40 ms measured alone, and the saving is that query and nothing more. Exactly the precedent
    *  `AmbiguousCodeError` already sets by carrying its `ids` instead of making the caller
    *  re-parse a message (`resolve.ts`), and `AircraftSlugResult.ambiguous` by carrying its. */
   | { kind: "notFound"; reason: string; holders: CarrierRef[] };
