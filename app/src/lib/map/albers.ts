@@ -267,7 +267,7 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
 // before this split.
 //
 // EXPORTED (M9 #111) so a test can assert a projected airport lands inside its own panel
-// against THIS table rather than a third hand-copy of it. `networkMap.ts`'s `INSET_RECTS` is
+// against THIS table rather than a third hand-copy of it. `segmentMap.ts`'s `INSET_RECTS` is
 // still a deliberate hand-copy and is still not imported from here; keep the two in sync.
 export const PANEL_RECTS: Record<Panel, PanelRect> = {
   us: [26, 18, 934, 424],
