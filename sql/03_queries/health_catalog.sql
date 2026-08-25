@@ -46,6 +46,18 @@ WITH required(object_name, column_name) AS (
         -- lat/lon are the M7 Task 10 fixture: present object, absent columns.
         ('dim_airport',            'lat'),
         ('dim_airport',            'lon'),
+        -- is_latest is what makes an airport_id join 1:1. 5,033 airport_ids carry more than one
+        -- airport_seq_id row, so a query that loses this column does not fail -- it FANS OUT and
+        -- multiplies its own row counts.
+        --
+        -- This entry closes a PRE-EXISTING gap rather than covering only the query that prompted
+        -- it. NINE served queries already depended on dim_airport.is_latest with nothing checking
+        -- it was there: lookup_airport_by_code, lookup_airport_code_exists, map_airport_coords,
+        -- resolve_airport, search_by_name, sitemap_airports, sitemap_routes, stats_counts and
+        -- stats_reference. map_carrier_diff is the tenth. dim_airport is the only object in the
+        -- catalog carrying an is_latest column at all, so there is no ambiguity about which one
+        -- this names.
+        ('dim_airport',            'is_latest'),
         ('dim_carrier',            'airline_id'),
         ('dim_carrier',            'carrier_code'),
         ('dim_city_market',        'city_market_id'),
