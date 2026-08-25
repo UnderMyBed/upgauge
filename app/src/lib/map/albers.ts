@@ -95,14 +95,15 @@ export function normalizeLon(lon: number): number {
  *     It has NO committed coastline and deliberately keeps none -- Natural Earth carries Midway
  *     only inside a feature that also spans the Caribbean (`app/geo/ne_50m_pac.json`'s own
  *     `_source` records why that cannot be cut apart here) -- so `fitPanels(BASEMAP_FIT_POINTS)`
- *     produces no fit for it and a page reaching it takes `networkMap.ts`'s subject-derived
- *     fallback, which is the ONLY panel that branch still serves. Folding Midway into `pac`
- *     instead is not a simplification, it is a regression: `pac`'s baked fit is scaled to the
- *     Marianas' own extent, so Midway projects to (1367.6, -429.7) -- off the canvas entirely --
- *     and `/airport/MDY?y=2021` loses its own subject. (That coordinate, and the American Samoa
- *     one in `PANEL_RECTS`, are counterfactuals under THIS commit's `pac` fit specifically:
- *     `ox`/`oy` move with the rect, so a figure quoted from an earlier revision of that rect is
- *     a true statement about a layout that no longer exists. Re-derive, never copy.) The gap is stated on the page itself
+ *     produces no fit for it and a page reaching it takes the subject-derived fallback in
+ *     `segmentMap.ts`'s `renderMapCore`, which is the ONLY panel that branch still serves.
+ *     Folding Midway into `pac` instead is not a simplification, it is a regression: `pac`'s
+ *     baked fit is scaled to the Marianas' own extent, so Midway projects to (1367.6, -429.7)
+ *     -- off the canvas entirely -- and `/airport/MDY?y=2021` loses its own subject. (That
+ *     coordinate, and the American Samoa one in `PANEL_RECTS`, are counterfactuals under THIS
+ *     commit's `pac` fit specifically: `ox`/`oy` move with the rect, so a figure quoted from
+ *     an earlier revision of that rect is a true statement about a layout that no longer
+ *     exists. Re-derive, never copy.) The gap is stated on the page itself
  *     (`NetworkMap.tsx`'s caption), never silently drawn wrong.
  * - `car` catches Puerto Rico and the USVI (lat 17.70-18.49, lon -67.15 to -64.71), which sit
  *   east of every conterminous airport (PQI, Maine, -68.05) and 6.86 degrees south of the

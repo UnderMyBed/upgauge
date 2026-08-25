@@ -84,8 +84,8 @@ const AIRPORT_KEYS: ReadonlySet<string> = new Set(["y"]);
  * verdict before committing to a `Cache-Control`, the same division `AIRPORT_KEYS` has with
  * `lib/year.ts` and `ALLOWED_KEYS` has with `lib/pivot/bounds.ts`. Declaring the key here and
  * bounding the value there is one mechanism; neither half is sufficient alone. */
-export const CARRIER_KEYS: ReadonlySet<string> = new Set(["type"]);
-export const AIRCRAFT_KEYS: ReadonlySet<string> = new Set(["carrier"]);
+const CARRIER_KEYS: ReadonlySet<string> = new Set(["type"]);
+const AIRCRAFT_KEYS: ReadonlySet<string> = new Set(["carrier"]);
 /** `/search`'s only key -- `app/search/page.tsx` reads `searchParams.q` and nothing else.
  * Declared truthfully even though nothing consumes this row's verdict today: `exempt` means "the
  * proxy does not redirect this path", never "the rules do not exist for it". */

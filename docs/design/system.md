@@ -593,8 +593,9 @@ Natural Earth refresh**: a committed input that says "ring 4 of this feature" si
 different island when upstream reorders, and this project has already paid once for a fixture
 that stopped exercising what it named (aircraft type 699). Say that, rather than "the source
 does not have it" — the last claim of that shape in this file was false for a milestone. Midway
-therefore has its own panel, `nwhi`, with zero reference points; `networkMap.ts`'s
-subject-derived fit is what renders it, and `nwhi` is now the only panel that branch serves.
+therefore has its own panel, `nwhi`, with zero reference points; the subject-derived fit in
+`segmentMap.ts`'s `renderMapCore` is what renders it, and `nwhi` is the only panel that branch
+serves.
 
 **Folding Midway into `pac` instead would be a regression, not a simplification.** `pac`'s baked
 fit is scaled to the Marianas' own extent, so Midway lands at (1367.6, −429.7) under the shipped
@@ -618,7 +619,7 @@ latitude). The original rect was 100×76px (aspect 1.32:1), so `fitPanels`'s `k 
 h/dy)` bound on width and left the coastline only ~26px tall inside a 76px-tall frame — not
 wrong, but a thin sliver floating in a mostly-empty labelled box. Widened to 296×76px (aspect
 ~3.89:1, matching the measured geometry) so both dimensions bind together; height is
-unchanged so the bottom inset row (`ak`/`hi`/`pac`/`car`) keeps one shared baseline.
+unchanged so the bottom inset row (`ak`/`hi`/`nwhi`/`car`/`sam`) keeps one shared baseline.
 `networkMap.ts`'s own `INSET_RECTS.car` (the frame-drawing literal, intentionally duplicated
 from `albers.ts` rather than imported) was updated to match — the two tables drifting would
 mean the drawn frame border no longer matches the rectangle the coastline was actually fit
@@ -659,13 +660,15 @@ letterboxes the island under a comment claiming otherwise. And `fitPanels` reads
 and 2.3884:1 raw, giving a width of 76 × 2.3801 ≈ **181** rather than 182 — 0.1px of slack
 against 1.1. Height binds at k=42272.46 with the extent filling 180.9 × 76.0.
 
-*Known limitation, stated rather than hidden:* Natural Earth's 1:50m Tutuila is 8 vertices, of
-which RDP keeps 5, so `sam` draws about 48.5px of outline per source vertex against the 6–10px
-`hi` and `car` manage. The shape is coarse at this scale, and visibly: the drawn outline spans
-180.5 × 62.2px inside an extent fitted to 180.9 × 76.0, because one of the three RDP drops is the
-vertex defining Tutuila's northern edge. It is sized for the tray anyway because the frame has to
-hold PPG's 2px node and its 9px label; a fidelity-matched box would be about 30×13px, narrower
-than the word printed on top of it.
+*Known limitation, stated rather than hidden, and purely a SOURCE limitation:* Natural Earth's
+1:50m Tutuila is 8 vertices, and at `PAC_RDP_EPSILON_DEG` all 8 survive, so `sam` draws 50.5px of
+outline per source vertex against the 4.4px `hi` and 6.0px `car` manage on that same denominator
+— drawn perimeter over source vertices. Mixing that with a drawn-vertex denominator is what
+produces a spurious "6–10px" comparison band. The shape is coarse at this scale because the source
+is, not because anything was thrown away: the drawn outline spans 180.5 × 75.6px inside an extent
+fitted to 180.9 × 76.0. It is sized for the tray anyway because the frame has to hold PPG's 2px
+node and its 9px label; a fidelity-matched box would be about 30×13px, narrower than the word
+printed on top of it.
 
 **`car` has the same defect, at ~1,392 px² over drawn Florida and Texas — 6.2% of its rect,
 against `pac`'s 33.3%.** It shipped in M7 Task 7b and is not fixed here. It is recorded
