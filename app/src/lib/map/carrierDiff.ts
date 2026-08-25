@@ -21,6 +21,37 @@ export type DiffCategory = "added" | "dropped" | "downgauged";
  * panels does not carry a second copy of it that can drift. */
 export const DIFF_CATEGORIES: readonly DiffCategory[] = ["added", "dropped", "downgauged"];
 
+/** The DISPLAY vocabulary for those categories, owned here beside the order for the same reason
+ * the order is owned here: so the surface rendering the panels does not carry a second copy that
+ * can drift from the one the producer writes into `SegmentMapInput.title`.
+ *
+ * Short on purpose. `title` is PAINTED INTO THE SVG on its own footer row and cannot wrap
+ * (segmentMap.ts) -- these are nowhere near the ~158-character ceiling, and nothing longer
+ * belongs in this table. */
+export const DIFF_CATEGORY_LABELS: Record<DiffCategory, string> = {
+  added: "Added",
+  dropped: "Dropped",
+  downgauged: "Downgauged",
+};
+
+/** The carrier-qualified caption a PAGE puts on one panel, e.g. `AS added`.
+ *
+ * WHY the page needs a different string from the bare label the producer sets: `renderSegmentMap`
+ * composes the map's whole accessible name as `${title}. Route map, ${window}.` plus
+ * `arcsSentence`, and `arcsSentence` emits "225 routes drawn" -- shared #104 copy, correctly
+ * uncarrier-qualified because the hub map uses it too. A screen-reader user reaching
+ * `role="img"` by graphic navigation never sees the section heading above it, so a bare "Added"
+ * leaves the map announcing a COUNT that does not name the carrier. This grain is
+ * (op_airline_id, route): a count that does not name the carrier is a claim the query never
+ * made, and /watch/new-routes is what that costs. The fix is one word, in the one field that
+ * reaches the accessible name.
+ *
+ * Built from DIFF_CATEGORY_LABELS rather than from a second literal, so the vocabulary still has
+ * exactly one owner and this is a refinement of it rather than a duplicate of it. */
+export function diffPanelTitle(carrierCode: string, category: DiffCategory): string {
+  return `${carrierCode} ${DIFF_CATEGORY_LABELS[category].toLowerCase()}`;
+}
+
 /** What `fetchCarrierDiff` returns.
  *
  * `quarantinedRoutes` sits HERE and not on a panel because it is a CARRIER-WIDE quantity: a route
@@ -269,6 +300,19 @@ export async function fetchCarrierDiff(
         // that at this boundary, since the question the field answers is "how many seats are
         // being withheld from the arcs", and the answer is none.
         sameAirportSeats: head.same_airport_seats ?? 0,
+        // SET HERE, not left to the consumer, because `title` is the ONLY channel into the map's
+        // accessible name and without it two of these three panels announce themselves
+        // IDENTICALLY: `renderSegmentMap` falls back to `Route map, ${window}.`, and added and
+        // downgauged share the trailing window. The only thing left separating them would be
+        // position -- which DIFF_CATEGORIES is already spending on category. A consumer that
+        // hands `panel.map` straight to `renderSegmentMap` now gets three distinct captions and
+        // three distinct accessible names without knowing this was ever a hazard.
+        //
+        // A PAGE should refine this with `diffPanelTitle(code, category)` -- see its docstring
+        // for why the carrier has to reach the accessible name. This is the floor, not the
+        // ceiling: the bare label is what is true without a carrier code, which is all this
+        // function is given.
+        title: DIFF_CATEGORY_LABELS[category],
       },
     });
   }

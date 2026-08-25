@@ -28,6 +28,7 @@ import CarrierPage, {
 } from "@/app/carrier/[code]/page";
 import { decode } from "@/lib/pivot/urlstate";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
+import { fetchCarrierDiff } from "@/lib/map/carrierDiff";
 import { resolveCarrier } from "@/lib/carrier";
 
 /** Every figure asserted below was measured against the built warehouse for
@@ -481,5 +482,109 @@ describe("/carrier/<code> truncation disclosure", () => {
     if (r.kind !== "ok") throw new Error("expected DL to resolve for this fixture");
     render(await CarrierView({ carrier: r.carrier, filterValue: r.filterValue }));
     expect(screen.queryByText(/top \d+ aircraft types/i)).toBeNull();
+  });
+});
+
+/* ---- #110: the diff map, driven against the REAL warehouse through the real page ---- */
+/* Fixtures prove the component; these prove the WIRING -- that `carrier.id` reaches
+ * `fetchCarrierDiff`, that the section lands inside the content column, and that the three
+ * carriers whose shapes the plan names actually render the way the shapes predict. A component
+ * test cannot see any of that: it is handed its `diffs` by the test. */
+describe("/carrier/<code> diff map (#110)", () => {
+  function diffPanels(container: HTMLElement): HTMLElement[] {
+    return [...container.querySelectorAll<HTMLElement>('[data-testid="diff-panel"]')];
+  }
+
+  it("renders all three panels, in order, on a carrier that has all three", async () => {
+    // AS: 225 added, 138 dropped, 128 downgauged, every panel UNDER the cap
+    // (map_carrier_diff.sql's per-carrier table), so nothing here is masked by truncation.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "AS" }) }));
+    const labels = diffPanels(container).map(
+      (p) => p.querySelector('[data-testid="diff-panel-label"]')?.textContent,
+    );
+    expect(labels).toEqual(["Added", "Dropped", "Downgauged"]);
+  });
+
+  it("gives the three real panels three DISTINCT accessible names", async () => {
+    // The live half of the `title` fix. Added and downgauged SHARE the trailing window, so
+    // before this unit two of these three were byte-identical strings.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "AS" }) }));
+    const labels = diffPanels(container).map(
+      (p) => p.querySelector("svg[role='img']")?.getAttribute("aria-label") ?? "",
+    );
+    expect(labels).toHaveLength(3);
+    expect(new Set(labels).size).toBe(3);
+    expect(labels[0]).toContain("AS added.");
+    expect(labels[1]).toContain("AS dropped.");
+    expect(labels[2]).toContain("AS downgauged.");
+  });
+
+  it("labels a single-category carrier by ITS category, not by panel index", async () => {
+    // ZW (Air Wisconsin): 92 dropped, 0 added, 0 downgauged. A component that labelled panels by
+    // POSITION in DIFF_CATEGORIES rather than by each panel's own `category` calls this one
+    // "Added" -- and on AS, where all three are present, index and category agree, so the test
+    // above cannot fail that way. 26 of the 66 carriers with any change have an empty category.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "ZW" }) }));
+    const panels = diffPanels(container);
+    expect(panels).toHaveLength(1);
+    expect(panels[0].querySelector('[data-testid="diff-panel-label"]')?.textContent).toBe("Dropped");
+    expect(panels[0].querySelector("svg[role='img']")?.getAttribute("aria-label")).toContain(
+      "ZW dropped.",
+    );
+  });
+
+  it("states the carrier-wide quarantine count on a carrier with NO drawable arc", async () => {
+    // F4 (Air Flamenco, 21615) is the one carrier of 114 in this state: 3 undrawable
+    // carrier-routes, zero arcs. `panels` is empty and `quarantinedRoutes` is not, so a section
+    // gated on the panels drops the count entirely -- the "no trace that anything was there"
+    // this field exists to prevent, on a page that is live in the sitemap.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "F4" }) }));
+    expect(diffPanels(container)).toHaveLength(0);
+    expect(
+      container.querySelector('[data-testid="diff-quarantine"]')?.textContent,
+    ).toMatch(/^3 of F4’s route pairs are on no panel above/);
+  });
+
+  it("renders THIS carrier's diff, not some other carrier's", async () => {
+    // THE WIRING ITSELF, as a round trip rather than a shape check. Every other test here passes
+    // unchanged if `carrier.id` is replaced by a hardcoded id -- WN, DL and AA all have three
+    // non-empty categories too, so "three panels, in order, with distinct names" is TRUE of the
+    // wrong carrier's data. Measured: swapping in WN's 19393 left every one of them green.
+    //
+    // So the binding is to the NUMBERS: the page's rendered pre-cap totals must equal what the
+    // producer returns for the id this page resolved. No figure is hardcoded, so this does not
+    // rot on a BTS refresh -- it re-derives both sides from the same warehouse.
+    const r = await resolveCarrier("AS");
+    if (r.kind !== "ok") throw new Error("expected AS to resolve for this fixture");
+    const expected = await fetchCarrierDiff(r.carrier.id, await dataAsOf());
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "AS" }) }));
+    const rendered = diffPanels(container).map((p) => {
+      const text = p.querySelector('[data-testid="diff-panel-count"]')?.textContent ?? "";
+      const m = /^AS (added|dropped|downgauged) ([\d,]+) route pair/.exec(text);
+      if (m === null) throw new Error(`count sentence did not parse: ${text}`);
+      return { category: m[1], total: Number(m[2].replace(/,/g, "")) };
+    });
+    expect(rendered).toEqual(
+      expected.panels.map((d) => ({ category: d.category, total: d.map.totalRoutes })),
+    );
+    // The fixture only bites if the categories actually carry different totals -- otherwise a
+    // wrong-carrier id could coincide. AS's three are 225 / 138 / 128 on the 2026-05 warehouse.
+    expect(new Set(rendered.map((x) => x.total)).size).toBe(rendered.length);
+  });
+
+  it("puts the section inside the content column, where the page's own claims live", async () => {
+    // `content()` excludes the legend rail on purpose (see its docstring). The diff map's
+    // sentences are claims about THIS carrier and have to be reachable there, not parked in a
+    // generic rail that has its own tests.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "AS" }) }));
+    expect(content(container)).toContain("another carrier may still be flying it");
+    expect(content(container)).toContain("re-entry, not first appearance");
+  });
+
+  it("renders no diff section at all for a carrier that filed in neither window", async () => {
+    // VX (Virgin America) has been dormant since 2018-03: no panels and nothing withheld, so
+    // there is no orphan heading and no empty map.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
+    expect(container.querySelector('[data-testid="diff-map"]')).toBeNull();
   });
 });

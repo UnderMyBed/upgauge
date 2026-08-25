@@ -7,10 +7,12 @@ import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { BASE_URL } from "@/lib/siteUrl";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
+import { DiffMap } from "@/components/DiffMap";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
+import { fetchCarrierDiff } from "@/lib/map/carrierDiff";
 import { encode } from "@/lib/pivot/urlstate";
 import {
   CARRIER_TYPE_LIMIT,
@@ -315,16 +317,26 @@ export async function CarrierView({
   // carrier's fleet says almost nothing, and the arrival of the A321 and the 737-9 across a
   // decade is the entire point of putting a chart on this page. The two windows are genuinely
   // different, which is why the `.window` line below names both.
-  const [result, mix, routesResult, originsResult]: [
+  //
+  // #110's diff query joins this SAME Promise.all rather than adding a sequential await after
+  // it, for the reason the two Top-N pivots already do. It takes NO filter: the diff map is the
+  // whole carrier's change, not one aircraft type's, so it is unaffected by `?type=`.
+  //
+  // `carrier.id` is the AIRLINE_ID off the resolved ref, not `Number(filterValue)` -- CLAUDE.md
+  // keys on AIRLINE_ID, and the typed field is the one place that cannot be a re-parse of a
+  // string this page happened to build for the pivot's filter list.
+  const [result, mix, routesResult, originsResult, diff]: [
     PivotResult,
     Awaited<ReturnType<typeof fetchAircraftMix>>,
     PivotResult,
     PivotResult,
+    Awaited<ReturnType<typeof fetchCarrierDiff>>,
   ] = await Promise.all([
     runPivot(query),
     fetchAircraftMix([["op_airline_id", [filterValue]]], EARLIEST_MONTH, asOf),
     runPivot(topNQuery(routesSpec)),
     runPivot(topNQuery(originsSpec)),
+    fetchCarrierDiff(carrier.id, asOf),
   ]);
 
   const totals = sumTotals(result.rows);
@@ -441,6 +453,14 @@ export async function CarrierView({
                 </p>
               </>
             )}
+            {/* ---- #110: the diff map. Self-contained; renders nothing when this carrier
+                 changed nothing and had nothing withheld. ---- */}
+            <DiffMap
+              diffs={diff.panels}
+              quarantinedRoutes={diff.quarantinedRoutes}
+              carrier={carrier.code}
+            />
+            {/* ---- end #110 ---- */}
             {/* The two claims this page cannot omit, both CLAUDE.md hard rules, both stated
                 about THIS carrier rather than in the abstract -- and rendered whether or not
                 there is a table, because they qualify the subject, not the rows. */}

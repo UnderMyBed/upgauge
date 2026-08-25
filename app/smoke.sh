@@ -1049,6 +1049,32 @@ check_dataset check "carrier: the page states the chart's own window" "$BODY" 'c
 check     "carrier: carries a self-referential canonical link (Task 2)" "$BODY" \
   '<link rel="canonical" href="http://localhost:3000/carrier/DL"'
 
+# ---- #110: the diff map's three small multiples, in the SERVED bytes ----
+# Every needle below is written against what React EMITS, not what the source contains: the
+# component writes U+2019/U+2014 literally for exactly this reason, and each needle sits inside
+# ONE text node, never across a `{...}` boundary -- React's SSR puts `<!-- -->` between adjacent
+# text nodes, which is how a greppable sentence stops being greppable while every unit test
+# still passes (grainNote's comment on carrier/[code]/page.tsx carries the same rule).
+check     "carrier: the diff map renders its panels" "$BODY" 'data-testid="diff-panel-label"'
+# The `title` fix, live. Added and downgauged SHARE the trailing window, so without a per-panel
+# title BOTH of these are the string `aria-label="Route map, 2025-06 → 2026-05.` -- byte-
+# identical, and position is the only thing left telling them apart. Two needles, because that
+# is the pair that collided.
+check     "carrier: the added panel names itself and its carrier"      "$BODY" 'aria-label="DL added.'
+check     "carrier: the downgauged panel does too, distinctly"         "$BODY" 'aria-label="DL downgauged.'
+check     "carrier: the dropped panel names itself and its carrier"    "$BODY" 'aria-label="DL dropped.'
+# The two honesty claims that exist nowhere else in the product, because no other surface knows
+# this map is a diff. map_carrier_diff.sql: 3,640 of 5,959 dropped carrier-routes had another
+# carrier flying the pair inside the trailing window; 4,691 of 8,357 added ones had filed that
+# pair before the prior window.
+check     "carrier: the diff map discloses the per-carrier grain" "$BODY" 'another carrier may still be flying it'
+check     "carrier: the diff map says added is re-entry"          "$BODY" 're-entry, not first appearance'
+check_not "carrier: the diff map claims nothing about the industry" "$BODY" 'nobody flew'
+# The downgauged panel cannot render the ordering it was cut by, and says so. Without this a
+# disclosure reading "400 of 512 routes drawn." is taken to mean the largest 400 ROUTES, which
+# is not what the cut selects.
+check     "carrier: the downgauged panel names its ranking key" "$BODY" 'by the fall in seats per departure'
+
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL")
 check     "carrier: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
@@ -1056,10 +1082,20 @@ check     "carrier: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTE
 # stopped filing in 2018-03; the chart is fetched over the full window and can only draw to
 # there, so naming the REQUESTED window would put "the full window · … → 2026-05" over a chart
 # that ends in 2018 -- M4c's bug, one page over. Both caveats render here too, with no table.
+# #110: F4 (Air Flamenco, 21615) is the ONE carrier of 114 whose diff has a non-zero
+# carrier-wide quarantine count and ZERO drawable arcs. A section gated on `panels.length` drops
+# that count silently -- the "no trace that anything was there" the field exists to prevent --
+# and no other carrier page can catch it. Dataset-pinned: the 3 is a measured count.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/F4")
+check_not "carrier: F4 draws no diff panel"                    "$BODY" 'data-testid="diff-panel-label"'
+check_dataset check "carrier: F4 still states what was withheld" "$BODY" '3 of F4’s route pairs are on no panel above'
+check     "carrier: ...with the reason THIS exclusion has"     "$BODY" 'window that decides the category was wholly quarantined'
+
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX")
 check     "carrier: a carrier that stopped filing names ITS range" "$BODY" 'chart: 2015-01 → 2018-03'
 check_not "carrier: ...and does not claim the full window there"   "$BODY" 'chart: the full window'
 check     "carrier: the caveats render without a table"            "$BODY" 'Operated, not marketed.'
+check_not "carrier: a dormant carrier gets no diff section"       "$BODY" 'data-testid="diff-map"'
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/carrier/dl")
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/carrier/dl")

@@ -871,3 +871,35 @@ svg.plot {
   font-style: italic;
   color: var(--limit);
 }
+
+/* ---------- the /carrier diff map's small multiples (#110) ---------- */
+/* The panels STACK rather than sitting three across, and that is a measurement: `.body` is
+   `minmax(0, 1fr) 214px` inside a 1200px `.wrap` with 20px padding and a 24px gap, so the main
+   column is 922px. Three across is 291px each, against a `viewBox="0 0 960 500"` canvas whose
+   airport labels are `font-size="10"` -- about 3px once scaled. A small multiple nobody can read
+   is not a comparison. Position still encodes category; it is simply vertical. */
+.diff-map {
+  margin-top: 26px;
+}
+.diff-panel {
+  margin-bottom: 26px;
+}
+/* Uppercased HERE and not in the DOM (see DiffMap.tsx): an all-caps DOM string is announced
+   letter by letter by some screen readers. Same idiom as `.mp-legend` and `.search-group h2`.
+   Weight and --ink, not --ink-3, because this label is what distinguishes three otherwise
+   identical map faces -- the same reason `FooterLine.emphasis` exists inside the SVG. */
+.dp-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  font-weight: 600;
+  color: var(--ink);
+}
+.dp-window {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-3);
+  margin-bottom: 7px;
+}
