@@ -56,14 +56,12 @@ export interface NetworkMapInput {
 /**
  * Origin-and-spokes as segments: every arc becomes a segment from the origin to that arc's own
  * endpoint. A faithful 1:1 mapping -- same-airport rows are NOT filtered here, because the one
- * copy of that filter lives in `drawableSegments`, and because `networkPanels` below needs the
- * unfiltered set.
+ * copy of that filter lives in `drawableSegments`.
  *
- * Exported so that the component and the renderer adapt a network exactly the same way; two
- * independently-written adapters is how the panels a page requests a coastline for drift from
- * the panels it actually draws marks in.
+ * Module-private: `renderNetworkMap` is its only caller. `networkPanels` deliberately does not
+ * use it (see its own doc), and nothing outside this file has a `NetworkMapInput` to adapt.
  */
-export function networkSegments(input: NetworkMapInput): SegmentDatum[] {
+function networkSegments(input: NetworkMapInput): SegmentDatum[] {
   const from = { code: input.origin.code, lat: input.origin.lat, lon: input.origin.lon };
   return input.arcs.map((a) => ({
     from,
@@ -76,13 +74,17 @@ export function networkSegments(input: NetworkMapInput): SegmentDatum[] {
 
 /**
  * Every panel a hub network's own points land in -- the ORIGIN INCLUDED, which is why this is
- * not simply `reachedPanelsFor(networkSegments(input))`.
+ * not simply `reachedPanelsFor` over this network's segments.
  *
- * A network with no drawable arc still draws its origin disc, and `networkSegments` of such an
- * input is empty, so routing this through the segment helper would return no panels at all and
+ * A network with no drawable arc still draws its origin disc, and such a network adapts to no
+ * segments at all, so routing this through the segment helper would return no panels and
  * silently drop the coastline out from under that disc. `NetworkMap.test.tsx`'s zero-arc case
  * is exactly that input. Both paths share `panelsFor`, so they cannot disagree about how a
  * point maps to a panel; they differ only in which points count.
+ *
+ * A hub self-arc carries the ORIGIN's own coordinates, so including it here can only re-add a
+ * panel the origin already put in the set -- which is why the hub map never had the unframed-
+ * coastline defect `reachedPanelsFor` had to be narrowed to fix.
  */
 export function networkPanels(input: NetworkMapInput): Panel[] {
   const points: GeoPoint[] = [input.origin, ...input.arcs].map((p) => ({ lat: p.lat, lon: p.lon }));

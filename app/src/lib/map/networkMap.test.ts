@@ -46,7 +46,8 @@ function fixture(): NetworkMapInput {
 /** Three conterminous destinations at the given seat totals, all with departures and load
  * factor comfortably clear of the departure floor and the load-factor floor -- so the ONLY
  * thing distinguishing their stroke widths is seats, and the draw-order test is actually
- * exercising `arcOrder`, not an accidental floor override. */
+ * exercising `segmentOrder` -- which is what executes on both render paths since #104 -- rather
+ * than an accidental floor override. */
 function fixtureWithSeats(seats: number[]): NetworkMapInput {
   const codes: (keyof typeof COORDS)[] = ["SEA", "JFK", "ORD"];
   return {
@@ -201,7 +202,8 @@ describe("renderNetworkMap", () => {
   it("excludes a same-airport arc entirely", () => {
     // Catches: drawing a zero-length arc. gc()'s degenerate branch emits 49
     // identical points -- several hundred bytes drawing an invisible mark on top
-    // of the origin disc. ORD draws 267, not 268.
+    // of the origin disc. Over 2025-05..2026-04, the fixed window airportNetwork.test.ts
+    // queries, ORD draws 267 arcs from 268 routes.
     const svg = renderNetworkMap(fixtureIncludingSelfArc("ORD"));
     const polylines = svg.match(/<polyline/g) ?? [];
     expect(polylines).toHaveLength(fixtureArcCount() - 1);

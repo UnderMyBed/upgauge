@@ -60,8 +60,10 @@ export function greatCircle(a: GeoPoint, b: GeoPoint, steps: number): GeoPoint[]
  * RE-MEASURED against the real served page (M7 Task 10; the figures this comment carried
  * before that -- "192,231 fixed 48, 132,178 adaptive, 77,384 flat 12" -- were a pre-Task-8
  * design-spec projection, never re-measured once the real page existed, and were roughly 2×
- * every real number below). Measured on ORD's 267 drawn arcs (268 destinations minus the
- * excluded same-airport row) against the actual composite-Albers projection this map ships
+ * every real number below). Measured on ORD's 267 drawn arcs over 2025-05..2026-04 -- the fixed
+ * window `airportNetwork.test.ts` pins, 268 routes minus the excluded same-airport row; the
+ * trailing 12 is a different and moving figure (274/273, `docs/data/invariants.md` § Route
+ * identity) -- against the actual composite-Albers projection this map ships
  * with (960px wide, so a transcontinental arc projects to only ~700px): a flat 48 emits
  * 189,274 bytes of polyline; THIS (adaptive) emits 64,287, not merely "with no visible change
  * to the long arcs" but because a long arc on a 960px-wide canvas needs ~32 steps at

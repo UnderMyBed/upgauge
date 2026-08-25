@@ -617,8 +617,8 @@ scale with the arc's length ON SCREEN (`round(projectedLengthPx / 22)`, floor 4,
 with its angular distance — a 40px hop needs a handful of points and a transcontinental arc
 needs dozens. Adaptive beats a flat 48 outright, and it also beats a flat 12 — most arcs on a
 960px-wide canvas are short enough that adaptive's floor of 4 undercuts a flat 12, which would
-still visibly polygonize the long arcs it does not help. The measured byte counts behind that
-are stated once, in `stepsFor`'s own header, and not restated here. A great circle cannot
+still visibly polygonize the long arcs it does not help. The byte counts behind that comparison
+are measured in `stepsFor`'s own header, against a named window. A great circle cannot
 cross a panel boundary at all (above), so
 `stepsFor` is only ever consulted for an arc `greatCircle` actually draws — a cross-panel arc
 is the two projected endpoints, straight, regardless of its geographic length.

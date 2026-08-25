@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  drawableSegments,
   NETWORK_ARC_CAP,
   reachedPanelsFor,
   renderSegmentMap,
@@ -21,6 +22,10 @@ const COORDS = {
   MIA: { lat: 25.79, lon: -80.29 },
   ATL: { lat: 33.64, lon: -84.43 },
   ANC: { lat: 61.17, lon: -149.99 },
+  // Same-panel partners for ANC and HNL -- the pairs that tell a per-segment cross-panel test
+  // apart from one still measuring against a single region.
+  FAI: { lat: 64.82, lon: -147.86 },
+  OGG: { lat: 20.9, lon: -156.43 },
   HNL: { lat: 21.32, lon: -157.92 },
   SJU: { lat: 18.44, lon: -66.0 },
   // The two fact-present airports east of the antimeridian that this engine must normalize:
@@ -50,14 +55,17 @@ function seg(
   };
 }
 
-/** A valid input wherever a test needs one but does not care about its specifics. `drawnRoutes`
- * equals `totalRoutes`, so no disclosure line is rendered. */
+/** A valid input wherever a test needs one but does not care about its specifics. `totalRoutes`
+ * matches what will actually be drawn, so no disclosure line is rendered. `sameAirportSeats` and
+ * `quarantinedRoutes` are required on the interface on purpose -- a producer that omits one
+ * silently drops a disclosure -- so they are stated as an explicit zero here, not defaulted. */
 function input(segments: SegmentDatum[], overrides: Partial<SegmentMapInput> = {}): SegmentMapInput {
   return {
     segments,
     window: "2025-06 → 2026-05",
-    drawnRoutes: segments.length,
-    totalRoutes: segments.length,
+    totalRoutes: drawableSegments(segments).length,
+    sameAirportSeats: 0,
+    quarantinedRoutes: 0,
     ...overrides,
   };
 }
@@ -88,6 +96,14 @@ function labelXY(svg: string, code: string): [string, string] {
   const m = svg.match(re);
   if (m === null) throw new Error(`no label for ${code}`);
   return [m[1], m[2]];
+}
+
+/** Solid-vs-dashed for each polyline, in DOCUMENT ORDER. Two arcs at identical seats get
+ * identical widths, so the dash is the only thing that can tell them apart. */
+function dashOrder(svg: string): string[] {
+  return [...svg.matchAll(/<polyline[^>]*\/>/g)].map((m) =>
+    m[0].includes('stroke-dasharray="5 3"') ? "dashed" : "solid",
+  );
 }
 
 function visibleText(svg: string): string {
@@ -213,9 +229,67 @@ describe("renderSegmentMap", () => {
     // HNL -> ANC crosses from `hi` to `ak`, a pair the hub renderer could never produce: it
     // compared every destination against ONE origin region, so a boundary between two insets
     // was unreachable. Two points, not an interpolated path.
+    //
+    // ON ITS OWN THIS CANNOT DISCRIMINATE, and that is why the next test exists. `HNL -> ANC`
+    // is cross-panel under the correct predicate AND under `panelOf(to) !== "us"` AND under a
+    // hub-shaped `panelOf(to) !== panelOf(lines[0].from)`, because neither end is `us`. Only
+    // the intra-inset case below tells the three apart.
     const svg = renderSegmentMap(input([seg("HNL", "ANC")]));
     const points = svg.match(/points="([^"]+)"/)![1].trim().split(/\s+/);
     expect(points).toHaveLength(2);
+  });
+
+  it("draws a great circle between two airports in the SAME non-conterminous panel", () => {
+    // Catches the coupling this whole task exists to break: any predicate that still measures a
+    // segment against ONE region -- `panelOf(to) !== "us"`, or the literal hub form
+    // `panelOf(to) !== panelOf(lines[0].from)` -- rather than against the segment's own two
+    // ends. Both mutants pass every other test in this file; both turn these two arcs into
+    // 2-point chords, and only a point COUNT on an intra-panel pair sees it.
+    //
+    // The fixture needs a `us` segment present so the hub-shaped mutant has a conterminous
+    // "origin" to measure against; SEA->PDX is lightest, so `segmentOrder` puts it first.
+    // Real routes: HNL-OGG (inter-island Hawai'i) and ANC-FAI (Anchorage-Fairbanks) are exactly
+    // the shape #105's and #109's maps will draw, and a straight chord where a curve belongs is
+    // a geographic lie about both.
+    const svg = renderSegmentMap(
+      input([
+        seg("SEA", "PDX", { seats: 100 }),
+        seg("HNL", "OGG", { seats: 500 }),
+        seg("ANC", "FAI", { seats: 900 }),
+      ]),
+    );
+    const counts = [...svg.matchAll(/points="([^"]+)"/g)].map(
+      (m) => m[1].trim().split(/\s+/).length,
+    );
+    expect(counts).toHaveLength(3);
+    expect(counts[1]).toBeGreaterThan(2); // HNL -> OGG, both `hi`
+    expect(counts[2]).toBeGreaterThan(2); // ANC -> FAI, both `ak`
+  });
+
+  it("breaks a seats tie by code, on BOTH endpoints, not by array position", () => {
+    // F19 measured a seats tie at exactly the 400th row in 31 of the 36 capped views -- DL x
+    // type 614 has 164 route pairs all tied at 160.0 seats at the cut. `ORDER BY seats DESC`
+    // carries no tiebreak column, so without one here which of them draws on top is whatever
+    // order the array arrived in, and that is not reproducible between runs.
+    //
+    // Equal seats means equal stroke WIDTH, so width cannot tell the two apart -- the dash does.
+    // Both halves are asserted separately because dropping only one tiebreak leaves the other
+    // covering for it: on the first fixture every `from` is SEA, on the second every `to` is SEA.
+    const byTo = renderSegmentMap(
+      input([
+        seg("SEA", "PDX", { seats: 500, loadFactor: 0.62 }), // dashed, listed first
+        seg("SEA", "JFK", { seats: 500, loadFactor: 0.9 }), // solid; JFK < PDX, so draws first
+      ]),
+    );
+    expect(dashOrder(byTo)).toEqual(["solid", "dashed"]);
+
+    const byFrom = renderSegmentMap(
+      input([
+        seg("PDX", "SEA", { seats: 500, loadFactor: 0.62 }), // dashed, listed first
+        seg("JFK", "SEA", { seats: 500, loadFactor: 0.9 }), // solid; JFK < PDX, so draws first
+      ]),
+    );
+    expect(dashOrder(byFrom)).toEqual(["solid", "dashed"]);
   });
 
   it("normalizes longitude before the cross-panel test, not only before projecting", () => {
@@ -247,16 +321,33 @@ describe("renderSegmentMap", () => {
   it("states a capped view's true total, on the map itself and not only in the aria-label", () => {
     // Catches: capping silently. `NetworkMapInput` has no field for this at all, which is why
     // /airport can truncate with no on-page disclosure; the point-to-point maps must not.
-    const svg = renderSegmentMap(
-      input([seg("SEA", "PDX")], { drawnRoutes: 400, totalRoutes: 1_622 }),
-    );
-    expect(visibleText(svg)).toContain("400 of 1,622 routes drawn.");
-    expect(ariaLabel(svg)).toContain("400 of 1,622 routes drawn.");
+    const svg = renderSegmentMap(input([seg("SEA", "PDX")], { totalRoutes: 1_622 }));
+    expect(visibleText(svg)).toContain("1 of 1,622 routes drawn.");
+    expect(ariaLabel(svg)).toContain("1 of 1,622 routes drawn.");
   });
 
   it("renders no disclosure line when nothing was capped", () => {
-    const svg = renderSegmentMap(input([seg("SEA", "PDX")], { drawnRoutes: 1, totalRoutes: 1 }));
+    const svg = renderSegmentMap(input([seg("SEA", "PDX")], { totalRoutes: 1 }));
     expect(svg).not.toContain("routes drawn.");
+  });
+
+  it("never states two different drawn counts in one aria-label", () => {
+    // Catches: taking the drawn count from the caller. `arcsSentence` reports what was actually
+    // drawn and the disclosure used to report a caller-supplied drawn count, with nothing
+    // reconciling them -- so one accessible description could read "2 routes drawn as
+    // great-circle arcs ... 3 of 10 routes drawn." That is the compound-claim failure CLAUDE.md
+    // records for /watch/new-routes: every clause re-derived, never triaged by how true it
+    // sounds.
+    //
+    // The fixture makes them disagree if anything can: three segments, one of them a
+    // self-segment the renderer drops, against a caller total of 10. Both sentences must say 2.
+    const svg = renderSegmentMap(
+      input([seg("SEA", "PDX"), seg("ORD", "JFK"), seg("HNL", "HNL")], { totalRoutes: 10 }),
+    );
+    const label = ariaLabel(svg);
+    expect(label).toContain("2 routes drawn as great-circle arcs");
+    expect(label).toContain("2 of 10 routes drawn.");
+    expect(label).not.toContain("3 of 10");
   });
 
   it("states same-airport seats it excluded, on the map itself and not only in the aria-label", () => {
@@ -273,12 +364,12 @@ describe("renderSegmentMap", () => {
 
   it("does not claim same-airport seats are 'in this total' -- no total here carries them", () => {
     // Catches: reusing the HUB map's tail verbatim. On /airport "this total" is the stat strip's
-    // SEATS figure, which does carry them. This map's only totals are `drawnRoutes` /
-    // `totalRoutes`, which are ROUTE counts that deliberately exclude same-airport pairs -- so
+    // SEATS figure, which does carry them. This map's only totals are ROUTE counts --
+    // `totalRoutes` and what it drew -- and both exclude same-airport pairs, so
     // the hub wording points at a total that neither exists on the map face nor contains these
     // seats. The falsifying pair is in networkMap.test.ts: the hub must still say it.
     const svg = renderSegmentMap(
-      input([seg("SEA", "PDX")], { sameAirportSeats: 598_829, drawnRoutes: 400, totalRoutes: 519 }),
+      input([seg("SEA", "PDX")], { sameAirportSeats: 598_829, totalRoutes: 519 }),
     );
     expect(svg).not.toContain("included in this total");
     expect(visibleText(svg)).toContain(
@@ -315,20 +406,19 @@ describe("renderSegmentMap", () => {
     // three independent substring checks pass under any ordering.
     const svg = renderSegmentMap(
       input([seg("SEA", "PDX")], {
-        drawnRoutes: 400,
         totalRoutes: 519,
         quarantinedRoutes: 34,
         sameAirportSeats: 598_829,
       }),
     );
     const expected =
-      "2025-06 → 2026-05 · 400 of 519 routes drawn. · " +
+      "2025-06 → 2026-05 · 1 of 519 routes drawn. · " +
       "34 quarantined routes not drawn — failed an invariant, never clamped. · " +
       "598,829 same-airport seats excluded from the arcs above, and from the route counts.";
     expect(visibleText(svg)).toContain(`>${expected}</text>`);
     expect(ariaLabel(svg)).toBe(
       "Route map, 2025-06 → 2026-05. 1 route drawn as great-circle arcs, thinnest to heaviest by seats. " +
-        "400 of 519 routes drawn. " +
+        "1 of 519 routes drawn. " +
         "34 quarantined routes not drawn — failed an invariant, never clamped. " +
         "598,829 same-airport seats excluded from the arcs above, and from the route counts.",
     );
@@ -421,10 +511,13 @@ describe("renderSegmentMap", () => {
 
 describe("reachedPanelsFor", () => {
   it("normalizes longitude before deciding a panel", () => {
-    // Catches: dropping normalizeLon. `regionOf`'s tests are all written in western-hemisphere
-    // terms and it does NOT normalize for its caller. Un-normalized, GUM (+144.8) satisfies
-    // `lat < 25 && lon > -70` and files as CARIBBEAN, and SYA (+174.11) falls through every
-    // test to the conterminous panel 270 degrees from its central meridian.
+    // There is no `normalizeLon` call ON THIS PATH to delete -- `reachedPanelsFor` routes
+    // through `fitPanels`, which normalizes internally, and that is the point: the correct
+    // behaviour is inherited rather than re-typed. The mutation this catches is the obvious
+    // hand-rolled rewrite, a `regionOf` loop over the endpoints (which is what
+    // `NetworkMap.tsx` used to carry, normalizeLon included). Un-normalized, GUM (+144.8)
+    // satisfies `lat < 25 && lon > -70` and files as CARIBBEAN, and SYA (+174.11) falls through
+    // every test to the conterminous panel 270 degrees from its central meridian.
     expect(reachedPanelsFor([seg("SEA", "GUM")])).toEqual(["us", "pac"]);
     expect(reachedPanelsFor([seg("SEA", "SYA")])).toEqual(["us", "ak"]);
   });
@@ -437,8 +530,24 @@ describe("reachedPanelsFor", () => {
     );
   });
 
-  it("counts a self-segment's airport, which draws no arc but is still in the network", () => {
-    expect(reachedPanelsFor([seg("HNL", "HNL")])).toEqual(["hi"]);
+  it("ignores a self-segment, which draws no arc and so reaches no panel", () => {
+    // Catches: counting endpoints the renderer will not fit. This used to return ["hi"] while
+    // `renderSegmentMap` fitted only drawable segments, so a panel reached ONLY by a
+    // self-segment got a coastline and no inset frame around it -- an unframed, unlabelled
+    // landmass, against the rule `INSETS` states in the same file.
+    expect(reachedPanelsFor([seg("HNL", "HNL")])).toEqual([]);
+  });
+
+  it("returns EXACTLY the panels renderSegmentMap frames, for the same segments", () => {
+    // The invariant behind the fix, stated directly rather than left to two call sites to
+    // preserve independently. `[SEA->PDX, HNL->HNL]` is the case that used to break it: the
+    // coastline said Hawai'i, the frame said nothing.
+    const segments = [seg("SEA", "PDX"), seg("HNL", "HNL")];
+    expect(reachedPanelsFor(segments)).toEqual(["us"]);
+
+    const svg = renderSegmentMap(input(segments));
+    expect(svg).not.toContain("HAWAI");
+    expect(svg).not.toContain("ALASKA");
   });
 
   it("returns nothing for an empty network rather than defaulting to a panel", () => {

@@ -65,50 +65,55 @@ export interface SegmentMapInput {
   segments: SegmentDatum[];
   /** Human-readable window, e.g. "2025-06 → 2026-05". Rendered on the map face. */
   window: string;
-  /** How many routes were drawn, and how many exist. `drawn < total` is what the disclosure
-   *  line reports; equal values render no disclosure line.
+  /** How many routes exist BEFORE the cap -- the TRUE count. Returning the capped count here
+   *  makes the disclosure read "400 of 400" and is the mutant #105 exists to kill. The renderer
+   *  cannot derive this: the query that produced these segments carried a LIMIT, so the true
+   *  total is only knowable upstream (`db.ts:251-254`). `NetworkMapInput` has no equivalent
+   *  field, which is why `AIRPORT_NETWORK_LIMIT` can truncate silently today.
    *
-   *  `totalRoutes` is the TRUE count BEFORE the cap. Returning the capped count here makes the
-   *  disclosure read "400 of 400" and is the mutant #105 exists to kill. Note that
-   *  `NetworkMapInput` has no equivalent field, which is why `AIRPORT_NETWORK_LIMIT` can
-   *  truncate silently today.
-   *
-   *  NOTHING CROSS-CHECKS `drawnRoutes` AGAINST `segments.length`, deliberately. The renderer
-   *  cannot derive `totalRoutes` (the query that produced these segments carried a LIMIT, so
-   *  the true total is only knowable upstream -- `db.ts:251-254`), and it must not throw on
-   *  the served path. So a producer that draws 400 segments while claiming `drawnRoutes: 399`
-   *  renders a false sentence and nothing here catches it. #105 and #109 own that assertion;
-   *  both compute `drawnRoutes` as `min(total, cap)`. */
-  drawnRoutes: number;
+   *  THE DRAWN COUNT IS NOT AN INPUT. It is `lines.length` -- what the renderer actually drew
+   *  after filtering self-segments. An earlier revision took it from the caller, and the two
+   *  numbers could then contradict each other inside ONE `aria-label`: "1 route drawn as
+   *  great-circle arcs ... 2 of 10 routes drawn." That is the compound-claim failure CLAUDE.md
+   *  records for `/watch/new-routes`, where each clause has to be re-derived rather than
+   *  triaged by how true it sounds. Deriving it closes the gap by construction instead of by
+   *  contract, and `totalRoutes` still comes from the caller, so #105's capped-count mutant
+   *  stays killable. */
   totalRoutes: number;
   /** Routes the producer could not draw because every filing behind them was quarantined --
-   *  excluded from `drawnRoutes` and `totalRoutes` alike, so without this field they vanish
+   *  excluded from `totalRoutes` and from the drawn count alike, so without this field they vanish
    *  from the map entirely: not an arc, not a row in any count, no trace that anything was
    *  there. Measured (#105): 34 such groups over the trailing 12, and every one of them
    *  PERFORMED DEPARTURES -- quarantined `zero_seats`, a passenger aircraft that flew and filed
    *  zero seats. Two views have no map at all for this reason.
    *
    *  CLAUDE.md: quarantined rows are "excluded from aggregates but surfaced in the UI with
-   *  count + reason. Showing the dirt is a trust feature." Optional, so the hub path -- which
-   *  has no equivalent field -- is untouched. */
-  quarantinedRoutes?: number;
+   *  count + reason. Showing the dirt is a trust feature."
+   *
+   *  REQUIRED, not optional. A producer written against an optional field compiles, renders,
+   *  and silently omits the disclosure -- which is the exact failure the field exists to
+   *  prevent. A compile error in #105/#109 is loud; a missing sentence is not. The hub path
+   *  never sees this interface, so requiring it costs `renderNetworkMap` nothing. */
+  quarantinedRoutes: number;
   /** Optional caption under the window line -- the diff map's per-panel label. */
   title?: string;
   /** Seats from rows whose two endpoints are the SAME airport. Such a row can never be an arc
    *  -- its great circle has zero angular length -- but its seats must still reach the reader,
    *  or the map's own stated total falls out of step with the stat strip above it on the page.
-   *  Optional because a producer that filed none passes nothing; `NetworkMapInput` carries the
-   *  same field as a required scalar for the same reason (see its own doc for the measurement).
    *
-   *  A same-airport pair is NOT counted in `drawnRoutes` or `totalRoutes` -- it is not one of
-   *  the routes, and the producer excludes it from both. That is why this map's note cannot
+   *  REQUIRED, for the reason `NetworkMapInput` makes it required: a producer that leaves it
+   *  off an optional field compiles and silently drops the disclosure, which is precisely what
+   *  the field exists to prevent. Pass `0` to say "none", explicitly.
+   *
+   *  A same-airport pair is NOT counted in `totalRoutes`, and the renderer's own drawn count
+   *  excludes it by construction (`drawableSegments`) -- it is not one of the routes. That is why this map's note cannot
    *  borrow the hub map's "included in this total" wording: there is no total on this map face
    *  that carries these seats, and stating them here is the only place they surface at all.
    *
    *  Measured for the point-to-point maps (#105): 598,829 same-airport seats across 759
    *  carrier x aircraft-type groups over the trailing 12. Dropping them silently in the
    *  generalization would have lost an honesty property the hub map already had. */
-  sameAirportSeats?: number;
+  sameAirportSeats: number;
   basemapPaths?: string;
 }
 
@@ -254,7 +259,7 @@ export function sameAirportNote(seats: number, total: SameAirportTotal): string 
  * rows excluded from these totals, never clamped"). A map has no reason-code gutter to put the
  * reason in, so it goes inline. "Never clamped" is load-bearing, not decoration: the alternative
  * to quarantining a `load_factor > 1.0` row is clamping it, which this project refuses. */
-export function quarantinedNote(routes: number): string | null {
+function quarantinedNote(routes: number): string | null {
   return routes > 0
     ? `${routes.toLocaleString("en-US")} quarantined route${routes === 1 ? "" : "s"} not drawn — failed an invariant, never clamped.`
     : null;
@@ -443,22 +448,42 @@ export function panelsFor(points: GeoPoint[]): Panel[] {
 }
 
 /**
- * Every panel this network's own endpoints land in, normalized across the antimeridian exactly
- * as `fitPanels`/`project` require. Drives which panels' coastline `basemapPathsFor` is asked
- * for -- a page must not ship the Pacific or Caribbean outline when nothing in its own network
- * reaches either.
+ * Every panel this network's DRAWN endpoints land in, normalized across the antimeridian
+ * exactly as `fitPanels`/`project` require. Drives which panels' coastline `basemapPathsFor` is
+ * asked for -- a page must not ship the Pacific or Caribbean outline when nothing in its own
+ * network reaches either.
  *
- * Counts BOTH endpoints of EVERY segment, self-segments included. A self-segment draws no arc
- * (its great circle has zero length) but its airport is genuinely part of the network, and the
- * asymmetry is deliberate: a coastline drawn under a panel with no marks on it is scenery,
- * while a MISSING coastline under a drawn arc reads as a rendering defect.
+ * SELF-SEGMENTS ARE EXCLUDED, via the same `drawableSegments` the renderer filters through, so
+ * that this function and `renderSegmentMap` answer the identical question. They did not always:
+ * this counted every endpoint while the renderer fitted only drawable ones, and a panel reached
+ * ONLY by a self-segment then got a coastline from this function and no inset frame or label
+ * from the renderer. `[SEA->PDX, HNL->HNL]` drew Hawai'i's landmass with no "HAWAI'I" frame
+ * around it -- an unframed, unlabelled landmass, against the rule `INSETS` states ten lines
+ * above: an inset that isn't labelled is a lie. Worse downstream, a component copying
+ * `NetworkMap.tsx`'s `pacHasNoBasemap` condition would caption "The Pacific inset has no
+ * coastline under its arcs" on a map drawing no Pacific inset and no arcs there.
+ *
+ * The invariant to keep: this returns EXACTLY the panels `renderSegmentMap` fits and frames for
+ * the same segments -- never a superset, never a subset.
+ *
+ * This is not the hub map's problem, and `networkPanels` does not share the filter: a hub
+ * self-arc carries the ORIGIN's own coordinates, so its panel is already in the set. The
+ * generalization introduced this one by giving a self-segment two endpoints that need not be
+ * anywhere near the rest of the network.
  */
 export function reachedPanelsFor(segments: SegmentDatum[]): Panel[] {
+  return panelsFor(fitPointsOf(drawableSegments(segments)));
+}
+
+/** Both endpoints of every segment given, as bare `GeoPoint`s -- the `fitPanels` input. One
+ * copy, so `reachedPanelsFor` and `renderSegmentMap` cannot drift on what "the map's points"
+ * means. */
+function fitPointsOf(segments: SegmentDatum[]): GeoPoint[] {
   const points: GeoPoint[] = [];
   for (const s of segments) {
     points.push({ lat: s.from.lat, lon: s.from.lon }, { lat: s.to.lat, lon: s.to.lon });
   }
-  return panelsFor(points);
+  return points;
 }
 
 /** The segments that actually become arcs. A row whose two endpoints are the same airport has
@@ -571,20 +596,19 @@ export function renderSegmentMap(input: SegmentMapInput): string {
       .map((n) => n.code),
   );
 
-  const points: GeoPoint[] = [];
-  for (const s of lines) {
-    points.push({ lat: s.from.lat, lon: s.from.lon }, { lat: s.to.lat, lon: s.to.lon });
-  }
+  const points = fitPointsOf(lines);
 
   // The disclosure states the two counts and makes no claim about WHICH routes were drawn --
   // the renderer is not told the ranking the producer capped on, and inventing one ("the
   // heaviest N") would be a claim it cannot support.
+  // ...and its first number is `lines.length`, the same quantity `arcsSentence` reports, so one
+  // aria-label can never carry two counts of one thing.
   const disclosure =
-    input.drawnRoutes < input.totalRoutes
-      ? `${input.drawnRoutes.toLocaleString("en-US")} of ${input.totalRoutes.toLocaleString("en-US")} routes drawn.`
+    lines.length < input.totalRoutes
+      ? `${lines.length.toLocaleString("en-US")} of ${input.totalRoutes.toLocaleString("en-US")} routes drawn.`
       : null;
-  const note = sameAirportNote(input.sameAirportSeats ?? 0, "excluded");
-  const quarantined = quarantinedNote(input.quarantinedRoutes ?? 0);
+  const note = sameAirportNote(input.sameAirportSeats, "excluded");
+  const quarantined = quarantinedNote(input.quarantinedRoutes);
 
   // Order: what window, then what was capped, then what could not be drawn, then what is not an
   // arc at all -- widest claim first, each one narrowing what the reader is looking at.
@@ -617,5 +641,7 @@ export function renderSegmentMap(input: SegmentMapInput): string {
   });
 }
 
-export type { MapPlan, NodeMark, FooterLine };
+// `NodeMark` and `renderMapCore` are what `networkMap.ts` builds on. `MapPlan` and
+// `FooterLine` stay module-private: nothing outside this file constructs one by name.
+export type { NodeMark };
 export { renderMapCore };
