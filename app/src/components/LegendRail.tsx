@@ -19,10 +19,14 @@ import { BY_AIRCRAFT_TYPE, type MixDimension } from "@/lib/chart/aircraftMix";
  * reader how to read the thing next to it. Defaulted, so `/explore`, `/route`, `/airport` and
  * `/carrier` are untouched.
  *
- * `map` is the M7 counterpart, opt-in for the same reason: `/airport/<code>` is the only page
- * that draws the network map, and the final whole-branch review found this group entirely
- * missing -- the map encodes three independent facts (stroke width by seats, dash by load
- * factor, dotted/muted by the departure floor) that nothing else on the served page explains. */
+ * `map` is the M7 counterpart, opt-in for the same reason: three pages draw a map and the rest
+ * do not. `/airport/<code>` draws a hub network, `/carrier/<code>` a point-to-point network for
+ * one aircraft type, and `/aircraft/<name>` the same for one carrier -- `/carrier` also carries
+ * the diff map's three panels, covered by the same rail. Opt-in because the map encodes three
+ * independent facts (stroke width by seats, dash by load factor, dotted/muted by the departure
+ * floor) that nothing else on a served page explains, and a page without a map must not claim
+ * them. The wording is deliberately route-scoped rather than destination-scoped: on every one
+ * of these maps an arc is a ROUTE, which is true of the hub map too. */
 export function LegendRail({
   fleetMix = false,
   stack = BY_AIRCRAFT_TYPE,

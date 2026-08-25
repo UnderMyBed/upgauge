@@ -1412,6 +1412,60 @@ check_re  "aircraft?carrier: the 308 preserves the filter, not just the slug" "$
   "^[Ll]ocation: $(re_escape '/aircraft/B737-8?carrier=DL')$"
 check     "aircraft?carrier: the 308 keeps the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
+# 12c. #108: the /aircraft network map itself -- what 12b's header checks cannot see. Every check
+#      above this block reads a Cache-Control; a page can carry the right header and still draw
+#      the wrong map, or none. These read the BODY.
+#
+#      Needles are the bytes React EMITS, not the bytes the source contains. Nothing here carries
+#      an apostrophe, an entity or an angle-bracketed pair for that reason: `check_not` on a JSX
+#      string containing `&rsquo;` has printed a silent `ok` in this file before, because JSX
+#      decodes entities at compile time and React emits raw U+2019.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8")
+check     "aircraft: unfiltered renders the picker"          "$BODY" 'data-testid="map-picker"'
+# The map query needs BOTH a carrier and a type, so the unfiltered page issues none at all.
+check_not "aircraft: unfiltered draws no arcs"               "$BODY" 'data-testid="segment-map"'
+check     "aircraft: unfiltered says what the picker is for" "$BODY" 'Pick a carrier to draw the routes'
+# THE FILTER VOCABULARY, in the served bytes. `?carrier=` resolves CODES and refuses ids, so an
+# href built from the raw `airline_id` is live, looks deliberate, and is refused at the far end.
+check     "aircraft: the picker links a carrier CODE"        "$BODY" 'href="/aircraft/B737-8?carrier=WN"'
+check_not "aircraft: ...never the raw AIRLINE_ID"            "$BODY" 'carrier=19393'
+# Nothing to clear on the page a reader arrives at first.
+check_not "aircraft: unfiltered offers no clear-filter link" "$BODY" '>Clear the filter</a>'
+
+# WN files more B737-8 pairs than the 400-arc cap (1,318 measured over the trailing 12 to
+# 2026-05), so this view states the cap. The count is a PATTERN: a BTS refresh moves it.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8?carrier=WN")
+check     "aircraft?carrier=WN: draws the map"               "$BODY" 'data-testid="segment-map"'
+check     "aircraft?carrier=WN: the map SVG is in the served HTML" "$BODY" 'aria-label="Route map, '
+check_re  "aircraft?carrier=WN: states the cap it hit"       "$BODY" '400 of [0-9,]+ routes drawn\.'
+check     "aircraft?carrier=WN: says the filter scopes to the map" "$BODY" 'The filter applies to the map only'
+check     "aircraft?carrier=WN: offers the way back"         "$BODY" '<a href="/aircraft/B737-8">Clear the filter</a>'
+# The arc encodings reach the rail, which is the only thing on the page that explains them.
+check     "aircraft?carrier=WN: the rail explains the arcs"  "$BODY" 'Arc rendering'
+
+# AS files 325 pairs on the same type -- UNDER the cap, and with no quarantined or same-airport
+# group either, so this view states NOTHING. A cap note rendered unconditionally reads "325 of
+# 325 routes drawn." here and looks entirely plausible, which is why the pair is on one page.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8?carrier=AS")
+check     "aircraft?carrier=AS: draws the map"               "$BODY" 'data-testid="segment-map"'
+check_not "aircraft?carrier=AS: states no cap it did not hit" "$BODY" 'routes drawn.'
+
+# THE ONE CHECK NO UNIT TEST CAN MAKE, and the reason this block exists. `%57%4E` percent-decodes
+# to `WN`. `proxy.ts` admits `?carrier=` on the RAW bytes and refuses this spelling (12b's
+# `%44L` block proves the header side), so the page must refuse it too -- reading the value off
+# `searchParams`, which Next hands over already decoded, would draw WN's map under a URL this
+# server rejected and no unit test could see it, because no unit test crosses Next's decoding.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8?carrier=%57%4E")
+check_not "aircraft?carrier=%57%4E: a percent-spelling draws NO map" "$BODY" 'data-testid="segment-map"'
+check     "aircraft?carrier=%57%4E: ...and names which way it failed" "$BODY" 'without percent-encoding'
+
+# Every holder NAMED, none chosen. The two Pan Am rows are byte-identical by name, so the
+# airline_id is what makes the list legible rather than the same string twice.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8?carrier=PA")
+check_not "aircraft?carrier=PA: refuses to pick a holder"    "$BODY" 'data-testid="segment-map"'
+check     "aircraft?carrier=PA: names the unrelated holder"  "$BODY" 'Florida Coastal Airlines (airline_id 20389)'
+check     "aircraft?carrier=PA: ...and both Pan Am eras"     "$BODY" 'Pan American World Airways (airline_id 20386)'
+
 for U in /airport/SEA /airport/ATL /airport/ORD /carrier/DL /aircraft/B737-8; do
   printf '  note %8s bytes of HTML for %s\n' "$(curl -s --max-time 30 "${BASE}${U}" | wc -c)" "$U"
 done
