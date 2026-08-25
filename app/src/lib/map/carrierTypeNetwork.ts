@@ -46,9 +46,9 @@ export interface DrawableView {
   /** Seats on same-airport groups that passed the floor -- kept out of `routes`, disclosed by
    * the renderer's footer rather than dropped. */
   sameAirportSeats: number;
-  /** Groups whose every filing was quarantined, so their sums are NULL. Not drawable, but the
-   * carrier DID serve them, so they belong in the denominator and in the disclosure -- never
-   * dropped without trace. */
+  /** Groups whose every filing was quarantined, so their sums are NULL. Not drawable, and NOT
+   * in `totalRoutes` -- they are their own disjoint category with their own sentence, never
+   * folded into the drawable denominator (A5b). Surfaced, never dropped without trace. */
   quarantinedRoutes: number;
 }
 
@@ -347,8 +347,13 @@ export async function fetchCarrierTypeNetwork(
   // What DOES return null: nothing filed in the window, and the case where everything filed was
   // genuinely never flown (no view on today's data is only that, so this arm is stated for the
   // case rather than left to chance -- the empty-window test drives the branch itself).
-  const totalRoutes = routes.length + quarantinedRoutes;
-  if (totalRoutes === 0 && sameAirportSeats === 0) return null;
+  // The null rule names all THREE categories explicitly, and must keep doing so. It used to
+  // read `totalRoutes === 0 && sameAirportSeats === 0`, which was only correct while
+  // `totalRoutes` carried the quarantined count (amendment A5). Under A5b it no longer does, so
+  // that spelling would send `F4` x `489` -- three pairs, every filing quarantined, nothing
+  // drawable -- back to returning null, undoing the whole reason `quarantinedRoutes` exists.
+  const totalRoutes = routes.length;
+  if (totalRoutes === 0 && quarantinedRoutes === 0 && sameAirportSeats === 0) return null;
 
   const drawn = routes.slice(0, limit);
   const coords = await fetchCoords([
@@ -390,11 +395,16 @@ export async function fetchCarrierTypeNetwork(
   return {
     segments,
     window: `${timeFrom} → ${timeTo}`,
-    // The TRUE count before the cap, which is the whole reason this file fetches past it, PLUS
-    // the pairs excluded as quarantined -- the carrier served those, so the denominator has to
-    // describe the network it actually served. Returning `segments.length` makes the disclosure
-    // read "400 of 400"; omitting the quarantined pairs makes it describe a smaller network
-    // than the one on file.
+    // The TRUE count of DRAWABLE routes before the cap, which is the whole reason this file
+    // fetches past it. Returning `segments.length` makes the disclosure read "400 of 400".
+    //
+    // Quarantined pairs are NOT in here (amendment A5b, correcting A5). `totalRoutes - drawn`
+    // has to be purely the routes the cap elided, every one of them genuinely smaller, or the
+    // sentence built from it mixes two unrelated exclusions and becomes false -- on `8V` x
+    // `035`, "14 smaller routes are not drawn" about 14 pairs that are quarantined, not
+    // smaller. Three disjoint categories, three sentences, no arithmetic across them:
+    // `totalRoutes` counts what is drawable, `quarantinedRoutes` gets its own, and
+    // `sameAirportSeats` gets its own.
     totalRoutes,
     sameAirportSeats,
     quarantinedRoutes,

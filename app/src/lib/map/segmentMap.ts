@@ -67,9 +67,12 @@ export interface SegmentMapInput {
    *  such groups carrying 598,829 seats. */
   sameAirportSeats?: number;
   /** Route pairs excluded because EVERY filing on them was quarantined, so their measure sums
-   *  are NULL rather than zero. Counted in `totalRoutes` -- the carrier did serve them -- and
+   *  are NULL rather than zero. Excluded from `totalRoutes` and from the drawn count alike, and
    *  kept out of `segments`, because an arc drawn from a NULL sum would be a fabricated
-   *  measurement. Rendered beside `sameAirportSeats`, never silently dropped: quarantined rows
+   *  measurement. Its own disjoint category with its own sentence: folding it into the drawable
+   *  denominator makes `totalRoutes - drawn` mix two unrelated exclusions, so a disclosure built
+   *  on that difference calls quarantined pairs "smaller routes" (A5b).
+   *  Rendered beside `sameAirportSeats`, never silently dropped: quarantined rows
    *  are excluded from aggregates but surfaced with a count, and showing the dirt is a trust
    *  feature (CLAUDE.md).
    *

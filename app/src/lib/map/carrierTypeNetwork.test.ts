@@ -232,17 +232,24 @@ describe("fetchCarrierTypeNetwork, against the warehouse", () => {
     expect(codes).not.toContain("MSP-SLC");
   });
 
-  it("surfaces quarantined pairs in the denominator instead of dropping them", async () => {
-    // 8V x 035: 33 grouped pairs -- 15 drawable, 14 fully quarantined, 1 same-airport carrying
-    // 3 seats, 3 filed-and-never-flown. The carrier SERVED 29 of them, so a denominator of 15
-    // describes a smaller network than the one on file and says nothing about the 14 whose
-    // filings were all quarantined. Excluded from aggregates, surfaced with a count.
+  it("surfaces quarantined pairs in their own count, NOT in the drawable denominator", async () => {
+    // 8V x 035 is the view that carries all four categories at once: 33 grouped pairs = 15
+    // drawable + 14 fully quarantined + 1 same-airport carrying 3 seats + 3 filed-and-never-
+    // flown. Re-derived under A5b, not adjusted to fit: `totalRoutes` counts the 15.
+    //
+    // The 14 get their own field and their own sentence. Folding them into `totalRoutes` (which
+    // A5 briefly required, and which this test asserted as 29) makes `totalRoutes - drawn` mix
+    // two unrelated exclusions, so the disclosure built on that difference describes 14
+    // quarantined pairs as "smaller routes are not drawn". They are not smaller; they are
+    // untrustworthy, and they flew.
     const result = await fetchCarrierTypeNetwork(B8V, "035", FROM, TO);
     expect(result).not.toBeNull();
     expect(result!.segments).toHaveLength(15);
+    expect(result!.totalRoutes).toBe(15);
     expect(result!.quarantinedRoutes).toBe(14);
-    expect(result!.totalRoutes).toBe(29);
     expect(result!.sameAirportSeats).toBe(3);
+    // The three categories are disjoint, so nothing is double-counted and nothing is lost.
+    expect(drawableSegments(result!.segments)).toHaveLength(result!.totalRoutes);
     for (const s of result!.segments) expect(s.from.code).not.toBe(s.to.code);
   });
 
@@ -255,7 +262,11 @@ describe("fetchCarrierTypeNetwork, against the warehouse", () => {
     expect(result!.segments).toHaveLength(0);
     expect(drawableSegments(result!.segments)).toHaveLength(0);
     expect(result!.quarantinedRoutes).toBe(3);
-    expect(result!.totalRoutes).toBe(3);
+    // Zero DRAWABLE routes, and that is the honest number under A5b -- the map draws nothing and
+    // says why. This is also the view that pins the null rule to all three categories: while
+    // `totalRoutes` carried the quarantined count, `totalRoutes === 0` was enough to gate on,
+    // and taking them out would have sent this view back to returning null.
+    expect(result!.totalRoutes).toBe(0);
   });
 
   it("still renders a map for a view that is nothing but a same-airport filing", async () => {
