@@ -12,6 +12,12 @@ import { aircraftSlugFromPath, resolveAircraftSlug, AIRCRAFT_PREFIX } from "@/li
 import { presetSlugFromPath, presetBySlug } from "@/lib/watch";
 import { parseYear } from "@/lib/year";
 import { decodeRequest } from "@/lib/pivot/bounds";
+import {
+  rawFilterValue,
+  resolveCarrierFilter,
+  resolveTypeFilter,
+  type MapFilter,
+} from "@/lib/map/mapFilter";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
 
 // `proxy`, not `middleware`: Next 16 deprecated and renamed the convention
@@ -433,6 +439,55 @@ export async function proxy(request: NextRequest) {
     response.headers.set("Cache-Control", entityOk && yearOk ? HTML_CACHE : NO_STORE);
     return response;
   }
+  // #106. `/carrier/:code?type=<aircraft slug>` and `/aircraft/:name?carrier=<code>` filter each
+  // page's network map to one entity. Same SHAPE as the `/airport` branch directly above -- a
+  // second cacheability input the generic `isCacheable(entity, slug)` call has no slot for, which
+  // is why both pages come OUT of `ENTITY_ROUTES` (see that table's own comment; `/route`, which
+  // gained no key, stays in). It is NOT the same KIND of second input, and the difference is the
+  // whole risk of this branch: `parseYear` answers from a regex and a range with no database read
+  // at all, while these two values name ENTITIES, so admitting one requires resolving it. That
+  // makes these the first query keys here that cost a query -- paid ONLY when the key is present,
+  // so an unfiltered request and every crawler hit pay exactly what they paid before. The
+  // alternative, a structural bound alone, makes an unresolvable filter a long-cached 200:
+  // `/carrier/DL?type=NOPE-1` would render DL's ordinary unfiltered page under `HTML_CACHE`, once
+  // per spelling. `lib/map/mapFilter.ts` carries the full argument and the measured bounds.
+  //
+  // BOTH BRANCHES MUST SIT BELOW THE `OG_ROUTES` LOOP, for the reason that loop's own comment
+  // gives: every entity slug reader is a bare prefix test that does not stop at one segment, so
+  // `carrierSlugFromPath("/carrier/DL/opengraph-image")` is `"DL/opengraph-image"`, not null -- and
+  // these branches RETURN, so from above the loop every carrier and aircraft card would be
+  // answered by resolving that whole string as a slug. The OG loop returns first; branch order
+  // here is load-bearing, not cosmetic.
+  //
+  // The value is read from the RAW query bytes, never `new URLSearchParams(rawQuery).get(...)` --
+  // the `/airport` branch above uses that form and it PERCENT-DECODES, so `y=%3201%39` arrives as
+  // `"2019"` and `/airport/SEA?y=%32019` is a distinct CDN key for a byte-identical page. That is
+  // pre-existing, bounded for a four-digit year, and deliberately NOT fixed here; these keys carry
+  // textual values whose percent-spelling family is far larger, so they take `bounds.ts`'s
+  // raw-bytes shape instead (`mapFilter.ts`'s `rawFilterValue`).
+  //
+  // Cacheability is an AND of TWO ALLOW-LISTS, never a negation -- CLAUDE.md's `ENTITY_ROUTES`
+  // rule, restated for the second input exactly as the `/airport` branch restates it. The slug
+  // must resolve to `ok` or `redirect` (`isCacheable`, unchanged) AND the filter must be `none`
+  // (absent) or `ok` (`isFilterCacheable`). `unknown` and `ambiguous` both decline, and a fifth
+  // `MapFilter` kind added later declines by default rather than being cached by omission.
+  const carrierSlug = carrierSlugFromPath(pathname);
+  if (carrierSlug !== null) {
+    const entityOk = await isCacheable({ resolve: resolveCarrier }, carrierSlug);
+    const filterOk = await isFilterCacheable(resolveTypeFilter, rawFilterValue(rawQuery, "type"));
+    response.headers.set("Cache-Control", entityOk && filterOk ? HTML_CACHE : NO_STORE);
+    return response;
+  }
+  const aircraftSlug = aircraftSlugFromPath(pathname);
+  if (aircraftSlug !== null) {
+    const entityOk = await isCacheable({ resolve: resolveAircraftSlug }, aircraftSlug);
+    const filterOk = await isFilterCacheable(
+      resolveCarrierFilter,
+      rawFilterValue(rawQuery, "carrier"),
+    );
+    response.headers.set("Cache-Control", entityOk && filterOk ? HTML_CACHE : NO_STORE);
+    return response;
+  }
   for (const entity of ENTITY_ROUTES) {
     const slug = entity.slugFromPath(pathname);
     if (slug === null) continue;
@@ -601,14 +656,24 @@ async function isFreshnessReadable(): Promise<boolean> {
  * has no slot for. Its own `if` branch runs BEFORE this loop and returns early, so `/airport`
  * requests never reach the code below at all -- `airportSlugFromPath` and
  * `resolveAirportCode` are still imported and still used, just from that branch instead of
- * from a row here. */
+ * from a row here.
+ *
+ * #106 pulled `/carrier/:code` and `/aircraft/:name` out for the SAME reason and by the same
+ * mechanism -- each gained a map-filter query key (`type` and `carrier`), a second
+ * cacheability input with no slot here -- which leaves this table with ONE row. That is not a
+ * table wearing out: `/route/:pair` is the only entity page whose cacheability is still
+ * answered by its slug alone, and the shape this table expresses (`slugFromPath` + `resolve`,
+ * one input, one verdict) is exactly the shape it still has. Three of the four rows moved to
+ * their own branches because their PAGES grew a second input, not because the abstraction was
+ * wrong -- and `OG_ROUTES` below still carries all four entities, because a card takes no
+ * query at all. Do NOT collapse this into an inline `if` for `/route`: the failure it defends
+ * against is a future entity page whose author copies three lines out of four, and a table
+ * with one row still shows that author the shape. */
 const ENTITY_ROUTES: ReadonlyArray<{
   slugFromPath: (pathname: string) => string | null;
   resolve: (slug: string) => Promise<{ kind: string }>;
 }> = [
   { slugFromPath: routeSlugFromPath, resolve: resolveRoutePair },
-  { slugFromPath: carrierSlugFromPath, resolve: resolveCarrier },
-  { slugFromPath: aircraftSlugFromPath, resolve: resolveAircraftSlug },
 ];
 
 /** The same table for the four OG card routes -- ALL FOUR entities, `/airport` included.
@@ -715,8 +780,45 @@ async function isCacheable(
   }
 }
 
-/** The HTML page routes' Cache-Control -- `/explore`, every `ENTITY_ROUTES` page, and (M6 Task
- * 7) `/watch` plus every `/watch/:preset` -- and ONLY those. `/watch`'s pages belong here for
+/** The same allow-list discipline as `isCacheable` above, for the SECOND cacheability input the
+ * `/carrier` and `/aircraft` branches carry (#106) -- a map filter naming an entity.
+ *
+ * Two cacheable outcomes and only two: `none` (no filter key on the request -- the page's
+ * ordinary unfiltered view, exactly as cacheable as it has always been) and `ok` (the value
+ * resolved to one entity). `unknown` and `ambiguous` decline, and an outcome added to
+ * `MapFilter` later declines by default -- the identical "new outcome? decline by default"
+ * property `isCacheable`'s own comment argues for, and for the identical reason: a `!==
+ * "unknown"` negation would make `/carrier/DL?type=CE-180` -- a value naming TWO real BTS
+ * airframes -- a long-cached 200 for a filter the server refuses to apply.
+ *
+ * THE TRY/CATCH IS HERE, IN THE PROBE, NOT IN `proxy()`'s BODY, and that placement is the whole
+ * reason this wrapper exists rather than an inline `.kind === "ok"` test. `mapFilter.ts`'s
+ * resolvers are total over malformed INPUT but deliberately propagate a real database failure
+ * -- swallowing that there would turn a broken warehouse into a confident "no such carrier" on
+ * the page. Here the swallow is right, for the reason `isCacheable` already states: a transient
+ * DuckDB failure inside a PROXY would decline a request the page might well still serve, and
+ * declining the cache costs a cache miss rather than a wrong answer pinned for an hour. Nothing
+ * is hidden -- the page runs the same resolution unguarded and still fails loudly.
+ *
+ * A generic over the resolver rather than two functions: the carrier filter resolves to a
+ * numeric `AIRLINE_ID` and the type filter to a zero-padded string BTS code (CLAUDE.md's
+ * hard rule -- `036` becomes `36` if int-parsed), so `MapFilter` is generic in its id and this
+ * probe must not collapse the two. It reads only `kind`, which both share. */
+async function isFilterCacheable(
+  resolve: (raw: string | null) => Promise<MapFilter>,
+  raw: string | null,
+): Promise<boolean> {
+  try {
+    const { kind } = await resolve(raw);
+    return kind === "none" || kind === "ok";
+  } catch {
+    return false;
+  }
+}
+
+/** The HTML page routes' Cache-Control -- `/explore`, all four entity pages (whether answered
+ * by an `ENTITY_ROUTES` row or by their own branch), the four OG cards, and (M6 Task 7)
+ * `/watch` plus every `/watch/:preset` -- and ONLY those. `/watch`'s pages belong here for
  * the identical reason `/explore` does: each preset page reads live `mart_route_health` state
  * per request (`WatchPresetView`'s `runPreset()`), not a fixed catalog query the way
  * `/sitemap.xml`/`robots.txt` do, so it carries the same per-request-resolution risk this
@@ -779,12 +881,19 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // exists to enforce rather than becoming the one silent exception.
 //
 // THIS LIST AND `ENTITY_ROUTES` (plus `OG_ROUTES`, which owns the four `opengraph-image`
-// entries) MUST AGREE, with the one carved-out exception each of
-// `/airport/:code` and `/watch`/`/watch/:preset` already is: those pathnames stay in THIS list
-// (the matcher) but have their own `if` branch above rather than a row in `ENTITY_ROUTES`,
-// because each has a cacheability question the generic table can't express (a live
-// `mart_route_health` read for `/watch`; the `y` query param for `/airport`, M7 Task 9). Absent
-// their own branch OR their matcher entry, the same two failure modes below still apply. A row
+// entries) MUST AGREE -- but `ENTITY_ROUTES` IS NO LONGER THE MAIN MECHANISM, and an author
+// adding a fifth entity page must not read it as one. There are now FOUR carve-outs:
+// `/airport/:code` (the `y` query param, M7 Task 9), `/carrier/:code` and `/aircraft/:name`
+// (the `type`/`carrier` map filters, #106), and `/watch`/`/watch/:preset` (a live
+// `mart_route_health` read). Each stays in THIS list but has its own `if` branch above rather
+// than a row in `ENTITY_ROUTES`, because each has a cacheability question the generic table
+// cannot express -- the table's `isCacheable(entity, slug)` has exactly ONE input slot.
+// `/route/:pair` is the only row left in it.
+//
+// So the rule for a new page is: a matcher entry HERE, always -- plus EITHER an `ENTITY_ROUTES`
+// row (if the slug is its only cacheability input) OR its own branch (if anything else feeds
+// the decision). Absent a matcher entry, or absent both of those, the same two failure modes
+// below still apply. A row
 // here without a row (or branch) there ships an entity page that is long-cached on its 404s; a
 // row there without a row here ships a page with no Cache-Control at all AND turns each of its
 // 404s into a 500 (`not-found.tsx` throws `MissingRawPathError` when the pathname header is

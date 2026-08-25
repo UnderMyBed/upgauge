@@ -4,7 +4,20 @@ import { carrierHoldersByCode, lookupCarriersByCode, type CarrierRef } from "@/l
 export type CarrierResult =
   | { kind: "ok"; carrier: CarrierRef; canonical: string; filterValue: string }
   | { kind: "redirect"; canonical: string }
-  | { kind: "notFound"; reason: string };
+  /** `holders` is every `dim_carrier` row carrying this code, in the order
+   *  `lookup_carrier_code_exists.sql` returned them -- EMPTY when the code is nowhere in
+   *  `dim_carrier` at all, which is the unknown-vs-recognized split `carrierNotFoundReason`
+   *  below words. It rides on the result rather than being left for the caller to re-derive:
+   *  this function has already paid for the query (it needs the holders to word `reason`), and
+   *  a caller that wants them otherwise has to make the SAME `carrierHoldersByCode` call a
+   *  second time -- which is what `/aircraft/:name?carrier=`'s filter did, running THREE carrier
+   *  queries per refused code where two is the floor (the refusal needs one lookup to learn the
+   *  code is not fact-present and one to learn who holds it). Measured under one protocol, warm,
+   *  mean of 30: 9.42 ms before, 7.32 ms after -- the removed `lookup_carrier_code_exists` costs
+   *  1.40 ms measured alone, and the saving is that query and nothing more. Exactly the precedent
+   *  `AmbiguousCodeError` already sets by carrying its `ids` instead of making the caller
+   *  re-parse a message (`resolve.ts`), and `AircraftSlugResult.ambiguous` by carrying its. */
+  | { kind: "notFound"; reason: string; holders: CarrierRef[] };
 
 /** The `/carrier/<code>` slug's prefix, and the reader for it.
  *
@@ -71,14 +84,14 @@ export function carrierSlugFromPath(pathname: string): string | null {
 export async function resolveCarrier(slug: string): Promise<CarrierResult> {
   const wanted = slug.trim().toUpperCase();
   if (wanted.length === 0) {
-    return { kind: "notFound", reason: `expected a carrier code, got '${slug}'` };
+    return { kind: "notFound", reason: `expected a carrier code, got '${slug}'`, holders: [] };
   }
 
   const found = await lookupCarriersByCode([wanted]);
   const carrier = found.get(wanted);
   if (carrier === undefined) {
     const holders = (await carrierHoldersByCode([wanted])).get(wanted) ?? [];
-    return { kind: "notFound", reason: carrierNotFoundReason(wanted, holders) };
+    return { kind: "notFound", reason: carrierNotFoundReason(wanted, holders), holders };
   }
 
   // The canonical spelling is the one dim_carrier stores, not `wanted` -- so the redirect

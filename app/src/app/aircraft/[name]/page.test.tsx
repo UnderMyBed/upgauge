@@ -1,7 +1,30 @@
 // @vitest-environment jsdom
+
+// `next/headers` throws "called outside a request scope" when invoked directly in a test -- the
+// same reason `/airport`'s page test carries this identical mock, and for the identical cause:
+// #106 gave this page's REDIRECT branch a `headers()` call, so that the raw query survives the
+// case-normalization 308 instead of being silently dropped. That branch is already exercised by
+// the pre-existing lowercase-redirect test below, so the module has to be mocked rather than
+// left real. The factory awaits a dynamic `import()` for `RAW_QUERY_HEADER` -- a top-level
+// import binding referenced inside `vi.mock` would break on hoisting, since `vi.mock` calls are
+// hoisted above every import statement in the file.
+import { vi } from "vitest";
+vi.mock("next/headers", async () => {
+  const { RAW_QUERY_HEADER } = await import("@/lib/rawQuery");
+  // Default: an empty raw query, matching a bare request with no `?` at all -- which is what
+  // keeps every PRE-EXISTING test in this file (none of which anticipated `headers()` being
+  // called) passing unmodified, including the lowercase-redirect digest, which must stay exactly
+  // the bare canonical path with no stray `?`.
+  return { headers: vi.fn(async () => new Headers({ [RAW_QUERY_HEADER]: "" })) };
+});
 import { describe, expect, it } from "vitest";
+import { headers } from "next/headers";
+import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { render, screen } from "@testing-library/react";
-import AircraftPage, { generateMetadata } from "@/app/aircraft/[name]/page";
+import AircraftPage, {
+  aircraftRedirectTarget,
+  generateMetadata,
+} from "@/app/aircraft/[name]/page";
 import { decode } from "@/lib/pivot/urlstate";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
 
@@ -157,6 +180,46 @@ describe("/aircraft/<slug> for a zero-padded BTS code", () => {
 });
 
 describe("/aircraft/<slug> redirect and 404", () => {
+  // #106. This redirect used to build `/aircraft/B737-8` from the slug alone, silently dropping
+  // every query key -- so `/aircraft/b737-8?carrier=DL` would have 308ed to `/aircraft/B737-8` with the
+  // filter gone entirely, and the destination would have rendered the unfiltered view with no
+  // error anywhere. The identical measured bug `/airport` fixed with `airportRedirectTarget`.
+  //
+  // Asserting the digest STRING, not merely that a redirect fired: "a redirect happened" is true
+  // both before and after the fix, so the test immediately below would keep passing under the
+  // bug. The string is what discriminates.
+  it("preserves a filter query across the case-normalization redirect", async () => {
+    vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: "carrier=DL" }));
+    expect(await catchDigest("b737-8")).toBe(
+      "NEXT_REDIRECT;replace;/aircraft/B737-8?carrier=DL;308;",
+    );
+  });
+
+  it("preserves an UNRESOLVABLE filter across the same redirect, rather than dropping it", async () => {
+    // A redirect that stripped a bad filter would be the same silent-fallback bug in a different
+    // coat: the canonical URL must reach the same refusal the direct URL does -- `no-store` from
+    // proxy.ts, and (once #107/#108 land the page surface) a named error -- not quietly render
+    // the unfiltered view because the redirect erased the evidence anything was wrong.
+    vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: "carrier=ZZ" }));
+    expect(await catchDigest("b737-8")).toBe(
+      "NEXT_REDIRECT;replace;/aircraft/B737-8?carrier=ZZ;308;",
+    );
+  });
+
+  it("appends nothing for an empty raw query, rather than a stray '?'", () => {
+    // The bare-request case, and the reason the helper tests the LENGTH rather than appending
+    // unconditionally: every pre-existing redirect on this page carries no query at all.
+    expect(aircraftRedirectTarget("B737-8", "")).toBe("/aircraft/B737-8");
+    expect(aircraftRedirectTarget("B737-8", "carrier=DL")).toBe("/aircraft/B737-8?carrier=DL");
+  });
+
+  it("passes the raw query through VERBATIM, without re-encoding it", () => {
+    // Reassembling a query from decoded params is the corruption `lib/rawQuery.ts`'s header
+    // exists to prevent -- a `,` inside a value becomes indistinguishable from a separator. This
+    // helper concatenates bytes and must never normalize them.
+    expect(aircraftRedirectTarget("B737-8", "carrier=%42%37")).toBe("/aircraft/B737-8?carrier=%42%37");
+  });
+
   it("redirects a lower-case slug permanently (308) to the canonical URL", async () => {
     // Fails if the redirect branch is dropped, if `permanentRedirect` regresses to plain
     // `redirect()` (digest would end ';307;'), or if the target carries the raw short name --
