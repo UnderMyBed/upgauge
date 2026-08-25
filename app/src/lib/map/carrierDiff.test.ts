@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { DIFF_CATEGORIES, fetchCarrierDiff, type CarrierDiff } from "./carrierDiff";
+import {
+  DIFF_CATEGORIES,
+  fetchCarrierDiff,
+  type CarrierDiff,
+  type CarrierDiffResult,
+} from "./carrierDiff";
 import { DEPARTURE_FLOOR } from "./arcs";
 
 // Live-database tests, not fixtures, for the reason lib/resolve.ts's header gives: this codebase
@@ -12,14 +17,15 @@ const WN = 19393; // Southwest -- 13 downgauged routes tied at its panel maximum
 const MQ = 20398; // Envoy -- 317 added routes tied at exactly 76 seats across the 400th row
 const WRIGHT = 20333; // 8V -- owns 16 of the 25 wholly-quarantined windows in this span
 const ZW = 20046; // Air Wisconsin -- 92 dropped, 0 added, 0 downgauged
+const AIR_FLAMENCO = 21615; // F4 -- 3 wholly-quarantined-window routes and ZERO drawable arcs
 const VIRGIN_AMERICA = 21171; // dormant since 2018: nothing in either window
 const FOUR_W = 20323; // 4W -- downgauged panel UNDER the cap, and averaging moves it 10 -> 5
 const AA = 19805; // American -- downgauged panel over the cap, and its first ten reorder if
                   // `gauge_fall` (the RANKING key) is averaged rather than a ratio of sums
 const AS_OF = "2026-05";
 
-function panel(diffs: CarrierDiff[], category: string): CarrierDiff {
-  const found = diffs.find((d) => d.category === category);
+function panel(panels: CarrierDiff[], category: string): CarrierDiff {
+  const found = panels.find((d) => d.category === category);
   if (found === undefined) throw new Error(`no ${category} panel`);
   return found;
 }
@@ -43,7 +49,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // `p.category`, which is ALPHABETICAL -- it emits added, downgauged, dropped, and measured,
     // that is exactly what AS comes back as before this module reorders. A set assertion cannot
     // fail here; the ORDERING is the property.
-    const diffs = await fetchCarrierDiff(AS, AS_OF);
+    const diffs = (await fetchCarrierDiff(AS, AS_OF)).panels;
     expect(diffs.map((d) => d.category)).toEqual(["added", "dropped", "downgauged"]);
   });
 
@@ -52,7 +58,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // exclusion clause -- e.g. `dropped` selecting on flew_p12 alone, which would put every
     // continuing downgauged route in the dropped panel too. AS is the subject because all three
     // of its panels sit under the cap, so a duplicate cannot be hidden by truncation.
-    const diffs = await fetchCarrierDiff(AS, AS_OF);
+    const diffs = (await fetchCarrierDiff(AS, AS_OF)).panels;
     const all = diffs.flatMap(pairs);
     expect(all.length).toBeGreaterThan(0);
     expect(new Set(all).size).toBe(all.length);
@@ -65,7 +71,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // The non-emptiness assertion is written FIRST and explicitly: a test whose only assertion
     // is a count would pass vacuously against an empty result, which is the failure this whole
     // task exists to avoid.
-    const diffs = await fetchCarrierDiff(AS, AS_OF);
+    const diffs = (await fetchCarrierDiff(AS, AS_OF)).panels;
     const dropped = panel(diffs, "dropped");
     expect(dropped.map.segments.length).toBeGreaterThan(0);
     expect(dropped.map.segments).toHaveLength(138);
@@ -77,7 +83,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // trailing window, so under that bug its seats are NULL and its window line names months in
     // which the carrier did not fly it. Measured: 108,110 seats over 619 performed departures in
     // 2024-06..2025-05.
-    const dropped = panel(await fetchCarrierDiff(AS, AS_OF), "dropped");
+    const dropped = panel((await fetchCarrierDiff(AS, AS_OF)).panels, "dropped");
     expect(dropped.window).toBe("2024-06 → 2025-05");
     expect(dropped.map.window).toBe("2024-06 → 2025-05");
     const top = dropped.map.segments[0];
@@ -89,7 +95,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
   it("gives added and downgauged the TRAILING window", async () => {
     // The other half of the same mutant: a single window applied to all three panels. Added and
     // dropped must differ, or the small multiple is three views of one window.
-    const diffs = await fetchCarrierDiff(AS, AS_OF);
+    const diffs = (await fetchCarrierDiff(AS, AS_OF)).panels;
     expect(panel(diffs, "added").window).toBe("2025-06 → 2026-05");
     expect(panel(diffs, "downgauged").window).toBe("2025-06 → 2026-05");
     expect(panel(diffs, "added").window).not.toBe(panel(diffs, "dropped").window);
@@ -105,7 +111,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // sub-30-departure arc dotted and muted, so if one panel were floored at 30 that "barely
     // flown" encoding would be reachable in the other panels only, and a VISUAL difference would
     // read as a DATA difference.
-    const diffs = await fetchCarrierDiff(AS, AS_OF);
+    const diffs = (await fetchCarrierDiff(AS, AS_OF)).panels;
     expect(diffs.map((d) => d.map.segments.length)).toEqual([225, 138, 128]);
     for (const diff of diffs) {
       const departures = diff.map.segments.map((s) => s.departures);
@@ -118,7 +124,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // Catches: totalRoutes = segments.length, which makes the disclosure line read "400 of 400"
     // and silently truncates. Measured: SkyWest added 1,624 carrier-routes in the trailing window
     // and the map draws the top 400 by seats.
-    const added = panel(await fetchCarrierDiff(OO, AS_OF), "added");
+    const added = panel((await fetchCarrierDiff(OO, AS_OF)).panels, "added");
     expect(added.map.totalRoutes).toBe(1624);
     expect(added.map.segments).toHaveLength(400);
   });
@@ -134,7 +140,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // 8V's dropped panel ties ANV-KYU and KGX-NUL at 6 seats over 1 and 2 departures; ranked on
     // seats then airport id, ANV-KYU (id 10990) comes first, and only a departures term reverses
     // that.
-    const dropped = panel(await fetchCarrierDiff(WRIGHT, AS_OF), "dropped");
+    const dropped = panel((await fetchCarrierDiff(WRIGHT, AS_OF)).panels, "dropped");
     const codes = pairs(dropped);
     const anv = codes.indexOf("ANV-KYU");
     const kgx = codes.indexOf("KGX-NUL");
@@ -157,7 +163,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // This asserts the POSITION of the cut -- the identity of the last five drawn routes -- and
     // not the set, because at a 317-way tie the set of stroke widths is identical under either
     // ordering. Same shape as networkMap's draw-order test.
-    const added = panel(await fetchCarrierDiff(MQ, AS_OF), "added");
+    const added = panel((await fetchCarrierDiff(MQ, AS_OF)).panels, "added");
     expect(added.map.totalRoutes).toBe(548);
     expect(pairs(added).slice(-5)).toEqual([
       "MEM-TPA",
@@ -175,7 +181,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // nothing". Under a coalesce, 8V BTI-VEE (trailing window wholly quarantined, prior window
     // real) becomes a fabricated DROPPED route, and 8V KAL-TAL (prior window wholly quarantined,
     // trailing window real) becomes a fabricated ADDED one.
-    const diffs = await fetchCarrierDiff(WRIGHT, AS_OF);
+    const diffs = (await fetchCarrierDiff(WRIGHT, AS_OF)).panels;
     const all = diffs.flatMap(pairs);
     expect(all.length).toBeGreaterThan(0); // anti-vacuity: absence must not pass on an empty result
     expect(all).not.toContain("BTI-VEE");
@@ -187,24 +193,28 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // the 66 carriers with any change have at least one empty category. ZW dropped 92
     // carrier-routes and added none. A caller rendering a fixed three-panel layout must handle
     // this; that consequence belongs to #110.
-    const diffs = await fetchCarrierDiff(ZW, AS_OF);
+    const diffs = (await fetchCarrierDiff(ZW, AS_OF)).panels;
     expect(diffs.map((d) => d.category)).toEqual(["dropped"]);
     expect(diffs[0].map.segments).toHaveLength(92);
   });
 
-  it("returns nothing at all for a carrier with no filings in either window", async () => {
-    // Virgin America, dormant since 2018 -- the same fixture sitemap lastmod uses. No panel, no
-    // empty panel, and no throw.
-    expect(await fetchCarrierDiff(VIRGIN_AMERICA, AS_OF)).toEqual([]);
+  it("returns no panels, and an honest zero, for a carrier with no filings in either window", async () => {
+    // Virgin America, dormant since 2018 -- the same fixture sitemap lastmod uses. No panel and
+    // no empty panel, but still a record: the carrier-wide count is part of the answer even when
+    // there is nothing to draw, which is why this is not an array.
+    expect(await fetchCarrierDiff(VIRGIN_AMERICA, AS_OF)).toEqual({
+      panels: [],
+      quarantinedRoutes: 0,
+    });
   });
 
-  it("does NOT check asOf for a carrier with no categorized routes, and that is the contract", async () => {
-    // The month the guard compares against is read off the query's own rows, so a carrier with
-    // no rows never reaches it -- 67 of the 114 codes sitemap_carriers.sql emits. Pinned rather
-    // than left to be discovered: the failure the guard prevents is a window line disagreeing
-    // with the DATA AS OF badge, and a carrier with no panel renders no window line. If this
-    // ever becomes unconditional, this test is the one that must be deleted deliberately.
-    expect(await fetchCarrierDiff(VIRGIN_AMERICA, "1999-01")).toEqual([]);
+  it("checks asOf even for a carrier with no drawable arc", async () => {
+    // This asserts the OPPOSITE of what it did before the query grew its anchor row, and the
+    // change is the point. The month was read off an arc row, so the guard silently did not run
+    // for the 48 of 114 carrier codes that have no arc -- a caller asking for a window this query
+    // does not serve was told `[]` rather than refused. The anchor row always exists, so the
+    // guard always runs.
+    await expect(fetchCarrierDiff(VIRGIN_AMERICA, "1999-01")).rejects.toThrow("1999-01");
   });
 
   it("refuses an asOf the fact table does not agree with, naming both months", async () => {
@@ -219,16 +229,16 @@ describe("fetchCarrierDiff, against the warehouse", () => {
 
   it("CUTS the downgauged panel by gauge fall, not by seats", async () => {
     // THE BUG THIS EXISTS FOR, and it is not the one the next test covers. The ranking key appears
-    // in TWO independent clauses: the QUALIFY's window ORDER BY, which decides WHICH 400 routes
-    // survive, and the final ORDER BY, which decides the order they arrive in. The round-1 defect
-    // was in the CUT. Reverting only the QUALIFY to `p.seats DESC` -- leaving the display order on
-    // rank_key -- reproduces that defect verbatim, and every ordering assertion in this file still
-    // passes, because AS's downgauged panel is under the cap and its order is unchanged.
+    // in TWO independent clauses -- a QUALIFY deciding WHICH 400 survive and a final ORDER BY
+    // deciding the order they arrive in -- and the round-1 defect was in the CUT. Reverting only
+    // the QUALIFY reproduced it verbatim while every ordering assertion here still passed, because
+    // AS's downgauged panel is under the cap and its order was unchanged. The query now computes
+    // `rn` ONCE so the two cannot diverge; this test is what would catch the split coming back.
     //
     // So this asserts the cut, on a CAPPED panel, through quantities the payload actually emits.
     // Measured on OO's 584-route downgauged panel: 176 of the drawn 400 differ between the two
     // cuts, and each of these two numbers alone is a kill.
-    const dg = panel(await fetchCarrierDiff(OO, AS_OF), "downgauged");
+    const dg = panel((await fetchCarrierDiff(OO, AS_OF)).panels, "downgauged");
     expect(dg.map.segments).toHaveLength(400);
     // A fall-cut panel reaches down to 50-seat routes; a seats-cut one stops at 272.
     expect(Math.min(...dg.map.segments.map((s) => s.seats))).toBe(50);
@@ -241,7 +251,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // Without `rankedBy` nothing downstream holds a fall value: #110 cannot state the ranked
     // quantity in an aria-label, and the ordering is checkable only by inferring it from
     // position. It must also be monotone with the order it explains.
-    const dg = panel(await fetchCarrierDiff(OO, AS_OF), "downgauged");
+    const dg = panel((await fetchCarrierDiff(OO, AS_OF)).panels, "downgauged");
     const falls = dg.map.segments.map((s) => s.rankedBy);
     expect(falls[0]).toBeCloseTo(26.0, 6);
     expect(falls.every((f) => typeof f === "number")).toBe(true);
@@ -250,7 +260,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     }
     // Null on the panels that rank on a field the segment already carries.
     for (const cat of ["added", "dropped"] as const) {
-      const other = panel(await fetchCarrierDiff(OO, AS_OF), cat);
+      const other = panel((await fetchCarrierDiff(OO, AS_OF)).panels, cat);
       expect(other.map.segments.every((s) => s.rankedBy === null)).toBe(true);
     }
   });
@@ -264,7 +274,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     //
     // AS's downgauged panel is under the cap, so nothing is cut and the ORDER is the observable
     // -- which is the point: the two keys disagree about the leader by a factor of ~8.
-    const dg = panel(await fetchCarrierDiff(AS, AS_OF), "downgauged");
+    const dg = panel((await fetchCarrierDiff(AS, AS_OF)).panels, "downgauged");
     expect(pairs(dg)[0]).toBe("KOA-OGG");
     const seatsLeader = [...dg.map.segments].sort((a, b) => b.seats - a.seats)[0];
     expect(`${seatsLeader.from.code}-${seatsLeader.to.code}`).toBe("SEA-SFO");
@@ -279,11 +289,11 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // It MUST assert totalRoutes, not segments.length: OO's downgauged panel is over the cap, so
     // segments.length is 400 under BOTH forms and cannot tell them apart. Measured: 584 correct,
     // 590 averaged. AS is useless here for the same reason in reverse -- 128 under both.
-    const oo = panel(await fetchCarrierDiff(OO, AS_OF), "downgauged");
+    const oo = panel((await fetchCarrierDiff(OO, AS_OF)).panels, "downgauged");
     expect(oo.map.totalRoutes).toBe(584);
     // 4W confirms it on an UNCAPPED panel, so the kill does not rest on a capped panel's
     // arithmetic: 10 correct, 5 averaged, and here segments.length moves too.
-    const fourW = panel(await fetchCarrierDiff(FOUR_W, AS_OF), "downgauged");
+    const fourW = panel((await fetchCarrierDiff(FOUR_W, AS_OF)).panels, "downgauged");
     expect(fourW.map.totalRoutes).toBe(10);
     expect(fourW.map.segments).toHaveLength(10);
   });
@@ -294,7 +304,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // decides the panel's RANKING, and averaging only THAT leaves every count in this file
     // identical while moving 34 routes into and out of AA's drawn 400 and reordering its first
     // ten. No count assertion anywhere can see it; only the ORDER can.
-    const aa = panel(await fetchCarrierDiff(AA, AS_OF), "downgauged");
+    const aa = panel((await fetchCarrierDiff(AA, AS_OF)).panels, "downgauged");
     expect(aa.map.totalRoutes).toBe(442);
     // AA's panel is CAPPED, so this order is a property of the cut as well as of the sort --
     // stated because the two clauses are separable and only naming both keeps that true.
@@ -320,23 +330,23 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // BDL-STL (1) to JAN-MCI (2).
     //
     // The scoping is pinned by the next test, not by this one.
-    const oo = panel(await fetchCarrierDiff(OO, AS_OF), "downgauged");
+    const oo = panel((await fetchCarrierDiff(OO, AS_OF)).panels, "downgauged");
     expect(pairs(oo)[0]).toBe("ATW-SBN");
     expect(oo.map.segments[0].departures).toBe(4);
-    const wn = panel(await fetchCarrierDiff(WN, AS_OF), "downgauged");
+    const wn = panel((await fetchCarrierDiff(WN, AS_OF)).panels, "downgauged");
     expect(pairs(wn)[0]).toBe("JAN-MCI");
   });
 
   it("cuts each panel exactly where its own pre-cap total and the cap say it should", async () => {
     // `drawnRoutes` came OFF the interface in A6 -- the renderer derives the drawn count from
     // `drawableSegments`. The invariant is still asserted here, where both halves are knowable:
-    // the SQL's QUALIFY cut and the window function's pre-cap count must imply each other, or
+    // the SQL's `rn <= $cap` cut and the window function's pre-cap count must imply each other, or
     // the "N of M" disclosure rests on a cut nobody can reproduce. Kills mutant 12b, an
     // off-by-one between `<= $cap` and this arithmetic.
-    const as = await fetchCarrierDiff(AS, AS_OF);
+    const as = (await fetchCarrierDiff(AS, AS_OF)).panels;
     expect(as.map((d) => d.map.segments.length)).toEqual([225, 138, 128]);
     for (const d of as) expect(d.map.totalRoutes).toBe(d.map.segments.length);
-    const oo = await fetchCarrierDiff(OO, AS_OF);
+    const oo = (await fetchCarrierDiff(OO, AS_OF)).panels;
     for (const d of oo) {
       expect(d.map.segments).toHaveLength(400);
       expect(d.map.totalRoutes).toBeGreaterThan(400);
@@ -348,12 +358,12 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // -- but its seats must still reach the reader (segmentMap.ts owns that contract). Measured
     // for OO: 6,042 added, 4,508 dropped, 286,713 downgauged -- in DIFF_CATEGORIES order, which
     // is NOT the query's alphabetical one.
-    const oo = await fetchCarrierDiff(OO, AS_OF);
+    const oo = (await fetchCarrierDiff(OO, AS_OF)).panels;
     expect(oo.map((d) => d.map.sameAirportSeats)).toEqual([6042, 4508, 286713]);
     // An explicit 0, never an omitted field, for a carrier that filed none -- the contract says
     // to say "none" out loud, because an omitted optional disclosure is the failure the field
     // exists to prevent. AS files no same-airport pair in any category.
-    for (const d of await fetchCarrierDiff(AS, AS_OF)) {
+    for (const d of (await fetchCarrierDiff(AS, AS_OF)).panels) {
       expect(d.map.sameAirportSeats).toBe(0);
     }
   });
@@ -361,20 +371,36 @@ describe("fetchCarrierDiff, against the warehouse", () => {
   it("counts the routes no category could reach because a window was wholly quarantined", async () => {
     // Without this they vanish: not an arc, not in any total, no trace anything was there.
     // 8V owns 16 of the 25 such carrier-routes in the span -- BTI-VEE and KAL-TAL among them,
-    // which the test above proves are in no panel. AS has none, so the field is 0 rather than a
-    // number carried over from another carrier.
-    for (const d of await fetchCarrierDiff(WRIGHT, AS_OF)) {
-      expect(d.map.quarantinedRoutes).toBe(16);
-    }
-    for (const d of await fetchCarrierDiff(AS, AS_OF)) {
-      expect(d.map.quarantinedRoutes).toBe(0);
-    }
+    // which the test above proves are in no panel.
+    //
+    // It is CARRIER-WIDE, so it belongs to the record and not to a panel. Stated on each panel
+    // instead -- which is what an earlier revision did to satisfy SegmentMapInput's required
+    // field -- 8V's three panels each said 16, the same 16, and a reader summing the small
+    // multiple got 48. Each panel now says 0, which is true of it: no route OF THAT CATEGORY went
+    // undrawn, because an undrawable route has no category at all.
+    const wright = await fetchCarrierDiff(WRIGHT, AS_OF);
+    expect(wright.quarantinedRoutes).toBe(16);
+    expect(wright.panels).toHaveLength(3);
+    for (const d of wright.panels) expect(d.map.quarantinedRoutes).toBe(0);
+
+    const as = await fetchCarrierDiff(AS, AS_OF);
+    expect(as.quarantinedRoutes).toBe(0);
+  });
+
+  it("still reports quarantined routes for a carrier that has no drawable arc at all", async () => {
+    // THE CASE THE RECORD EXISTS FOR. F4 has 3 wholly-quarantined-window carrier-routes and zero
+    // arcs, so while this function returned an array the count was lost on the floor -- the exact
+    // "no trace" the field prevents -- and there was nothing for a page-level disclosure to be
+    // built FROM, which meant deferring it foreclosed the remedy in the one case that needed it.
+    const f4 = await fetchCarrierDiff(AIR_FLAMENCO, AS_OF);
+    expect(f4.panels).toEqual([]);
+    expect(f4.quarantinedRoutes).toBe(3);
   });
 
   it("carries a load factor computed as a ratio of sums, never averaged", async () => {
     // Every segment's loadFactor comes from SUM(passengers) / NULLIF(SUM(seats), 0) over the
     // panel's own window. Measured: AS HNL-ITO is 0.7824 over 480,681 seats.
-    const added = panel(await fetchCarrierDiff(AS, AS_OF), "added");
+    const added = panel((await fetchCarrierDiff(AS, AS_OF)).panels, "added");
     const top = added.map.segments[0];
     expect(`${top.from.code}-${top.to.code}`).toBe("HNL-ITO");
     expect(top.seats).toBe(480681);

@@ -48,8 +48,15 @@ export interface SegmentDatum {
    *  an `aria-label` and no consumer test can check the ordering except by inferring it from row
    *  position, which is the "looks plausible and encodes nothing" trap CLAUDE.md names.
    *
-   *  `null`/absent where the panel ranks on a field it already carries -- added and dropped rank
-   *  on `seats`. Absence, never 0: 0 is a route whose gauge did not move. */
+   *  OPTIONAL, and the obligation is a rule rather than something to infer from that: a producer
+   *  whose panel ranks on a quantity NOT among the fields above MUST supply it. Absent means
+   *  exactly "this panel ranks on a field it already carries" -- added and dropped rank on
+   *  `seats` -- which is why it is not required the way `quarantinedRoutes` and `sameAirportSeats`
+   *  are. Those two are always meaningful, so an absent value is always a lost disclosure;
+   *  requiring this one would force an explicit `null` onto every segment of every seats-ranked
+   *  map to express nothing at all.
+   *
+   *  Absence, never 0: 0 is a route whose ranked quantity did not move. */
   rankedBy?: number | null;
 }
 

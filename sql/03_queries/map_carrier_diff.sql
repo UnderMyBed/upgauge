@@ -140,8 +140,9 @@
 --
 --    IT HAS TWO CONSUMERS, and they fail differently. The category CASE decides MEMBERSHIP, and
 --    averaging there moves the counts above. `gauge_fall` decides the downgauged panel's RANKING,
---    and averaging only THAT leaves every count identical while moving 17-26 routes into or out
---    of each over-cap panel's drawn 400 -- 34 on AA, whose first ten reorder. A test asserting
+--    and averaging only THAT leaves every count identical while replacing routes in every
+--    over-cap panel's drawn 400 -- 26 of OO's, 19 of WN's, 17 each of DL's and AA's, so 52/38/34/34
+--    routes change places counting both directions. AA's first ten reorder. A test asserting
 --    only counts cannot see the second one; carrierDiff.test.ts asserts AA's leading order for
 --    exactly that reason.
 --
@@ -227,8 +228,10 @@
 -- departures and AA's is BOS-STL at one.
 --
 -- The volume term in the ORDER BY below does NOT address this and is not claimed to. Measured on
--- all four panels, it moves ZERO routes into or out of the drawn 400 -- gauge fall is continuous,
--- so it only ever decides exact ties. What it does fix is which of a tied set leads: OO's leader
+-- all four panels, it moves ZERO routes into or out of the drawn 400: it breaks exact ties only,
+-- and no over-cap panel has one at its cut. (NOT because fall is continuous -- 125 of OO's 584
+-- falls are whole numbers. The ties are at the panel MAXIMUM; see the tiebreak section.) What it
+-- does fix is which of a tied set leads: OO's leader
 -- moves from ACV-FAT (1 departure) to ATW-SBN (4), and WN's from BDL-STL (1) to JAN-MCI (2).
 --
 -- IT HELPS EXACTLY HALF THE AFFECTED PANELS, and nothing here should let a reader think
@@ -265,7 +268,10 @@
 -- 8V's dropped panel ANV-KYU and KGX-NUL both file 6 seats over 1 and 2 departures, and an
 -- unscoped term would swap them. So the scope is kept for the same reason the id tiebreak is
 -- kept -- "no reorder at the cut today" is a property of this month's data, not of the query --
--- and carrierDiff.test.ts pins that interior ordering so un-scoping it goes red.
+-- and carrierDiff.test.ts pins that interior ordering, on 8V, so a whole-term un-scoping goes red.
+-- That coverage claim is bounded on purpose: the term is written ONCE now (see `ranked` below),
+-- so there is no second copy to edit independently -- which is what an earlier two-clause version
+-- had, where un-scoping one copy was a semantic no-op no data-driven test could have caught.
 --
 -- THE TIEBREAK. The ranking ORDER BY carries route_key_low, route_key_high after rank_key
 -- because 10 of the 14 over-cap panels have a tie sitting exactly on the cut -- every added and
@@ -279,8 +285,9 @@
 -- tie and the worst is 17-way. That is what the volume term above addresses; the id terms remain
 -- the final total order, because the triple is unique within a (carrier, category).
 --
--- category_total is count(*) OVER (PARTITION BY category), computed BEFORE the QUALIFY filters,
--- so it is the TRUE pre-cap count and cannot be the capped one. Returning the capped count is
+-- category_total is count(*) OVER (PARTITION BY category), computed in `ranked` over the full
+-- partition BEFORE `rn <= $cap` filters it, so it is the TRUE pre-cap count and cannot be the
+-- capped one. Returning the capped count is
 -- the mutant #105 exists to kill; here it is unwritable.
 --
 -- ============================================================================================
@@ -302,8 +309,9 @@
 -- KNOWN GAP, stated rather than papered over: for 5 (carrier, category) pairs the ONLY member is
 -- a same-airport pair. There are no arcs, so no panel is emitted, so those seats reach no map
 -- face at all. Emitting an arc-less panel to carry them would be a worse trade -- it would put
--- an empty map on the page - and the alternative is a page-level disclosure that is #110's to
--- make, not this query's.
+-- an empty map on the page. Unlike the quarantine count above, these seats are per CATEGORY, so
+-- they have nowhere to go on a record that carries no panel for their category; this one stays a
+-- disclosure for #110 to make from the carrier's own totals.
 --
 -- Issue #109 and the wave-1 plan both quote per-carrier figures that INCLUDE same-airport pairs.
 -- The figures this file produces, which are the ones page copy must use:
@@ -352,8 +360,15 @@
 -- count has somewhere to live. This query renders THREE panels, and an undrawable route has NO
 -- CATEGORY by construction -- that is what being undrawable means here -- so there is no panel it
 -- belongs to and inventing one would put an empty map face on the page under a category label
--- the data never supported. The count is carrier-wide, so it belongs to a page-level disclosure
--- for #110, which is where the per-face repetition below has to be solved anyway.
+-- the data never supported.
+--
+-- SO IT IS HOISTED OFF THE PANELS ENTIRELY. fetchCarrierDiff returns
+-- `{ panels, quarantinedRoutes }`, and the count rides on the record where a carrier-wide fact
+-- belongs. That fixes both disclosed defects at once: F4 gets its count with no panel to hang it
+-- on, and 8V stops stating the same 16 routes on three faces (a reader summing the small multiple
+-- got 48). Each panel now passes 0 for SegmentMapInput's required field, which is true of it --
+-- no route of THAT category went undrawn -- and renders no footer sentence, since
+-- segmentMap.ts's quarantinedNote returns null at 0.
 --
 -- A THIRD GROUP REACHES NO COUNT AT ALL, and this section would read as exhaustive without it:
 -- 2 carrier-routes are BOTH wholly quarantined AND same-airport. `undrawable_routes` carries
@@ -478,18 +493,54 @@ same_airport AS (
     WHERE is_same_airport
     GROUP BY category
 ),
--- Carrier-routes that reached no category because a window was wholly quarantined. A bare
--- aggregate with no GROUP BY, so this ALWAYS returns exactly one row -- the CROSS JOIN below
--- would annihilate the result set if it could return none.
-undrawable AS (
-    SELECT count(*) FILTER (
-        WHERE (flew_t12 IS NULL OR flew_p12 IS NULL)
-          AND route_key_low <> route_key_high)::BIGINT AS undrawable_routes
-    FROM flew
-),
 arcs AS (
     SELECT * FROM panel WHERE NOT is_same_airport
+),
+-- ONE window-function expression, computed ONCE, decides BOTH the cut (`rn <= $cap` below) and
+-- the display order (`ORDER BY rn`). It is written this way because the alternative already cost
+-- this unit a blocking round: the ranking key used to appear in a QUALIFY and again in a final
+-- ORDER BY, and reverting only the QUALIFY reproduced the original defect -- a panel cut by seats
+-- while displaying in fall order -- with every ordering test still green. Two clauses that must
+-- agree can disagree; one expression cannot. The same shape defeated two mutant scripts of this
+-- file, which edited one clause and not the other and so reported a passing gate.
+--
+-- Safe to compute before the dim_airport joins because those joins are provably 1:1 -- `is_latest`
+-- makes airport_id unique (0 airport_ids carry more than one is_latest row), so no join below can
+-- duplicate a row and change a count taken here.
+ranked AS (
+    SELECT
+        *,
+        row_number() OVER (
+            PARTITION BY category
+            ORDER BY rank_key DESC,
+                     CASE WHEN category = 'downgauged' THEN departures END DESC,
+                     route_key_low, route_key_high) AS rn,
+        count(*) OVER (PARTITION BY category)::BIGINT AS category_total
+    FROM arcs
+),
+-- EXACTLY ONE ROW, ALWAYS -- `windows` has one row and the scalar subquery is a bare aggregate.
+-- That is what makes the two carrier-wide facts below reachable even when the carrier has no
+-- drawable arc at all. F4 (21615) has 3 wholly-quarantined-window carrier-routes and zero arcs;
+-- before this anchor existed the query returned no rows for it and the count was lost on the
+-- floor -- the exact "no trace" it exists to prevent -- and there was nothing for a page-level
+-- disclosure to be built FROM, so deferring it foreclosed the remedy in the one case that needed
+-- it. `dataset_end_month` rides here for the same reason: read off an arc row it could only be
+-- checked when arcs existed, which left the asOf guard silently inactive on 48 of the 114 carrier
+-- codes.
+anchor AS (
+    SELECT
+        w.t12_end_month AS dataset_end_month,
+        (SELECT count(*) FILTER (
+             WHERE (flew_t12 IS NULL OR flew_p12 IS NULL)
+               AND route_key_low <> route_key_high)
+         FROM flew)::BIGINT AS undrawable_routes
+    FROM windows w
 )
+-- LEFT JOIN from the anchor, not FROM arcs: a carrier with no drawable arc still returns its one
+-- anchor row, with every arc column NULL. carrierDiff.ts distinguishes the two cases on
+-- `category IS NULL` -- which cannot collide with a data NULL, because `panel` already filtered
+-- `category IS NOT NULL`.
+--
 -- LEFT JOIN dim_airport, not INNER: an endpoint that fails to resolve returns NULL and
 -- carrierDiff.ts throws naming the airport_id, the same fail-loud airportNetwork.ts's toArcDatum
 -- has. An inner join would silently drop the arc and quietly disagree with category_total.
@@ -503,41 +554,28 @@ arcs AS (
 -- rounding between the ranking key and the emitted seats. Only the two COUNTS are cast, because
 -- count() is BIGINT and arrives as a JS bigint that demoteBigInts must convert.
 SELECT
-    p.category,
-    p.window_start_month,
-    p.window_end_month,
-    p.t12_end_month AS dataset_end_month,
-    p.route_key_low,
-    p.route_key_high,
+    a.dataset_end_month,
+    a.undrawable_routes,
+    r.category,
+    r.window_start_month,
+    r.window_end_month,
+    r.route_key_low,
+    r.route_key_high,
     lo.code AS from_code,
     lo.lat  AS from_lat,
     lo.lon  AS from_lon,
     hi.code AS to_code,
     hi.lat  AS to_lat,
     hi.lon  AS to_lon,
-    p.seats,
-    p.departures,
-    p.passengers / nullif(p.seats, 0) AS load_factor,
-    -- The downgauged panel's RANKING KEY, emitted per segment rather than left implicit in row
-    -- order. Without it nothing downstream carries a fall value: #110 could not put the ranked
-    -- quantity in an aria-label, and no consumer test could check the ordering except by
-    -- inferring it from position. NULL for added and dropped, which have no prior/trailing pair
-    -- to compare -- absence, not zero.
-    p.gauge_fall,
-    count(*) OVER (PARTITION BY p.category)::BIGINT AS category_total,
-    s.same_airport_seats,
-    u.undrawable_routes
-FROM arcs p
-LEFT JOIN same_airport s ON s.category = p.category
-CROSS JOIN undrawable u
-LEFT JOIN dim_airport lo ON lo.airport_id = p.route_key_low  AND lo.is_latest
-LEFT JOIN dim_airport hi ON hi.airport_id = p.route_key_high AND hi.is_latest
-QUALIFY row_number() OVER (
-    PARTITION BY p.category
-    ORDER BY p.rank_key DESC,
-             CASE WHEN p.category = 'downgauged' THEN p.departures END DESC,
-             p.route_key_low, p.route_key_high) <= $cap
-ORDER BY p.category,
-         p.rank_key DESC,
-         CASE WHEN p.category = 'downgauged' THEN p.departures END DESC,
-         p.route_key_low, p.route_key_high
+    r.seats,
+    r.departures,
+    r.passengers / nullif(r.seats, 0) AS load_factor,
+    r.gauge_fall,
+    r.category_total,
+    s.same_airport_seats
+FROM anchor a
+LEFT JOIN ranked r        ON r.rn <= $cap
+LEFT JOIN same_airport s  ON s.category = r.category
+LEFT JOIN dim_airport lo  ON lo.airport_id = r.route_key_low  AND lo.is_latest
+LEFT JOIN dim_airport hi  ON hi.airport_id = r.route_key_high AND hi.is_latest
+ORDER BY r.category, r.rn
