@@ -20,12 +20,13 @@ export const BASEMAP_PATHS: Record<Panel, string> = {
 
 /**
  * The fixed reference points every panel's coastline was fit to (raw lat/lon, 3 decimals,
- * matching app/geo/ne_110m_us.json's own precision). A per-page network map
- * (app/src/lib/map/networkMap.ts, M7 Task 8) must reuse `fitPanels(BASEMAP_FIT_POINTS)`
- * VERBATIM for any panel it has an entry for (us/ak/hi/pac/car/sam as of #111, since
- * ne_50m_car.json's and ne_50m_pac.json's points feed this same array) rather than re-deriving
- * one from its own subject points -- and must NOT union subject points into this array before
- * fitting (`fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])`, an earlier draft's wrong
+ * matching app/geo/ne_110m_us.json's own precision). A per-page map
+ * (app/src/lib/map/segmentMap.ts's `renderMapCore`) must reuse
+ * `fitPanels(BASEMAP_FIT_POINTS)` VERBATIM for any panel it has an entry for
+ * (us/ak/hi/pac/car/sam as of #111, since ne_50m_car.json's and ne_50m_pac.json's points feed
+ * this same array) rather than re-deriving one from its own subject points -- and must NOT
+ * union subject points into this array before fitting
+ * (`fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])`, an earlier draft's wrong
  * recommendation): a subject point outside this array's own extent changes fitPanels's
  * scale for every point, arcs and this already-baked coastline alike. See
  * build-basemap.mjs's header for the full reasoning. A panel with no entry here (`nwhi`

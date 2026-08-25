@@ -107,9 +107,6 @@ function pdxToHnlFixture(): NetworkMapInput {
   };
 }
 
-/** Same as pdxToHnlFixture, named for what it exercises here: the Hawai'i inset actually
- * getting drawn and labelled. */
-
 /** HNL -> ORD: the REVERSE of pdxToHnlFixture -- origin is the inset (Hawai'i), destination is
  * conterminous. Re-review finding 4's fixture: the straight line this draws crosses OUT of
  * HNL's own inset into the `us` panel, not "into an inset panel" the way PDX-HNL's does. A

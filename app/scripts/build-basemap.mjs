@@ -79,7 +79,7 @@
  * generated file. `basemapPathsFor` therefore takes no points at all: there is no
  * per-call fit, so the coastline provably cannot move between pages.
  *
- * A per-page network map (`app/src/lib/map/networkMap.ts`, M7 Task 8) must reuse `fitPanels(
+ * A per-page map (`app/src/lib/map/segmentMap.ts`'s `renderMapCore`) must reuse `fitPanels(
  * BASEMAP_FIT_POINTS)` VERBATIM -- identical input, identical output -- for any panel this
  * generator produced a fit for (us/ak/hi/pac/car/sam as of #111), and may fall back to a fit
  * derived from its own subject points ONLY for a panel with zero committed reference points
@@ -395,12 +395,13 @@ ${pathsLiteral}
 
 /**
  * The fixed reference points every panel's coastline was fit to (raw lat/lon, 3 decimals,
- * matching app/geo/ne_110m_us.json's own precision). A per-page network map
- * (app/src/lib/map/networkMap.ts, M7 Task 8) must reuse \`fitPanels(BASEMAP_FIT_POINTS)\`
- * VERBATIM for any panel it has an entry for (us/ak/hi/pac/car/sam as of #111, since
- * ne_50m_car.json's and ne_50m_pac.json's points feed this same array) rather than re-deriving
- * one from its own subject points -- and must NOT union subject points into this array before
- * fitting (\`fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])\`, an earlier draft's wrong
+ * matching app/geo/ne_110m_us.json's own precision). A per-page map
+ * (app/src/lib/map/segmentMap.ts's \`renderMapCore\`) must reuse
+ * \`fitPanels(BASEMAP_FIT_POINTS)\` VERBATIM for any panel it has an entry for
+ * (us/ak/hi/pac/car/sam as of #111, since ne_50m_car.json's and ne_50m_pac.json's points feed
+ * this same array) rather than re-deriving one from its own subject points -- and must NOT
+ * union subject points into this array before fitting
+ * (\`fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])\`, an earlier draft's wrong
  * recommendation): a subject point outside this array's own extent changes fitPanels's
  * scale for every point, arcs and this already-baked coastline alike. See
  * build-basemap.mjs's header for the full reasoning. A panel with no entry here (\`nwhi\`

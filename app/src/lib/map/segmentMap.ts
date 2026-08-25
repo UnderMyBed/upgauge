@@ -186,15 +186,15 @@ export const NETWORK_ARC_CAP = 400;
  * one that projected the coastline is exactly the misalignment this exists to prevent, so the
  * union recommendation reopens the bug it claims to close.
  *
- * The correct rule: for a panel `BASEMAP_FITS` has an entry for (us/ak/hi/car today -- Task 7b
- * added `ne_50m_car.json`'s Puerto Rico/USVI polygons, so `car` now has committed geometry too
- * and its reference points feed this same `fitPanels(BASEMAP_FIT_POINTS)` call), reuse that fit
- * VERBATIM -- identical input, identical output, so an arc and the coastline beneath it were
- * fit exactly once. For a panel with zero committed reference points (pac alone, as of Task
- * 7b -- no Guam/CNMI/American Samoa/Midway polygons at this scale, `build-basemap.mjs`'s
- * header), there is no coastline to align to, so a subject-derived fit is the legitimate,
- * documented fallback -- see the merge in `renderMapCore` below. An airport that then lands
- * slightly outside the simplified coastline renders slightly outside it; that is
+ * The correct rule: for a panel `BASEMAP_FITS` has an entry for (us/ak/hi/pac/car/sam -- every
+ * panel with committed geometry, and every one of their reference points feeds this same
+ * `fitPanels(BASEMAP_FIT_POINTS)` call), reuse that fit VERBATIM -- identical input, identical
+ * output, so an arc and the coastline beneath it were fit exactly once. For a panel with zero
+ * committed reference points (`nwhi` alone -- Natural Earth carries Midway only inside a
+ * feature that also spans the Caribbean, which `build-basemap.mjs` cannot split apart; its
+ * header records why), there is no coastline to align to, so a subject-derived fit is the
+ * legitimate, documented fallback -- see the merge in `renderMapCore` below. An airport that
+ * then lands slightly outside the simplified coastline renders slightly outside it; that is
  * geographically honest and must not be "fixed" by rescaling.
  */
 const BASEMAP_FITS: Map<Panel, PanelFit> = fitPanels(BASEMAP_FIT_POINTS);
@@ -418,7 +418,7 @@ interface MapPlan {
  */
 function renderMapCore(plan: MapPlan): string {
   // subjectFits decides WHICH panels this map reaches, and its own fit values are the FALLBACK
-  // for a panel with no committed basemap reference points -- `pac` alone today. For every
+  // for a panel with no committed basemap reference points -- `nwhi` (Midway) alone. For every
   // other panel the value actually projected with is BASEMAP_FITS's, the one the coastline was
   // baked against, never a fit re-derived from this one page's own endpoints. See
   // BASEMAP_FITS's own comment for why the naive union is wrong rather than merely different.
@@ -531,8 +531,8 @@ export function panelsFor(points: GeoPoint[]): Panel[] {
  * from the renderer. `[SEA->PDX, HNL->HNL]` drew Hawai'i's landmass with no "HAWAI'I" frame
  * around it -- an unframed, unlabelled landmass, against the rule `INSETS` states ten lines
  * above: an inset that isn't labelled is a lie. Worse downstream, a component copying
- * `NetworkMap.tsx`'s `pacHasNoBasemap` condition would caption "The Pacific inset has no
- * coastline under its arcs" on a map drawing no Pacific inset and no arcs there.
+ * `NetworkMap.tsx`'s `midwayHasNoBasemap` condition would caption "The Midway inset has no
+ * coastline under its arcs" on a map drawing no Midway inset and no arcs there.
  *
  * The invariant to keep: this returns EXACTLY the panels `renderSegmentMap` fits and frames for
  * the same segments -- never a superset, never a subset.

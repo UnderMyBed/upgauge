@@ -203,8 +203,9 @@ export async function fetchCarrierDiff(
   // widest drawn arc carries 367,195 -- three orders of magnitude more. (ATW-SBN's 50 is its seats
   // PER DEPARTURE, the unit the fall is measured in, not a seat count. An earlier revision of this
   // very comment confused the two -- in the comment whose own point is that anything writing "the
-  // biggest" about a panel must name which quantity.) `arcOrder` still imposes its own thinnest-first stroke order
-  // downstream; this order is the ranking, not the draw order.
+  // biggest" about a panel must name which quantity.) `segmentMap.ts`'s `segmentOrder` still
+  // imposes its own thinnest-first stroke order downstream; this order is the ranking, not the
+  // draw order.
   const byCategory = new Map<DiffCategory, DiffRow[]>();
   for (const row of rows) {
     // The anchor row carries the carrier-wide counts and no arc. It is the ONLY row that can have
