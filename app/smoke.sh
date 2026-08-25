@@ -1056,6 +1056,78 @@ check     "carrier 404: names the unrelated same-code holder" "$BODY" 'Florida C
 BODY=$(curl -s --max-time 15 "${BASE}/carrier/zz")
 check_re  "carrier 404: the SENTENCE carries the slug as typed" "$BODY" 'We can.{1,3}t show .{1,12}zz'
 
+# 11b. #106: /carrier/<code>?type=<aircraft slug>, the map filter -- and the cache-header split
+#      that only a served build can see. THE FIRST QUERY KEY ON THIS SITE WHOSE VALIDATION NEEDS A
+#      DATABASE READ. `?y=` above looks like the precedent and is not: `parseYear` is a regex plus
+#      a range and touches no database (lib/year.ts's own header says so), and #87 reads a type
+#      off the already-loaded catalog. Whether `B737-8` names anything is a fact about the
+#      WAREHOUSE, so the value is RESOLVED -- only when the key is present, so unfiltered requests
+#      and every crawler hit pay nothing.
+#
+#      Each block opens its OWN `HDRS=`, and every `check_not` is paired with a positive on the
+#      same headers: a `no-store`-everywhere regression would satisfy the negatives vacuously,
+#      which is exactly what the `?y=1999` pair above exists to prevent. Status is asserted as
+#      '200', never `check_not '500'` -- a dead server scores 000 and passes the negative form.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/carrier/DL?type=B737-8")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=B737-8")
+check     "carrier?type: a resolvable filter renders"                "$CODE" '200'
+check     "carrier?type: ...and keeps the project Cache-Control"     "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# MUTANT 1's target: an unresolvable filter must not be a CACHEABLE 200. Under a structural-bound-
+# only design this renders DL's ordinary unfiltered page under a one-hour shared cache, once per
+# spelling -- a distinct CDN entry for a filter that names nothing.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/carrier/DL?type=NOPE-1")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=NOPE-1")
+check     "carrier?type=NOPE-1: an unresolvable filter still renders" "$CODE" '200'
+check     "carrier?type=NOPE-1: ...but is no-store"                   "$HDRS" 'no-store'
+check_not "carrier?type=NOPE-1: ...and is never long-cached"          "$HDRS" 's-maxage'
+
+# MUTANTS 2 and 5's target. `CE-180` names BTS codes 030 (CESSNA 180) and 031 (CESSNA 180A/B),
+# both of which really flew -- so the filter is AMBIGUOUS, not unknown. Picking one is the
+# silent-pick failure `AUS` already cost this project once; a `!== "unknown"` predicate would
+# long-cache the page for a filter the server refuses to apply.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/carrier/DL?type=CE-180")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=CE-180")
+check     "carrier?type=CE-180: an ambiguous filter still renders"  "$CODE" '200'
+check     "carrier?type=CE-180: ...but is no-store"                 "$HDRS" 'no-store'
+check_not "carrier?type=CE-180: ...and is never long-cached"        "$HDRS" 's-maxage'
+
+# MUTANT 3's target, and the reason the value is read from RAW BYTES rather than through
+# URLSearchParams the way `?y=` is. `%42737-8` percent-DECODES to `B737-8`, a real type: under a
+# decoded-value bound this resolves and is long-cached, giving a byte-identical page a second CDN
+# key. That is the live `/airport/SEA?y=%32019` hole, which is pre-existing, bounded for a
+# four-digit year, and deliberately NOT fixed here -- these values are textual, so the family is
+# far larger.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/carrier/DL?type=%42737-8")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=%42737-8")
+check     "carrier?type=%42737-8: a percent-spelling still renders" "$CODE" '200'
+check     "carrier?type=%42737-8: ...but is no-store"               "$HDRS" 'no-store'
+check_not "carrier?type=%42737-8: ...and is never long-cached"      "$HDRS" 's-maxage'
+
+# One value, one spelling (lib/pivot/bounds.ts's LITERAL_KEYS rule). The path segment 308s on
+# case; a query VALUE has no redirect mechanism available to it, so refusing is the honest answer
+# -- and it is what makes the resolver's `redirect` outcome unreachable from the filter path.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/carrier/DL?type=b737-8")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=b737-8")
+check     "carrier?type=b737-8: a lower-case spelling still renders" "$CODE" '200'
+check     "carrier?type=b737-8: ...but is no-store"                  "$HDRS" 'no-store'
+check_not "carrier?type=b737-8: ...and is never long-cached"         "$HDRS" 's-maxage'
+
+# The 308 must carry the filter. This page built `/carrier/DL` from the slug alone until #106, so
+# `/carrier/dl?type=B737-8` 308ed to `/carrier/DL` with the filter gone and the destination
+# rendered the unfiltered view with no error anywhere -- the identical measured bug `/airport`
+# fixed with `airportRedirectTarget`. The Location is anchored with `$` through `re_escape`
+# against the MEASURED wire form (relative, not absolute -- measured on this served build, not
+# assumed from proxy.test.ts, which pins the pre-relativization value); a substring needle would
+# pass for `/carrier/DL` too, which is the bug.
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/dl?type=B737-8")
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/carrier/dl?type=B737-8")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check     "carrier?type: the case-redirect is a 308"                 "$CODE" '308'
+check_re  "carrier?type: the 308 preserves the filter, not just the code" "$LOC" \
+  "^[Ll]ocation: $(re_escape '/carrier/DL?type=B737-8')$"
+check     "carrier?type: the 308 keeps the project Cache-Control"    "$HDRS" "$HTML_CACHE_EXPECTED"
+
 # 12. /aircraft/<slug> -- the slug is not a key, and the chart stacks by carrier.
 BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8")
 check     "aircraft: renders the short name" "$BODY" '>B737-8<'
@@ -1149,6 +1221,53 @@ check_re  "aircraft 404: refuses to pick one"       "$BODY" 'We won.{1,3}t pick 
 # There is no fixed buffer here -- these bodies land in shell variables -- but the `grep -q`
 # hazard at the top of this file was invisible until a page crossed 64 KB, so the numbers are
 # kept where the next person will see them.
+# 12b. #106: /aircraft/<slug>?carrier=<code>, the mirror of 11b's filter on the other page. Same
+#      five-part discipline, same pairing rule, and the same reason it can only be seen here.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/B737-8?carrier=DL")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8?carrier=DL")
+check     "aircraft?carrier: a resolvable filter renders"            "$CODE" '200'
+check     "aircraft?carrier: ...and keeps the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/B737-8?carrier=ZZ")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8?carrier=ZZ")
+check     "aircraft?carrier=ZZ: an unresolvable filter still renders" "$CODE" '200'
+check     "aircraft?carrier=ZZ: ...but is no-store"                   "$HDRS" 'no-store'
+check_not "aircraft?carrier=ZZ: ...and is never long-cached"          "$HDRS" 's-maxage'
+
+# THE CARRIER SIDE OF MUTANTS 2 AND 5, and the finding that shaped this resolver: `/carrier/PA` is
+# `notFound`, NOT `ambiguous` -- `CarrierResult` is a three-way union with no ambiguous kind.
+# `lookupCarriersByCode(["PA"])` returns nothing because it filters to fact-present airlines, so
+# the collision only surfaces through the SECOND query `resolveCarrier` makes to word its 404:
+# `PA` is held by airline_id 20384 and 20386 (both "Pan American World Airways") plus 20389
+# "Florida Coastal Airlines", an unrelated carrier sharing the code. More than one holder is a
+# refusal to choose; ZERO or ONE is merely unknown, which is the boundary the unit tests pin.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/B737-8?carrier=PA")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8?carrier=PA")
+check     "aircraft?carrier=PA: an ambiguous filter still renders" "$CODE" '200'
+check     "aircraft?carrier=PA: ...but is no-store"                "$HDRS" 'no-store'
+check_not "aircraft?carrier=PA: ...and is never long-cached"       "$HDRS" 's-maxage'
+
+# `%44L` percent-decodes to `DL`. Same raw-bytes rule as 11b's `%42737-8`.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/B737-8?carrier=%44L")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8?carrier=%44L")
+check     "aircraft?carrier=%44L: a percent-spelling still renders" "$CODE" '200'
+check     "aircraft?carrier=%44L: ...but is no-store"               "$HDRS" 'no-store'
+check_not "aircraft?carrier=%44L: ...and is never long-cached"      "$HDRS" 's-maxage'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/B737-8?carrier=dl")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8?carrier=dl")
+check     "aircraft?carrier=dl: a lower-case spelling still renders" "$CODE" '200'
+check     "aircraft?carrier=dl: ...but is no-store"                  "$HDRS" 'no-store'
+check_not "aircraft?carrier=dl: ...and is never long-cached"         "$HDRS" 's-maxage'
+
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/b737-8?carrier=DL")
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/b737-8?carrier=DL")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check     "aircraft?carrier: the case-redirect is a 308"             "$CODE" '308'
+check_re  "aircraft?carrier: the 308 preserves the filter, not just the slug" "$LOC" \
+  "^[Ll]ocation: $(re_escape '/aircraft/B737-8?carrier=DL')$"
+check     "aircraft?carrier: the 308 keeps the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+
 for U in /airport/SEA /airport/ATL /airport/ORD /carrier/DL /aircraft/B737-8; do
   printf '  note %8s bytes of HTML for %s\n' "$(curl -s --max-time 30 "${BASE}${U}" | wc -c)" "$U"
 done
@@ -1557,7 +1676,7 @@ check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize 
 # trigger". proxy() has no try/catch around that call, so `GET /watch??x=1` was a 500 on every one
 # of the twelve matcher paths, `/` and `/sitemap.xml` included, for any client. Measured at
 # d109845, and re-measured against a served build by restoring the throw on top of the fix: the
-# five doubled-`?` rows below all 500, while their single-`?` neighbours all stay 307 -- so the
+# seven doubled-`?` rows below all 500, while their single-`?` neighbours all stay 307 -- so the
 # branch that exists to bound an unbounded cache family had introduced an unbounded family of
 # origin-hitting 500s. (Note which checks discriminate: the `is never cached` / `is never
 # long-cached` pair stays GREEN on a 500, because Next's error response carries no-store of its
@@ -1572,6 +1691,8 @@ for U in "/?utm_source=twitter|/" \
          "/route/JFK-LAX??cachebust=99|/route/JFK-LAX" \
          "/carrier/DL?utm_source=x|/carrier/DL" \
          "/airport/ORD??y=2019|/airport/ORD?y=2019" \
+         "/carrier/DL??type=x|/carrier/DL?type=x" \
+         "/aircraft/B737-8??carrier=x|/aircraft/B737-8?carrier=x" \
          "/robots.txt?x=1|/robots.txt" \
          "/sitemap.xml?x=1|/sitemap.xml" \
          "/sitemap.xml??x=1|/sitemap.xml"; do

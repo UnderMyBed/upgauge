@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { cache } from "react";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveAircraftSlug } from "@/lib/aircraftSlug";
+import { headers } from "next/headers";
+import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { BASE_URL } from "@/lib/siteUrl";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
@@ -288,6 +290,28 @@ export async function generateMetadata({
   };
 }
 
+/** The redirect target for a case-normalized aircraft type slug, carrying the ORIGINAL raw query string
+ * through UNCHANGED.
+ *
+ * #106, and the identical measured bug `/airport` fixed with `airportRedirectTarget`
+ * (`app/airport/[code]/page.tsx:497-499`, whose own doc comment has the full account). This
+ * page built `/aircraft/${{resolved.canonical}}` from the slug alone, silently dropping every query
+ * key -- so once `carrier` became a legitimate key here, `/aircraft/b737-8?carrier=DL` would have 308ed to
+ * `/aircraft/B737-8` with the filter gone entirely, and the destination would have rendered the
+ * unfiltered view with no error anywhere. That is precisely the "silently renders a different
+ * query than the URL encodes" failure this project refuses everywhere else.
+ *
+ * The query is appended VERBATIM from the raw string, never reconstructed from parsed
+ * `searchParams` -- reassembling a query from decoded params is the re-encoding corruption
+ * `lib/rawQuery.ts`'s whole header exists to prevent. An empty raw query (no `?` at all on the
+ * original request) appends nothing, so a bare `/aircraft/b737-8` still redirects to the bare
+ * `/aircraft/B737-8`. */
+export function aircraftRedirectTarget(canonical: string, rawQuery: string): string {
+  return rawQuery.length > 0
+    ? `/aircraft/${canonical}?${rawQuery}`
+    : `/aircraft/${canonical}`;
+}
+
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the four-way
  * `AircraftSlugResult` before handing the "ok" case to `AircraftView`. Same split as
  * `RoutePage`/`RouteView`.
@@ -305,7 +329,13 @@ export default async function AircraftPage({ params }: { params: Promise<{ name:
   if (resolved.kind === "redirect") {
     // permanentRedirect -> 308, not redirect()'s 307: the uppercased slug IS the canonical URL
     // for this type. Same source-verified digest as /route (page.test.tsx pins it).
-    permanentRedirect(`/aircraft/${resolved.canonical}`);
+    // #106: the raw query must survive this redirect, or the map filter is silently
+    // lost on a miscased slug. Read off the same RAW_QUERY_HEADER proxy.ts sets, never
+    // off `searchParams` -- this page takes no `searchParams` at all, and even if it
+    // did, reconstructing a query string from decoded params is the exact corruption
+    // that header exists to avoid.
+    const rawQuery = rawQueryFromHeaders(await headers());
+    permanentRedirect(aircraftRedirectTarget(resolved.canonical, rawQuery));
   }
   if (resolved.kind === "notFound" || resolved.kind === "ambiguous") {
     notFound();

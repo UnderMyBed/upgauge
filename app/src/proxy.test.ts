@@ -364,6 +364,86 @@ describe("proxy", () => {
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
 
+  // #106. `/carrier/:code?type=` and `/aircraft/:name?carrier=` -- the SAME two-allow-list shape
+  // as the `?y=` pair above, and the same "both halves or neither" discipline, but the second
+  // input is an ENTITY REFERENCE rather than a closed structural set. `y` is decided by a regex
+  // and a range with no database read; these values are resolved against the warehouse, which is
+  // what makes an unresolvable one a declined cache instead of a long-cached 200.
+  //
+  // These tests cannot see proxy.ts's matcher (they call `proxy()` directly), so `app/smoke.sh`
+  // asserts every one of these headers against a served build too.
+  it.each([
+    ["a carrier page with a resolvable type filter", "/carrier/DL?type=B737-8"],
+    ["an aircraft page with a resolvable carrier filter", "/aircraft/B737-8?carrier=DL"],
+  ])("still caches %s", async (_label, path) => {
+    // The positive half. Without it, a `no-store`-everywhere regression passes every negative
+    // below vacuously -- which is precisely how `?y=`'s own pair is written.
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it.each([
+    ["a type filter naming nothing", "/carrier/DL?type=NOPE-1"],
+    ["a carrier filter naming nothing", "/aircraft/B737-8?carrier=ZZ"],
+  ])("declines to cache %s", async (_label, path) => {
+    // MUTANT 1's target. A structural-bound-only design admits these, and `/carrier/DL?type=
+    // NOPE-1` then renders DL's ordinary unfiltered page under a one-hour shared cache, once per
+    // spelling -- a cacheable 200 for a filter that names nothing.
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it.each([
+    ["a type filter naming TWO airframes", "/carrier/DL?type=CE-180"],
+    ["a carrier filter naming THREE airlines", "/aircraft/B737-8?carrier=PA"],
+  ])("declines to cache %s, which is not 'unknown'", async (_label, path) => {
+    // MUTANT 5's target, and the reason `isFilterCacheable` is an ALLOW-list of kinds rather
+    // than `!== "unknown"`. `CE-180` names BTS codes 030 and 031; `PA` names two Pan Am eras
+    // plus an unrelated Florida Coastal. Both are `ambiguous`, so a negation-shaped predicate
+    // would long-cache a page for a filter the server refuses to apply -- the exact shape
+    // `/aircraft/CE-180`'s own 404 test above exists to catch, one axis over.
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it.each([
+    ["a percent-spelled type filter", "/carrier/DL?type=%42737-8"],
+    ["a percent-spelled carrier filter", "/aircraft/B737-8?carrier=%44L"],
+  ])("declines to cache %s", async (_label, path) => {
+    // MUTANT 3's target. `%42737-8` and `%44L` percent-decode to `B737-8` and `DL`, both real.
+    // Reading the value with `new URLSearchParams(rawQuery).get(...)` -- the shape the `/airport`
+    // branch uses -- decodes first, so both would resolve and both would be long-cached under a
+    // second CDN key for a byte-identical page. That is the live `?y=%32019` hole; these keys
+    // carry textual values, so the family is far larger and the bound runs on the raw bytes.
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it.each([
+    ["a lower-case type filter", "/carrier/DL?type=b737-8"],
+    ["a lower-case carrier filter", "/aircraft/B737-8?carrier=dl"],
+  ])("declines to cache %s -- one value, one spelling", async (_label, path) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it.each([
+    ["/carrier/DL"],
+    ["/aircraft/B737-8"],
+  ])("still caches %s with no filter at all -- the default view", async (path) => {
+    // The `parseYear(null)` property, restated for these keys: `none` is a CACHEABLE outcome,
+    // distinct from a filter that was provided and rejected. An allow-list requiring an explicit
+    // `ok` would decline every unfiltered request -- the overwhelming majority of both pages'
+    // traffic, and every crawler hit.
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it("caches the 308 from a miscased carrier slug that carries a filter", async () => {
+    const res = await proxy(new NextRequest("http://localhost/carrier/dl?type=B737-8"));
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
   it("still caches an airport page with no y at all -- the default trailing-12 view", async () => {
     // parseYear(null) is "default", not "invalid" -- an implementation that flipped the
     // allow-list to require an explicit "year" kind would fail every un-parameterized

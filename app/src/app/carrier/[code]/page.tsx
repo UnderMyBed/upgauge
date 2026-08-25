@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { cache } from "react";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveCarrier } from "@/lib/carrier";
+import { headers } from "next/headers";
+import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { BASE_URL } from "@/lib/siteUrl";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
@@ -509,6 +511,28 @@ export async function generateMetadata({
   };
 }
 
+/** The redirect target for a case-normalized carrier code slug, carrying the ORIGINAL raw query string
+ * through UNCHANGED.
+ *
+ * #106, and the identical measured bug `/airport` fixed with `airportRedirectTarget`
+ * (`app/airport/[code]/page.tsx:497-499`, whose own doc comment has the full account). This
+ * page built `/carrier/${{resolved.canonical}}` from the slug alone, silently dropping every query
+ * key -- so once `type` became a legitimate key here, `/carrier/dl?type=B737-8` would have 308ed to
+ * `/carrier/DL` with the filter gone entirely, and the destination would have rendered the
+ * unfiltered view with no error anywhere. That is precisely the "silently renders a different
+ * query than the URL encodes" failure this project refuses everywhere else.
+ *
+ * The query is appended VERBATIM from the raw string, never reconstructed from parsed
+ * `searchParams` -- reassembling a query from decoded params is the re-encoding corruption
+ * `lib/rawQuery.ts`'s whole header exists to prevent. An empty raw query (no `?` at all on the
+ * original request) appends nothing, so a bare `/carrier/dl` still redirects to the bare
+ * `/carrier/DL`. */
+export function carrierRedirectTarget(canonical: string, rawQuery: string): string {
+  return rawQuery.length > 0
+    ? `/carrier/${canonical}?${rawQuery}`
+    : `/carrier/${canonical}`;
+}
+
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the three-way
  * `CarrierResult` before handing the "ok" case to `CarrierView`. Same split as
  * route/[pair]/page.tsx's `RoutePage`/`RouteView`. */
@@ -526,7 +550,13 @@ export default async function CarrierPage({
     // `NEXT_REDIRECT;${type};${url};${statusCode};` (node_modules/next/dist/client/components/
     // redirect.js), which page.test.tsx pins exactly -- a regression to plain `redirect()`
     // would show up there as ';307;'.
-    permanentRedirect(`/carrier/${resolved.canonical}`);
+    // #106: the raw query must survive this redirect, or the map filter is silently
+    // lost on a miscased slug. Read off the same RAW_QUERY_HEADER proxy.ts sets, never
+    // off `searchParams` -- this page takes no `searchParams` at all, and even if it
+    // did, reconstructing a query string from decoded params is the exact corruption
+    // that header exists to avoid.
+    const rawQuery = rawQueryFromHeaders(await headers());
+    permanentRedirect(carrierRedirectTarget(resolved.canonical, rawQuery));
   }
   if (resolved.kind === "notFound") {
     // Throws `NEXT_HTTP_ERROR_FALLBACK;404` and terminates this segment's render, which
