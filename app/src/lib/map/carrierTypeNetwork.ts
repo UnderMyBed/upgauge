@@ -48,8 +48,18 @@ export interface DrawableView {
   sameAirportSeats: number;
   /** Groups whose every filing was quarantined, so their sums are NULL. Not drawable, and NOT
    * in `totalRoutes` -- they are their own disjoint category with their own sentence, never
-   * folded into the drawable denominator (A5b). Surfaced, never dropped without trace. */
+   * folded into the drawable denominator. Surfaced, never dropped without trace. */
   quarantinedRoutes: number;
+  /** How many same-airport groups contributed to `sameAirportSeats`. Carried SEPARATELY from
+   * the seat total so the null rule can ask "is this category empty?" without inferring it from
+   * a measure. Gating on `sameAirportSeats === 0` instead would be correct only by way of an
+   * invariant in another file -- `normalize_t100_segment.sql:81` quarantines
+   * `seats = 0 AND departures_performed > 0`, so a group clearing the floor always has seats
+   * (verified across the whole dataset: 129,502 groups, zero with departures and no seats).
+   * Should that quarantine rule ever narrow, a same-airport-only view that flew with zero filed
+   * seats would return no map at all -- this category's version of the bug `quarantinedRoutes`
+   * exists to prevent. A count costs one integer and depends on nothing outside this file. */
+  sameAirportRoutes: number;
 }
 
 /** The ceiling the pivot's `LIMIT` is set to, and the reason this file can state a true total
@@ -125,11 +135,11 @@ export function carrierTypeNetworkQuery(
  *
  * This is not defensive tidiness. `render.ts:301` emits `ORDER BY <col> DESC` with NO secondary
  * key, and ties land exactly on the cut: measured over the trailing 12, 31 of the 36 views that
- * exceed 400 have a seats tie at `row_number() = 400`, worst `DL` x type `614` with 164 pairs
- * all tied at exactly 160.0 seats (`OO` x `530`: 211 tied at 50.0). Both figures are measured
- * on the DRAWABLE population this comparator actually ranks -- quarantined and same-airport
- * groups already removed. On the raw grouped population `OO` x `530` reads 232 instead, which
- * is the figure the plan's F19 carried; `DL` x `614`'s 164 is the same in both. "Top 400" is
+ * exceed 400 have a seats tie at `row_number() = 400`. The widest is `OH` x type `638` with 232
+ * pairs tied at 76.0 seats, then `9E` x `638` (228), `OO` x `629` (223), `OO` x `530` (211);
+ * `DL` x `614`, this file's fixture, is sixth with 164 tied at exactly 160.0. Every figure is
+ * measured on the DRAWABLE population this comparator ranks -- quarantined and same-airport
+ * groups already removed. "Top 400" is
  * therefore non-deterministic on the SQL side -- which 164 get drawn could change between two
  * runs or two DuckDB versions. Ranking here instead of in SQL makes the result independent of
  * the engine's row order entirely, which is strictly stronger than a SQL tiebreak, and needs no
@@ -173,17 +183,17 @@ function bySeatsThenRouteKey(a: DrawableRoute, b: DrawableRoute): number {
  *
  *   departures IS NULL  every filing on the pair was quarantined, so the sums are unknowable --
  *                       NOT zero. Measured over the trailing 12 at this grain: 34 such groups,
- *                       and every one of them PERFORMED departures before quarantine. They are
- *                       `zero_seats` and `load_factor_gt_1` filings, which means a passenger
- *                       aircraft flew and filed an impossible seat count. THEY FLEW. Counted in
- *                       `quarantinedRoutes` and surfaced, never silently discarded.
+ *                       every one of which PERFORMED departures before quarantine, and every
+ *                       one quarantined `zero_seats` -- a passenger aircraft flew and filed a
+ *                       seat count of zero. THEY FLEW. Counted in `quarantinedRoutes` and
+ *                       surfaced, never silently discarded.
  *   departures = 0      the pair was filed and genuinely not flown -- 23 such groups. Neither
  *                       drawn nor counted: an arc would claim service that did not operate, and
- *                       the carrier did not serve the pair, so it is not in the denominator.
+ *                       the carrier did not serve the pair, so it is not a route it flew.
  *
- * An earlier version of this file collapsed both into one `departures <= 0` branch and called
- * all 57 "filed and never flown". That was false for 34 of them, and reading their NULL as zero
- * is exactly the coercion `CarrierTypeRouteRow` above forbids.
+ * Collapsing the two into one `departures <= 0` branch reads their NULL as zero, which is the
+ * coercion `CarrierTypeRouteRow` above forbids, and describes 34 pairs that flew as pairs that
+ * did not.
  *
  * THE FLOOR is group-level, never row-level, and that is a deliberate trade: a row-level filter
  * would drop a never-flown MONTH from a pair that flew in other months, making this map's seat
@@ -217,12 +227,27 @@ export function drawableRoutes(
 
   const routes: DrawableRoute[] = [];
   let sameAirportSeats = 0;
+  let sameAirportRoutes = 0;
   let quarantinedRoutes = 0;
 
   for (const row of rows) {
     const departures = row.departures_performed ?? null;
     const seats = row.seats ?? null;
     const passengers = row.passengers ?? null;
+
+    // SAME-AIRPORT FIRST, and the order is load-bearing. A filing whose two endpoints are one
+    // airport is not a route the carrier served, whatever its quarantine state, so it must not
+    // reach `quarantinedRoutes` -- which counts route PAIRS and feeds a sentence about them.
+    // Measured over the trailing 12: exactly one such group is also fully quarantined (`8V` x
+    // `416`), and counting it made one of that view's ten "quarantined route pairs" a pair with
+    // one endpoint. Its sums are NULL, so there is no seat figure to preserve and nothing is
+    // lost by dropping it; what would be lost by keeping it is the meaning of the count.
+    //
+    // A same-airport pair that FLEW still contributes its seats, below -- that branch sits
+    // under the floor, so one that never flew contributes nothing.
+    if (row.route_key_low === row.route_key_high && (row.departures_performed ?? null) === null) {
+      continue;
+    }
 
     if (departures === null || seats === null || passengers === null) {
       // ONE null means ALL null: the three measures carry the IDENTICAL quarantine FILTER, so
@@ -240,9 +265,8 @@ export function drawableRoutes(
         );
       }
       // Every filing quarantined: untrustworthy, NOT unflown. Surfaced rather than dropped.
-      // This also counts the one same-airport group in that state (measured: exactly one over
-      // the trailing 12) -- its seats are unknowable, so `sameAirportSeats` has nowhere to put
-      // it and a silent discard is the failure this counter exists to end.
+      // Same-airport filings never reach here -- the branch above takes them -- so this counts
+      // route pairs only, which is what its name and the sentence built from it both claim.
       quarantinedRoutes += 1;
       continue;
     }
@@ -256,6 +280,7 @@ export function drawableRoutes(
     // so the fixture guarding the order carries seats AND zero departures, never zero seats.
     if (row.route_key_low === row.route_key_high) {
       sameAirportSeats += seats;
+      sameAirportRoutes += 1;
       continue;
     }
 
@@ -269,7 +294,7 @@ export function drawableRoutes(
   }
 
   routes.sort(bySeatsThenRouteKey);
-  return { routes, sameAirportSeats, quarantinedRoutes };
+  return { routes, sameAirportSeats, sameAirportRoutes, quarantinedRoutes };
 }
 
 /** A ratio of sums, or null when the denominator is zero -- never an average, and never 0.0 for
@@ -292,6 +317,66 @@ function node(id: number, coords: Map<number, AirportCoords>, context: string): 
   return { code: c.code, lat: c.lat, lon: c.lon };
 }
 
+/** True when a view has nothing to draw AND nothing to disclose -- the only shape that earns no
+ * panel at all.
+ *
+ * ALL THREE CATEGORIES, each asked its own question. Any one of them alone justifies a map:
+ * drawable routes get arcs; fully-quarantined pairs get a count and a reason, without which the
+ * reader is told nothing about them at all; same-airport filings get their seats. Gating on
+ * `totalRoutes` alone suppresses the second and third, which is the bug their fields exist to
+ * prevent -- and gating same-airport on `sameAirportSeats` rather than `sameAirportRoutes`
+ * outsources the question to a quarantine rule in another file (see `DrawableView`).
+ *
+ * EXPORTED so both of those can be driven directly. Neither is reachable through
+ * `fetchCarrierTypeNetwork` against today's warehouse -- a same-airport group that flew always
+ * has seats -- so a test that could only go through the live path could not tell the two gates
+ * apart. Same precedent as `drawableRoutes` and `segmentsForDrawing` above. */
+export function hasNothingToShow(view: DrawableView): boolean {
+  return view.routes.length === 0 && view.quarantinedRoutes === 0 && view.sameAirportRoutes === 0;
+}
+
+/** Assemble the capped routes into segments, and refuse to hand over a set the renderer would
+ * draw a different number of.
+ *
+ * TWO INDEPENDENT DERIVATIONS, compared. `expected` is the caller's cap arithmetic; the check
+ * counts `drawableSegments(segments)` -- what `renderSegmentMap` will actually draw from this
+ * same array, by the renderer's own function, the one that also words its `aria-label`.
+ * Comparing against `segments.length` instead would make the check unfalsifiable, because
+ * `segments` is built by mapping over a slice and is equal to it by construction.
+ *
+ * The reachable trigger is a segment whose two endpoints resolve to ONE CODE while carrying
+ * two different airport_ids. `drawableRoutes` excludes same-ID pairs, which is NOT the same
+ * guarantee: 37 codes in `dim_airport` (is_latest) are carried by more than one airport_id.
+ * None of those collisions is fact-present today, so the map cannot currently produce one --
+ * but a code that starts colliding in a future rebuild would otherwise ship a disclosure line
+ * counting a route the renderer silently declines to draw.
+ *
+ * EXPORTED for that test, and for no other caller. The precedent is `drawableRoutes` above:
+ * a pure function extracted so an invariant of the impure entry point can be driven directly. */
+export function segmentsForDrawing(
+  drawn: DrawableRoute[],
+  coords: Map<number, AirportCoords>,
+  expected: number,
+): SegmentDatum[] {
+  const segments: SegmentDatum[] = drawn.map((r) => ({
+    from: node(r.routeKeyLow, coords, "route_key_low"),
+    to: node(r.routeKeyHigh, coords, "route_key_high"),
+    seats: r.seats,
+    departures: r.departures,
+    loadFactor: ratio(r.passengers, r.seats),
+  }));
+
+  const drawable = drawableSegments(segments).length;
+  if (expected !== drawable) {
+    throw new Error(
+      `segmentsForDrawing: cap arithmetic says ${expected} routes but the renderer would draw ` +
+        `${drawable} of the ${segments.length} segments handed over -- the disclosure line ` +
+        "would state a count the map does not draw.",
+    );
+  }
+  return segments;
+}
+
 /** The carrier x aircraft-type network map's data: one segment-grain `runPivot` plus one
  * `map_airport_coords.sql` lookup for the endpoints of the routes actually drawn.
  *
@@ -299,10 +384,20 @@ function node(id: number, coords: Map<number, AirportCoords>, context: string): 
  * signatures keep them apart deliberately. The query is issued at NETWORK_FETCH_CEILING so the
  * whole view is present to be counted; `limit` then decides how much of it is drawn.
  *
- * Returns null when nothing DRAWABLE remains -- the pair filed nothing in the window, or filed
- * only service it never flew (`F4` x `489`: three groups, all phantom, zero drawable). Same
- * "no panel rather than an empty panel" rule `fetchAirportNetwork` follows: a map of zero arcs
- * is an empty panel.
+ * RETURNS NULL ONLY WHEN THERE IS NOTHING TO SAY -- which is narrower than "nothing to draw",
+ * and the difference is the point. Null means: no filing in the window, or nothing left after
+ * every category is accounted for. A view with zero drawable routes still returns a MAP when it
+ * has something to disclose:
+ *
+ *   `F4` x `489`  three pairs, every filing on all three quarantined -> a map with zero
+ *                 segments, `totalRoutes: 0` and `quarantinedRoutes: 3`. The reader is told the
+ *                 count and the reason, instead of being shown nothing at all.
+ *   `8E` x `340`  one same-airport filing carrying 5 seats -> a map with zero segments and
+ *                 `sameAirportSeats: 5`.
+ *
+ * A caller must therefore handle a non-null input whose `segments` is empty. `fetchAirportNetwork`
+ * gates on `rows.length === 0` for the same reason: "no drawable arcs" is a different question
+ * from "nothing filed".
  *
  * Coordinates are resolved for the CAPPED set only, so a 1,559-row view pays for 400 arcs'
  * endpoints rather than all of them. The pivot's own `resolveRows` pass resolves those ids a
@@ -328,32 +423,23 @@ export async function fetchCarrierTypeNetwork(
     carrierTypeNetworkQuery(airlineId, aircraftTypeCode, timeFrom, timeTo, NETWORK_FETCH_CEILING),
   );
   const rows = result.rows as unknown as CarrierTypeRouteRow[];
-  const { routes, sameAirportSeats, quarantinedRoutes } = drawableRoutes(
-    rows,
-    airlineId,
-    aircraftTypeCode,
-  );
+  const view = drawableRoutes(rows, airlineId, aircraftTypeCode);
+  const { routes, sameAirportSeats, quarantinedRoutes } = view;
 
-  // ONE null rule, and it is "there is nothing to say", not "there is nothing to draw".
+  // The null rule NAMES ALL THREE CATEGORIES, and must. `totalRoutes` counts drawable routes
+  // only, so gating on it alone would return null for a view whose every pair is quarantined
+  // (`F4` x `489`) or whose only filing is same-airport (`8E` x `340`) -- suppressing exactly
+  // the disclosures the other two fields exist to carry. Each category independently justifies
+  // a map; only all three empty means there is nothing to say.
   //
-  // Quarantine alone must NOT suppress the map: `F4` x `489` is three pairs whose every filing
-  // was quarantined, and returning null there hides a data-quality fact behind a missing panel
-  // -- the reader is told nothing at all rather than told the count. Same-airport seats alone
-  // must not suppress it either: `8E` x `340` is a single same-airport filing carrying 5 seats,
-  // and segmentMap.ts's own contract says those seats reach the reader. `fetchAirportNetwork`
-  // gates on `rows.length === 0` for the same reason -- "no drawable arcs" is a different
-  // question from "nothing filed".
+  // A view where everything filed was genuinely never flown also lands here, and that arm has
+  // real fixtures rather than being stated for the case: `DL` x `650` over 2015 is five pairs,
+  // every one of them zero seats on zero performed departures. The window is a caller-supplied
+  // parameter, so a view being unreachable in the trailing 12 does not make it unreachable.
   //
-  // What DOES return null: nothing filed in the window, and the case where everything filed was
-  // genuinely never flown (no view on today's data is only that, so this arm is stated for the
-  // case rather than left to chance -- the empty-window test drives the branch itself).
-  // The null rule names all THREE categories explicitly, and must keep doing so. It used to
-  // read `totalRoutes === 0 && sameAirportSeats === 0`, which was only correct while
-  // `totalRoutes` carried the quarantined count (amendment A5). Under A5b it no longer does, so
-  // that spelling would send `F4` x `489` -- three pairs, every filing quarantined, nothing
-  // drawable -- back to returning null, undoing the whole reason `quarantinedRoutes` exists.
+  // Same-airport is gated on its COUNT, never on `sameAirportSeats` -- see `sameAirportRoutes`.
   const totalRoutes = routes.length;
-  if (totalRoutes === 0 && quarantinedRoutes === 0 && sameAirportSeats === 0) return null;
+  if (hasNothingToShow(view)) return null;
 
   const drawn = routes.slice(0, limit);
   const coords = await fetchCoords([
@@ -361,36 +447,7 @@ export async function fetchCarrierTypeNetwork(
     ...drawn.map((r) => r.routeKeyHigh),
   ]);
 
-  const segments: SegmentDatum[] = drawn.map((r) => ({
-    from: node(r.routeKeyLow, coords, "route_key_low"),
-    to: node(r.routeKeyHigh, coords, "route_key_high"),
-    seats: r.seats,
-    departures: r.departures,
-    loadFactor: ratio(r.passengers, r.seats),
-  }));
-
-  // TWO INDEPENDENT DERIVATIONS, compared -- and since amendment A6 the second one is the
-  // RENDERER'S OWN. `expected` comes from this file's cap arithmetic; `drawable` is what
-  // `renderSegmentMap` will actually draw from these same segments, counted by the same
-  // function that words its `aria-label`. Comparing against `segments.length` instead would
-  // make this unfalsifiable, which is not a check.
-  //
-  // A6 removed `drawnRoutes` from `SegmentMapInput` precisely because a caller-supplied count
-  // that must equal a derived one can only ever be wrong. That does not retire the invariant,
-  // it sharpens it: this now also asserts that every segment handed over IS drawable by the
-  // renderer's definition, which `segments.length` could never say. It fires if the slice bound
-  // and the cap arithmetic drift apart -- a `slice(0, NETWORK_ARC_CAP)` under a caller-supplied
-  // `limit` -- or if an undrawable segment ever reached the array, which the same-airport
-  // exclusion upstream is what prevents.
-  const expected = Math.min(routes.length, limit);
-  const drawable = drawableSegments(segments).length;
-  if (expected !== drawable) {
-    throw new Error(
-      `fetchCarrierTypeNetwork: cap arithmetic says ${expected} routes but the renderer would ` +
-        `draw ${drawable} of the ${segments.length} segments handed over -- the disclosure ` +
-        "line would state a count the map does not draw.",
-    );
-  }
+  const segments = segmentsForDrawing(drawn, coords, Math.min(routes.length, limit));
 
   return {
     segments,
@@ -398,7 +455,7 @@ export async function fetchCarrierTypeNetwork(
     // The TRUE count of DRAWABLE routes before the cap, which is the whole reason this file
     // fetches past it. Returning `segments.length` makes the disclosure read "400 of 400".
     //
-    // Quarantined pairs are NOT in here (amendment A5b, correcting A5). `totalRoutes - drawn`
+    // Quarantined pairs are NOT in here. `totalRoutes - drawn`
     // has to be purely the routes the cap elided, every one of them genuinely smaller, or the
     // sentence built from it mixes two unrelated exclusions and becomes false -- on `8V` x
     // `035`, "14 smaller routes are not drawn" about 14 pairs that are quarantined, not

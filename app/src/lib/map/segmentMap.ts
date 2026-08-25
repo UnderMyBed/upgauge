@@ -43,12 +43,19 @@ export interface SegmentMapInput {
   segments: SegmentDatum[];
   /** Human-readable window, e.g. "2025-06 → 2026-05". Rendered on the map face. */
   window: string;
-  /** How many routes EXIST, before any cap. The drawn count is deliberately NOT a field: the
+  /** How many DRAWABLE routes exist, before any cap -- not how many route pairs the carrier
+   *  filed. Pairs excluded as fully quarantined are counted by `quarantinedRoutes` and are NOT
+   *  in here, so `totalRoutes` can be 0 for a view that filed three pairs. Same-airport pairs
+   *  are in neither. The exclusion is what keeps `totalRoutes - drawn` purely the routes the cap
+   *  elided, every one of them genuinely smaller; mixing in another exclusion makes any sentence
+   *  built on that difference false.
+   *
+   *  The drawn count is deliberately NOT a field: the
    *  renderer derives it from `drawableSegments(segments).length`, which is the same quantity
    *  `arcsSentence` already reports. A caller-supplied number that must equal a derived one is
    *  a redundancy that can only ever be wrong -- it produced an `aria-label` reading "1 route
    *  drawn as great-circle arcs ... 2 of 10 routes drawn", one description carrying two counts
-   *  of one thing (amendment A6).
+   *  of one thing.
    *
    *  This field stays because the renderer genuinely cannot derive it: `segments` has already
    *  been capped by the time it arrives. Returning the capped count here makes the disclosure
@@ -69,19 +76,25 @@ export interface SegmentMapInput {
   /** Route pairs excluded because EVERY filing on them was quarantined, so their measure sums
    *  are NULL rather than zero. Excluded from `totalRoutes` and from the drawn count alike, and
    *  kept out of `segments`, because an arc drawn from a NULL sum would be a fabricated
-   *  measurement. Its own disjoint category with its own sentence: folding it into the drawable
-   *  denominator makes `totalRoutes - drawn` mix two unrelated exclusions, so a disclosure built
-   *  on that difference calls quarantined pairs "smaller routes" (A5b).
-   *  Rendered beside `sameAirportSeats`, never silently dropped: quarantined rows
-   *  are excluded from aggregates but surfaced with a count, and showing the dirt is a trust
-   *  feature (CLAUDE.md).
+   *  measurement. A disjoint category with its own sentence: folded into the drawable
+   *  denominator, `totalRoutes - drawn` mixes two unrelated exclusions and a disclosure built on
+   *  that difference calls quarantined pairs "smaller routes". Rendered beside
+   *  `sameAirportSeats`, never silently dropped -- quarantined rows are excluded from aggregates
+   *  but surfaced with a count, and showing the dirt is a trust feature (CLAUDE.md).
    *
    *  NULL IS NOT ZERO, and here the difference is the whole point. Measured over the trailing
-   *  12 at (carrier, aircraft type, undirected pair) grain: 34 such groups, and every one of
-   *  them PERFORMED departures -- they are `zero_seats` and `load_factor_gt_1` filings, so a
-   *  passenger aircraft flew and filed an impossible seat count. Reading their NULL as "never
-   *  flew" is the coercion this field exists to prevent. Separately, 23 groups performed a real
-   *  zero departures; those are not counted here and not drawn. */
+   *  12 at (carrier, aircraft type, undirected pair) grain: 34 such groups, every one of which
+   *  PERFORMED departures and every one quarantined `zero_seats` -- a passenger aircraft flew
+   *  and filed a seat count of zero. Reading their NULL as "never flew" is the coercion this
+   *  field exists to prevent. Separately, 23 groups performed a real zero departures; those are
+   *  neither counted here nor drawn.
+   *
+   *  COUNTS FULLY-QUARANTINED PAIRS ONLY, so `quarantinedRoutes: 0` does NOT mean "no quarantine
+   *  in this view". A pair with some-but-not-all filings quarantined is drawn, and its seats,
+   *  departures and load factor silently exclude the quarantined rows: measured, 70 such groups
+   *  across 19 views, hiding 114 rows. `runPivot` returns `quarantinedRowsOnPage` and this
+   *  contract has no field for it. `fetchAirportNetwork` has the identical gap, so this is a
+   *  consistency choice, stated rather than left to be inferred. */
   quarantinedRoutes?: number;
   /** Optional caption under the window line -- the diff map's per-panel label. */
   title?: string;

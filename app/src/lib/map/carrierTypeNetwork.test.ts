@@ -6,7 +6,11 @@ import {
   carrierTypeNetworkQuery,
   drawableRoutes,
   fetchCarrierTypeNetwork,
+  hasNothingToShow,
+  segmentsForDrawing,
   type CarrierTypeRouteRow,
+  type DrawableRoute,
+  type DrawableView,
 } from "./carrierTypeNetwork";
 
 // Measured fixtures. The window is FIXED, not derived from max(year_month), for the reason
@@ -122,8 +126,8 @@ describe("drawableRoutes", () => {
     // ingest (normalize_t100_segment.sql:71-72) and remove nothing here.
     //
     // Both dropped rows carry a REAL zero, never a null: a null departure sum is a quarantined
-    // group, which this branch must not touch. An earlier fixture here mixed the two -- a row
-    // with `seats: 0, departures: null` -- a state the shared quarantine FILTER cannot produce.
+    // group, which this branch must not touch. A fixture mixing the two -- `seats: 0,
+    // departures: null` -- describes a state the shared quarantine FILTER cannot produce.
     const view = drawableRoutes(
       [row(100, 200, 0, 0, 0), row(300, 400, 900, 700, 0), row(500, 600, 50, 25, 5)],
       DL,
@@ -147,10 +151,10 @@ describe("drawableRoutes", () => {
   });
 
   it("applies the floor to same-airport rows too", () => {
-    // THE FIXTURE CARRIES SEATS IT NEVER FLEW, and that is the whole point. An earlier version
-    // used a 0-seat same-airport row, so `sameAirportSeats` was 0 under BOTH orderings and
-    // hoisting the same-airport branch above the floor left every test green -- a fixture that
-    // did not exercise the path it named. 3,000 seats on zero departures separates them.
+    // THE FIXTURE MUST CARRY SEATS IT NEVER FLEW. A 0-seat same-airport row leaves
+    // `sameAirportSeats` at 0 under BOTH orderings, so hoisting the same-airport branch above
+    // the floor stays green and the test proves nothing. 3,000 seats on zero departures is what
+    // separates the two orderings.
     const view = drawableRoutes(
       [row(700, 700, 3000, 2000, 0), row(500, 600, 50, 25, 5)],
       DL,
@@ -158,6 +162,17 @@ describe("drawableRoutes", () => {
     );
     expect(view.sameAirportSeats).toBe(0);
     expect(view.routes.map((r) => r.routeKeyLow)).toEqual([500]);
+  });
+
+  it("gates the same-airport category on its COUNT, not on its seat total", () => {
+    // A same-airport group that flew with zero filed seats. Today the warehouse cannot produce
+    // one -- normalize_t100_segment.sql:81 quarantines `seats = 0 AND departures_performed > 0`,
+    // verified across 129,502 groups -- so this fixture describes what happens if that rule ever
+    // narrows. `sameAirportRoutes` sees it; `sameAirportSeats` alone reports 0 and would send a
+    // view whose only content is this filing to a null map.
+    const view = drawableRoutes([row(700, 700, 0, 0, 4)], DL, TYPE_614);
+    expect(view.sameAirportSeats).toBe(0);
+    expect(view.sameAirportRoutes).toBe(1);
   });
 
   it("counts a fully-quarantined group rather than letting it vanish", () => {
@@ -173,8 +188,8 @@ describe("drawableRoutes", () => {
   });
 
   it("separates a quarantined group from one that genuinely never flew", () => {
-    // The two used to share a `departures <= 0` branch. They are different facts and land in
-    // different places: NULL is counted and disclosed, 0 is dropped entirely.
+    // Two different facts landing in two different places: NULL is counted and disclosed, a
+    // real 0 is dropped entirely. One `departures <= 0` branch cannot express that.
     const view = drawableRoutes(
       [row(100, 200, null, null, null), row(300, 400, 0, 0, 0), row(500, 600, 50, 25, 5)],
       DL,
@@ -207,6 +222,77 @@ describe("drawableRoutes", () => {
   });
 });
 
+describe("hasNothingToShow", () => {
+  const view = (o: Partial<DrawableView> = {}): DrawableView => ({
+    routes: [],
+    sameAirportSeats: 0,
+    sameAirportRoutes: 0,
+    quarantinedRoutes: 0,
+    ...o,
+  });
+  const aRoute: DrawableRoute = {
+    routeKeyLow: 1,
+    routeKeyHigh: 2,
+    seats: 10,
+    passengers: 5,
+    departures: 1,
+  };
+
+  it("is true only when all three categories are empty", () => {
+    expect(hasNothingToShow(view())).toBe(true);
+    expect(hasNothingToShow(view({ routes: [aRoute] }))).toBe(false);
+    expect(hasNothingToShow(view({ quarantinedRoutes: 3 }))).toBe(false);
+    expect(hasNothingToShow(view({ sameAirportRoutes: 1 }))).toBe(false);
+  });
+
+  it("asks the same-airport COUNT, not the seat total", () => {
+    // A same-airport group that flew with zero filed seats. The live path cannot produce one
+    // today (normalize_t100_segment.sql:81 quarantines `seats = 0 AND departures_performed > 0`,
+    // verified across 129,502 groups), so this is the only place the two gates can be told
+    // apart -- and if that quarantine rule ever narrows, the seat-gated form silently returns no
+    // map for a view whose only content is this filing.
+    expect(hasNothingToShow(view({ sameAirportRoutes: 1, sameAirportSeats: 0 }))).toBe(false);
+  });
+});
+
+describe("segmentsForDrawing", () => {
+  const at = (id: number, code: string, lat: number, lon: number) =>
+    [id, { id, code, name: code, lat, lon }] as const;
+
+  function routeOf(low: number, high: number, seats: number): DrawableRoute {
+    return { routeKeyLow: low, routeKeyHigh: high, seats, passengers: seats / 2, departures: 1 };
+  }
+
+  it("refuses a set the renderer would draw a different number of", () => {
+    // THE REACHABLE TRIGGER, and it is not a same-ID pair. `drawableRoutes` already excludes
+    // those; what it cannot exclude is two DIFFERENT airport_ids resolving to one CODE, because
+    // it never sees a code. Measured: 37 codes in dim_airport (is_latest) are carried by more
+    // than one airport_id. None is fact-present today, so this cannot arise from the warehouse
+    // as it stands -- but `drawableSegments` filters on CODE, so such a pair would be dropped
+    // by the renderer while the disclosure line went on counting it.
+    const coords = new Map([at(1, "AAA", 40, -100), at(2, "AAA", 41, -101), at(3, "BBB", 42, -102)]);
+    expect(() => segmentsForDrawing([routeOf(1, 2, 500), routeOf(1, 3, 400)], coords, 2)).toThrow(
+      /the renderer would draw 1 of the 2 segments/,
+    );
+  });
+
+  it("passes a set whose every segment the renderer will draw", () => {
+    // Anti-vacuity: the throw above must be about the code collision, not about the fixture
+    // shape. Same two routes, distinct codes, same expected count.
+    const coords = new Map([at(1, "AAA", 40, -100), at(2, "CCC", 41, -101), at(3, "BBB", 42, -102)]);
+    const segments = segmentsForDrawing([routeOf(1, 2, 500), routeOf(1, 3, 400)], coords, 2);
+    expect(segments).toHaveLength(2);
+    expect(segments[0].loadFactor).toBeCloseTo(0.5, 10);
+  });
+
+  it("throws rather than rendering a dash for an endpoint with no coordinates", () => {
+    const coords = new Map([at(1, "AAA", 40, -100)]);
+    expect(() => segmentsForDrawing([routeOf(1, 9, 500)], coords, 1)).toThrow(
+      /no coordinates resolved for airport_id 9/,
+    );
+  });
+});
+
 // Live-database tests, not fixtures -- lib/resolve.ts's header rule: this codebase has no
 // mocks. Every figure below was measured directly against fct_segment_month over
 // 2025-06..2026-05; the queries are in the task report.
@@ -219,12 +305,11 @@ describe("fetchCarrierTypeNetwork, against the warehouse", () => {
   });
 
   it("drops a pair that was filed and genuinely not flown", async () => {
-    // THE FIXTURE MOVED, and why matters. This test used to name F4 x 489, whose three groups
-    // are `deps IS NULL` -- fully QUARANTINED, having performed 14, 11 and 2 departures. They
-    // never reached the floor at all, so deleting the floor left this test green: a fixture
-    // that did not exercise the path it named.
+    // THE FIXTURE MUST BE A REAL ZERO, not a quarantined group. F4 x 489's three pairs are
+    // `deps IS NULL` -- fully quarantined, having performed 14, 11 and 2 departures -- so they
+    // never reach the floor and deleting the floor leaves such a test green.
     //
-    // DL x 622 is a genuine one. MSP-SLC filed 0 seats on 0 performed departures over the whole
+    // DL x 622 is genuine: MSP-SLC filed 0 seats on 0 performed departures across the whole
     // window, one of 23 such groups. 336 grouped pairs, 335 drawable.
     const result = await fetchCarrierTypeNetwork(DL, "622", FROM, TO);
     expect(result!.totalRoutes).toBe(335);
@@ -235,13 +320,12 @@ describe("fetchCarrierTypeNetwork, against the warehouse", () => {
   it("surfaces quarantined pairs in their own count, NOT in the drawable denominator", async () => {
     // 8V x 035 is the view that carries all four categories at once: 33 grouped pairs = 15
     // drawable + 14 fully quarantined + 1 same-airport carrying 3 seats + 3 filed-and-never-
-    // flown. Re-derived under A5b, not adjusted to fit: `totalRoutes` counts the 15.
+    // flown. `totalRoutes` counts the 15 drawable ones and nothing else.
     //
-    // The 14 get their own field and their own sentence. Folding them into `totalRoutes` (which
-    // A5 briefly required, and which this test asserted as 29) makes `totalRoutes - drawn` mix
-    // two unrelated exclusions, so the disclosure built on that difference describes 14
-    // quarantined pairs as "smaller routes are not drawn". They are not smaller; they are
-    // untrustworthy, and they flew.
+    // The 14 get their own field and their own sentence. Folded into `totalRoutes`,
+    // `totalRoutes - drawn` mixes two unrelated exclusions and the disclosure built on that
+    // difference describes 14 quarantined pairs as "smaller routes are not drawn". They are not
+    // smaller; they are untrustworthy, and they flew.
     const result = await fetchCarrierTypeNetwork(B8V, "035", FROM, TO);
     expect(result).not.toBeNull();
     expect(result!.segments).toHaveLength(15);
@@ -253,6 +337,19 @@ describe("fetchCarrierTypeNetwork, against the warehouse", () => {
     for (const s of result!.segments) expect(s.from.code).not.toBe(s.to.code);
   });
 
+  it("does not count a same-airport filing as a quarantined ROUTE", async () => {
+    // 8V x 416 holds the single group in the window that is BOTH same-airport and fully
+    // quarantined. Counting it makes one of this view's quarantined "route pairs" a pair with
+    // one endpoint, and `quarantinedRoutes` feeds a sentence about routes. 10 fully-quarantined
+    // groups, 9 of them routes. Its sums are NULL, so no seat figure is lost by dropping it --
+    // which is why it cannot go to `sameAirportSeats` either.
+    const result = await fetchCarrierTypeNetwork(B8V, "416", FROM, TO);
+    expect(result).not.toBeNull();
+    expect(result!.totalRoutes).toBe(223);
+    expect(result!.quarantinedRoutes).toBe(9);
+    expect(result!.sameAirportSeats).toBe(378);
+  });
+
   it("still renders a map when quarantine is the only thing standing in the way", async () => {
     // F4 x 489: three pairs, every filing on all three quarantined. Returning null hides a
     // data-quality fact behind a missing panel -- the reader is told nothing rather than told
@@ -262,11 +359,20 @@ describe("fetchCarrierTypeNetwork, against the warehouse", () => {
     expect(result!.segments).toHaveLength(0);
     expect(drawableSegments(result!.segments)).toHaveLength(0);
     expect(result!.quarantinedRoutes).toBe(3);
-    // Zero DRAWABLE routes, and that is the honest number under A5b -- the map draws nothing and
-    // says why. This is also the view that pins the null rule to all three categories: while
-    // `totalRoutes` carried the quarantined count, `totalRoutes === 0` was enough to gate on,
-    // and taking them out would have sent this view back to returning null.
+    // Zero DRAWABLE routes: the map draws nothing and says why. This view is what pins the null
+    // rule to all three categories -- gating on `totalRoutes` alone would suppress it entirely,
+    // and with it the only account the reader gets of these three pairs.
     expect(result!.totalRoutes).toBe(0);
+  });
+
+  it("returns null for a view whose every pair was filed and never flown", async () => {
+    // The third null arm, and it has a real fixture -- just not in the trailing 12. DL x 650
+    // (DC-9-50) over 2015 is five pairs, every one zero seats on zero performed departures:
+    // nothing drawable, nothing quarantined, no same-airport filing. Nothing to draw AND nothing
+    // to disclose is the only shape that earns no panel. The window is a caller-supplied
+    // parameter, so "no such view in the trailing 12" does not make this arm unreachable.
+    const result = await fetchCarrierTypeNetwork(DL, "650", "2015-01", "2015-12");
+    expect(result).toBeNull();
   });
 
   it("still renders a map for a view that is nothing but a same-airport filing", async () => {
@@ -288,8 +394,8 @@ describe("fetchCarrierTypeNetwork, against the warehouse", () => {
     expect(result).not.toBeNull();
     expect(result!.totalRoutes).toBe(DL_614_TOTAL);
     expect(result!.segments).toHaveLength(NETWORK_ARC_CAP);
-    // The drawn count is the RENDERER's, derived rather than declared (amendment A6). Asserting
-    // it through `drawableSegments` is what pins the producer and the renderer to one number:
+    // The drawn count is the RENDERER's, derived rather than declared. Asserting it through
+    // `drawableSegments` is what pins the producer and the renderer to one number:
     // `segments.length` alone would still pass if an undrawable segment were handed over.
     expect(drawableSegments(result!.segments)).toHaveLength(NETWORK_ARC_CAP);
   });
