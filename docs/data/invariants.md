@@ -579,6 +579,13 @@ misfiles all of them:
 | SPN | Francisco C. Ada Saipan International | TT | 15.12 | 145.73 |
 | **SYA** | **Eareckson AS (Shemya)** | **AK** | **52.71** | **174.11** |
 
+Note that the positive-longitude list is **not** the list of airports in the Pacific panels, and
+seeding one from the other is how the "6 airports reach `pac`" figure came to be wrong in six
+files at once: **PPG is negative-longitude and southern-hemisphere**, so it is absent here while
+being the airport that decides the Pacific layout. Measured over the trailing 12, seven
+fact-present airports reach a Pacific panel — GUM, HNL, PPG, ROP, SFO, SPN, TIQ — and MDY and UAM
+each reach one in a single earlier month (2021-09 and 2015-08).
+
 **SYA is the trap.** It is in *Alaska*, and the western Aleutians cross the antimeridian, so a
 predicate of the shape "Alaska means `lon < −129`" excludes a genuinely Alaskan airport while
 handing it to whatever branch catches everything else. Normalizing `lon > 0 → lon − 360` puts
@@ -591,6 +598,15 @@ reason — the fallback branch catches whatever the two explicit tests miss:
 - **American Samoa is in the southern hemisphere.** PPG (Pago Pago) is at **−14.3°** latitude,
   and Midway (MDY) at 28.2° / −177.4°. A `lon < −150 AND lat < 30` test for Hawai'i catches
   both, giving a "Hawai'i" population spanning 42° of latitude when Hawai'i itself spans 2.3°.
+  Pulling them out of Hawai'i is necessary and **not sufficient**: a single Pacific panel holding
+  the Marianas, American Samoa and Midway spans roughly 5,000 km, so a fit scaled to that extent
+  puts Tinian and Saipan — 18 km apart, on a route filing 39,908 seats over the trailing 12 —
+  **2.73px** apart even at full canvas width, and a fit scaled to the Marianas alone throws PPG
+  to (1006.8, 771.6) and MDY to (1635.6, −207.7), both off a 960×500 canvas. Three panels, not
+  one: `pac` (west of the antimeridian, `lon < −200`), `sam` (`lat < 0`) and `nwhi` (Midway).
+  Their union is exactly the one `lat < 30 AND lon < −160` test they replace, which is what makes
+  the split unable to move a point into or out of any other panel. Encoding and rects:
+  `docs/design/system.md` § The map.
 - **Puerto Rico and the USVI extend the conterminous bounding box in BOTH directions**, so no
   single rectangle holds them and the lower 48 legibly. They span lat 17.70 → 18.49 and lon
   −67.15 → −64.71, against a conterminous fact-present extreme of **PQI (Maine, −68.05°)** in

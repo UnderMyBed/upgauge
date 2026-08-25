@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
  * Generates `app/src/lib/map/basemapPaths.generated.ts` from the committed
- * `app/geo/ne_110m_us.json` and `app/geo/ne_50m_car.json` -- the coastline + state-outline
- * paths the network map's arcs (M7 Task 6) are drawn over.
+ * `app/geo/ne_110m_us.json`, `app/geo/ne_50m_car.json` and `app/geo/ne_50m_pac.json` -- the
+ * coastline + state-outline paths the network map's arcs (M7 Task 6) are drawn over.
  *
  * INPUT (committed, not fetched here -- `make verify` must work offline and
  * reproducibly):
@@ -11,7 +11,7 @@
  *   fetched as GeoJSON from the nvkelso/natural-earth-vector mirror
  *   (https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_1_states_provinces.geojson),
  *   filtered to the 51 US features (`iso_a2 == 'US'`: 50 states + DC). Feeds the `us`/`ak`/
- *   `hi` panels (and `pac`, which still gets nothing -- see below).
+ *   `hi` panels.
  *
  *   `app/geo/ne_50m_car.json` (M7 Task 7b), Natural Earth 1:50m Cultural Vectors, Admin 0 --
  *   Countries (https://www.naturalearthdata.com/downloads/50m-cultural-vectors/50m-admin-0-countries/),
@@ -30,16 +30,23 @@
  *   Natural Earth. Crediting the authors is unnecessary."). Full provenance for each file is
  *   recorded again in its own `_source` field.
  *
- *   Neither file has a resolvable entry for Guam/Saipan/Tinian/Rota/American Samoa/Midway
- *   (the `pac` panel) -- at every resolution checked, those territories are not resolvable
- *   as distinct polygons cheaply reachable from this mirror, and building that out was
- *   explicitly out of scope for Task 7b (6 fact-present airports vs. `car`'s 74). `pac`
- *   remains a real, documented limitation, not a bug: any point landing in `pac` still
- *   projects correctly via `albers.ts`'s `project()`, which falls back to the `us` panel's
- *   fit when its own panel has no fit -- the arc just has no coastline drawn under it. The
- *   page-level disclosure of this gap (so an empty, labelled Pacific inset does not read as a
- *   rendering bug to a site visitor) lives in `app/src/components/NetworkMap.tsx`'s `pac`-
- *   empty caption, added alongside this change, and `docs/design/system.md` § The map.
+ *   `app/geo/ne_50m_pac.json` (M9 #111), the SAME source layer, scale and mirror as
+ *   `ne_50m_car.json`, filtered to `SOVEREIGNT == 'United States of America'` AND `NAME in
+ *   ('Guam', 'N. Mariana Is.', 'American Samoa')` -- 3 features, feeding the `pac` and `sam`
+ *   panels. AN EARLIER VERSION OF THIS HEADER SAID THAT FILE HAD NO ENTRY FOR THEM, and it
+ *   was wrong for a whole milestone: Guam (12 points), N. Mariana Is. (46 points across 6
+ *   rings) and American Samoa (8 points) are all in the very file `ne_50m_car.json` was cut
+ *   from. The claim was never checked; it is now, and the check is the committed file.
+ *
+ *   MIDWAY genuinely is absent, and is the one gap left: at 1:10m it exists only inside a
+ *   13-ring `U.S. Minor Outlying Is.` feature that also contains Navassa Island in the
+ *   CARIBBEAN. `main()` below classifies a WHOLE feature by `regionOf` of its first ring's
+ *   first point, so taking Midway that way would project Navassa into the Pacific inset --
+ *   ring-level selection inside a committed input is a different design, not this one. Midway
+ *   therefore has its own panel (`nwhi`) with no reference points at all, keeps `project()`'s
+ *   subject-derived fallback, and the gap is disclosed on the page itself
+ *   (`app/src/components/NetworkMap.tsx`'s `nwhi`-empty caption) and in
+ *   `docs/design/system.md` § The map. That is a real, documented limitation, not a bug.
  *
  * WHY COMMITTED, NOT FETCHED AT BUILD TIME: `make verify` builds twice and diffs every
  * artifact byte-for-byte; a build step that reaches the network is not reproducible (no
@@ -67,9 +74,9 @@
  *
  * A per-page network map (`app/src/lib/map/networkMap.ts`, M7 Task 8) must reuse `fitPanels(
  * BASEMAP_FIT_POINTS)` VERBATIM -- identical input, identical output -- for any panel this
- * generator produced a fit for (us/ak/hi/car as of Task 7b, since `ne_50m_car.json`'s
- * PR/USVI points now feed `BASEMAP_FIT_POINTS` too), and may fall back to a fit derived from
- * its own subject points ONLY for a panel with zero committed reference points (pac alone).
+ * generator produced a fit for (us/ak/hi/pac/car/sam as of #111), and may fall back to a fit
+ * derived from its own subject points ONLY for a panel with zero committed reference points
+ * (`nwhi` alone -- Midway; see above).
  *
  * AN EARLIER DRAFT OF THIS COMMENT RECOMMENDED THE WRONG FIX, and it is worth recording why,
  * since the wrong version shipped (unfixed) for one task: it said a per-page map "must call
@@ -108,6 +115,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const GEO_PATH = path.join(REPO_ROOT, "app", "geo", "ne_110m_us.json");
 const CAR_GEO_PATH = path.join(REPO_ROOT, "app", "geo", "ne_50m_car.json");
+const PAC_GEO_PATH = path.join(REPO_ROOT, "app", "geo", "ne_50m_pac.json");
 const OUT_PATH = path.join(REPO_ROOT, "app", "src", "lib", "map", "basemapPaths.generated.ts");
 
 // Ramer-Douglas-Peucker simplification, applied to each ring in RAW (lat, lon) degrees,
@@ -215,15 +223,16 @@ export function round3(n) {
 export function loadReferencePointsAndFits() {
   const raw = JSON.parse(readFileSync(GEO_PATH, "utf8"));
   const rawCar = JSON.parse(readFileSync(CAR_GEO_PATH, "utf8"));
-  // Two committed inputs, two resolutions (110m for the 51 US states/DC, 50m for the 2
-  // Caribbean territories -- see this file's header for why neither carries the other's
-  // features). Concatenated BEFORE sorting so the merged array is ordered purely by postal
-  // code, not by which file a feature happened to come from -- sort order must not depend on
-  // array-concatenation order for the output to be deterministic. "PR"/"VI" interleave
-  // alphabetically among the state codes (e.g. "PR" sorts between "PA" and "RI"); regionOf
-  // still classifies every feature into the right panel below regardless of where in this
-  // list it lands.
-  const features = [...raw.features, ...rawCar.features].sort((a, b) =>
+  const rawPac = JSON.parse(readFileSync(PAC_GEO_PATH, "utf8"));
+  // Three committed inputs, two resolutions (110m for the 51 US states/DC, 50m for the 2
+  // Caribbean and 3 Pacific territories -- see this file's header for why the 110m file
+  // carries none of the five). Concatenated BEFORE sorting so the merged array is ordered
+  // purely by postal code, not by which file a feature happened to come from -- sort order
+  // must not depend on array-concatenation order for the output to be deterministic.
+  // "AS"/"GU"/"MP"/"PR"/"VI" interleave alphabetically among the state codes (e.g. "PR" sorts
+  // between "PA" and "RI", "AS" between "AR" and "AZ"); regionOf still classifies every
+  // feature into the right panel below regardless of where in this list it lands.
+  const features = [...raw.features, ...rawCar.features, ...rawPac.features].sort((a, b) =>
     a.properties.postal.localeCompare(b.properties.postal),
   );
 
@@ -235,7 +244,7 @@ export function loadReferencePointsAndFits() {
   // ROUNDED TO 3 DECIMALS HERE, before `fits` is computed from them, not only when they are
   // later serialized into `BASEMAP_FIT_POINTS` (final whole-branch review, Important #6).
   // `ne_110m_us.json` is already committed at 3 decimals, so this is a no-op for the us/ak/hi
-  // panels -- but `ne_50m_car.json` (M7 Task 7b) is committed at 4 decimals, so without this
+  // panels -- but `ne_50m_car.json` and `ne_50m_pac.json` are committed at 4 decimals, so without this
   // the fit baked into every coastline path would be derived from RAW 4-decimal car points
   // while `BASEMAP_FIT_POINTS` -- what a per-page network map actually calls
   // `fitPanels()` on at runtime -- carried only the fmt2-rounded 3-decimal copies. The two
@@ -263,7 +272,7 @@ function main() {
   const { features, referencePoints, fits } = loadReferencePointsAndFits();
 
   /** @type {Record<string, string[]>} */
-  const pathsByPanel = { us: [], ak: [], hi: [], pac: [], car: [] };
+  const pathsByPanel = { us: [], ak: [], hi: [], pac: [], nwhi: [], car: [], sam: [] };
 
   for (const feature of features) {
     const rings = ringsOf(feature.geometry);
@@ -289,7 +298,7 @@ function main() {
     );
   }
 
-  const panelOrder = ["us", "ak", "hi", "pac", "car"];
+  const panelOrder = ["us", "ak", "hi", "pac", "nwhi", "car", "sam"];
   const pathsLiteral = panelOrder
     .map((panel) => `  ${panel}: ${JSON.stringify(pathsByPanel[panel].join(""))},`)
     .join("\n");
@@ -308,9 +317,10 @@ function main() {
   }
 
   const out = `/**
- * GENERATED by app/scripts/build-basemap.mjs (\`make basemap\`) from TWO committed inputs:
- * app/geo/ne_110m_us.json (us/ak/hi -- and pac, which still gets nothing) and, as of M7
- * Task 7b, app/geo/ne_50m_car.json (car -- Puerto Rico + the USVI).
+ * GENERATED by app/scripts/build-basemap.mjs (\`make basemap\`) from THREE committed inputs:
+ * app/geo/ne_110m_us.json (us/ak/hi), app/geo/ne_50m_car.json (car -- Puerto Rico + the USVI,
+ * M7 Task 7b) and app/geo/ne_50m_pac.json (pac -- Guam + the Northern Marianas; sam --
+ * American Samoa, M9 #111). \`nwhi\` (Midway) has no input and is empty on purpose.
  * DO NOT HAND-EDIT -- your changes will be overwritten. See build-basemap.mjs's header for
  * both sources, their licenses, and why this is committed rather than fetched at build time.
  */
@@ -324,14 +334,15 @@ ${pathsLiteral}
  * The fixed reference points every panel's coastline was fit to (raw lat/lon, 3 decimals,
  * matching app/geo/ne_110m_us.json's own precision). A per-page network map
  * (app/src/lib/map/networkMap.ts, M7 Task 8) must reuse \`fitPanels(BASEMAP_FIT_POINTS)\`
- * VERBATIM for any panel it has an entry for (us/ak/hi/car as of Task 7b, since
- * ne_50m_car.json's PR/USVI points feed this same array) rather than re-deriving one
- * from its own subject points -- and must NOT union subject points into this array before
+ * VERBATIM for any panel it has an entry for (us/ak/hi/pac/car/sam as of #111, since
+ * ne_50m_car.json's and ne_50m_pac.json's points feed this same array) rather than re-deriving
+ * one from its own subject points -- and must NOT union subject points into this array before
  * fitting (\`fitPanels([...BASEMAP_FIT_POINTS, ...subjectPoints])\`, an earlier draft's wrong
  * recommendation): a subject point outside this array's own extent changes fitPanels's
  * scale for every point, arcs and this already-baked coastline alike. See
- * build-basemap.mjs's header for the full reasoning. A panel with no entry here (pac alone)
- * has no coastline to align to, so a subject-derived fit is the legitimate fallback.
+ * build-basemap.mjs's header for the full reasoning. A panel with no entry here (\`nwhi\`
+ * alone -- Midway) has no coastline to align to, so a subject-derived fit is the legitimate
+ * fallback.
  */
 export const BASEMAP_FIT_POINTS: GeoPoint[] = [
 ${pointsLiteral}

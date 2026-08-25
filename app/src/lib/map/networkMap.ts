@@ -37,16 +37,19 @@ import { BASEMAP_FIT_POINTS } from "./basemap";
  * one that projected the coastline is exactly the misalignment this exists to prevent, so the
  * union recommendation reopens the bug it claims to close.
  *
- * The correct rule: for a panel `BASEMAP_FITS` has an entry for (us/ak/hi/car today -- Task 7b
- * added `ne_50m_car.json`'s Puerto Rico/USVI polygons, so `car` now has committed geometry too
- * and its reference points feed this same `fitPanels(BASEMAP_FIT_POINTS)` call), reuse that fit
- * VERBATIM -- identical input, identical output, so an arc and the coastline beneath it were
- * fit exactly once. For a panel with zero committed reference points (pac alone, as of Task
- * 7b -- no Guam/CNMI/American Samoa/Midway polygons at this scale, `build-basemap.mjs`'s
- * header), there is no coastline to align to, so a subject-derived fit is the legitimate,
- * documented fallback -- see the merge in `renderNetworkMap` below. An airport that then lands
- * slightly outside the simplified coastline renders slightly outside it; that is
- * geographically honest and must not be "fixed" by rescaling.
+ * The correct rule: for a panel `BASEMAP_FITS` has an entry for (us/ak/hi/pac/car/sam today --
+ * Task 7b added `ne_50m_car.json`'s Puerto Rico/USVI polygons and #111 added
+ * `ne_50m_pac.json`'s Guam/Northern Marianas/American Samoa ones, so all six feed this same
+ * `fitPanels(BASEMAP_FIT_POINTS)` call), reuse that fit VERBATIM -- identical input, identical
+ * output, so an arc and the coastline beneath it were fit exactly once. For a panel with zero
+ * committed reference points (`nwhi` alone as of #111 -- Midway, which Natural Earth carries
+ * only inside a feature that also spans the Caribbean; `build-basemap.mjs`'s header), there is
+ * no coastline to align to, so a subject-derived fit is the legitimate, documented fallback --
+ * see the merge in `renderNetworkMap` below. That branch is not dead code kept for symmetry:
+ * `/airport/MDY?y=2021` and `/airport/HNL?y=2021` are the pages it carries, and giving Midway
+ * the baked `pac` fit instead would project it to (1635.6, -207.7), off a 960x500 canvas.
+ * An airport that lands slightly outside the simplified coastline renders slightly outside it;
+ * that is geographically honest and must not be "fixed" by rescaling.
  */
 const BASEMAP_FITS: Map<Panel, PanelFit> = fitPanels(BASEMAP_FIT_POINTS);
 
@@ -94,13 +97,22 @@ const TOP_LABEL_COUNT = 8;
 const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, number]> = {
   ak: [36, 322, 176, 468],
   hi: [192, 392, 292, 468],
-  pac: [308, 392, 408, 468],
+  // Reshaped by #111 from the original 100x76 placeholder to match albers.ts's own
+  // PANEL_RECTS.pac -- real Guam + Northern Marianas geometry is 0.2052:1, five times taller
+  // than wide, and 216px of height is what puts Tinian and Saipan 6px apart. See that file's
+  // comment for the arithmetic.
+  pac: [308, 252, 352, 468],
+  // Midway. No committed geometry, so the coastline cannot disagree with this frame -- but the
+  // frame must still be drawn, or the arc that reaches Midway floats in unlabelled space.
+  nwhi: [368, 392, 408, 468],
   // Widened by M7 Task 7b to match albers.ts's own PANEL_RECTS.car -- see that file's
   // comment for the measurement (real PR/USVI geometry is ~3.89:1 wide, not the original
   // rect's 1.32:1). Keep this literal in sync with PANEL_RECTS.car; a frame border drawn to
   // a different rect than the one the coastline was actually fit to would visibly not match
   // the landmass inside it.
   car: [424, 392, 720, 468],
+  // American Samoa (#111), aspect-matched to its 2.1419:1 extent at the tray's own height.
+  sam: [736, 392, 899, 468],
 };
 
 /** Order and label text for the four insets. `us` never gets a frame -- it is the base map
@@ -110,8 +122,10 @@ const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, number]
 const INSETS: { panel: Exclude<Panel, "us">; label: string }[] = [
   { panel: "ak", label: "ALASKA" },
   { panel: "hi", label: "HAWAI‘I" },
-  { panel: "pac", label: "PACIFIC" },
+  { panel: "pac", label: "MARIANAS" },
+  { panel: "nwhi", label: "MIDWAY" },
   { panel: "car", label: "CARIBBEAN" },
+  { panel: "sam", label: "AMERICAN SAMOA" },
 ];
 
 /** Escapes text that lands inside SVG markup, whether as element content or as an attribute
@@ -199,8 +213,8 @@ export function renderNetworkMap(input: NetworkMapInput): string {
   // subjectFits decides WHICH panels this network reaches (unchanged from before the fix --
   // still exactly "the panels the subject's own points land in", which is what the inset-
   // frame loop below needs), and its own fit values are the FALLBACK for a panel with no
-  // committed basemap reference points -- `pac` alone today, since M7 Task 7b gave `car` real
-  // Puerto Rico and USVI geometry from Natural Earth 1:50m. For every other panel, the
+  // committed basemap reference points -- `nwhi` (Midway) alone today, since M7 Task 7b gave
+  // `car` real geometry and #111 gave `pac` and `sam` theirs. For every other panel, the
   // VALUE this map actually projects with is BASEMAP_FITS's -- the one the coastline was
   // baked against -- never a fit re-derived from this one page's own arc endpoints. See
   // BASEMAP_FITS's own comment for why the naive `fitPanels([...BASEMAP_FIT_POINTS,

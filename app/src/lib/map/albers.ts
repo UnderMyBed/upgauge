@@ -11,7 +11,7 @@
  * antimeridian. Contract: `docs/design/system.md` § The map § Projection.
  */
 
-export type Panel = "us" | "ak" | "hi" | "pac" | "car";
+export type Panel = "us" | "ak" | "hi" | "pac" | "nwhi" | "car" | "sam";
 
 export interface GeoPoint {
   lat: number;
@@ -53,15 +53,36 @@ export function normalizeLon(lon: number): number {
  * Which panel a point belongs to. Callers MUST pass an already-normalized longitude
  * (`normalizeLon(lon)`), never the raw value.
  *
- * Ordered most-specific first (`pac`, `car`, `hi`, `ak`), `us` last as the unconditional
- * fallback -- the mockup's two-panel-plus-fallback shape is preserved, but two more specific
- * panels are inserted ahead of it so they never fall through:
+ * Ordered most-specific first (`sam`, `pac`, `nwhi`, `car`, `hi`, `ak`), `us` last as the
+ * unconditional fallback -- the mockup's two-panel-plus-fallback shape is preserved, but four
+ * more specific panels are inserted ahead of it so they never fall through:
  *
- * - `pac` catches Guam/Saipan/Tinian/Rota (normalized lon ~ -214 to -215, lat ~13-15) AND
- *   American Samoa (lat -14.3, lon -170.7) AND Midway (lat 28.2, lon -177.4) -- all far west
- *   and south of Hawai'i proper. Testing this before `hi` is what keeps the mockup's
- *   `lon < -150 && lat < 30` Hawai'i test from also catching Samoa and Midway, which used to
- *   stretch a "Hawai'i" panel across 42 degrees of latitude when Hawai'i itself spans 2.3.
+ * - `sam`, `pac` and `nwhi` are the three-way split of what was ONE `lat < 30 && lon < -160`
+ *   test. Their union is exactly that predicate again, so nothing can move into or out of
+ *   `us`/`ak`/`hi`/`car` because of the split -- a property worth stating because it is what
+ *   makes the split provably fit-preserving for the other four panels, not merely observed to
+ *   be. They are three panels rather than one because a SINGLE Albers fit cannot carry them:
+ *   the Marianas, American Samoa and Midway span roughly 5,000 km, and one panel scaled to
+ *   that extent puts Saipan and Tinian -- 18 km apart, and a route carrying 39,908 seats over
+ *   the trailing 12 -- 2.73px apart even at the full width of a 960x500 canvas. Measured; the
+ *   arithmetic is in `PANEL_RECTS` below.
+ *   - `sam` is American Samoa (PPG, lat -14.3, lon -170.7), the one territory in this dataset
+ *     south of the equator. Testing it before `hi` is what keeps the mockup's
+ *     `lon < -150 && lat < 30` Hawai'i test from also catching it, which used to stretch a
+ *     "Hawai'i" panel across 42 degrees of latitude when Hawai'i itself spans 2.3.
+ *   - `pac` is the Marianas -- Guam/Rota/Tinian/Saipan (normalized lon ~ -214 to -215, lat
+ *     13.5-15.1) plus the uninhabited northern islands, i.e. everything WEST of the
+ *     antimeridian. That is what `lon < -200` says.
+ *   - `nwhi` is the Northwestern Hawaiian Islands: Midway (MDY, lat 28.2, lon -177.4) and Kure.
+ *     It has NO committed coastline and deliberately keeps none -- Natural Earth carries Midway
+ *     only inside a feature that also spans the Caribbean (`app/geo/ne_50m_pac.json`'s own
+ *     `_source` records why that cannot be cut apart here) -- so `fitPanels(BASEMAP_FIT_POINTS)`
+ *     produces no fit for it and a page reaching it takes `networkMap.ts`'s subject-derived
+ *     fallback, which is the ONLY panel that branch still serves. Folding Midway into `pac`
+ *     instead is not a simplification, it is a regression: `pac`'s baked fit is scaled to the
+ *     Marianas' own extent, so Midway projects to (1635.6, -207.7) -- off the canvas entirely --
+ *     and `/airport/MDY?y=2021` loses its own subject. The gap is stated on the page itself
+ *     (`NetworkMap.tsx`'s caption), never silently drawn wrong.
  * - `car` catches Puerto Rico and the USVI (lat 17.70-18.49, lon -67.15 to -64.71), which sit
  *   east of every conterminous airport (PQI, Maine, -68.05) and 6.86 degrees south of the
  *   southernmost (EYW, Key West, 24.56) -- no single conterminous rectangle can hold both
@@ -69,7 +90,9 @@ export function normalizeLon(lon: number): number {
  *   branch rather than falling into `us`.
  */
 export function regionOf(lat: number, lon: number): Panel {
-  if (lat < 30 && lon < -160) return "pac";
+  if (lat < 0 && lon < -160) return "sam";
+  if (lat < 30 && lon < -200) return "pac";
+  if (lat < 30 && lon < -160) return "nwhi";
   if (lat < 25 && lon > -70) return "car";
   if (lat < 30 && lon < -150) return "hi";
   if (lat > 51 && lon < -129) return "ak";
@@ -96,21 +119,36 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
   us: { p1: 29.5, p2: 45.5, lam0: -96, phi0: 37.5 },
   ak: { p1: 55, p2: 65, lam0: -154, phi0: 50 },
   hi: { p1: 8, p2: 18, lam0: -157, phi0: 20 },
-  // Guam/Saipan/Tinian/Rota cluster around normalized lon -214.3 to -215.2, lat 13.5-15.1;
-  // American Samoa (-170.7, -14.3) and Midway (-177.4, 28.2) fall in the same panel (see
-  // `regionOf`) but well outside that cluster, so the parallels bracket the dense cluster
-  // rather than the panel's full, sparse extent -- the fit loop below only ever scales to
-  // whatever points actually land in the panel for a given page, never the whole Pacific.
+  // The Marianas: Guam/Saipan/Tinian/Rota cluster around normalized lon -214.3 to -215.2, lat
+  // 13.5-15.1, and the committed coastline reaches lat 18.81 for the northern islands. These
+  // parallels are UNCHANGED from when this panel also held American Samoa and Midway, and that
+  // is deliberate: retuning them to bracket the Marianas alone (p1 14.2, p2 17.9) moves the
+  // ratio that actually matters here -- Tinian-Saipan over Guam-Saipan -- from 0.08628 to
+  // 0.08637, a 0.1% difference that no rect can express. A gratuitous reprojection of geometry
+  // that is about to be committed is a cost with no benefit.
   pac: { p1: 10, p2: 18, lam0: -214.7, phi0: 14 },
+  // Midway (-177.4, 28.2) and Kure. No committed geometry, so this is only ever used with a
+  // subject-derived fit (`networkMap.ts`); it still needs real parallels, because `project`
+  // reads PANEL_PARAMS for any panel that HAS a fit, however that fit was derived.
+  nwhi: { p1: 27, p2: 29, lam0: -177.4, phi0: 28.2 },
   // Puerto Rico + USVI: lat 17.70-18.49, lon -67.15 to -64.71.
   car: { p1: 17, p2: 19, lam0: -65.9, phi0: 18 },
+  // American Samoa: Tutuila spans lat -14.36 to -14.26, lon -170.82 to -170.57. Its own
+  // parallels, not `pac`'s, and not because of distortion over a 30 km island: under `pac`'s
+  // lam0 of -214.7 Samoa sits 44 degrees off the central meridian, and `albersRaw`'s
+  // `th = n * (lon - lam0)` term then rotates it about 13 degrees. A sheared island is a
+  // drawing of somewhere else. Southern standard parallels give a negative `n`; the resulting
+  // orientation was checked rather than assumed (north maps to smaller screen y, east to
+  // larger x -- `albers.test.ts`).
+  sam: { p1: -14.4, p2: -14.2, lam0: -170.7, phi0: -14.3 },
 };
 
 // Canvas 960x500 (mockup's W/H), 16px outer pad. us/ak/hi rects are the mockup's own,
-// unchanged; pac/car are new, placed in the same bottom strip as hi (y 392-468), laid out
-// left to right after ak (36-176) and hi (192-292) with the mockup's own 16px gutter: pac
-// 308-408 (100px wide, still a placeholder -- pac has zero committed geometry, M7 Task 7b),
-// car 424-... (below).
+// unchanged. The other four sit in the bottom inset tray, laid out left to right after ak
+// (36-176) and hi (192-292) with the mockup's own 16px rect-to-rect gutter, every one of them
+// ending on the tray's shared 468 baseline: pac 308-352, nwhi 368-408, car 424-720, sam
+// 736-899. Frames are drawn at rect +/- 6px (`networkMap.ts`), so a 16px gutter leaves 4px
+// between neighbouring frames -- which is what hi and pac have measured today.
 //
 // `car`'s width was widened by M7 Task 7b once real geometry existed to check the original
 // 100x76 square against (Task 4/7's own open item -- there was nothing to measure it
@@ -123,22 +161,59 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
 // floating in the middle of a mostly-empty labelled box, not a rendering bug but a
 // misleading rectangle. Widened to 296px (76 * 3.89, rounded) so both dimensions bind
 // together and the coastline fills its frame the same way every other panel's does; height
-// (392-468, matching hi/pac) is unchanged so the bottom inset row keeps one shared baseline.
-const PANEL_RECTS: Record<Panel, PanelRect> = {
+// (392-468, matching hi) is unchanged so the bottom inset row keeps one shared baseline.
+//
+// `pac` got the same treatment, for the OPPOSITE mismatch, once its own geometry existed
+// (`ne_50m_pac.json`). Guam + the Northern Marianas' raw-Albers extent under `PANEL_PARAMS
+// .pac` is dx=0.019902, dy=0.096983 -- an aspect of 0.2052:1, five times TALLER than wide,
+// because the chain is a ~617 km north-south arc only ~129 km across. The old 100x76
+// placeholder (aspect 1.32:1) bound on height and left the islands a 15.6px-wide sliver.
+//
+// Height, not width, is what this rect is really buying, and the number is forced rather than
+// chosen. `dy` is the chain's latitude span in radians, which no projection parameter can
+// change, so `k` is capped at `h / 0.096983` however wide the rect gets (to bind on width
+// instead you would need `h >= 4.873w`, the same constraint again). Tinian and Saipan are
+// 0.002819 raw units apart -- 18 km, and a route filing 39,908 seats over the trailing 12 --
+// so drawing them 6px apart, one node diameter of clear air at r=2, needs k >= 2129 and
+// therefore h >= 206.4px. Hence 44x216 at k=2211: Tinian-Saipan 6.23px, Guam-Rota 31.45px,
+// Guam-Saipan 72.23px, and the islands fill 44.0 x 214.4px of the frame.
+//
+// The three-territory panel this replaces could not have satisfied that at ANY size: with
+// American Samoa in the same fit the extent is dx=0.840302, dy=0.485097, so a `pac` rect
+// filling the whole canvas less the 16px pad caps k at 964.7 and leaves Tinian and Saipan
+// 2.73px apart. That is why `sam` is a panel and not a rect change -- see `regionOf`.
+//
+// `sam` is 163x76: the tray's own height, and the width its 2.1419:1 extent asks for so both
+// dimensions bind. Known limitation, stated rather than hidden: Natural Earth's 1:50m Tutuila
+// is 8 vertices, of which RDP keeps 5, so this frame draws roughly 57px of outline per source
+// vertex against the 6-10px `hi` and `car` manage. The shape is coarse at this scale. It is
+// sized for the tray anyway because the frame has to hold PPG's 2px node and its 9px label,
+// and a fidelity-matched box would be about 28x13px -- smaller than the word on top of it.
+//
+// `nwhi` is 40x76 and has no geometry at all; a single-point subject fit degenerates to
+// `k = min(w, h)` and centres Midway in the frame, which is exactly what it did inside `pac`
+// before this split.
+//
+// EXPORTED (M9 #111) so a test can assert a projected airport lands inside its own panel
+// against THIS table rather than a third hand-copy of it. `networkMap.ts`'s `INSET_RECTS` is
+// still a deliberate hand-copy and is still not imported from here; keep the two in sync.
+export const PANEL_RECTS: Record<Panel, PanelRect> = {
   us: [26, 18, 934, 424],
   ak: [36, 322, 176, 468],
   hi: [192, 392, 292, 468],
-  pac: [308, 392, 408, 468],
+  pac: [308, 252, 352, 468],
+  nwhi: [368, 392, 408, 468],
   car: [424, 392, 720, 468],
+  sam: [736, 392, 899, 468],
 };
 
-const PANEL_ORDER: Panel[] = ["us", "ak", "hi", "pac", "car"];
+const PANEL_ORDER: Panel[] = ["us", "ak", "hi", "pac", "nwhi", "car", "sam"];
 
 /**
  * Fits each panel's own points into its own screen rect independently (same-scale-per-panel,
  * not one global scale) and returns a `Map` that OMITS any panel with zero points -- most
- * airports never touch `pac` or `car`, and a page must not draw a labelled empty inset frame
- * for a panel nothing in its network reaches.
+ * airports never touch `pac`, `nwhi`, `car` or `sam`, and a page must not draw a labelled
+ * empty inset frame for a panel nothing in its network reaches.
  */
 export function fitPanels(points: GeoPoint[]): Map<Panel, PanelFit> {
   const withPanel = points.map((pt) => {

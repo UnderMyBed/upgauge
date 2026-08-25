@@ -7,8 +7,9 @@
  * test re-running the same in-process function can't observe a byte-diff across two
  * separate `node` invocations.
  */
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { fitPanels } from "./albers";
+import { fitPanels, PANEL_RECTS, project } from "./albers";
 import { basemapPathsFor, BASEMAP_FIT_POINTS } from "./basemap";
 // The generator's OWN function, not a re-implementation of it -- see build-basemap.mjs's
 // `loadReferencePointsAndFits` doc comment for why this is exported rather than kept
@@ -48,16 +49,39 @@ describe("basemapPathsFor", () => {
     expect(basemapPathsFor(["car"])).toContain('data-name="VI"');
   });
 
-  it("requesting `pac` still emits nothing, not an error -- the one gap left open", () => {
-    // Guam/Saipan/Tinian/Rota/American Samoa/Midway remain unresolvable as distinct polygons
-    // at any resolution cheaply reachable from this mirror (checked, not assumed -- see
-    // build-basemap.mjs's header) -- out of scope for M7 Task 7b (6 fact-present airports
-    // vs. `car`'s 74). `pac` still has zero committed reference points, so `fitPanels` never
-    // produces a fit for it and the generator emits no path. A page reaching into the
-    // Pacific still renders (via `project`'s own `us`-fit fallback); it just draws no
-    // coastline under those arcs, disclosed on the page itself (NetworkMap.test.tsx).
-    expect(() => basemapPathsFor(["pac"])).not.toThrow();
-    expect(basemapPathsFor(["pac"])).toBe("");
+  it("emits paths for the Marianas panel (#111: ne_50m_pac.json)", () => {
+    // The inverse of the test this replaces, which asserted `basemapPathsFor(["pac"]) === ""`
+    // outright on the strength of a header comment claiming Natural Earth had no polygon for
+    // these territories at any cheaply reachable resolution. That claim was false, and had
+    // been for a milestone: Guam and N. Mariana Is. are in the very 1:50m file
+    // ne_50m_car.json was cut from. Both `data-name`s, not just the panel attribute -- MP is
+    // a 6-ring MultiPolygon and GU a single polygon, so a regression that dropped one feature
+    // while keeping the other still has to be caught.
+    expect(basemapPathsFor(["pac"])).toMatch(/data-panel="pac"/);
+    expect(basemapPathsFor(["pac"])).toContain('data-name="GU"');
+    expect(basemapPathsFor(["pac"])).toContain('data-name="MP"');
+  });
+
+  it("emits paths for the American Samoa panel (#111)", () => {
+    // `sam` is a panel rather than part of `pac` because ONE Albers fit cannot carry both:
+    // the two are ~5,000 km apart, so a shared fit puts Tinian and Saipan 2.73px apart even
+    // at full canvas width, and PPG at (1006.8, 771.6) under a Marianas-scaled one. Catches a
+    // regression that puts American Samoa back into `pac`'s input or its region test.
+    expect(basemapPathsFor(["sam"])).toMatch(/data-panel="sam"/);
+    expect(basemapPathsFor(["sam"])).toContain('data-name="AS"');
+  });
+
+  it("requesting `nwhi` emits nothing, not an error -- the one gap left open", () => {
+    // Midway is the gap that survived #111, and it is a property of the SOURCE rather than of
+    // scope: at 1:10m it exists only inside a 13-ring `U.S. Minor Outlying Is.` feature that
+    // also contains Navassa Island in the CARIBBEAN, and build-basemap.mjs classifies a whole
+    // feature by regionOf of its first ring's first point -- so taking Midway that way would
+    // project Navassa into the Pacific. `nwhi` therefore has zero committed reference points,
+    // `fitPanels` never produces a fit for it, and the generator emits no path. A page
+    // reaching Midway still renders it correctly, via networkMap.ts's subject-derived
+    // fallback, and the gap is disclosed on the page itself (NetworkMap.test.tsx).
+    expect(() => basemapPathsFor(["nwhi"])).not.toThrow();
+    expect(basemapPathsFor(["nwhi"])).toBe("");
   });
 });
 
@@ -73,7 +97,7 @@ describe("geometry survives simplification and projection intact", () => {
   // VA is the fixture (not NC) because its two-ring island geometry means a regression
   // that only collapses, say, the SECOND ring (not both) still has to be caught -- a test
   // that only looked at ring count, or only at the first `M...Z`, would miss that.
-  function pathDataFor(dataName: string, panelName: "us" | "car" = "us"): string {
+  function pathDataFor(dataName: string, panelName: "us" | "car" | "pac" | "sam" = "us"): string {
     const panel = basemapPathsFor([panelName]);
     const match = panel.match(new RegExp(`data-name="${dataName}" d="([^"]*)"`));
     if (!match) throw new Error(`no path found for data-name="${dataName}"`);
@@ -220,5 +244,212 @@ describe("BASEMAP_FIT_POINTS", () => {
     for (const panel of generatorFits.keys()) {
       expect(runtimeFits.get(panel)).toEqual(generatorFits.get(panel));
     }
+  });
+});
+
+describe("the Pacific panels' committed geometry (#111)", () => {
+  // Same trap as VA's and PR's tests above -- the closed-ring RDP bug collapses each ring to
+  // its OWN single repeated point, so every check is per-subpath, never over a feature's
+  // combined coordinate set.
+  //
+  // WHAT IS DIFFERENT HERE, AND WHY THERE IS NO 20 px^2 / 10 px^2 THRESHOLD FOR MP: at
+  // RDP_EPSILON_DEG = 0.05 the four northern Mariana rings (Farallon de Pajaros, Anatahan,
+  // Agrihan, Pagan) measure 1.20, 1.40, 3.20 and 3.91 px^2. There is no threshold above ~1
+  // px^2 that clears them, and inventing one that happens to pass is worse than having none.
+  // The reason is not RDP: those islands are 2-4 km across, and at `pac`'s k of 2211 they are
+  // 2.3-4.2px wide UNSIMPLIFIED -- RDP costs them about 1.5px of height on an already
+  // sub-pixel feature. A per-input epsilon would buy nothing and is a code path M7 Task 7b
+  // explicitly refused.
+  //
+  // So the per-subpath assertion is the EXACT statement of the bug instead of a proxy for it:
+  // the collapse emits `M x,y L x,y Z` -- ONE distinct coordinate pair, and a bounding box
+  // that is exactly 0 in BOTH dimensions. Two distinct pairs and a non-zero box in both
+  // dimensions is what real geometry has and what a collapsed ring cannot. Real thresholds go
+  // where they are defensible: GU and AS below.
+  function pathDataFor(dataName: string, panelName: "pac" | "sam"): string {
+    const panel = basemapPathsFor([panelName]);
+    const match = panel.match(new RegExp(`data-name="${dataName}" d="([^"]*)"`));
+    if (!match) throw new Error(`no path found for data-name="${dataName}"`);
+    return match[1];
+  }
+
+  function subpathsOf(d: string): string[] {
+    return d
+      .split(/(?<=Z)\s*/)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  }
+
+  function coordsOf(subpath: string): [number, number][] {
+    return [...subpath.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)].map(
+      (m) => [Number(m[1]), Number(m[2])] as const as [number, number],
+    );
+  }
+
+  function boxOf(subpath: string): { w: number; h: number; distinct: number } {
+    const coords = coordsOf(subpath);
+    const xs = coords.map((c) => c[0]);
+    const ys = coords.map((c) => c[1]);
+    return {
+      w: Math.max(...xs) - Math.min(...xs),
+      h: Math.max(...ys) - Math.min(...ys),
+      distinct: new Set(coords.map((c) => `${c[0]},${c[1]}`)).size,
+    };
+  }
+
+  it("the Northern Marianas' six rings each survive simplification", () => {
+    // Ground truth against the current generated artifact: 6 subpaths, measured bounding
+    // boxes 3.91 / 1.40 / 3.20 / 1.20 / 27.54 / 15.95 px^2, with 2 or 4 distinct coordinate
+    // pairs each. A ring collapsed by the closed-ring RDP bug has exactly 1 distinct pair and
+    // a box that is 0 x 0 -- regardless of what the other five rings do.
+    const subpaths = subpathsOf(pathDataFor("MP", "pac"));
+    expect(subpaths).toHaveLength(6);
+    for (const subpath of subpaths) {
+      const { w, h, distinct } = boxOf(subpath);
+      expect(distinct).toBeGreaterThanOrEqual(2);
+      expect(w).toBeGreaterThan(0);
+      expect(h).toBeGreaterThan(0);
+    }
+  });
+
+  it("Guam's committed geometry", () => {
+    // Ground truth: ONE subpath, 10.9 x 14.1px, area ~153.7 px^2. Threshold 50 px^2 -- a 3.1x
+    // margin, the same spirit as VA's 3.7x and PR's 3.9x above. Don't raise it without
+    // re-measuring Guam's own ring first.
+    const subpaths = subpathsOf(pathDataFor("GU", "pac"));
+    expect(subpaths).toHaveLength(1);
+    const { w, h } = boxOf(subpaths[0]);
+    expect(w * h).toBeGreaterThan(50);
+  });
+
+  it("American Samoa's committed geometry", () => {
+    // Ground truth: ONE subpath (Tutuila), 162.6 x 56.1px, area ~9,121.9 px^2. Threshold
+    // 2000 px^2 -- a 4.6x margin.
+    //
+    // Known limitation, recorded rather than hidden: Natural Earth's 1:50m Tutuila is 8
+    // vertices and RDP keeps 5, so `sam` draws roughly 57px of outline per source vertex
+    // against the 6-10px `hi` and `car` manage, and the dropped vertices were 11px and 15px
+    // off the kept chords. The shape is coarse at this scale. It is sized for the tray anyway
+    // because the frame has to hold PPG's 2px node and its 9px label; a fidelity-matched box
+    // would be about 28x13px, narrower than the word printed on top of it.
+    const subpaths = subpathsOf(pathDataFor("AS", "sam"));
+    expect(subpaths).toHaveLength(1);
+    const { w, h } = boxOf(subpaths[0]);
+    expect(w * h).toBeGreaterThan(2000);
+  });
+});
+
+describe("every Pacific-reaching airport lands inside its own inset (#111)", () => {
+  // The acceptance property of #111, asserted where it actually lives: on the projection of
+  // the REAL warehouse coordinates through the REAL committed fit, against albers.ts's own
+  // PANEL_RECTS rather than a copy of it. `PANEL_RECTS` is exported for exactly this.
+  //
+  // Seven fact-present airports reach a Pacific panel over the trailing 12: GUM, HNL, PPG,
+  // ROP, SFO, SPN and TIQ. Before #111 they were stated as six everywhere, and the omitted
+  // one was PPG -- the one that decides the layout, because it is 5,000 km from the Marianas.
+  const fits = fitPanels(BASEMAP_FIT_POINTS);
+  const COORDS: Record<string, [number, number]> = {
+    GUM: [13.48388889, 144.79722222],
+    ROP: [14.17444444, 145.24111111],
+    TIQ: [14.99916667, 145.61944444],
+    SPN: [15.12027778, 145.73],
+    PPG: [-14.33166667, -170.71138889],
+    HNL: [21.31777778, -157.92027778],
+    UAM: [13.58388889, 144.93],
+  };
+  const at = (code: string) => project(COORDS[code][0], COORDS[code][1], fits);
+
+  it.each([
+    ["GUM", "pac"],
+    ["ROP", "pac"],
+    ["TIQ", "pac"],
+    ["SPN", "pac"],
+    ["UAM", "pac"],
+    ["PPG", "sam"],
+    ["HNL", "hi"],
+  ] as const)("%s projects inside the %s rect", (code, panel) => {
+    const [x, y] = at(code);
+    const [x0, y0, x1, y1] = PANEL_RECTS[panel];
+    const inside = x >= x0 && x <= x1 && y >= y0 && y <= y1;
+    expect(`${code} at (${x.toFixed(1)}, ${y.toFixed(1)}) inside ${panel}: ${inside}`).toBe(
+      `${code} at (${x.toFixed(1)}, ${y.toFixed(1)}) inside ${panel}: true`,
+    );
+  });
+
+  it("keeps the four Marianas airports mutually distinguishable", () => {
+    // A node is r=2 and a label is font-size 9, so anything under ~6px renders as one dot.
+    // The binding pair is SPN-TIQ (Saipan and Tinian, 18 km apart, and a route filing 39,908
+    // seats over the trailing 12), NOT the more obvious GUM-SPN: under the old 100x76 rect
+    // with Marianas-only geometry, GUM-SPN measures 25.60px and passes while SPN-TIQ measures
+    // 2.21px. A test written against GUM-SPN could not have died for its stated reason.
+    //
+    // This is a DISTANCE assertion, not a "both nodes are present" one, for CLAUDE.md's
+    // standing reason: presence is satisfied by two dots on top of each other.
+    const codes = ["GUM", "ROP", "TIQ", "SPN"] as const;
+    for (let i = 0; i < codes.length; i++) {
+      for (let j = i + 1; j < codes.length; j++) {
+        const a = at(codes[i]);
+        const b = at(codes[j]);
+        const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+        expect(`${codes[i]}-${codes[j]}: ${(d >= 6).toString()} (${d.toFixed(2)}px)`).toBe(
+          `${codes[i]}-${codes[j]}: true (${d.toFixed(2)}px)`,
+        );
+      }
+    }
+  });
+});
+
+describe("the panels #111 must not have moved", () => {
+  it("holds us/ak/hi/car to the exact path bytes they had before #111", () => {
+    // #111's acceptance criterion, stated at the only altitude that actually says it: the
+    // PATH STRINGS, byte for byte. The fit assertion below names WHICH panel moved and by how
+    // much, which is the useful thing when one does -- but a fit is only sensitive to a
+    // coordinate that moves a panel's min/max EXTENT. Measured: nudging an interior WA vertex
+    // 1 degree west leaves all four fits untouched and this hash red, which is exactly the
+    // mutant that proved the fit check alone insufficient. Both assertions, or the guard has a
+    // hole in the shape of every interior vertex in the file.
+    //
+    // Hashes rather than 100KB of inline `d` attributes, and NOT a substitute for `make
+    // basemap`'s zero-diff gate: that gate proves the artifact reproduces from its inputs, but
+    // it lives in `make verify`, which runs on schedule and workflow_dispatch only and never on
+    // a pull request. This runs in `make app-check`, which does.
+    //
+    // A legitimate future basemap refresh moves these. Re-measure and say so in the commit;
+    // never edit one to match a diff you have not read.
+    const hashes = Object.fromEntries(
+      (["us", "ak", "hi", "car"] as const).map((panel) => [
+        panel,
+        createHash("sha256").update(basemapPathsFor([panel])).digest("hex"),
+      ]),
+    );
+    expect(hashes).toEqual({
+      us: "a1355b846c078a0d58e39957b3a95df9e2b6bc8babc1119130c860e309f0f3c6",
+      ak: "c424a4acc83b813379e6cf2cc4839aa14d7d003f2d0b26b629dac2e316303f5f",
+      hi: "bdaf4ac90b2a8dffd4d5e5cc29f1e8eea5ea434e764d5d2825eec998ce9d6743",
+      car: "1d837f6ba9d12262f246c242f8e1a4a794eea6ba22127c22e60b8823ebaff49f",
+    });
+  });
+
+  it("holds us/ak/hi/car to the fit they were baked at before #111", () => {
+    // `fitPanels` partitions points per panel, so adding `ne_50m_pac.json`'s features CANNOT
+    // move `us`, `ak`, `hi` or `car` -- and `regionOf`'s three-way split of the old `pac`
+    // branch has a union identical to that branch, so it cannot either. Both are arguments;
+    // this is the check.
+    //
+    // Frozen literals rather than another hash: a diff here names WHICH panel moved and by how
+    // much, which is the whole question when one does. Necessary and NOT sufficient on its own
+    // -- see the byte-level check above for the interior-vertex hole this one cannot see.
+    const fits = fitPanels(BASEMAP_FIT_POINTS);
+    expect({
+      us: fits.get("us"),
+      ak: fits.get("ak"),
+      hi: fits.get("hi"),
+      car: fits.get("car"),
+    }).toEqual({
+      us: { k: 904.5131300948573, ox: 487.1120339377376, oy: 239.57188375255203 },
+      ak: { k: 377.8396853372171, ox: 87.7779935792461, oy: 481.4201810606285 },
+      hi: { k: 1221.0803508579845, ox: 247.8265564145108, oy: 442.31592580205955 },
+      car: { k: 5304.317346044431, ox: 603.4689616699768, oy: 440.65076212255065 },
+    });
   });
 });
