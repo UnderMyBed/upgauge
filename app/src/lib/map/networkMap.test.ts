@@ -109,9 +109,6 @@ function pdxToHnlFixture(): NetworkMapInput {
 
 /** Same as pdxToHnlFixture, named for what it exercises here: the Hawai'i inset actually
  * getting drawn and labelled. */
-function fixtureReachingHawaii(): NetworkMapInput {
-  return pdxToHnlFixture();
-}
 
 /** HNL -> ORD: the REVERSE of pdxToHnlFixture -- origin is the inset (Hawai'i), destination is
  * conterminous. Re-review finding 4's fixture: the straight line this draws crosses OUT of
@@ -276,7 +273,9 @@ describe("renderNetworkMap", () => {
     // it caught a real one-sided edit during this task's own mutant run. A frame drawn to a
     // different rect than the one the coastline was fit to would visibly not match the landmass
     // inside it, and nothing else in this suite looks at absolute frame position.
-    const { us: _us, ...insetPanels } = PANEL_RECTS;
+    const insetPanels = Object.fromEntries(
+      Object.entries(PANEL_RECTS).filter(([panel]) => panel !== "us"),
+    );
     expect(INSET_RECTS).toEqual(insetPanels);
   });
 
