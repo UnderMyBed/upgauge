@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { renderNetworkMap, type NetworkMapInput } from "./networkMap";
 import { GOLDEN_NETWORK_INPUT, GOLDEN_NETWORK_SVG } from "./networkGolden.fixture";
+// MERGE (#104 x #111): #104 relocated INSET_RECTS into segmentMap.ts while #111 changed its
+// values and added this sync gate. The table's new home is segmentMap.ts; the gate follows it.
+import { INSET_RECTS } from "./segmentMap";
+import { PANEL_RECTS } from "./albers";
 import type { ArcDatum } from "./arcs";
 
 /** Real coordinates throughout, per this task's brief -- a synthetic grid would make the
@@ -15,6 +19,13 @@ const COORDS = {
   // below, to extend the SUBJECT's bounding box without changing which panel ("us") any of
   // these airports land in.
   MIA: { lat: 25.79, lon: -80.29 },
+  // One airport per remaining panel, so a single fixture can reach all six insets and the
+  // label test below can be a claim about EVERY label rather than about Hawai'i's.
+  ANC: { lat: 61.17, lon: -149.99 }, // ak
+  GUM: { lat: 13.48, lon: 144.8 }, // pac -- positive longitude, regionOf normalizes first
+  MDY: { lat: 28.2, lon: -177.38 }, // nwhi
+  SJU: { lat: 18.44, lon: -66.0 }, // car
+  PPG: { lat: -14.33, lon: -170.71 }, // sam -- southern hemisphere
 } as const;
 
 function originArc(code: keyof typeof COORDS): ArcDatum {
@@ -240,15 +251,59 @@ describe("renderNetworkMap", () => {
   });
 
   it("does not emit an inset frame for a panel with no points", () => {
+    // EVERY inset label, not a sample. #111 renamed `pac`'s from "PACIFIC" to "MARIANAS" and
+    // left this assertion naming the old string, which made it unreachable for any input --
+    // `grep -c PACIFIC networkMap.ts` returns 0 -- so this test proved only its `hi` half.
+    // Demonstrated rather than argued: making the inset loop draw `pac` unconditionally leaves
+    // the old `not.toContain("PACIFIC")` GREEN and reddens the list below.
+    //
+    // A `not.toContain` over a fixture that draws NO insets cannot gate a rename -- renaming
+    // only makes it likelier to pass. The rename gate is the POSITIVE test below, which is
+    // where the claim belongs and where it is now made.
     const svg = renderNetworkMap(conterminousOnlyFixture());
     expect(svg).not.toContain("HAWAI");
-    expect(svg).not.toContain("PACIFIC");
+    expect(svg).not.toContain("MARIANAS");
+    expect(svg).not.toContain("MIDWAY");
+    expect(svg).not.toContain("AMERICAN SAMOA");
+    expect(svg).not.toContain("CARIBBEAN");
+    expect(svg).not.toContain("ALASKA");
+  });
+
+  it("draws its frames to the same rects albers.ts fits the panels into", () => {
+    // INSET_RECTS is a hand-copy of PANEL_RECTS that no test guarded, because PANEL_RECTS was
+    // unexported. #111 exported it (to assert airports land inside their own panel) and then
+    // edited BOTH tables by hand -- the exact operation the missing gate existed to catch, and
+    // it caught a real one-sided edit during this task's own mutant run. A frame drawn to a
+    // different rect than the one the coastline was fit to would visibly not match the landmass
+    // inside it, and nothing else in this suite looks at absolute frame position.
+    const { us: _us, ...insetPanels } = PANEL_RECTS;
+    expect(INSET_RECTS).toEqual(insetPanels);
   });
 
   it("labels every inset it does draw", () => {
-    // An inset that isn't labelled is a lie -- the mockup's own comment.
-    const svg = renderNetworkMap(fixtureReachingHawaii());
-    expect(svg).toContain("HAWAI");
+    // An inset that isn't labelled is a lie -- the mockup's own comment. This asserted only
+    // `HAWAI` until #111, which meant a network reaching five other insets could draw five
+    // unlabelled frames and nothing would notice; it also meant the rename gate the negative
+    // test above claimed to be was nowhere in the suite. Mutant-verified: renaming ALASKA to
+    // AK, or CARIBBEAN to PR-USVI, left the whole 99-test suite green before this.
+    //
+    // One origin and one destination per panel, so every INSETS entry is exercised at once.
+    const svg = renderNetworkMap({
+      origin: originArc("ORD"),
+      arcs: [
+        destArc("ANC"),
+        destArc("HNL"),
+        destArc("GUM"),
+        destArc("MDY"),
+        destArc("SJU"),
+        destArc("PPG"),
+      ],
+      window: "2025-05 → 2026-04",
+      sameAirportSeats: 0,
+    });
+    for (const label of ["ALASKA", "HAWAI", "MARIANAS", "MIDWAY", "CARIBBEAN", "AMERICAN SAMOA"]) {
+      expect(`${label}: ${svg.includes(label)}`).toBe(`${label}: true`);
+    }
   });
 
   it("carries an accessible role and label", () => {

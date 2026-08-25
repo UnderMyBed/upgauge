@@ -19,16 +19,22 @@ export function NetworkMap({ network }: { network: NetworkMapInput }) {
     basemapPaths: basemapPathsFor(reached),
   });
 
-  // M7 Task 7b widened `car`'s coastline (ne_50m_car.json) but deliberately left `pac` empty
-  // -- 6 fact-present airports (GUM, HNL, ROP, SFO, SPN, TIQ) reach it, against `car`'s 74,
-  // which didn't justify the same fetch-and-filter work. `renderNetworkMap` still draws a
-  // labelled "PACIFIC" inset frame whenever a network reaches that panel (`fits.has("pac")`,
-  // networkMap.ts), same as before this task -- an empty, labelled box with real arcs and
-  // destination dots inside it but no landmass under them, which reads as a rendering defect
-  // unless something on the page says otherwise. Derived from `basemapPathsFor` itself
-  // (never a hardcoded "pac is always empty"), so this caption disappears on its own the day
-  // `pac` gains real geometry, without a code change here.
-  const pacHasNoBasemap = reached.includes("pac") && basemapPathsFor(["pac"]) === "";
+  // `pac` (Guam + the Northern Marianas) and `sam` (American Samoa) have real coastline as of
+  // #111 -- 7 fact-present airports reach the Pacific panels over the trailing 12 (GUM, HNL,
+  // PPG, ROP, SFO, SPN, TIQ), against `car`'s 79. Midway is the one gap left, and it is a
+  // property of the SOURCE, not of scope: Natural Earth carries Midway only inside a feature
+  // that also spans the Caribbean, which `build-basemap.mjs` cannot split apart (its header
+  // and app/geo/ne_50m_pac.json's `_source` both record why). So Midway gets its own panel,
+  // `nwhi`, which `renderNetworkMap` still frames and labels whenever a network reaches it
+  // (`fits.has("nwhi")`, networkMap.ts) -- an empty, labelled box with a real arc and a real
+  // destination dot inside it but no landmass under them, which reads as a rendering defect
+  // unless something on the page says otherwise. Two pages reach it: `/airport/MDY?y=2021`
+  // and `/airport/HNL?y=2021` (MDY-HNL, HA, 2021-09, its only filing).
+  //
+  // Derived from `basemapPathsFor` itself (never a hardcoded "nwhi is always empty"), so this
+  // caption disappears on its own the day Midway gains real geometry, without a code change
+  // here -- which is exactly what it just did for `pac`.
+  const midwayHasNoBasemap = reached.includes("nwhi") && basemapPathsFor(["nwhi"]) === "";
 
   return (
     <div className="map">
@@ -36,12 +42,12 @@ export function NetworkMap({ network }: { network: NetworkMapInput }) {
           input reaches it, and the one string that could (the origin/destination codes) is
           a BTS code, already validated by the resolver that produced `network.origin`. */}
       <div dangerouslySetInnerHTML={{ __html: svg }} />
-      {pacHasNoBasemap ? (
+      {midwayHasNoBasemap ? (
         <p className="foot">
-          {"The Pacific inset has no coastline under its arcs — Natural Earth's " +
-            "public-domain basemap has no polygon at this scale for Guam/CNMI/American " +
-            "Samoa/Midway. Arcs and destinations still render correctly; only the " +
-            "underlying landmass is missing."}
+          {"The Midway inset has no coastline under its arcs — Natural Earth's public-domain " +
+            "basemap carries Midway only inside one feature that also spans the Caribbean, so " +
+            "it cannot be drawn on its own. Arcs and destinations still render correctly; " +
+            "only the underlying landmass is missing."}
         </p>
       ) : null}
     </div>

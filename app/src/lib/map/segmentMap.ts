@@ -205,10 +205,29 @@ export const TOP_LABEL_COUNT = 8;
  * two literal tables in sync if the canvas layout ever changes; this copy is chrome only
  * (drawing the frame border), never projection math, which `fitPanels`/`project` alone own.
  */
-const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, number]> = {
+/** MERGE (#104 x #111). #104 relocated this table here from `networkMap.ts`; #111 changed three
+ *  of its values and added `nwhi`/`sam`. EXPORTED because #111's sync gate in
+ *  `networkMap.test.ts` asserts it deep-equals `albers.ts`'s `PANEL_RECTS` minus `us` -- a frame
+ *  drawn to a different rect than the one the coastline was fit to would visibly not match the
+ *  landmass inside it, and #111 edited both tables by hand, which is exactly the operation that
+ *  gate exists to catch. The follow-up #111 names is to import `PANEL_RECTS` and delete this. */
+export const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, number]> = {
   ak: [36, 322, 176, 468],
   hi: [192, 392, 292, 468],
-  pac: [308, 392, 408, 468],
+  // #111: reshaped AND relocated. Real Guam + Northern Marianas geometry is 0.2052:1 -- five
+  // times taller than wide -- and 216px of height is what puts Tinian and Saipan 6px apart.
+  // The top-left margin is the only place a rect that tall does not sit underneath the opaque
+  // lower-48 landmass, where its frame and MARIANAS label were painted over. The one inset
+  // outside the bottom tray.
+  pac: [40, 30, 84, 246],
+  // #111: Midway. No committed geometry -- Natural Earth carries it only inside a feature that
+  // also spans the Caribbean -- so it keeps the subject-derived fit. The frame is still drawn,
+  // or the arc reaching Midway floats in unlabelled space.
+  nwhi: [368, 392, 408, 468],
+  // #111: American Samoa. 181 wide, not 163: the 2.1419:1 aspect that produced 163 was measured
+  // under PANEL_PARAMS.pac. Under its own parallels it is 2.3801:1 on the 3-decimal reference
+  // points fitPanels actually reads.
+  sam: [736, 392, 917, 468],
   // Widened by M7 Task 7b to match albers.ts's own PANEL_RECTS.car -- see that file's
   // comment for the measurement (real PR/USVI geometry is ~3.89:1 wide, not the original
   // rect's 1.32:1). Keep this literal in sync with PANEL_RECTS.car; a frame border drawn to
@@ -224,8 +243,12 @@ const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, number]
 const INSETS: { panel: Exclude<Panel, "us">; label: string }[] = [
   { panel: "ak", label: "ALASKA" },
   { panel: "hi", label: "HAWAI‘I" },
-  { panel: "pac", label: "PACIFIC" },
+  // #111: "PACIFIC" -> "MARIANAS". A panel holding only the Marianas cannot keep a name that
+  // covers the two beside it.
+  { panel: "pac", label: "MARIANAS" },
+  { panel: "nwhi", label: "MIDWAY" },
   { panel: "car", label: "CARIBBEAN" },
+  { panel: "sam", label: "AMERICAN SAMOA" },
 ];
 
 /** Escapes text that lands inside SVG markup, whether as element content or as an attribute

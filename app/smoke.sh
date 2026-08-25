@@ -914,7 +914,8 @@ check     "airport map: the network SVG is in the served HTML" "$BODY" \
 check_dataset check_re "airport map: exactly 273 polylines (same-airport arc excluded)" \
   "$(count "$BODY" '<polyline')" '^273$'
 # An inset label -- ORD's own network reaches ak/hi/car (measured against this served build;
-# see the `pac` absence below), each drawn as a labelled `<rect>`+`<text>` frame (INSETS,
+# no ORD route touches a Pacific panel, which is why section 10b uses GUM), each drawn as a
+# labelled `<rect>`+`<text>` frame (INSETS,
 # networkMap.ts). Plain "ALASKA", not the bare `>ALASKA<` M5-style checks use elsewhere in this
 # file: the RSC payload escapes this SVG string's `>`/`<` to `>`/`<` (see the polyline
 # comment just above) but NOT the plain word between them, so the bracketed form appears once
@@ -926,8 +927,8 @@ check     "airport map: an inset is labelled (ALASKA)" "$BODY" 'ALASKA'
 # insets, window line and cache pair reach the served bytes, but NONE of them proves the
 # COASTLINE does -- the one output produced by a committed GENERATED module
 # (basemapPaths.generated.ts) rather than by code under test. A collapsed or empty basemap
-# renders a map with no landmass, which is visually IDENTICAL to the legitimately-empty `pac`
-# panel (docs/design/system.md § The map) -- so this is the map's own analogue of the
+# renders a map with no landmass, which is visually IDENTICAL to the legitimately-empty `nwhi`
+# (Midway) panel (docs/design/system.md § The map) -- so this is the map's own analogue of the
 # aircraft-mix chart's ramp-fill checks, and the one thing this section was missing.
 # `data-panel="us"` is the attribute `build-basemap.mjs` stamps on every `<path>` it emits
 # (basemapPathsFor's own docstring); ORD's network reaches `us` on every build (it IS the
@@ -965,6 +966,61 @@ check     "airport map ?y=nonsense: malformed input is no-store"            "$HD
 check_not "airport map ?y=nonsense: ...and is never long-cached"           "$HDRS" "s-maxage"
 BODY=$(curl -s --max-time 15 "${BASE}/airport/ORD?y=nonsense")
 check     "airport map ?y=nonsense: names the offending year" "$BODY" "unknown year 'nonsense'"
+
+# 10b. The Pacific panels' coastline (#111). Before this block `grep -in "pac" app/smoke.sh`
+# returned two COMMENTS and zero checks -- so the one thing a unit test structurally cannot
+# see (that the committed generated artifact's paths reach the SERVED bytes) had no coverage
+# at all on the panels that were about to change. ORD's own `data-panel="us"` check above
+# exists for exactly this reason and says so; this is its Pacific half.
+#
+# /airport/GUM is the subject: its trailing-12 network reaches `pac` (SPN, ROP), `hi` (HNL)
+# and `us` (SFO). Needles measured against a real served build, not copied from source --
+# `data-panel="pac"` occurs twice (the GU path and the MP path) and `MARIANAS` twice (the
+# `<text>` label, plus the RSC payload's copy, which escapes the SVG string's own angle
+# brackets but not the plain word between them -- see the ALASKA comment above).
+BODY=$(curl -s --max-time 30 "${BASE}/airport/GUM")
+check     "airport map GUM: the network SVG is in the served HTML" "$BODY" \
+  '<svg viewBox="0 0 960 500" width="960" height="500" role="img"'
+# The label, not just the frame: `pac` was "PACIFIC" until #111 split American Samoa and
+# Midway into their own panels, at which point a panel holding only the Marianas could not
+# keep a name that also covers the two panels beside it.
+check     "airport map GUM: the Marianas inset is labelled for what it holds" "$BODY" 'MARIANAS'
+# Both `data-name`s, not just the panel attribute. MP is a 6-ring MultiPolygon and GU a single
+# polygon; a regression dropping one feature while keeping the other would pass a check that
+# only looked for `data-panel="pac"`.
+check     "airport map GUM: Guam's own coastline reaches the served bytes"    "$BODY" 'data-name="GU"'
+check     "airport map GUM: the Northern Marianas coastline reaches the bytes" "$BODY" 'data-name="MP"'
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/airport/GUM")
+check     "airport map GUM: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# The other two Pacific panels, and the one gap left. Dataset-pinned as a block: MDY has
+# EXACTLY ONE filing in the whole window (MDY-HNL, HA, 2021-09, 278 seats), so a BTS revision
+# that dropped it would take `nwhi` off this page entirely -- which is a real signal, not
+# noise, but it is a claim about the dataset rather than about the build.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/HNL?y=2021")
+check_dataset check     "airport map HNL 2021: American Samoa is labelled"   "$BODY" 'AMERICAN SAMOA'
+check_dataset check     "airport map HNL 2021: its coastline reaches the bytes" "$BODY" 'data-name="AS"'
+check_dataset check     "airport map HNL 2021: the Midway inset is labelled" "$BODY" 'MIDWAY'
+# The paired positive for the check_not below is the four checks above, on this same body --
+# an empty body would fail them, so the negative cannot pass vacuously. `nwhi` is the one panel
+# with a frame and no coastline: Natural Earth carries Midway only inside a feature that also
+# spans the Caribbean (build-basemap.mjs's header). If it ever gains geometry, this check and
+# the caption check below must BOTH be rewritten -- they are two halves of one claim.
+check_dataset check_not "airport map HNL 2021: Midway genuinely has no coastline" "$BODY" 'data-panel="nwhi"'
+# CLAUDE.md: a correction is not landed until the user-facing copy carries it. This is the
+# only served-build coverage the caption has. ASCII prefix only -- the sentence continues into
+# a U+2014 em dash, which React emits raw from a JS string literal.
+check_dataset check     "airport map HNL 2021: the Midway gap is disclosed on the page" "$BODY" \
+  'The Midway inset has no coastline under its arcs'
+# And the page that would have LOST ITS OWN SUBJECT. Baking a `pac` fit takes `pac` off
+# networkMap.ts's subject-derived fallback; folding Midway in with it would project MDY to
+# (1367.6, -429.7), off a 960x500 canvas, so /airport/MDY?y=2021's origin disc would simply not
+# be drawn while the caption still said only the landmass was missing. The origin disc is
+# r="4.5" (networkMap.ts) and its cx/cy are asserted EXACTLY: a presence check on `<circle`
+# passes under that bug, since the destination dot is still emitted.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/MDY?y=2021")
+check_dataset check     "airport map MDY 2021: Midway's own origin disc is inside its inset" "$BODY" \
+  '<circle cx="388.0" cy="430.0" r="4.5"'
 
 # 11. /carrier/<code> -- the page has to say what it is counting.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL")

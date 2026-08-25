@@ -93,6 +93,7 @@ STATED: dict[str, tuple[str, ...]] = {
     "sitemap_airports": (
         "app/src/app/route/[pair]/page.test.tsx",
         "app/src/app/sitemap.ts",
+        "app/src/lib/map/albers.ts",
         "app/src/lib/map/greatCircle.test.ts",
         "app/src/lib/map/greatCircle.ts",
         "app/src/lib/map/networkMap.ts",
