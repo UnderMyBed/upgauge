@@ -444,6 +444,20 @@ The `<30 departures` floor applies to `t12_departures_performed` — **performed
 scheduled** — same reasoning as the fact-table quarantine rules: a route with a big schedule
 that mostly didn't fly should not count as "active."
 
+**A dropped carrier–route is structurally absent from this table, and the fix is never to lower
+the floor.** A route a carrier stopped flying has zero trailing-window departures, so it cannot
+clear `t12_departures_performed >= 30` — measured: **zero** rows with `t12_months_present = 0`.
+The floor gates the whole table before any delta, z-score or clamp, so relaxing it to admit
+dropped routes would move **every `health_score` in the database**. Anything needing the dropped
+side reads `fct_route_month` directly, as `sql/03_queries/map_carrier_diff.sql` does.
+
+The floor is not confined to dropped routes either, which matters to anything comparing two
+populations across it: of the added carrier–routes in the same 24-month span (nothing flown in
+the prior window, something flown in the trailing one), **92.8% are also below the floor**. So a
+query sourcing one category from this table and another from `fct_route_month` floors the two
+by a factor of 14 and they are not comparable — the categories must share one floor, applied in
+one place.
+
 **`p12_months_present` (like `t12_months_present`) is a 0–12 *count* of distinct months
 present in the window, not a boolean** — `count(DISTINCT r.year_month) FILTER (...)` in
 `sql/02_marts/200_mart_route_health.sql`. Only `= 0` ("no prior window at all") and `>= 1`

@@ -46,6 +46,10 @@ WITH required(object_name, column_name) AS (
         -- lat/lon are the M7 Task 10 fixture: present object, absent columns.
         ('dim_airport',            'lat'),
         ('dim_airport',            'lon'),
+        -- is_latest is what makes an airport_id join 1:1. 5,033 airport_ids carry more than one
+        -- airport_seq_id row, so a join that loses this column does not fail -- it FANS OUT, and
+        -- map_carrier_diff.sql's per-category count(*) OVER would silently multiply with it.
+        ('dim_airport',            'is_latest'),
         ('dim_carrier',            'airline_id'),
         ('dim_carrier',            'carrier_code'),
         ('dim_city_market',        'city_market_id'),

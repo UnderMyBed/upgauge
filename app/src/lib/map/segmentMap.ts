@@ -13,6 +13,15 @@
  * current signatures, which is what makes `/airport`'s byte-identical guard possible.
  */
 
+/** The one cap on how many arcs any map in epic #5 draws. ONE SHARED CAP ACROSS ALL THREE MAPS,
+ *  never a per-map number: the carrier network (#107), the aircraft network (#108) and each of
+ *  the diff map's three panels (#110) all rank by seats and cut here, so a per-map cap would make
+ *  two maps' disclosure lines mean different things.
+ *
+ *  `SegmentMapInput.totalRoutes` is what keeps the cut honest -- it is the TRUE count before this
+ *  cap, and a producer returning the capped count is the mutant #105 exists to kill. */
+export const NETWORK_ARC_CAP = 400;
+
 /** One end of a segment. `code` is the display code; coordinates come from
  *  `map_airport_coords.sql`, whose `lat`/`lon` are NOT NULL for all fact-present airports.
  *
