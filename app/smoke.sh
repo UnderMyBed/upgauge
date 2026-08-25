@@ -1052,6 +1052,56 @@ check     "carrier: carries a self-referential canonical link (Task 2)" "$BODY" 
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL")
 check     "carrier: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
+# 11b. #107 -- /carrier's network map, filtered by aircraft type. Every needle below was read
+# out of a SERVED body, never copied from the JSX: this file has shipped three self-defects, one
+# of them a needle carrying an entity that JSX had already decoded at compile time, so it printed
+# `ok` unconditionally. The two anchors here are quoted verbatim from `curl` output.
+#
+# `<svg role="img"` is deliberately NOT the needle for the map. The aircraft-mix chart already
+# emits it on this very page (checked above), so it is green whether or not a map renders --
+# exactly the assertion-an-outcome-the-bug-also-produces shape. `data-testid="segment-map"`
+# discriminates; that string appears nowhere else on the page.
+check     "carrier: unfiltered renders the type picker"          "$BODY" 'data-testid="map-picker"'
+check_not "carrier: unfiltered draws no arcs"                    "$BODY" 'data-testid="segment-map"'
+check_not "carrier: unfiltered offers no way to clear nothing"   "$BODY" '>Clear the filter</a>'
+
+# The filtered view. `?type=` takes an aircraft SLUG, never the BTS id -- `proxy.ts` and
+# `mapFilter.ts` agree on that and `?type=614` is refused.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL?type=B737-8")
+check     "carrier?type: the map SVG is in the served HTML"      "$BODY" 'data-testid="segment-map"'
+check     "carrier?type: the picker marks the showing type"      "$BODY" '<a href="/carrier/DL?type=B737-8" aria-current="page">'
+check     "carrier?type: offers the way back to the unfiltered page" "$BODY" '<a href="/carrier/DL">Clear the filter</a>'
+check     "carrier?type: the map's disclosures render as HTML too"   "$BODY" 'data-testid="map-notes"'
+# The cap sentence, which is the disclosure a reader needs and the one A13 warns is easy to
+# assert vacuously: `not.toContain("not drawn")` cannot die, because "not drawn" belongs to the
+# QUARANTINE sentence. This is the real cap wording, with both counts.
+check_dataset check "carrier?type: states the cap it drew under" "$BODY" '400 of 519 routes drawn.'
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=B737-8")
+check     "carrier?type: a resolved filter stays cacheable"      "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# CE-180 names BTS codes 030 (CESSNA 180) and 031 (CESSNA 180A/B), both fact-present. The page
+# refuses rather than picking one -- the silent-pick failure /carrier/PA exists to refuse -- and
+# the refusal must not be a cacheable 200.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL?type=CE-180")
+check_not "carrier?type: an ambiguous type draws no map"         "$BODY" 'data-testid="segment-map"'
+check     "carrier?type: ...names every holder instead"          "$BODY" 'data-testid="mp-holder"'
+check     "carrier?type: ...and leaves the picker reachable"     "$BODY" 'data-testid="map-picker"'
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=CE-180")
+check     "carrier?type: an ambiguous filter is never cached"    "$HDRS" 'no-store'
+
+# An unknown type is a DIFFERENT finding from an ambiguous one and is worded apart.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL?type=NOPE-1")
+check_not "carrier?type: an unknown type draws no map"           "$BODY" 'data-testid="segment-map"'
+check     "carrier?type: ...and still offers the list"           "$BODY" 'data-testid="map-picker"'
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=NOPE-1")
+check     "carrier?type: an unknown filter is never cached"      "$HDRS" 'no-store'
+
+# A type that RESOLVES for a carrier that never flew it: VX stopped filing in 2018-03, so the
+# filter is `ok` and the map is null. Without this sentence the heading sits over a silent gap.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX?type=B737-8")
+check_not "carrier?type: a carrier with no such filings draws no map" "$BODY" 'data-testid="segment-map"'
+check_dataset check "carrier?type: ...and says so, naming the window" "$BODY" 'VX filed no B737-8 routes in 2025-06 → 2026-05.'
+
 # The other branch of the window line, and the negative half of the pair. VX (Virgin America)
 # stopped filing in 2018-03; the chart is fetched over the full window and can only draw to
 # there, so naming the REQUESTED window would put "the full window · … → 2026-05" over a chart
