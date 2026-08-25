@@ -4,7 +4,25 @@ import { displayValue, resolutionKey, type Resolved } from "@/lib/resolve";
 /** One filter link under a point-to-point map. `value` is what goes in the query string;
  * `label` is what the reader sees; `title` is the long form behind it. */
 export interface PickerOption {
-  /** The filter value, e.g. "673" or "19393". Goes in the query string verbatim (encoded). */
+  /** THE FILTER VALUE, and it is `filterValueOf`'s answer -- NEVER the row's raw dimension id.
+   *
+   *  The id space and the filter vocabulary are two different value spaces, and conflating them
+   *  was a live defect on both pages that mount a picker. `proxy.ts:442` declares the
+   *  vocabulary -- "`/carrier/:code?type=<aircraft slug>`" -- and `mapFilter.ts` admits only
+   *  that: an aircraft SLUG (`ERJ-175`) or a carrier CODE (`OO`). BTS ids (`673`, `20304`) are
+   *  refused on arrival. Verified live against the warehouse before the fix, not reasoned about:
+   *
+   *      resolveTypeFilter("673")       -> unknown  "unknown aircraft type '673'"
+   *      resolveTypeFilter("ERJ-175")   -> ok, id "673"
+   *      resolveCarrierFilter("20304")  -> unknown
+   *      resolveCarrierFilter("OO")     -> ok, id 20304
+   *
+   *  and it was EVERY option on EVERY page, not an edge case: zero of `dim_aircraft_type`'s
+   *  short names are bare numerics, so no id has ever resolved as a slug.
+   *
+   *  `selected` is compared against THIS, for the same reason -- an id-valued `value` against a
+   *  slug-valued selection marks nothing current, so no picker ever showed which view you were
+   *  looking at. */
   value: string;
   /** What the reader sees -- `displayValue`'s answer, so "CRJ-700" for an aircraft type and
    *  the carrier CODE ("OO") for an airline id. Never the raw BTS id when the dimension
@@ -85,28 +103,57 @@ export function pickerOptions(args: {
   basePath: string;
   /** The query key the map filters on -- "type" | "carrier" (canonicalQuery.ts's key sets). */
   filterKey: string;
-  /** The raw value currently selected, or null for the unfiltered view. */
+  /** THE FILTER VOCABULARY: one row's raw dimension id and its resolved label in, the value the
+   *  query string must carry out. `/carrier` passes `slugFor(label)`; `/aircraft` passes
+   *  `label`.
+   *
+   *  REQUIRED, AND DELIBERATELY NOT OPTIONAL. The contract this parameter carries is a
+   *  VALUE-SPACE one -- "a string that is a slug", not "a string" -- and TypeScript cannot
+   *  express it: `pickerOptions` returned `value: string` and `resolveTypeFilter` takes
+   *  `raw: string`, so a seam trace of the two signatures lines up perfectly while every link
+   *  the picker emits is refused at the far end. That is exactly how the defect shipped through
+   *  a review that did check the seam. A default of identity would silently reproduce it for
+   *  the next caller; a required parameter makes the compiler the thing that cannot forget.
+   *
+   *  Deriving it here instead -- `slugFor(label)` for both dimensions -- was considered and
+   *  rejected: it is correct only because `slugFor` happens to be a no-op over carrier codes
+   *  (all 1,658 match `[A-Z0-9]{2,3}`, `mapFilter.ts:121-125`), which makes this module's
+   *  correctness rest on an invariant owned by a different file. */
+  filterValueOf: (rawId: string, label: string) => string;
+  /** The filter value currently selected, or null for the unfiltered view. Compared against
+   *  `value`, so it is in the FILTER vocabulary -- the page reads it off the query string. */
   selected: string | null;
 }): PickerOption[] {
-  const { rows, resolved, dimKey, basePath, filterKey, selected } = args;
+  const { rows, resolved, dimKey, basePath, filterKey, filterValueOf, selected } = args;
 
   return rows
-    .map((row): PickerOption => {
+    .filter((row) => {
+      // Dropped BEFORE any label or filter value is derived. `String(null)` is "null", which
+      // would become a live href to a filter value naming nothing.
       const raw = row[dimKey];
-      // Never `String(null)` -- "null" would become a live href to a filter value that names
-      // nothing. An absent dimension value drops out below instead.
-      const value = raw === null || raw === undefined ? "" : String(raw);
-      const hit: Resolved | undefined = resolved.get(resolutionKey(dimKey, value));
+      return raw !== null && raw !== undefined && String(raw).length > 0;
+    })
+    .map((row): PickerOption => {
+      const rawId = String(row[dimKey]);
+      const hit: Resolved | undefined = resolved.get(resolutionKey(dimKey, rawId));
+      const label = displayValue(hit, rawId);
+      const value = filterValueOf(rawId, label);
+      if (value.length === 0) {
+        // A caller bug, and loud for `seatsOf`'s reason directly below: an empty filter value
+        // emits `?type=` -- a link that is live, looks deliberate, and names nothing.
+        throw new Error(
+          `pickerOptions: filterValueOf returned an empty filter value for ${dimKey}='${rawId}'`,
+        );
+      }
       return {
         value,
-        label: displayValue(hit, value),
+        label,
         title: hit?.name ?? null,
         seats: seatsOf(row),
         href: `${basePath}?${filterKey}=${encodeURIComponent(value)}`,
         selected: value === selected,
       };
     })
-    .filter((o) => o.value.length > 0)
     .sort(bySeatsAbsentLast);
 }
 

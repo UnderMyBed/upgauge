@@ -483,3 +483,152 @@ describe("/carrier/<code> truncation disclosure", () => {
     expect(screen.queryByText(/top \d+ aircraft types/i)).toBeNull();
   });
 });
+
+/**
+ * #107 -- the network map section.
+ *
+ * The filter is driven as a RESOLVED `MapFilter`, taken from the real `resolveTypeFilter`
+ * against the real warehouse rather than hand-built, so these fixtures cannot drift from what
+ * the page is actually handed: `CE-180` really is ambiguous (BTS codes 030 and 031, both
+ * fact-present), and `NOPE-1` really is unknown. The one exception is the raw-query pair at the
+ * bottom, which drives `CarrierPage` end-to-end because the header read is the thing under test.
+ */
+import { resolveTypeFilter } from "@/lib/map/mapFilter";
+
+const mapOf = (c: HTMLElement) => c.querySelector('[data-testid="segment-map"]');
+const pickerOf = (c: HTMLElement) => c.querySelector('[data-testid="map-picker"]');
+const clearOf = (c: HTMLElement) =>
+  [...c.querySelectorAll("a")].find((a) => a.textContent === "Clear the filter") ?? null;
+
+async function viewOf(code: string, typeFilter?: Awaited<ReturnType<typeof resolveTypeFilter>>) {
+  const r = await resolveCarrier(code);
+  if (r.kind !== "ok") throw new Error(`expected ${code} to resolve for this fixture`);
+  return render(
+    await CarrierView({ carrier: r.carrier, filterValue: r.filterValue, typeFilter }),
+  );
+}
+
+describe("/carrier/<code> network map", () => {
+  it("renders the picker and draws no map when no type is selected", async () => {
+    // BOTH halves, in one test, on purpose: a `CarrierView` that threw or rendered nothing
+    // would satisfy the "no map" clause alone, and prove nothing.
+    const { container } = await viewOf("DL");
+    expect(pickerOf(container)).not.toBeNull();
+    expect(mapOf(container)).toBeNull();
+  });
+
+  it("offers no way back when there is nothing to go back from", async () => {
+    // The clear link's ABSENCE is the property. Rendered unconditionally it is a live link to
+    // the page you are already on, which reads as a control that does nothing.
+    const { container } = await viewOf("DL");
+    expect(clearOf(container)).toBeNull();
+  });
+
+  it("draws the map when a type resolves", async () => {
+    const { container } = await viewOf("DL", await resolveTypeFilter("B737-8"));
+    expect(mapOf(container)).not.toBeNull();
+  });
+
+  it("marks the showing type in the picker, so the reader can see which view this is", async () => {
+    // POSITION, not presence: `aria-current="page"` must land on the B737-8 option and on no
+    // other. Asserting merely that some option carries it passes under a picker that marks the
+    // wrong one, and asserting the option EXISTS passes under one that marks nothing -- which
+    // is what shipped, because `selected` compared a slug against a BTS id.
+    const { container } = await viewOf("DL", await resolveTypeFilter("B737-8"));
+    const current = [...container.querySelectorAll('[data-testid="map-picker"] a[aria-current="page"]')];
+    expect(current.map((a) => a.getAttribute("href"))).toEqual(["/carrier/DL?type=B737-8"]);
+  });
+
+  it("returns to the unfiltered page, not to the filtered URL", async () => {
+    const { container } = await viewOf("DL", await resolveTypeFilter("B737-8"));
+    expect(clearOf(container)?.getAttribute("href")).toBe("/carrier/DL");
+  });
+
+  it("refuses an ambiguous type rather than picking one of its holders", async () => {
+    // `CE-180` names BTS codes 030 and 031, both fact-present. Picking one is the silent-pick
+    // failure `/carrier/PA` exists to refuse.
+    //
+    // THE CARRIER IS Q5 (40-Mile Air, airline_id 20342) AND THAT IS THE WHOLE TEST. On DL --
+    // the obvious fixture, and the one this test was first written with -- a page that silently
+    // picked a holder would fetch DL x 030 or DL x 031, get NULL from both because DL flies no
+    // Cessna 180s, and render no map. The assertion below would pass over the defect: an
+    // outcome the buggy implementation also produces. Q5 is the only carrier in the warehouse
+    // that flies either code (measured over the trailing 12: 031, four rows), and Q5 x 031
+    // returns a real 2-segment map -- so under a silent pick a map APPEARS here and this goes
+    // red.
+    //
+    // Residual, stated rather than papered over: the 030 direction stays unobservable, because
+    // no carrier in this dataset flies 030 at all. No fixture can fix that, and the sibling
+    // catalog test in picker.test.ts pins the reason (no carrier flies both codes of one short
+    // name). The holder list below is what covers the rest: naming one holder and drawing its
+    // map is the half-wrong state a bare "no map" assertion would miss.
+    const filter = await resolveTypeFilter("CE-180");
+    expect(filter.kind).toBe("ambiguous");
+    const { container } = await viewOf("Q5", filter);
+    expect(mapOf(container)).toBeNull();
+    expect([...container.querySelectorAll('[data-testid="mp-holder"]')].map((li) => li.textContent))
+      .toEqual(["030", "031"]);
+  });
+
+  it("keeps the picker and the way back reachable under a refusal", async () => {
+    // A refusal that leaves the reader with nothing to do is a dead end. Both refusal kinds,
+    // because they are two different findings and the page renders them through one branch.
+    for (const raw of ["CE-180", "NOPE-1"]) {
+      const { container } = await viewOf("DL", await resolveTypeFilter(raw));
+      expect(container.querySelector(".mp-list")).not.toBeNull();
+      expect(clearOf(container)?.getAttribute("href")).toBe("/carrier/DL");
+    }
+  });
+
+  it("refuses an unknown type and draws no map", async () => {
+    const filter = await resolveTypeFilter("NOPE-1");
+    expect(filter.kind).toBe("unknown");
+    const { container } = await viewOf("DL", filter);
+    expect(mapOf(container)).toBeNull();
+  });
+
+  it("says so when a real type resolved but this carrier filed none of it", async () => {
+    // VX stopped filing in 2018-03, so every type is `ok` and every map is null. Reachable from
+    // any hand-typed URL naming a type the carrier does not operate; without this the heading
+    // would sit above a silent gap.
+    const { container } = await viewOf("VX", await resolveTypeFilter("B737-8"));
+    expect(mapOf(container)).toBeNull();
+    expect(screen.getByText(/VX filed no B737-8 routes in/)).toBeDefined();
+  });
+
+  it("discloses a truncated picker list", async () => {
+    const r = await resolveCarrier("DL");
+    if (r.kind !== "ok") throw new Error("expected DL to resolve for this fixture");
+    const { container } = render(
+      await CarrierView({ carrier: r.carrier, filterValue: r.filterValue, limit: 5 }),
+    );
+    expect(container.querySelector(".mp-note")).not.toBeNull();
+  });
+
+  it("does not claim a truncated picker below the limit", async () => {
+    const { container } = await viewOf("DL");
+    expect(container.querySelector(".mp-note")).toBeNull();
+  });
+});
+
+describe("/carrier/<code> reads the filter from the raw query bytes", () => {
+  it("draws the map for a filter that arrives on the raw-query header", async () => {
+    vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: "type=B737-8" }));
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    expect(mapOf(container)).not.toBeNull();
+  });
+
+  it("refuses a percent-spelled filter the proxy already declined to cache", async () => {
+    // THE DIVERGENCE, and the reason this page must not read `searchParams`. `?type=%42737-8`
+    // decodes to "B737-8", so a `searchParams`-based page draws the map -- while `proxy.ts`
+    // reads the same key on the RAW bytes, fails the no-percent bound and sets `no-store`. The
+    // page would then be applying a filter the server's admission policy refused: one value,
+    // two readings. The needle is the MAP, not the header, because the header is the proxy's.
+    vi.mocked(headers).mockResolvedValueOnce(
+      new Headers({ [RAW_QUERY_HEADER]: "type=%42737-8" }),
+    );
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    expect(mapOf(container)).toBeNull();
+    expect(pickerOf(container)).not.toBeNull();
+  });
+});
