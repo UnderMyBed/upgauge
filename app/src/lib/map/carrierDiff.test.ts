@@ -217,7 +217,45 @@ describe("fetchCarrierDiff, against the warehouse", () => {
   });
 
 
-  it("ranks the downgauged panel by gauge fall, not by seats", async () => {
+  it("CUTS the downgauged panel by gauge fall, not by seats", async () => {
+    // THE BUG THIS EXISTS FOR, and it is not the one the next test covers. The ranking key appears
+    // in TWO independent clauses: the QUALIFY's window ORDER BY, which decides WHICH 400 routes
+    // survive, and the final ORDER BY, which decides the order they arrive in. The round-1 defect
+    // was in the CUT. Reverting only the QUALIFY to `p.seats DESC` -- leaving the display order on
+    // rank_key -- reproduces that defect verbatim, and every ordering assertion in this file still
+    // passes, because AS's downgauged panel is under the cap and its order is unchanged.
+    //
+    // So this asserts the cut, on a CAPPED panel, through quantities the payload actually emits.
+    // Measured on OO's 584-route downgauged panel: 176 of the drawn 400 differ between the two
+    // cuts, and each of these two numbers alone is a kill.
+    const dg = panel(await fetchCarrierDiff(OO, AS_OF), "downgauged");
+    expect(dg.map.segments).toHaveLength(400);
+    // A fall-cut panel reaches down to 50-seat routes; a seats-cut one stops at 272.
+    expect(Math.min(...dg.map.segments.map((s) => s.seats))).toBe(50);
+    // ...and carries 230 sub-floor arcs against a seats cut's 74. Both are consequences of
+    // cutting on a key that is orthogonal to seats; neither is observable from row order.
+    expect(dg.map.segments.filter((s) => s.departures < DEPARTURE_FLOOR)).toHaveLength(230);
+  });
+
+  it("carries the ranked quantity on the segment, not only in the row order", async () => {
+    // Without `rankedBy` nothing downstream holds a fall value: #110 cannot state the ranked
+    // quantity in an aria-label, and the ordering is checkable only by inferring it from
+    // position. It must also be monotone with the order it explains.
+    const dg = panel(await fetchCarrierDiff(OO, AS_OF), "downgauged");
+    const falls = dg.map.segments.map((s) => s.rankedBy);
+    expect(falls[0]).toBeCloseTo(26.0, 6);
+    expect(falls.every((f) => typeof f === "number")).toBe(true);
+    for (let i = 1; i < falls.length; i++) {
+      expect(falls[i]!).toBeLessThanOrEqual(falls[i - 1]!);
+    }
+    // Null on the panels that rank on a field the segment already carries.
+    for (const cat of ["added", "dropped"] as const) {
+      const other = panel(await fetchCarrierDiff(OO, AS_OF), cat);
+      expect(other.map.segments.every((s) => s.rankedBy === null)).toBe(true);
+    }
+  });
+
+  it("orders the downgauged panel by gauge fall, not by seats", async () => {
     // Catches: one shared ranking key across all three panels. For added and dropped, seats IS
     // the magnitude of the claim; for downgauged it is orthogonal to it. Measured on OO, the one
     // carrier whose downgauged panel is cut: ranked by seats it DREW a median fall of 1.50 and
@@ -258,6 +296,9 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // ten. No count assertion anywhere can see it; only the ORDER can.
     const aa = panel(await fetchCarrierDiff(AA, AS_OF), "downgauged");
     expect(aa.map.totalRoutes).toBe(442);
+    // AA's panel is CAPPED, so this order is a property of the cut as well as of the sort --
+    // stated because the two clauses are separable and only naming both keeps that true.
+    expect(aa.map.segments).toHaveLength(400);
     expect(pairs(aa).slice(0, 10)).toEqual([
       "BOS-STL",
       "ATL-JAX",
@@ -330,7 +371,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     }
   });
 
-  it("carries a load factor computed as a ratio of sums, never averaged, and null when absent", async () => {
+  it("carries a load factor computed as a ratio of sums, never averaged", async () => {
     // Every segment's loadFactor comes from SUM(passengers) / NULLIF(SUM(seats), 0) over the
     // panel's own window. Measured: AS HNL-ITO is 0.7824 over 480,681 seats.
     const added = panel(await fetchCarrierDiff(AS, AS_OF), "added");
@@ -338,6 +379,11 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     expect(`${top.from.code}-${top.to.code}`).toBe("HNL-ITO");
     expect(top.seats).toBe(480681);
     expect(top.loadFactor).toBeCloseTo(0.7824, 4);
+    // NOT "and null when absent": no emitted arc can have a null load factor. The >= 1 floor
+    // guarantees departures, and zero arcs have departures >= 1 with null-or-zero seats
+    // (measured: 0, both windows), so the denominator is always positive. The nullable type is
+    // the contract's, honoured here rather than exercised -- claiming coverage of it would be
+    // claiming a branch this data cannot reach.
     for (const s of added.map.segments) {
       // `>= 0`, not `> 0`: 3,578 of the 19,328 categorized carrier-routes carry a load factor
       // of exactly 0 -- passengers 0 against real seats and real departures. AS's added panel

@@ -50,6 +50,8 @@ interface DiffRow {
   seats: number;
   departures: number;
   load_factor: number | null;
+  /** The downgauged panel's ranking key, in seats per departure. NULL on added and dropped. */
+  gauge_fall: number | null;
   category_total: number;
   /** Per category. Null when this carrier filed no same-airport pair in that category. */
   same_airport_seats: number | null;
@@ -89,6 +91,10 @@ function toSegment(row: DiffRow): SegmentDatum {
     seats: row.seats,
     departures: row.departures,
     loadFactor: row.load_factor,
+    // The downgauged panel is cut and ordered by gauge fall, which no arc channel encodes -- so
+    // the value travels with the segment rather than being implied by its position. Null on
+    // added and dropped, which rank on `seats`, a field the segment already carries.
+    rankedBy: row.gauge_fall,
   };
 }
 

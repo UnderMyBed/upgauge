@@ -68,7 +68,9 @@
 -- comparability in the other direction.
 --
 -- 1 is the weakest floor that makes each category's own sentence true. It removes only what
--- falsifies it: 15 added and 11 dropped carrier-routes that filed but performed zero departures.
+-- falsifies it: 5 added and 3 dropped carrier-routes that filed in the deciding window and
+-- performed zero departures there. (7 and 4 route-windows file with zero performed departures
+-- altogether; most of those routes are excluded by something else first.)
 -- Two properties fall out and are relied on downstream:
 --
 --   * No carrier-route has departures >= 1 with NULL or zero seats, in either window (measured:
@@ -229,6 +231,11 @@
 -- so it only ever decides exact ties. What it does fix is which of a tied set leads: OO's leader
 -- moves from ACV-FAT (1 departure) to ATW-SBN (4), and WN's from BDL-STL (1) to JAN-MCI (2).
 --
+-- IT HELPS EXACTLY HALF THE AFFECTED PANELS, and nothing here should let a reader think
+-- otherwise: DL and AA have UNIQUE maxima, so no tiebreak can reach them and their leaders remain
+-- BNA-JFK at 2 performed departures and BOS-STL at 1. A thinly flown route still leads two of the
+-- four cut panels, and that is the readability defect above, not something this term addresses.
+--
 -- Nothing stronger is available here without breaking a claim. Demoting the thin arcs in the
 -- ranking would make "the 400 largest falls" FALSE; excluding them would be a SECOND floor on one
 -- category, which is the incomparability this file's whole shape exists to prevent.
@@ -264,10 +271,13 @@
 -- because 10 of the 14 over-cap panels have a tie sitting exactly on the cut -- every added and
 -- dropped one. Worst: MQ added, where 317 routes tie at exactly 76 seats spanning row 400; WN
 -- added 237 tied at 175; OO dropped 225 tied at 76. Without the tiebreak, WHICH of those 317 are
--- drawn is SQL-unspecified and moves between runs. The four downgauged panels do NOT tie at the
--- cut -- gauge fall is continuous where seats are integral -- but they carry the same tiebreak,
--- because "no tie today" is a property of this month's data, not of the query. The triple is
--- unique within a (carrier, category), so this is a total order.
+-- drawn is SQL-unspecified and moves between runs.
+--
+-- The four downgauged panels do not tie AT THE CUT, but not for the reason an earlier revision of
+-- this comment gave: gauge fall is NOT free of round numbers -- 125 of OO's 584 falls are whole
+-- numbers. Downgauged ties land at the panel MAXIMUM instead, where 12 carriers have a multi-way
+-- tie and the worst is 17-way. That is what the volume term above addresses; the id terms remain
+-- the final total order, because the triple is unique within a (carrier, category).
 --
 -- category_total is count(*) OVER (PARTITION BY category), computed BEFORE the QUALIFY filters,
 -- so it is the TRUE pre-cap count and cannot be the capped one. Returning the capped count is
@@ -310,9 +320,15 @@
 -- `undrawable_routes` counts carrier-routes this query could not categorize AT ALL because a
 -- window was WHOLLY quarantined -- flew_t12 or flew_p12 is NULL. They are in no panel, in no
 -- category_total, and without this count they would vanish with no trace that anything was
--- there. That is exactly SegmentMapInput.quarantinedRoutes' declared contract (#104 owns it:
--- "routes the producer could not draw because every filing behind them was quarantined").
--- Measured: 25 across all carriers, 16 of them 8V's.
+-- there. That is SegmentMapInput.quarantinedRoutes' PURPOSE, but NOT the letter of its current
+-- doc, and the difference is not cosmetic because #104's renderer emits that doc's sentence into
+-- a footer and an aria-label. It says "every filing behind them was quarantined". Measured over
+-- these 25: ZERO have both windows quarantined. 14 are trailing-window-only and 11 prior-only,
+-- and 7 performed real departures in the window that stayed clean -- 8V BTI-VEE has 8 clean
+-- prior-window departures. 8V's own 16 split 10 trailing / 6 prior. The property they all share
+-- is narrower and exact: the window that DECIDES the category was wholly quarantined, so no
+-- category could be assigned. #105's 34 groups are all-quarantined and satisfy both readings;
+-- these satisfy only the second, so the shared sentence has to be the second.
 --
 -- SEPARATELY, and NOT this field: 87 of the drawn carrier-routes touch at least one quarantined
 -- row in EITHER window without being wholly quarantined -- 75 of them downgauged, where a
@@ -321,6 +337,23 @@
 -- which is what CLAUDE.md's quarantine rule requires. Both windows are counted because both
 -- participate in every category decision -- added and dropped each test one window for absence
 -- and read the other for measures, and downgauged reads both.
+--
+-- ONE CARRIER LOSES THIS COUNT ENTIRELY, and it is a live page, not a hypothetical.
+-- undrawable_routes rides on arc rows, and carrierDiff.ts returns [] when there are none, so a
+-- carrier with wholly-quarantined windows and NO categorized arc drops it on the floor -- the
+-- exact "no trace" this count exists to prevent. Measured across all 114 carrier codes: exactly
+-- one is in that state, F4 (21615, Air Flamenco), with 3 undrawable carrier-routes and 0 arcs.
+--
+-- #105 HAS THE SAME CASE AND SOLVES IT, and the reason that solution does not port is structural
+-- rather than a difference of care. carrierTypeNetwork.ts refuses to return null when quarantine
+-- alone empties a view -- "returning null there hides a data-quality fact behind a missing panel"
+-- -- and emits a map with totalRoutes 0 carrying the count, which segmentMap.ts's totalRoutes doc
+-- now blesses explicitly. That works because #105 renders ONE map per view, so a carrier-wide
+-- count has somewhere to live. This query renders THREE panels, and an undrawable route has NO
+-- CATEGORY by construction -- that is what being undrawable means here -- so there is no panel it
+-- belongs to and inventing one would put an empty map face on the page under a category label
+-- the data never supported. The count is carrier-wide, so it belongs to a page-level disclosure
+-- for #110, which is where the per-face repetition below has to be solved anyway.
 --
 -- A THIRD GROUP REACHES NO COUNT AT ALL, and this section would read as exhaustive without it:
 -- 2 carrier-routes are BOTH wholly quarantined AND same-airport. `undrawable_routes` carries
@@ -431,7 +464,10 @@ panel AS (
         -- use is PARTITION BY category. See the header's ranking section.
         CASE WHEN category = 'downgauged' THEN gauge_fall
              WHEN category = 'dropped'    THEN p12_seats
-             ELSE t12_seats END AS rank_key
+             ELSE t12_seats END AS rank_key,
+        -- Carried through for the payload, NOT for ranking (rank_key above owns that). NULL on
+        -- added and dropped by construction: neither has both windows.
+        CASE WHEN category = 'downgauged' THEN gauge_fall END AS gauge_fall
     FROM categorized
     WHERE category IS NOT NULL
 ),
@@ -482,6 +518,12 @@ SELECT
     p.seats,
     p.departures,
     p.passengers / nullif(p.seats, 0) AS load_factor,
+    -- The downgauged panel's RANKING KEY, emitted per segment rather than left implicit in row
+    -- order. Without it nothing downstream carries a fall value: #110 could not put the ranked
+    -- quantity in an aria-label, and no consumer test could check the ordering except by
+    -- inferring it from position. NULL for added and dropped, which have no prior/trailing pair
+    -- to compare -- absence, not zero.
+    p.gauge_fall,
     count(*) OVER (PARTITION BY p.category)::BIGINT AS category_total,
     s.same_airport_seats,
     u.undrawable_routes

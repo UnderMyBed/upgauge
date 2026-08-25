@@ -37,6 +37,20 @@ export interface SegmentDatum {
   seats: number;
   departures: number;
   loadFactor: number | null;
+  /** The quantity this segment's panel was RANKED and CUT on, when that quantity is not one of
+   *  the fields above. Only the diff map's downgauged panel has one: the fall in gauge, in seats
+   *  per departure, computed as a ratio of sums over each window.
+   *
+   *  It exists because a panel can be ordered by something it cannot draw. `arcs.ts` spends width
+   *  on seats, dash on load factor and dotted-muted on the departure floor -- none of them is the
+   *  fall -- so on that panel the ink is anti-correlated with the ranking (measured: r = -0.29 to
+   *  -0.39 inside the drawn 400). Without this field no surface can state the ranked quantity in
+   *  an `aria-label` and no consumer test can check the ordering except by inferring it from row
+   *  position, which is the "looks plausible and encodes nothing" trap CLAUDE.md names.
+   *
+   *  `null`/absent where the panel ranks on a field it already carries -- added and dropped rank
+   *  on `seats`. Absence, never 0: 0 is a route whose gauge did not move. */
+  rankedBy?: number | null;
 }
 
 export interface SegmentMapInput {
