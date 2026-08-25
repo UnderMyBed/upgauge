@@ -1,7 +1,6 @@
 import { splitPairs } from "@/lib/pivot/urlstate";
 import { resolveCarrier } from "@/lib/carrier";
 import { resolveAircraftSlug } from "@/lib/aircraftSlug";
-import { carrierHoldersByCode } from "@/lib/resolve";
 
 /** `?type=` on `/carrier/:code` and `?carrier=` on `/aircraft/:name` -- the two map-filter query
  * keys (#106), and the admission policy for their VALUES.
@@ -24,10 +23,27 @@ import { carrierHoldersByCode } from "@/lib/resolve";
  * inspecting a value (`canonicalQuery.ts:14-17`). So the value is RESOLVED, and the decision --
  * made deliberately, with its cost -- is to resolve **only when the filter key is present**.
  * An unfiltered request pays nothing, which is every crawler hit and every one of the entity
- * URLs in `sitemap.xml`; a filtered request pays one extra resolve (3.6 ms carrier, 4.6 ms
- * aircraft, measured at `proxy.ts:679-698`). The alternative -- a structural bound only --
- * makes an unresolvable filter a CACHEABLE 200, which is the precise failure this module
- * exists to refuse.
+ * URLs in `sitemap.xml`. A filtered one pays one extra resolve on top of the slug's. MEASURED
+ * here rather than quoting `proxy.ts:679-698`'s 3.6/4.6 ms, which are `isCacheable`'s lookup and
+ * not this one -- warm, in-process, mean of 10 calls each:
+ *
+ *     carrier  ok  (DL)       7.1 ms      type  ok  (B737-8)     9.5 ms
+ *     carrier  unknown (ZZ)  10.8 ms      type  unknown (NOPE-1) 9.5 ms
+ *     carrier  ambiguous (PA) 9.7 ms
+ *
+ * The refused carrier path was 47.1 ms until the holders it needs stopped being fetched twice:
+ * `resolveCarrier` already calls `carrierHoldersByCode` to word its own `reason`, so they now
+ * ride on `CarrierResult.notFound` (`carrier.ts`) instead of being re-queried here. A refused
+ * `?carrier=` cost FOUR proxy-side queries where the pre-#106 path cost one; it now costs two.
+ *
+ * The alternative -- a structural bound only -- makes an unresolvable filter a CACHEABLE 200,
+ * which is the precise failure this module exists to refuse. What it does NOT close, and what
+ * this module cannot close from here, is the ORIGIN cost of a refused value: a `no-store` 200
+ * is a full page render the CDN keeps nothing of, and a value that fails the regex above is
+ * still a canonical KEY SET, so `canonicalQuery.ts` does not redirect it. Before #106 any
+ * unknown key on these paths was a 0.9-1.6 ms 307; a refused `type=` is an 82-104 ms render,
+ * repeatable without bound. Named, with the edge rule it is left to, in
+ * `docs/architecture/hosting.md` § What this does not close.
  *
  * ONE OWNER, TWO READERS, the relationship `lib/year.ts` has with `/airport` and `bounds.ts`
  * has with `/explore`: `proxy.ts` reads these verdicts to choose a `Cache-Control` before the
@@ -144,9 +160,12 @@ export function rawFilterValue(rawQuery: string, key: string): string | null {
   return null;
 }
 
+/** `what` carries its own article: "an aircraft type", not "a" + "aircraft type". This string is
+ *  not internal -- it exists so #107/#108 can word the page's refusal without re-deriving this
+ *  module's rule, so it reaches a reader the moment wave 2 renders it. */
 function spellingReason(raw: string, what: string, shape: string): string {
   return (
-    `'${raw}' is not a ${what} this server will filter by -- ${shape}, spelled literally and ` +
+    `'${raw}' is not ${what} this server will filter by -- ${shape}, spelled literally and ` +
     "without percent-encoding, because one value must have exactly one spelling"
   );
 }
@@ -178,7 +197,7 @@ export async function resolveTypeFilter(raw: string | null): Promise<MapFilter<s
     return {
       kind: "unknown",
       raw,
-      reason: spellingReason(raw, "aircraft type", "up to 12 of A-Z, 0-9 and '-'"),
+      reason: spellingReason(raw, "an aircraft type", "up to 12 of A-Z, 0-9 and '-'"),
     };
   }
 
@@ -240,7 +259,7 @@ export async function resolveCarrierFilter(raw: string | null): Promise<MapFilte
     return {
       kind: "unknown",
       raw,
-      reason: spellingReason(raw, "carrier code", "two or three of A-Z and 0-9"),
+      reason: spellingReason(raw, "a carrier code", "two or three of A-Z and 0-9"),
     };
   }
 
@@ -260,7 +279,12 @@ export async function resolveCarrierFilter(raw: string | null): Promise<MapFilte
     };
   }
 
-  const holders = (await carrierHoldersByCode([raw])).get(raw) ?? [];
+  // `resolveCarrier` ALREADY made this query -- it needs the holders to word its `reason` --
+  // so they ride on the result (`carrier.ts`) rather than being fetched again here. The first
+  // version of this function called `carrierHoldersByCode` a second time, which cost 47.1 ms
+  // per refused code and made a refused `?carrier=` four proxy-side queries where the
+  // pre-#106 path made one.
+  const holders = resolved.holders;
   if (holders.length > 1) {
     return {
       kind: "ambiguous",

@@ -4,7 +4,17 @@ import { carrierHoldersByCode, lookupCarriersByCode, type CarrierRef } from "@/l
 export type CarrierResult =
   | { kind: "ok"; carrier: CarrierRef; canonical: string; filterValue: string }
   | { kind: "redirect"; canonical: string }
-  | { kind: "notFound"; reason: string };
+  /** `holders` is every `dim_carrier` row carrying this code, in the order
+   *  `lookup_carrier_code_exists.sql` returned them -- EMPTY when the code is nowhere in
+   *  `dim_carrier` at all, which is the unknown-vs-recognized split `carrierNotFoundReason`
+   *  below words. It rides on the result rather than being left for the caller to re-derive:
+   *  this function has already paid for the query (it needs the holders to word `reason`), and
+   *  a caller that wants them otherwise has to make the SAME `carrierHoldersByCode` call a
+   *  second time -- measured at 47.1 ms per refused code for `/aircraft/:name?carrier=`'s
+   *  filter, which ran four proxy-side queries where one would do. Exactly the precedent
+   *  `AmbiguousCodeError` already sets by carrying its `ids` instead of making the caller
+   *  re-parse a message (`resolve.ts`), and `AircraftSlugResult.ambiguous` by carrying its. */
+  | { kind: "notFound"; reason: string; holders: CarrierRef[] };
 
 /** The `/carrier/<code>` slug's prefix, and the reader for it.
  *
@@ -71,14 +81,14 @@ export function carrierSlugFromPath(pathname: string): string | null {
 export async function resolveCarrier(slug: string): Promise<CarrierResult> {
   const wanted = slug.trim().toUpperCase();
   if (wanted.length === 0) {
-    return { kind: "notFound", reason: `expected a carrier code, got '${slug}'` };
+    return { kind: "notFound", reason: `expected a carrier code, got '${slug}'`, holders: [] };
   }
 
   const found = await lookupCarriersByCode([wanted]);
   const carrier = found.get(wanted);
   if (carrier === undefined) {
     const holders = (await carrierHoldersByCode([wanted])).get(wanted) ?? [];
-    return { kind: "notFound", reason: carrierNotFoundReason(wanted, holders) };
+    return { kind: "notFound", reason: carrierNotFoundReason(wanted, holders), holders };
   }
 
   // The canonical spelling is the one dim_carrier stores, not `wanted` -- so the redirect

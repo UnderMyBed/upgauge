@@ -648,7 +648,7 @@ being invisible to whoever added a route:
 > `resolveAircraftSlug` each resolve an id against the warehouse, where a preset slug resolves
 > against `presetBySlug()`, a lookup into the fixed, four-entry `PRESETS` registry
 > (`lib/watch.ts`) — no query at all. That is why `/watch`'s cacheability rule in `proxy.ts` is
-> written as its own `if` branch rather than a fifth `ENTITY_ROUTES` row: **the allow-list
+> written as its own `if` branch rather than an `ENTITY_ROUTES` row: **the allow-list
 > (`presetBySlug(slug) !== null`, or the bare `/watch` path which has no slug to fail) answers
 > "is this a well-formed, known page" for free, but does NOT answer "is it safe to cache" —
 > every preset page still runs a live `mart_route_health` query, so the branch also gates on
@@ -1190,21 +1190,46 @@ destination rendering the unfiltered view with no error anywhere — the identic
 `/airport` fixed with `airportRedirectTarget`. Both now read the raw query off `RAW_QUERY_HEADER`,
 never off `searchParams`, and append it verbatim.
 
+**The keys are admitted before any page consumes them, and that window closes in the same PR.**
+#106 ships the admission layer only: the proxy resolves `type`/`carrier` and answers for them, but
+the map surfaces that *read* them are #107 and #108. So on a #106-only tree
+`/carrier/DL?type=NOPE-1` and `/carrier/DL` return HTML that is byte-identical apart from the RSC
+payload echoing the query — a 200 rendering the unfiltered page for a URL that names a filter,
+which is the "silently renders a different query than the URL encodes" failure the 308 fix one
+paragraph up exists to prevent. It is tolerable only because **epic #5 ships as ONE pull request
+containing #106, #107 and #108 together**, so the state never exists on `main`, only between
+commits on the branch.
+
+That "only between commits" is load-bearing rather than reassuring, because **nothing purges the
+CDN on deploy** — there is no purge step in `deploy/` or `.github/`. Had #106 deployed alone, a
+filtered URL cached during that window would have gone on serving the unfiltered body for up to
+`HTML_CACHE`'s hour plus its `stale-while-revalidate` day — ~25 hours *after* #107 made the filter
+real, with nothing to invalidate it. Splitting this epic across two deploys is therefore not a
+scheduling choice; it would ship a wrong answer with no way to recall it.
+
 **Filtered views stay out of `sitemap.xml` by construction, and no exclusion rule was added.** No
 URL constructor in `lib/sitemap.ts` appends a query string and `app/sitemap.ts` only prefixes
 `BASE_URL`, so there is nothing to exclude. Adding a filtered URL would also move
 `sitemap_urls_total` and fail `test_stated_counts.py`, which registers both files.
 
-Mutant table (`mapFilter.ts`, `proxy.ts`, `canonicalQuery.ts` — each run against a **served** build,
-then reverted):
+Mutant table (`mapFilter.ts`, `proxy.ts`, `canonicalQuery.ts`, `carrier.ts` — each run and then
+reverted; 1–5 against a **served** build, 6 against both):
 
 | # | Mutation | What went red |
 |---|---|---|
 | 1 | `entityOk && filterOk` → `entityOk` in the `/carrier` branch | every `no-store` / `s-maxage` pair in § 11b except the resolvable one |
 | 2 | `ambiguous` mapped to `ok` on the first holder | the `CE-180` and `PA` pairs only — the `unknown` cases stayed green |
 | 3 | the value read with `new URLSearchParams(rawQuery).get(…)` | the `%42737-8` and `%44L` pairs only |
-| 4 | `canonicalize()`'s throw on a leading `?` restored | the two new section-15 doubled-`?` rows' status and Location checks |
+| 4 | `canonicalize()`'s throw on a leading `?` restored | **16** checks — the status and Location rows of all **seven** section-15 doubled-`?` entries (a leading `?` 500s every gated path, not only the two added here), plus the follow-the-redirect pair. The `no-store` halves stay GREEN on a 500, since Next's error response carries `no-store` of its own |
 | 5 | `isFilterCacheable` → `kind !== "unknown"` | the `CE-180` and `PA` pairs only, everything else green |
+| 6 | `CarrierResult.notFound.holders` returned empty | **nothing in `app/smoke.sh` — 544/544 still green** — and three `mapFilter.test.ts` cases red |
+
+Mutant 6 is the one worth reading twice. Both `unknown` and `ambiguous` are `no-store`, so a served
+build cannot tell them apart: every smoke check stays green while the resolver silently stops
+distinguishing "nothing holds this code" from "three airlines do". **The ambiguous/unknown
+distinction is guarded by the unit tests alone**, which is the inverse of this file's usual warning
+and worth stating in the same breath — `app/smoke.sh` sees the cache header, not the reasoning
+behind it.
 
 Mutants 2 and 5 redden the same two checks by different mechanisms — one corrupts the resolver, the
 other the predicate — which is why both are run rather than either standing in for the other.
@@ -1599,12 +1624,9 @@ forming a chain) and byte-equality then produces the redirect. `canonicalQuery.t
 totality over a corpus of hostile inputs, and asserts that every `strip` location is itself clean —
 the proxy 307s to it, so a location that would strip again is a redirect loop. No check in
 `app/smoke.sh` used a doubled `?`, which is why neither `make app-smoke` nor `make image-smoke`
-saw a 500 on every gated path; the section-15 loop carries **seven** of them now — the five
-that closed the original bug (`/watch??x=1`, `/watch???`, `/route/JFK-LAX??cachebust=99`,
-`/airport/ORD??y=2019`, `/sitemap.xml??x=1`), plus `/carrier/DL??type=x` and
-`/aircraft/B737-8??carrier=x`, added by #106 because `/carrier` had no doubled-`?` row and
-`/aircraft/:name` appeared in none of the eleven at all. This sentence read "three" until then,
-against a loop that already carried five.
+saw a 500 on every gated path; the section-15 loop carries **seven** of them — `/watch??x=1`,
+`/watch???`, `/route/JFK-LAX??cachebust=99`, `/airport/ORD??y=2019`, `/sitemap.xml??x=1`,
+`/carrier/DL??type=x` and `/aircraft/B737-8??carrier=x`.
 
 ### `/api/pivot` closes its own — `exempt` means the proxy does not redirect, not that the rules are off
 
@@ -1752,11 +1774,13 @@ it are easy to get wrong and both matter here:
   had no edge limit while this same file said the `f` axis was left to the edge *deliberately*:
   the reasoning was load-bearing on a rule that did not cover the path it named.
 
-  **What is left out is left out on purpose, and widening is the mutant to fear.** The entity
-  pages sit behind an hour of `HTML_CACHE` and `/_next/` assets are immutable, so a walk of either
-  is answered at the edge and never reaches the box; a single real page load asks for more static
-  chunks than 1 req/s allows, so `starts_with(path, "/")` would throttle every genuine visitor
-  while still passing any check that merely looks for `"/api/"` in the string.
+  **What is left out is left out on purpose, and widening is the mutant to fear.** `/_next/`
+  assets are immutable and an entity page's *cacheable* responses sit behind an hour of
+  `HTML_CACHE`, so a walk of either is answered at the edge and never reaches the box — but see
+  the `?type=`/`?carrier=` entry below, which is the case that sentence no longer covers. A
+  single real page load asks for more static chunks than 1 req/s allows, so
+  `starts_with(path, "/")` would throttle every genuine visitor while still passing any check
+  that merely looks for `"/api/"` in the string.
   `pipeline/tests/test_cloudflare_desired_state.py` therefore *evaluates* the expression against
   named paths in both directions rather than matching substrings of it.
 
@@ -1766,6 +1790,28 @@ it are easy to get wrong and both matter here:
   outright, the same reasoning this file already records for `_rsc`. It is also unnecessary: every
   link to `/explore` in the app is a raw `<a href>`, and `TopBar` sets `prefetch={false}` on the
   two `<Link>`s a data page renders, with `TopBar.test.tsx` asserting it.
+
+  **Still uncovered, and named rather than implied: a REFUSED map-filter value on
+  `/carrier/:code` and `/aircraft/:name`.** #106 gave those two paths a legitimate query key, so a
+  value that fails the raw-byte bound or resolves to nothing is no longer stripped by the key gate
+  — it is a canonical key set, and the page renders in full under `no-store`. `no-store` means the
+  CDN keeps nothing, so every repeat is another origin render, and the value space is unbounded
+  because failing the regex does not make the KEY unknown. Measured on a served build:
+
+  | request | before #106 | after |
+  |---|---|---|
+  | `/carrier/DL?utm_source=x` | 307 strip, 0.9–1.6 ms | unchanged — still an unknown key |
+  | `/carrier/DL?type=NOPE-1` | 307 strip, 0.9–1.6 ms | **200 `no-store`, 82–104 ms** |
+  | `/carrier/DL?type=<200 random bytes>` | 307 strip | **200 `no-store`, 103 ms** |
+
+  This is the ORIGIN axis, not the cache-key axis: the cache-key family *is* closed, because a
+  refused value is never stored under any spelling. It is the same trade `/search` makes one row
+  down — correctness bought with an uncached origin hit — but on a page that renders rather than
+  running one resolver query, so it is ~90x the cost per request it replaced. The rule above does
+  not match these paths and **is deliberately not widened here**: doing so needs a Cloudflare
+  change plus a re-measured `test_cloudflare_desired_state.py`, and it would also close the
+  pre-existing `/airport/:code?y=<junk>` case, which has the identical shape at a smaller radius.
+  That is a real improvement and its own piece of work, tracked separately.
 
   **Still uncovered, and named rather than implied: `/search`.** It is `no-store`
   *unconditionally*, so every request reaches the origin, over an attacker-chosen unbounded `q`.

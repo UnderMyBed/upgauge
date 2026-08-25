@@ -146,8 +146,12 @@ describe("proxy", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  // M4d. Three more entity pages, one row each in proxy.ts's ENTITY_ROUTES and one each in its
-  // matcher. These tests cannot see the matcher at all -- they call `proxy()` directly, so a
+  // M4d. Three more entity pages, one matcher entry each -- but no longer one ENTITY_ROUTES row
+  // each: since #106 only `/route/:pair` is answered by that table, and the cases below exercise
+  // THREE different mechanisms (`/airport` its own branch since M7 Task 9, `/carrier` and
+  // `/aircraft` theirs since #106, `/route` the table). That is the point of asserting them
+  // together: the header must be identical whichever branch answers.
+  // These tests cannot see the matcher at all -- they call `proxy()` directly, so a
   // matcher entry could be missing and every one of them would still pass. That gap is the whole
   // reason `app/smoke.sh` asserts the same header against a served build; see the file header.
   it.each([
@@ -283,7 +287,7 @@ describe("proxy", () => {
   );
 
   // M6 Task 7. `/watch` and every `/watch/:preset` get the same shorter HTML_CACHE as /explore
-  // and the four ENTITY_ROUTES pages, not PROJECT_CACHE -- each preset page reads live
+  // and the four entity pages, not PROJECT_CACHE -- each preset page reads live
   // mart_route_health state per request, the same per-request-resolution risk /explore carries
   // and /sitemap.xml/robots.txt do not.
   it("gives the /watch index HTML_CACHE", async () => {

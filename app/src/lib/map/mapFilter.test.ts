@@ -165,6 +165,20 @@ describe("resolveCarrierFilter", () => {
     expect(new Set(f.holders).size).toBe(3);
   });
 
+  it("names holders that do NOT share a name, where PA's two Pan Am rows do", async () => {
+    // A second live ambiguous code, and it tests the FORMATTING differently from `PA`. `PA`'s
+    // first two holders are byte-identical by name, so a formatter that dropped the id would
+    // still produce three entries there and only the `new Set(...).size` assertion above would
+    // notice. `2T` is held by airline_id 20116 (Canada 3000 Airlines Ltd.) and 22146
+    // (BermudAir) -- visibly distinct airlines, so this pins that the NAMES reach the caller
+    // rather than a list of ids that happens to be the right length.
+    const f = await resolveCarrierFilter("2T");
+    if (f.kind !== "ambiguous") throw new Error(`expected ambiguous, got ${f.kind}`);
+    expect(f.holders.length).toBe(2);
+    expect(f.holders.join(" | ")).toContain("Canada 3000");
+    expect(f.holders.join(" | ")).toContain("BermudAir");
+  });
+
   it("sorts the holders by airline_id rather than returning driver row order", async () => {
     const f = await resolveCarrierFilter("PA");
     if (f.kind !== "ambiguous") throw new Error(`expected ambiguous, got ${f.kind}`);
