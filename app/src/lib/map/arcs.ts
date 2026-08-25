@@ -30,6 +30,12 @@ export interface ArcDatum {
  * floor" row. This overrides the seat-width and load-factor-dash encodings entirely: a floor
  * arc's story is "barely flown," and scaling it by seats or dashing it by load factor would
  * bury that under a second, contradictory signal. */
+/** The three fields the stroke encoding actually reads. `ArcDatum` satisfies it, and so does
+ * `SegmentDatum` -- which carries two endpoints rather than one `code`/`lat`/`lon`, and so is
+ * not an `ArcDatum` however identical its weights are. Narrowing the parameter is what lets
+ * ONE copy of the encoding serve both maps; the encoding itself is unchanged. */
+export type ArcWeight = Pick<ArcDatum, "seats" | "departures" | "loadFactor">;
+
 export const DEPARTURE_FLOOR = 30;
 
 /** Below this load factor, an arc that is ALREADY above the departure floor is dashed rather
@@ -78,7 +84,7 @@ export interface ArcStroke {
  * the formula's own floor at seats/max = 0 -- rather than dividing by zero and propagating
  * NaN into the rendered attribute.
  */
-export function strokeFor(a: ArcDatum, maxSeats: number): ArcStroke {
+export function strokeFor(a: ArcWeight, maxSeats: number): ArcStroke {
   if (a.departures < DEPARTURE_FLOOR) {
     return { width: 1, dash: "1 3", opacity: 0.75, stroke: "var(--ink-3)" };
   }

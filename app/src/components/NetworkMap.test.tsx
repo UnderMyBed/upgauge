@@ -131,5 +131,12 @@ describe("NetworkMap", () => {
     const { container } = render(<NetworkMap network={empty} />);
     expect(container.querySelectorAll("polyline").length).toBe(0);
     expect(container.querySelector('svg[role="img"]')).not.toBeNull();
+
+    // Catches: deriving the reached panels from the SEGMENTS rather than from the network's
+    // own points. #104 made every other map point-to-point, and a hub with no drawable arc
+    // adapts to zero segments -- so `reachedPanelsFor(networkSegments(input))` would return no
+    // panels at all and drop the coastline out from under the origin disc, which is still
+    // drawn. `networkPanels` counts the origin, which is why it exists separately.
+    expect(container.innerHTML).toContain('data-panel="us"');
   });
 });

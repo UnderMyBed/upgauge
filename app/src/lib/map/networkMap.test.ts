@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderNetworkMap, type NetworkMapInput } from "./networkMap";
+import { GOLDEN_NETWORK_INPUT, GOLDEN_NETWORK_SVG } from "./networkGolden.fixture";
 import type { ArcDatum } from "./arcs";
 
 /** Real coordinates throughout, per this task's brief -- a synthetic grid would make the
@@ -147,6 +148,17 @@ function fixtureArcCount(): number {
 }
 
 describe("renderNetworkMap", () => {
+  it("renders the golden fixture byte for byte", () => {
+    // THE guard for #104's hub-and-spoke -> point-to-point refactor: `renderNetworkMap` is
+    // reimplemented on top of the shared segment core, and `/airport`'s rendered bytes must
+    // not move by so much as a digit. Captured from this renderer BEFORE the refactor -- see
+    // networkGolden.fixture.ts for why this is a literal fixture and not a live /airport
+    // render, and for what each of its ten arcs pins.
+    //
+    // If this goes red, the adapter is wrong. Do not regenerate the golden to make it green.
+    expect(renderNetworkMap(GOLDEN_NETWORK_INPUT)).toBe(GOLDEN_NETWORK_SVG);
+  });
+
   it("draws thin arcs before heavy ones", () => {
     // Catches: insertion-order drawing. This is an ORDERING property, so asserting
     // the SET of stroke widths passes under the bug -- only document order catches

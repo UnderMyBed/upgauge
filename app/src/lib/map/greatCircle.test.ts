@@ -32,8 +32,9 @@ describe("greatCircle", () => {
 
 describe("stepsFor", () => {
   it("gives more points to a long arc than a short one", () => {
-    // Catches: reverting to a fixed step count. Fixed 48 costs 192,231 bytes of
-    // polyline on ORD's 268 arcs; adaptive gives 132,178 for the same picture.
+    // Catches: reverting to a fixed step count, which is worse in both directions -- it
+    // over-samples the many short arcs and under-samples the few long ones. `greatCircle.ts`'s
+    // `stepsFor` header carries the measured byte counts, and is the one place they are stated.
     expect(stepsFor(900)).toBeGreaterThan(stepsFor(40));
   });
 

@@ -604,8 +604,10 @@ fact-present airports have at least one over the trailing 12 months; ORD alone i
 degenerate-endpoint branch (`om < 1e-9`) would emit `steps + 1` identical points — several
 hundred bytes of polyline drawing an invisible mark directly on top of the origin disc. So
 the drawn arc set always excludes any row whose code equals the origin's (`app/src/lib/map/
-networkMap.ts`'s `renderNetworkMap`: ORD draws 267 arcs, not 268) — but the row's seats stay
-in whatever total the map states, passed in separately (`sameAirportSeats`), never derived
+networkMap.ts`'s `renderNetworkMap`) — an airport with a same-airport filing draws one fewer arc
+than it has routes, 267 from 268 for ORD over 2025-05 → 2026-04, the fixed window
+`app/src/lib/map/airportNetwork.test.ts` pins it at. But the row's seats stay in whatever total
+the map states, passed in separately (`sameAirportSeats`), never derived
 from the already-filtered arc list. A map that dropped these seats from its own total as well
 as from its arcs would disagree with the stat strip directly above it on the same page. Both
 halves are required; shipping one without the other is a defect.
@@ -613,9 +615,11 @@ halves are required; shipping one without the other is a defect.
 **Step count is adaptive, not fixed** (`app/src/lib/map/greatCircle.ts`'s `stepsFor`): points
 scale with the arc's length ON SCREEN (`round(projectedLengthPx / 22)`, floor 4, cap 48), not
 with its angular distance — a 40px hop needs a handful of points and a transcontinental arc
-needs dozens. Measured on ORD's 268 arcs: a flat 48 emits 192,231 bytes of polyline; adaptive
-emits 132,178 with no visible change to the long arcs, and a flat 12 would save more but
-visibly polygonizes them. A great circle cannot cross a panel boundary at all (above), so
+needs dozens. Adaptive beats a flat 48 outright, and it also beats a flat 12 — most arcs on a
+960px-wide canvas are short enough that adaptive's floor of 4 undercuts a flat 12, which would
+still visibly polygonize the long arcs it does not help. The measured byte counts behind that
+are stated once, in `stepsFor`'s own header, and not restated here. A great circle cannot
+cross a panel boundary at all (above), so
 `stepsFor` is only ever consulted for an arc `greatCircle` actually draws — a cross-panel arc
 is the two projected endpoints, straight, regardless of its geographic length.
 

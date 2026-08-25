@@ -1,61 +1,39 @@
 /**
- * Composes the projection (`albers.ts`, Task 4) and the interpolation (`greatCircle.ts`,
- * Task 5) into the actual picture: arc encoding (`arcs.ts`, this task), draw order, and one
- * function returning a complete `<svg>…</svg>` string. Server-rendered markup only, no chart
- * library, no dependency outside `app/src/lib/map/` -- the same "in the served HTML, visible
- * with JS off" property `AircraftMixChart.tsx` established for M4c's chart.
+ * The hub-and-spoke map: one origin airport and its destinations, as served by `/airport`.
  *
- * Ported from `docs/design/mockups/map-network.html`'s inline `<script>` (lines 53-96 of
- * that file: inset frames, the arc loop, destination nodes, labels, the origin marker).
+ * Since #104 this file owns no geometry. `segmentMap.ts`'s `renderMapCore` draws every mark on
+ * every map in this project; this module's whole job is to adapt origin-and-spokes into
+ * segments and to supply the policy that is genuinely hub-shaped -- the origin disc, the
+ * same-airport disclosure, per-arc label ranking, and node emission in the CALLER's order.
+ *
+ * That last one is preserved rather than fixed, deliberately. `/airport`'s rendered bytes must
+ * not move (`networkGolden.fixture.ts`), and they are a function of the array `runPivot`
+ * returns -- whose SQL sorts `seats DESC` with no tiebreak column. Imposing an order here would
+ * be a real improvement and a real byte change; the fix belongs upstream, at the query.
+ *
  * Contract: `docs/design/system.md` § The map § Arc encoding.
  */
 
-import type { GeoPoint, Panel, PanelFit } from "./albers";
-import { fitPanels, normalizeLon, project, regionOf } from "./albers";
-import { greatCircle, stepsFor } from "./greatCircle";
-import { arcOrder, strokeFor, DEPARTURE_FLOOR, type ArcDatum } from "./arcs";
-import { BASEMAP_FIT_POINTS } from "./basemap";
-
-/**
- * THE FIT THE COASTLINE WAS BAKED AGAINST -- computed once, at module load, from the same
- * fixed reference points `basemap.ts`'s generator used (`fitPanels(BASEMAP_FIT_POINTS)`,
- * bit-for-bit identical input). This is the fix for a real, confirmed defect (M7 Task 8):
- * an earlier draft of this file called `fitPanels(points)` with ONLY the origin and its own
- * destinations, which is a DIFFERENT fit than the one `basemapPaths.generated.ts`'s
- * coordinates were baked with -- every arc was scaled/offset relative to a landmass drawn at
- * a different scale, geographically wrong on every render despite passing every existing
- * test (none of which asserted on absolute screen position).
- *
- * The WRONG fix -- and it was the fix this codebase's own generator comment, header, and
- * `basemap.ts` all recommended before Task 8 -- is `fitPanels([...BASEMAP_FIT_POINTS,
- * ...subjectPoints])`. `fitPanels` derives its scale `k` and offsets from the min/max extent
- * of whatever points it is given; the coastline's pixels are already baked in at
- * `fitPanels(BASEMAP_FIT_POINTS)`'s own extent, and a subject point that falls OUTSIDE that
- * extent (a coastal airport seaward of a simplified coastline -- the ordinary case, since
- * simplification pulls the line inward, not the exception) changes the extent, which changes
- * `k` for every point, arcs and the already-baked coastline alike. A different `k` from the
- * one that projected the coastline is exactly the misalignment this exists to prevent, so the
- * union recommendation reopens the bug it claims to close.
- *
- * The correct rule: for a panel `BASEMAP_FITS` has an entry for (us/ak/hi/car today -- Task 7b
- * added `ne_50m_car.json`'s Puerto Rico/USVI polygons, so `car` now has committed geometry too
- * and its reference points feed this same `fitPanels(BASEMAP_FIT_POINTS)` call), reuse that fit
- * VERBATIM -- identical input, identical output, so an arc and the coastline beneath it were
- * fit exactly once. For a panel with zero committed reference points (pac alone, as of Task
- * 7b -- no Guam/CNMI/American Samoa/Midway polygons at this scale, `build-basemap.mjs`'s
- * header), there is no coastline to align to, so a subject-derived fit is the legitimate,
- * documented fallback -- see the merge in `renderNetworkMap` below. An airport that then lands
- * slightly outside the simplified coastline renders slightly outside it; that is
- * geographically honest and must not be "fixed" by rescaling.
- */
-const BASEMAP_FITS: Map<Panel, PanelFit> = fitPanels(BASEMAP_FIT_POINTS);
+import type { GeoPoint, Panel } from "./albers";
+import { DEPARTURE_FLOOR, type ArcDatum } from "./arcs";
+import type { NodeMark, SegmentDatum } from "./segmentMap";
+import {
+  arcsSentence,
+  crossPanelCount,
+  drawableSegments,
+  panelsFor,
+  renderMapCore,
+  sameAirportNote,
+  segmentOrder,
+  TOP_LABEL_COUNT,
+} from "./segmentMap";
 
 export interface NetworkMapInput {
   origin: ArcDatum;
   arcs: ArcDatum[];
   window: string;
   /** Seats from rows whose origin and destination are the same airport as `origin.code`
-   * (359 of 1,047 fact-present airports carry at least one; ORD alone is 53 rows / 73,082
+   * (359 of 1,047 fact-present airports carry at least one; ORD alone is 53 rows / 76,236
    * seats over the trailing 12 months -- docs/data/invariants.md § Route identity). Such a
    * row cannot be an arc: its great circle has zero length, and `greatCircle`'s degenerate
    * branch would emit `steps + 1` identical points, several hundred bytes drawing an
@@ -68,245 +46,111 @@ export interface NetworkMapInput {
    * INPUT, never an import -- this stays true of the PATH MARKUP even after Task 7 shipped:
    * a caller supplies whichever panels' paths it wants drawn (`basemapPathsFor`), and this
    * file has no opinion on which those are. The FIT those paths were projected with is a
-   * different matter and IS imported now that Task 7's `basemap.ts` exists (`BASEMAP_FITS`,
-   * above) -- reusing it verbatim is what keeps this markup and the arcs drawn over it in the
-   * same reference frame. Rendered beneath the arcs when present; omitted entirely -- no
-   * empty `<g>`, no comment -- when absent. */
+   * different matter and IS imported (`segmentMap.ts`'s `BASEMAP_FITS`) -- reusing it verbatim
+   * is what keeps this markup and the arcs drawn over it in the same reference frame. Rendered
+   * beneath the arcs when present; omitted entirely -- no empty `<g>`, no comment -- when
+   * absent. */
   basemapPaths?: string;
 }
 
-const WIDTH = 960;
-const HEIGHT = 500;
-
-/** How many of the arcs, ranked by seats, get a text label next to their destination node.
- * Mirrors the mockup's own `slice(0,8)` -- labelling every destination on a busy hub would
- * bury the map in text. */
-const TOP_LABEL_COUNT = 8;
+/**
+ * Origin-and-spokes as segments: every arc becomes a segment from the origin to that arc's own
+ * endpoint. A faithful 1:1 mapping -- same-airport rows are NOT filtered here, because the one
+ * copy of that filter lives in `drawableSegments`, and because `networkPanels` below needs the
+ * unfiltered set.
+ *
+ * Exported so that the component and the renderer adapt a network exactly the same way; two
+ * independently-written adapters is how the panels a page requests a coastline for drift from
+ * the panels it actually draws marks in.
+ */
+export function networkSegments(input: NetworkMapInput): SegmentDatum[] {
+  const from = { code: input.origin.code, lat: input.origin.lat, lon: input.origin.lon };
+  return input.arcs.map((a) => ({
+    from,
+    to: { code: a.code, lat: a.lat, lon: a.lon },
+    seats: a.seats,
+    departures: a.departures,
+    loadFactor: a.loadFactor,
+  }));
+}
 
 /**
- * Screen rects for the four labelled insets, mirroring `albers.ts`'s own (unexported)
- * `PANEL_RECTS` layout table verbatim. Not derivable from `fitPanels`'s return value, which
- * carries only each panel's data-dependent SCALE and OFFSET (`k`/`ox`/`oy`), not its fixed
- * on-canvas frame -- and Task 6 must not edit Task 4's file to export the constant. Keep the
- * two literal tables in sync if the canvas layout ever changes; this copy is chrome only
- * (drawing the frame border), never projection math, which `fitPanels`/`project` alone own.
+ * Every panel a hub network's own points land in -- the ORIGIN INCLUDED, which is why this is
+ * not simply `reachedPanelsFor(networkSegments(input))`.
+ *
+ * A network with no drawable arc still draws its origin disc, and `networkSegments` of such an
+ * input is empty, so routing this through the segment helper would return no panels at all and
+ * silently drop the coastline out from under that disc. `NetworkMap.test.tsx`'s zero-arc case
+ * is exactly that input. Both paths share `panelsFor`, so they cannot disagree about how a
+ * point maps to a panel; they differ only in which points count.
  */
-const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, number]> = {
-  ak: [36, 322, 176, 468],
-  hi: [192, 392, 292, 468],
-  pac: [308, 392, 408, 468],
-  // Widened by M7 Task 7b to match albers.ts's own PANEL_RECTS.car -- see that file's
-  // comment for the measurement (real PR/USVI geometry is ~3.89:1 wide, not the original
-  // rect's 1.32:1). Keep this literal in sync with PANEL_RECTS.car; a frame border drawn to
-  // a different rect than the one the coastline was actually fit to would visibly not match
-  // the landmass inside it.
-  car: [424, 392, 720, 468],
-};
-
-/** Order and label text for the four insets. `us` never gets a frame -- it is the base map
- * itself, not an inset of it, matching the mockup, which only ever framed `ak`/`hi`. "An
- * inset that isn't labelled is a lie" is the mockup's own comment; system.md states it as a
- * standing rule, not a note about one page. */
-const INSETS: { panel: Exclude<Panel, "us">; label: string }[] = [
-  { panel: "ak", label: "ALASKA" },
-  { panel: "hi", label: "HAWAI‘I" },
-  { panel: "pac", label: "PACIFIC" },
-  { panel: "car", label: "CARIBBEAN" },
-];
-
-/** Escapes text that lands inside SVG markup, whether as element content or as an attribute
- * value -- codes and window strings are effectively a closed, safe alphabet today, but this
- * function is what keeps that true rather than assumed. */
-function esc(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
-function fmt(n: number): string {
-  return n.toFixed(1);
-}
-
-/** One sentence, written once, used on the visible window/note line AND in `aria-label` --
- * the number is per-subject, and two independently-authored copies of one measurement is
- * exactly how they drift (the same reasoning `AircraftMixChart.tsx`'s `gapNote` and Other-band
- * share note already apply). `null` when there is nothing to disclose, so both call sites can
- * skip the sentence with one check rather than two. */
-function sameAirportNote(seats: number): string | null {
-  return seats > 0
-    ? `${seats.toLocaleString("en-US")} same-airport seats excluded from the arcs above, included in this total.`
-    : null;
+export function networkPanels(input: NetworkMapInput): Panel[] {
+  const points: GeoPoint[] = [input.origin, ...input.arcs].map((p) => ({ lat: p.lat, lon: p.lon }));
+  return panelsFor(points);
 }
 
 /** What the map shows, for a reader who cannot see it -- the subject, the window, how many
- * destinations are drawn, and the same-airport seats excluded from the arcs but not the
- * total. Mirrors `AircraftMixChart.tsx`'s `describe()`: written once, read by both the visible
- * key and `aria-label`, so the two cannot drift.
- *
- * `crossPanelCount` is NOT cosmetic (final whole-branch review, Important #5): a great circle
- * is discontinuous across a panel boundary, so `renderNetworkMap` draws those destinations as
- * straight lines across the boundary instead (system.md's own rule) -- calling ALL of them
- * "great-circle arcs" is wrong for exactly those, and a screen-reader user gets no other
- * account of the map at all. `0` (the common case -- most airports have no cross-panel
- * destination) keeps the sentence exactly as before; only a nonzero count changes the wording,
- * and it names the exact number rather than a vague "some".
- *
- * Direction is NOT part of the claim (re-review finding 4): the boundary a destination crosses
- * can run either way -- most origins are conterminous and cross INTO an inset (PDX-HNL), but an
- * inset-origin subject (ANC, HNL, SJU, GUM) has destinations that cross OUT of its own inset
- * into the conterminous panel instead. "Into an inset panel" was true only for the first case
- * and false for the second, on the subject's own arcs -- the wording below names the boundary,
- * never a panel kind, so it holds for both directions. */
-function describeMap(input: NetworkMapInput, drawn: ArcDatum[], crossPanelCount: number): string {
-  const note = sameAirportNote(input.sameAirportSeats);
-  const arcsDesc =
-    crossPanelCount === 0
-      ? `${drawn.length} destination${drawn.length === 1 ? "" : "s"} drawn as great-circle arcs, thinnest to heaviest by seats.`
-      : `${drawn.length} destination${drawn.length === 1 ? "" : "s"} drawn thinnest to heaviest by seats -- ` +
-        `${drawn.length - crossPanelCount} as great-circle arcs, ${crossPanelCount} as straight lines across a panel boundary (a great circle cannot cross one).`;
-  return [`Network map of ${input.origin.code}'s scheduled service, ${input.window}.`, arcsDesc, note]
+ * destinations are drawn, and the same-airport seats excluded from the arcs but not the total.
+ * Mirrors `AircraftMixChart.tsx`'s `describe()`: written once, read by both the visible key and
+ * `aria-label`, so the two cannot drift. The arcs sentence itself is `arcsSentence`, shared
+ * with the point-to-point map, which differs only in calling them routes rather than
+ * destinations. */
+function describeMap(input: NetworkMapInput, drawn: number, crossPanel: number): string {
+  return [
+    `Network map of ${input.origin.code}'s scheduled service, ${input.window}.`,
+    arcsSentence(drawn, crossPanel, "destination"),
+    sameAirportNote(input.sameAirportSeats),
+  ]
     .filter((s): s is string => s !== null)
     .join(" ");
 }
 
 /**
  * Renders the complete network map for one origin airport as an `<svg>…</svg>` string.
- *
- * Draw order (mirrors the mockup, and is itself part of the contract -- see `arcOrder`'s own
- * docs on why thinnest-first is an ordering property a set-based test cannot catch): inset
- * frames for panels the network actually reaches → the injected basemap, if any → arcs,
- * thinnest first → destination nodes → labels for the top 8 by seats → the origin marker →
- * the window line and the excluded-seats note.
  */
 export function renderNetworkMap(input: NetworkMapInput): string {
-  const { origin } = input;
-
   // Same-airport rows are excluded HERE, from the drawn set -- never upstream, and never by
-  // relying on the caller to have already filtered. A same-airport arc's great circle has
-  // zero length; greatCircle's degenerate branch would emit `steps + 1` identical points
-  // drawing an invisible mark on top of the origin disc (see NetworkMapInput.sameAirportSeats
-  // for the measured cost). Their seats are NOT dropped -- only the polyline is -- which is
-  // why `sameAirportSeats` is a separate field the caller supplies rather than something
-  // derivable from `arcs` after this filter runs.
-  const drawn = input.arcs.filter((a) => a.code !== origin.code);
+  // relying on the caller to have already filtered. Their seats are NOT dropped, only the
+  // polyline, which is why `sameAirportSeats` is a separate field the caller supplies rather
+  // than something derivable from `arcs` after this filter runs.
+  const drawn = drawableSegments(networkSegments(input));
 
-  const points: GeoPoint[] = [
-    { lat: origin.lat, lon: origin.lon },
-    ...drawn.map((a) => ({ lat: a.lat, lon: a.lon })),
-  ];
-  // subjectFits decides WHICH panels this network reaches (unchanged from before the fix --
-  // still exactly "the panels the subject's own points land in", which is what the inset-
-  // frame loop below needs), and its own fit values are the FALLBACK for a panel with no
-  // committed basemap reference points -- `pac` alone today, since M7 Task 7b gave `car` real
-  // Puerto Rico and USVI geometry from Natural Earth 1:50m. For every other panel, the
-  // VALUE this map actually projects with is BASEMAP_FITS's -- the one the coastline was
-  // baked against -- never a fit re-derived from this one page's own arc endpoints. See
-  // BASEMAP_FITS's own comment for why the naive `fitPanels([...BASEMAP_FIT_POINTS,
-  // ...points])` union is wrong rather than merely different.
-  const subjectFits = fitPanels(points);
-  const fits = new Map<Panel, PanelFit>();
-  for (const panel of subjectFits.keys()) {
-    fits.set(panel, BASEMAP_FITS.get(panel) ?? subjectFits.get(panel)!);
-  }
-  const originRegion = regionOf(origin.lat, normalizeLon(origin.lon));
-  // Computed once, up front, from the same predicate the arc loop below uses per-arc
-  // (`region !== originRegion`) -- so `describeMap`'s wording and what the arc loop actually
-  // draws cannot drift apart the way an independently-derived count could.
-  const crossPanelCount = drawn.filter(
-    (a) => regionOf(a.lat, normalizeLon(a.lon)) !== originRegion,
-  ).length;
+  // Node marks in the caller's own array order, one per arc and NOT deduped by code -- see this
+  // file's header for why that is preserved rather than fixed.
+  const nodes: NodeMark[] = drawn.map((s) => ({
+    code: s.to.code,
+    lat: s.to.lat,
+    lon: s.to.lon,
+    belowFloor: s.departures < DEPARTURE_FLOOR,
+  }));
 
-  let body = "";
-
-  // Inset frames -- only for panels with at least one point in them (`fits` is keyed
-  // exactly on `subjectFits`'s panels; see albers.ts's fitPanels), and `us` is never framed.
-  for (const { panel, label } of INSETS) {
-    if (!fits.has(panel)) continue;
-    const [x0, y0, x1, y1] = INSET_RECTS[panel];
-    body += `<rect x="${x0 - 6}" y="${y0 - 6}" width="${x1 - x0 + 12}" height="${y1 - y0 + 12}" fill="none" stroke="var(--rule-2)" style="stroke-width:1"/>`;
-    body += `<text x="${x0 - 4}" y="${y0 + 6}" font-size="8" letter-spacing="0.1em" fill="var(--ink-3)">${esc(label)}</text>`;
-  }
-
-  // The basemap is an injected input, never an import -- Task 7 supplies it. Rendered
-  // beneath the arcs, and omitted entirely (no wrapper, no empty group) when absent.
-  if (input.basemapPaths) {
-    body += input.basemapPaths;
-  }
-
-  const maxSeats = drawn.length === 0 ? 0 : Math.max(...drawn.map((a) => a.seats));
-
-  // Arcs, thinnest first so heavy ones sit on top.
-  for (const a of arcOrder(drawn)) {
-    const region = regionOf(a.lat, normalizeLon(a.lon));
-    const crossPanel = region !== originRegion;
-    const originXY = project(origin.lat, origin.lon, fits);
-    const destXY = project(a.lat, a.lon, fits);
-
-    let path: [number, number][];
-    if (crossPanel) {
-      // A great circle cannot cross a panel boundary -- the projection is discontinuous
-      // there -- so this is drawn as a straight line across the boundary instead (system.md).
-      path = [originXY, destXY];
-    } else {
-      const steps = stepsFor(Math.hypot(destXY[0] - originXY[0], destXY[1] - originXY[1]));
-      path = greatCircle(
-        { lat: origin.lat, lon: origin.lon },
-        { lat: a.lat, lon: a.lon },
-        steps,
-      ).map((p) => project(p.lat, p.lon, fits));
-    }
-
-    const pts = path.map(([x, y]) => `${fmt(x)},${fmt(y)}`).join(" ");
-    const s = strokeFor(a, maxSeats);
-    // `stroke-dasharray` omitted entirely when `s.dash` is empty (the solid, above-both-floors
-    // case -- most arcs) rather than emitted as `stroke-dasharray=""`. Browsers treat the empty
-    // attribute as "no dashing," identically to its absence, so this was never a rendering bug
-    // -- but it is invalid SVG, and it cost ~5 KB of no-op attribute bytes on `/airport/ORD`'s
-    // 267 polylines (final whole-branch review, Minor finding).
-    const dashAttr = s.dash === "" ? "" : ` stroke-dasharray="${s.dash}"`;
-    body += `<polyline points="${pts}" fill="none" stroke="${s.stroke}" stroke-width="${s.width.toFixed(2)}"${dashAttr} stroke-opacity="${s.opacity}" stroke-linecap="round"/>`;
-  }
-
-  // Destination nodes, then labels for the top 8 by seats.
-  const topCodes = new Set(
+  // Labels rank by ARC seats. On a hub each destination has exactly one arc, so this is the
+  // same answer `renderSegmentMap`'s per-airport ranking would give; the two are separate
+  // because that equivalence holds only on a hub (segmentMap.ts's TOP_LABEL_COUNT).
+  const labelled = new Set(
     [...drawn]
-      .sort((a, b) => b.seats - a.seats || a.code.localeCompare(b.code))
+      .sort((a, b) => b.seats - a.seats || a.to.code.localeCompare(b.to.code))
       .slice(0, TOP_LABEL_COUNT)
-      .map((a) => a.code),
+      .map((s) => s.to.code),
   );
-  for (const a of drawn) {
-    const [x, y] = project(a.lat, a.lon, fits);
-    const belowFloor = a.departures < DEPARTURE_FLOOR;
-    body += `<circle cx="${fmt(x)}" cy="${fmt(y)}" r="${belowFloor ? 1.3 : 2}" fill="${belowFloor ? "var(--ink-3)" : "var(--ink)"}"/>`;
-    if (topCodes.has(a.code)) {
-      body += `<text x="${fmt(x + 5)}" y="${fmt(y + 3)}" font-size="9" font-weight="600" fill="var(--ink)">${esc(a.code)}</text>`;
-    }
-  }
 
-  // Origin marker: a field-coloured disc ringed in the signal colour, the one departure from
-  // the ink/ink-3 palette every other mark on the map uses -- this is the subject, not a
-  // destination.
-  const [ox, oy] = project(origin.lat, origin.lon, fits);
-  body += `<circle cx="${fmt(ox)}" cy="${fmt(oy)}" r="4.5" fill="var(--field)" stroke="var(--signal)" style="stroke-width:1.8"/>`;
-  body += `<text x="${fmt(ox - 7)}" y="${fmt(oy - 8)}" text-anchor="end" font-size="11" font-weight="600" fill="var(--signal)">${esc(origin.code)}</text>`;
+  // The origin seeds the fit even when nothing else does -- its disc is drawn regardless.
+  const points: GeoPoint[] = [
+    { lat: input.origin.lat, lon: input.origin.lon },
+    ...drawn.map((s) => ({ lat: s.to.lat, lon: s.to.lon })),
+  ];
 
-  // Window line + the excluded-seats note -- stated on the map itself, not only in the
-  // aria-label, so a sighted reader also sees why the arc count and the stat strip's own
-  // seat total do not visibly match. sameAirportSeats stays in the STATED total even though
-  // its rows never become arcs; see NetworkMapInput's own doc for why both halves are
-  // required.
+  const lines = segmentOrder(drawn);
   const note = sameAirportNote(input.sameAirportSeats);
-  const noteSuffix = note === null ? "" : ` · ${note}`;
-  body += `<text x="8" y="${HEIGHT - 6}" font-size="10" fill="var(--ink-2)">${esc(input.window)}${esc(noteSuffix)}</text>`;
 
-  const ariaLabel = describeMap(input, drawn, crossPanelCount);
-
-  return (
-    `<svg viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}" ` +
-    `role="img" aria-label="${esc(ariaLabel)}" ` +
-    `style="font-family:var(--font-mono);font-variant-numeric:tabular-nums" ` +
-    `xmlns="http://www.w3.org/2000/svg">${body}</svg>`
-  );
+  return renderMapCore({
+    lines,
+    points,
+    nodes,
+    labelled,
+    marker: input.origin,
+    footerLines: [{ text: [input.window, note].filter((s): s is string => s !== null).join(" · ") }],
+    ariaLabel: describeMap(input, drawn.length, crossPanelCount(lines)),
+    basemapPaths: input.basemapPaths,
+  });
 }

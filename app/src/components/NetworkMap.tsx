@@ -1,20 +1,5 @@
-import { normalizeLon, regionOf, type Panel } from "@/lib/map/albers";
 import { basemapPathsFor } from "@/lib/map/basemap";
-import { renderNetworkMap, type NetworkMapInput } from "@/lib/map/networkMap";
-
-/** Every panel this network's own points (origin + every arc, including a same-airport row --
- * its panel is the origin's own, so including it changes nothing) land in, normalized across
- * the antimeridian exactly as `fitPanels`/`project` require. Drives which panels' coastline
- * `basemapPathsFor` is asked for -- a page must not ship the Pacific or Caribbean outline when
- * nothing in its own network reaches either. */
-function reachedPanels(input: NetworkMapInput): Panel[] {
-  const points = [input.origin, ...input.arcs];
-  const panels = new Set<Panel>();
-  for (const p of points) {
-    panels.add(regionOf(p.lat, normalizeLon(p.lon)));
-  }
-  return [...panels];
-}
+import { networkPanels, renderNetworkMap, type NetworkMapInput } from "@/lib/map/networkMap";
 
 /**
  * Mounts the airport network map: `renderNetworkMap`'s `<svg>…</svg>` string, injected exactly
@@ -28,7 +13,7 @@ function reachedPanels(input: NetworkMapInput): Panel[] {
  * how to align them.
  */
 export function NetworkMap({ network }: { network: NetworkMapInput }) {
-  const reached = reachedPanels(network);
+  const reached = networkPanels(network);
   const svg = renderNetworkMap({
     ...network,
     basemapPaths: basemapPathsFor(reached),
