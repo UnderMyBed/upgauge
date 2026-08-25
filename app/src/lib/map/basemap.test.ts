@@ -631,8 +631,11 @@ describe("no inset frame is drawn over the conterminous landmass", () => {
 
   it("records `car` as the one pre-existing violation, rather than omitting it", () => {
     // `car` (M7 Task 7b) is the same class of defect and shipped a milestone earlier: its rect
-    // (424,392)-(720,468) overlaps drawn Florida and Texas, measured at 1,396 px^2 -- 6.2% of
-    // its rect, against `pac`'s 33.3%. Out of scope for #111 and deliberately not fixed, but a
+    // (424,392)-(720,468) overlaps drawn Florida and Texas, measured at 1,396 px^2 on a 0.1px
+    // sample grid -- 6.2% of its rect, against `pac`'s 33.3%. (The grid over-counts slightly;
+    // an exact polygon clip puts it at 1,392. Both are quoted somewhere, so the method is named
+    // here rather than leaving a future reader to read 4 px^2 as drift.) Out of scope for #111
+    // and deliberately not fixed, but a
     // test that simply left `car` out of the list above would read as though the property held
     // everywhere. This asserts the exemption is EXACTLY those two states: if `car` ever grows
     // past them, or is fixed, this goes red and someone re-reads the rule.

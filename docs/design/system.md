@@ -664,7 +664,7 @@ vertex defining Tutuila's northern edge. It is sized for the tray anyway because
 hold PPG's 2px node and its 9px label; a fidelity-matched box would be about 30×13px, narrower
 than the word printed on top of it.
 
-**`car` has the same defect, at 1,396 px² over drawn Florida and Texas — 6.2% of its rect,
+**`car` has the same defect, at ~1,392 px² over drawn Florida and Texas — 6.2% of its rect,
 against `pac`'s 33.3%.** It shipped in M7 Task 7b and is not fixed here. It is recorded
 because `basemap.test.ts` asserts every other inset frame is clear of drawn land, and a test that
 simply omitted `car` would read as though the property held everywhere.
