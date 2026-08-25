@@ -51,6 +51,11 @@ interface DiffRow {
   departures: number;
   load_factor: number | null;
   category_total: number;
+  /** Per category. Null when this carrier filed no same-airport pair in that category. */
+  same_airport_seats: number | null;
+  /** Carrier-wide, identical on every row: routes no category could reach because a window was
+   *  wholly quarantined. */
+  undrawable_routes: number;
 }
 
 function isDiffCategory(value: string): value is DiffCategory {
@@ -92,16 +97,22 @@ function toSegment(row: DiffRow): SegmentDatum {
  * as one `SegmentMapInput` per category.
  *
  * EVERY ROW IS A CARRIER-ROUTE PAIR, NEVER A ROUTE, and the copy rendering these panels has to say
- * so: 3,638 of 5,959 dropped carrier-routes (61.1%) had a DIFFERENT carrier flying the same pair
+ * so: 3,640 of 5,959 dropped carrier-routes (61.1%) had a DIFFERENT carrier flying the same pair
  * inside the trailing window, and 4,608 of 8,357 added ones (55.1%) had one inside the prior
- * window. "Added" is re-entry, not first appearance -- 4,690 of 8,357 (56.1%) had filed that pair
- * before the prior window. `map_carrier_diff.sql`'s header carries every one of these
- * measurements and the query that produced it; take page copy from there, not from issue #109,
- * whose per-carrier table has the dropped and added labels swapped.
+ * window. "Added" is re-entry, not first appearance -- 4,691 of 8,357 (56.1%) had filed that pair
+ * before the prior window. `map_carrier_diff.sql`'s header states each of these with the exact
+ * predicate that produced it; take page copy from there, not from issue #109, whose per-carrier
+ * table has the dropped and added labels swapped.
+ *
+ * THE PANELS DO NOT SHARE A RANKING KEY. Added and dropped rank on seats, because seats is the
+ * magnitude of what those labels claim. Downgauged ranks on the FALL IN GAUGE, because seats is
+ * orthogonal to what that label claims -- ranking it by seats drew the smallest downgauges and
+ * cut the largest. #110's disclosure for that panel must name its key: "400 of 584" alone reads
+ * as the largest 400 routes, which is not what the cut selects.
  *
  * ONLY NON-EMPTY CATEGORIES ARE RETURNED, so this is a 0-to-3 length array in
  * `DIFF_CATEGORIES` order. That is `fetchAirportNetwork`'s rule -- no panel rather than an empty
- * panel -- and it is live, not theoretical: 33 of the 66 carriers with any change at all have at
+ * panel -- and it is live, not theoretical: 26 of the 66 carriers with any change at all have at
  * least one empty category, and ZW has 92 dropped, 0 added and 0 downgauged. A caller rendering a
  * fixed three-panel layout must handle a missing category.
  *
@@ -110,6 +121,15 @@ function toSegment(row: DiffRow): SegmentDatum {
  * mismatch throws rather than serving a map whose window line disagrees with the page's DATA AS
  * OF badge -- the disagreement `lib/entityFacts.ts` exists to make structurally impossible for
  * the entity pages.
+ *
+ * THAT GUARD IS ROW-CONDITIONAL, and deliberately so rather than by oversight. The month it
+ * checks against is read off the query's own rows, so a carrier with no categorized route --
+ * 67 of the 114 codes `sitemap_carriers.sql` emits -- returns `[]` without the check running.
+ * That is sound because the failure it prevents is a window line disagreeing with the badge, and
+ * a carrier with no panel renders no window line: there is nothing to disagree. Making it
+ * unconditional would cost a second query on the majority of carrier pages to guard a state
+ * those pages cannot reach. `refuses an asOf...` and `returns nothing at all...` in
+ * `carrierDiff.test.ts` pin both halves of this, so it stays a stated property.
  */
 export async function fetchCarrierDiff(
   airlineId: number,
@@ -160,17 +180,46 @@ export async function fetchCarrierDiff(
     const bucket = byCategory.get(category);
     if (bucket === undefined) continue;
     const head = bucket[0];
+    const segments = bucket.map(toSegment);
+    // `drawnRoutes` is NOT an input any more (A6): the renderer derives the drawn count from
+    // `drawableSegments(segments).length`, because a caller-supplied count that must equal a
+    // derived one can only ever be wrong -- it produced an aria-label carrying two different
+    // counts of one quantity. The invariant is still worth asserting HERE, though, where both
+    // halves are knowable: the SQL cut this panel at `$cap` and the window function counted the
+    // same partition before that cut, so if they ever disagree the disclosure "N of M" is built
+    // on a cut nobody can reproduce. Caught mutant 12b -- an off-by-one between the QUALIFY's
+    // `<= $cap` and this arithmetic.
+    const expectedDrawn = Math.min(head.category_total, cap);
+    if (expectedDrawn !== segments.length) {
+      throw new Error(
+        `fetchCarrierDiff: ${category} panel cut ${segments.length} segments where the ` +
+          `pre-cap total ${head.category_total} against cap ${cap} implies ${expectedDrawn} -- ` +
+          "the query's QUALIFY and this arithmetic have drifted apart",
+      );
+    }
     out.push({
       category,
       window: `${head.window_start_month} → ${head.window_end_month}`,
       map: {
-        segments: bucket.map(toSegment),
+        segments,
         window: `${head.window_start_month} → ${head.window_end_month}`,
-        drawnRoutes: bucket.length,
         // The TRUE count before the cap, straight off `count(*) OVER (PARTITION BY category)`,
-        // which the query computes before its QUALIFY filters. Never `bucket.length` -- that is
-        // the capped count, and it makes the disclosure line read "400 of 400".
+        // which the query computes before its QUALIFY filters. Never `segments.length` -- that
+        // is the capped count, and it makes the disclosure line read "400 of 400".
         totalRoutes: head.category_total,
+        // Routes no category could reach because a window was wholly quarantined -- absent from
+        // `segments` and from `totalRoutes` alike, so without this they leave no trace at all.
+        // Carrier-wide rather than per-category by construction: an uncategorized route has no
+        // category to be counted under. segmentMap.ts owns the field's contract.
+        quarantinedRoutes: head.undrawable_routes,
+        // Seats on pairs whose two endpoints are the same airport: never an arc, never in
+        // `totalRoutes`, but disclosed rather than lost. REQUIRED, and an explicit 0 when the
+        // carrier filed none in this category -- the field's own contract says to pass 0 rather
+        // than omit, because an omitted optional disclosure is the failure it exists to prevent.
+        // The SQL returns NULL for "no same-airport pair here"; 0 is the honest rendering of
+        // that at this boundary, since the question the field answers is "how many seats are
+        // being withheld from the arcs", and the answer is none.
+        sameAirportSeats: head.same_airport_seats ?? 0,
       },
     });
   }

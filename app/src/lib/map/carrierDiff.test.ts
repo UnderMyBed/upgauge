@@ -4,13 +4,15 @@ import { DEPARTURE_FLOOR } from "./arcs";
 
 // Live-database tests, not fixtures, for the reason lib/resolve.ts's header gives: this codebase
 // has no mocks. Every figure below was measured directly against fct_route_month on the 2026-05
-// warehouse -- the queries are in sql/03_queries/map_carrier_diff.sql's header.
+// warehouse; map_carrier_diff.sql's header states each population figure together with the exact
+// predicate that produced it, which is what makes them re-derivable after a refresh.
 const AS = 19930; // Alaska -- every panel under the cap, so cap behaviour cannot mask a bug
 const OO = 20304; // SkyWest -- every panel OVER the cap
 const MQ = 20398; // Envoy -- 317 added routes tied at exactly 76 seats across the 400th row
 const WRIGHT = 20333; // 8V -- owns 16 of the 25 wholly-quarantined windows in this span
 const ZW = 20046; // Air Wisconsin -- 92 dropped, 0 added, 0 downgauged
 const VIRGIN_AMERICA = 21171; // dormant since 2018: nothing in either window
+const FOUR_W = 20323; // 4W -- downgauged panel UNDER the cap, and averaging moves it 10 -> 5
 const AS_OF = "2026-05";
 
 function panel(diffs: CarrierDiff[], category: string): CarrierDiff {
@@ -114,7 +116,6 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // and silently truncates. Measured: SkyWest added 1,624 carrier-routes in the trailing window
     // and the map draws the top 400 by seats.
     const added = panel(await fetchCarrierDiff(OO, AS_OF), "added");
-    expect(added.map.drawnRoutes).toBe(400);
     expect(added.map.totalRoutes).toBe(1624);
     expect(added.map.segments).toHaveLength(400);
   });
@@ -169,6 +170,15 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     expect(await fetchCarrierDiff(VIRGIN_AMERICA, AS_OF)).toEqual([]);
   });
 
+  it("does NOT check asOf for a carrier with no categorized routes, and that is the contract", async () => {
+    // The month the guard compares against is read off the query's own rows, so a carrier with
+    // no rows never reaches it -- 67 of the 114 codes sitemap_carriers.sql emits. Pinned rather
+    // than left to be discovered: the failure the guard prevents is a window line disagreeing
+    // with the DATA AS OF badge, and a carrier with no panel renders no window line. If this
+    // ever becomes unconditional, this test is the one that must be deleted deliberately.
+    expect(await fetchCarrierDiff(VIRGIN_AMERICA, "1999-01")).toEqual([]);
+  });
+
   it("refuses an asOf the fact table does not agree with, naming both months", async () => {
     // The windows are derived inside the SQL from fct_route_month's own max(year_month). A caller
     // passing a different asOf would get a map whose window line disagrees with the page's DATA
@@ -176,6 +186,84 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // Both months named, not just "mismatch": which one is wrong is the whole diagnostic.
     await expect(fetchCarrierDiff(AS, "2025-01")).rejects.toThrow("2025-01");
     await expect(fetchCarrierDiff(AS, "2025-01")).rejects.toThrow("2026-05");
+  });
+
+
+  it("ranks the downgauged panel by gauge fall, not by seats", async () => {
+    // Catches: one shared ranking key across all three panels. For added and dropped, seats IS
+    // the magnitude of the claim; for downgauged it is orthogonal to it. Measured on OO, the one
+    // carrier whose downgauged panel is cut: ranked by seats it DREW a median fall of 1.50 and
+    // CUT a median of 7.50, discarding the largest fall in the set under a disclosure reading
+    // "400 of 584".
+    //
+    // AS's downgauged panel is under the cap, so nothing is cut and the ORDER is the observable
+    // -- which is the point: the two keys disagree about the leader by a factor of ~8.
+    const dg = panel(await fetchCarrierDiff(AS, AS_OF), "downgauged");
+    expect(pairs(dg)[0]).toBe("KOA-OGG");
+    const seatsLeader = [...dg.map.segments].sort((a, b) => b.seats - a.seats)[0];
+    expect(`${seatsLeader.from.code}-${seatsLeader.to.code}`).toBe("SEA-SFO");
+    expect(seatsLeader.seats).toBeGreaterThan(dg.map.segments[0].seats * 5);
+  });
+
+  it("decides downgauged on a ratio of sums, never an average of monthly ratios", async () => {
+    // CLAUDE.md's #1 homemade-tool bug, and this query's ONE cross-window comparison of a derived
+    // measure. Averaging the monthly seats/departures ratios instead yields 5,030 downgauged
+    // carrier-routes against 5,012, and moves the count for 32 carriers.
+    //
+    // It MUST assert totalRoutes, not segments.length: OO's downgauged panel is over the cap, so
+    // segments.length is 400 under BOTH forms and cannot tell them apart. Measured: 584 correct,
+    // 590 averaged. AS is useless here for the same reason in reverse -- 128 under both.
+    const oo = panel(await fetchCarrierDiff(OO, AS_OF), "downgauged");
+    expect(oo.map.totalRoutes).toBe(584);
+    // 4W confirms it on an UNCAPPED panel, so the kill does not rest on a capped panel's
+    // arithmetic: 10 correct, 5 averaged, and here segments.length moves too.
+    const fourW = panel(await fetchCarrierDiff(FOUR_W, AS_OF), "downgauged");
+    expect(fourW.map.totalRoutes).toBe(10);
+    expect(fourW.map.segments).toHaveLength(10);
+  });
+
+  it("cuts each panel exactly where its own pre-cap total and the cap say it should", async () => {
+    // `drawnRoutes` came OFF the interface in A6 -- the renderer derives the drawn count from
+    // `drawableSegments`. The invariant is still asserted here, where both halves are knowable:
+    // the SQL's QUALIFY cut and the window function's pre-cap count must imply each other, or
+    // the "N of M" disclosure rests on a cut nobody can reproduce. Kills mutant 12b, an
+    // off-by-one between `<= $cap` and this arithmetic.
+    const as = await fetchCarrierDiff(AS, AS_OF);
+    expect(as.map((d) => d.map.segments.length)).toEqual([225, 138, 128]);
+    for (const d of as) expect(d.map.totalRoutes).toBe(d.map.segments.length);
+    const oo = await fetchCarrierDiff(OO, AS_OF);
+    for (const d of oo) {
+      expect(d.map.segments).toHaveLength(400);
+      expect(d.map.totalRoutes).toBeGreaterThan(400);
+    }
+  });
+
+  it("discloses the seats on same-airport pairs rather than losing them with the arcs", async () => {
+    // A same-airport pair cannot be an arc, so it is out of `segments` and out of `totalRoutes`
+    // -- but its seats must still reach the reader (segmentMap.ts owns that contract). Measured
+    // for OO: 6,042 added, 4,508 dropped, 286,713 downgauged -- in DIFF_CATEGORIES order, which
+    // is NOT the query's alphabetical one.
+    const oo = await fetchCarrierDiff(OO, AS_OF);
+    expect(oo.map((d) => d.map.sameAirportSeats)).toEqual([6042, 4508, 286713]);
+    // An explicit 0, never an omitted field, for a carrier that filed none -- the contract says
+    // to say "none" out loud, because an omitted optional disclosure is the failure the field
+    // exists to prevent. AS files no same-airport pair in any category.
+    for (const d of await fetchCarrierDiff(AS, AS_OF)) {
+      expect(d.map.sameAirportSeats).toBe(0);
+    }
+  });
+
+  it("counts the routes no category could reach because a window was wholly quarantined", async () => {
+    // Without this they vanish: not an arc, not in any total, no trace anything was there.
+    // 8V owns 16 of the 25 such carrier-routes in the span -- BTI-VEE and KAL-TAL among them,
+    // which the test above proves are in no panel. AS has none, so the field is 0 rather than a
+    // number carried over from another carrier.
+    for (const d of await fetchCarrierDiff(WRIGHT, AS_OF)) {
+      expect(d.map.quarantinedRoutes).toBe(16);
+    }
+    for (const d of await fetchCarrierDiff(AS, AS_OF)) {
+      expect(d.map.quarantinedRoutes).toBe(0);
+    }
   });
 
   it("carries a load factor computed as a ratio of sums, never averaged, and null when absent", async () => {
@@ -187,7 +275,10 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     expect(top.seats).toBe(480681);
     expect(top.loadFactor).toBeCloseTo(0.7824, 4);
     for (const s of added.map.segments) {
-      expect(s.loadFactor === null || (s.loadFactor > 0 && s.loadFactor < 2)).toBe(true);
+      // `>= 0`, not `> 0`: 3,578 of the 19,328 categorized carrier-routes carry a load factor
+      // of exactly 0 -- passengers 0 against real seats and real departures. AS's added panel
+      // happens to have none, so `> 0` passed here while being false of the population.
+      expect(s.loadFactor === null || (s.loadFactor >= 0 && s.loadFactor < 2)).toBe(true);
     }
   });
 });
