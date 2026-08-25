@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { drawableSegments } from "./segmentMap";
 import {
   NETWORK_ARC_CAP,
   NETWORK_FETCH_CEILING,
@@ -252,7 +253,7 @@ describe("fetchCarrierTypeNetwork, against the warehouse", () => {
     const result = await fetchCarrierTypeNetwork(F4, "489", FROM, TO);
     expect(result).not.toBeNull();
     expect(result!.segments).toHaveLength(0);
-    expect(result!.drawnRoutes).toBe(0);
+    expect(drawableSegments(result!.segments)).toHaveLength(0);
     expect(result!.quarantinedRoutes).toBe(3);
     expect(result!.totalRoutes).toBe(3);
   });
@@ -275,9 +276,11 @@ describe("fetchCarrierTypeNetwork, against the warehouse", () => {
     const result = await fetchCarrierTypeNetwork(DL, TYPE_614, FROM, TO);
     expect(result).not.toBeNull();
     expect(result!.totalRoutes).toBe(DL_614_TOTAL);
-    expect(result!.drawnRoutes).toBe(NETWORK_ARC_CAP);
     expect(result!.segments).toHaveLength(NETWORK_ARC_CAP);
-    expect(result!.drawnRoutes).toBe(result!.segments.length);
+    // The drawn count is the RENDERER's, derived rather than declared (amendment A6). Asserting
+    // it through `drawableSegments` is what pins the producer and the renderer to one number:
+    // `segments.length` alone would still pass if an undrawable segment were handed over.
+    expect(drawableSegments(result!.segments)).toHaveLength(NETWORK_ARC_CAP);
   });
 
   it("does not disclose a cap on a view that fits under it", async () => {
@@ -287,8 +290,8 @@ describe("fetchCarrierTypeNetwork, against the warehouse", () => {
     // a disclosure about data quality rather than about the cap.
     const result = await fetchCarrierTypeNetwork(DL, "622", FROM, TO);
     expect(result!.quarantinedRoutes).toBe(0);
-    expect(result!.drawnRoutes).toBe(result!.totalRoutes);
-    expect(result!.drawnRoutes).toBe(result!.segments.length);
+    expect(drawableSegments(result!.segments)).toHaveLength(result!.totalRoutes);
+    expect(result!.segments).toHaveLength(result!.totalRoutes);
   });
 
   it("draws the largest routes BY SEATS, in seats order, not by departures", async () => {
@@ -356,7 +359,7 @@ describe("fetchCarrierTypeNetwork, against the warehouse", () => {
   it("honours a caller-supplied cap below the shared one", async () => {
     const result = await fetchCarrierTypeNetwork(DL, TYPE_614, FROM, TO, 12);
     expect(result!.segments).toHaveLength(12);
-    expect(result!.drawnRoutes).toBe(12);
+    expect(drawableSegments(result!.segments)).toHaveLength(12);
     expect(result!.totalRoutes).toBe(DL_614_TOTAL);
   });
 });

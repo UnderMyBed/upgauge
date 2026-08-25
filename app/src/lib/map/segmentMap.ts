@@ -43,14 +43,17 @@ export interface SegmentMapInput {
   segments: SegmentDatum[];
   /** Human-readable window, e.g. "2025-06 → 2026-05". Rendered on the map face. */
   window: string;
-  /** How many routes were drawn, and how many exist. `drawn < total` is what the disclosure
-   *  line reports; equal values render no disclosure line.
+  /** How many routes EXIST, before any cap. The drawn count is deliberately NOT a field: the
+   *  renderer derives it from `drawableSegments(segments).length`, which is the same quantity
+   *  `arcsSentence` already reports. A caller-supplied number that must equal a derived one is
+   *  a redundancy that can only ever be wrong -- it produced an `aria-label` reading "1 route
+   *  drawn as great-circle arcs ... 2 of 10 routes drawn", one description carrying two counts
+   *  of one thing (amendment A6).
    *
-   *  `totalRoutes` is the TRUE count BEFORE the cap. Returning the capped count here makes the
-   *  disclosure read "400 of 400" and is the mutant #105 exists to kill. Note that
-   *  `NetworkMapInput` has no equivalent field, which is why `AIRPORT_NETWORK_LIMIT` can
-   *  truncate silently today. */
-  drawnRoutes: number;
+   *  This field stays because the renderer genuinely cannot derive it: `segments` has already
+   *  been capped by the time it arrives. Returning the capped count here makes the disclosure
+   *  read "400 of 400" and is the mutant #105 exists to kill. Note that `NetworkMapInput` has
+   *  no equivalent field, which is why `AIRPORT_NETWORK_LIMIT` can truncate silently today. */
   totalRoutes: number;
   /** Seats on rows whose two endpoints are the SAME airport. Such a row cannot be a segment:
    *  its great circle has zero length, so `greatCircle`'s degenerate branch would emit
@@ -94,3 +97,16 @@ export interface SegmentMapInput {
  *  excluded, which is the population the cap decision was made against; the drawable
  *  population is 213 combos, worst 1,559. */
 export const NETWORK_ARC_CAP = 400;
+
+/** The segments a renderer can actually draw: a segment whose two endpoints are the same
+ *  airport has a zero-length great circle, and `greatCircle`'s degenerate branch would emit
+ *  `steps + 1` identical points -- several hundred bytes drawing an invisible mark. This is the
+ *  per-segment form of `networkMap.ts:193`'s `a.code !== origin.code`, which could assume the
+ *  near end was always the hub.
+ *
+ *  ONE definition, two readers, and that is the point of exporting it: the renderer counts what
+ *  it draws, and a producer asserts its own cap arithmetic against the same function rather
+ *  than against `segments.length`. Agreement by construction instead of by convention. */
+export function drawableSegments(segments: SegmentDatum[]): SegmentDatum[] {
+  return segments.filter((s) => s.from.code !== s.to.code);
+}

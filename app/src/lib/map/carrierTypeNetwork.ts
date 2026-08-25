@@ -1,7 +1,13 @@
 import { runPivot } from "@/lib/db";
 import type { PivotQuery } from "@/lib/pivot/types";
 import { fetchCoords, type AirportCoords } from "./airportNetwork";
-import { NETWORK_ARC_CAP, type GeoNode, type SegmentDatum, type SegmentMapInput } from "./segmentMap";
+import {
+  NETWORK_ARC_CAP,
+  drawableSegments,
+  type GeoNode,
+  type SegmentDatum,
+  type SegmentMapInput,
+} from "./segmentMap";
 
 /** Re-exported, never redefined. The literal lives in segmentMap.ts because it is one cap
  * across all three point-to-point maps and #109 must reach it without importing this file.
@@ -358,28 +364,32 @@ export async function fetchCarrierTypeNetwork(
     loadFactor: ratio(r.passengers, r.seats),
   }));
 
-  // TWO INDEPENDENT DERIVATIONS, compared. `drawnRoutes` comes from the cap arithmetic;
-  // `segments.length` comes from the slice that was actually taken. Writing
-  // `drawnRoutes = segments.length` would make this check unfalsifiable, which is not a check.
+  // TWO INDEPENDENT DERIVATIONS, compared -- and since amendment A6 the second one is the
+  // RENDERER'S OWN. `expected` comes from this file's cap arithmetic; `drawable` is what
+  // `renderSegmentMap` will actually draw from these same segments, counted by the same
+  // function that words its `aria-label`. Comparing against `segments.length` instead would
+  // make this unfalsifiable, which is not a check.
   //
-  // The producer owns it because the renderer deliberately does not throw on the served path
-  // and nothing else can see it: `drawnRoutes` is the numerator of a sentence a visitor reads
-  // ("Showing the N largest routes by seats of M"), so a value disagreeing with the number of
-  // segments handed over renders a FALSE claim rather than a wrong-looking one. It fires if
-  // the slice bound and the cap arithmetic ever drift apart -- a `slice(0, NETWORK_ARC_CAP)`
-  // under a caller-supplied `limit`, or a segment dropped during the map.
-  const drawnRoutes = Math.min(routes.length, limit);
-  if (drawnRoutes !== segments.length) {
+  // A6 removed `drawnRoutes` from `SegmentMapInput` precisely because a caller-supplied count
+  // that must equal a derived one can only ever be wrong. That does not retire the invariant,
+  // it sharpens it: this now also asserts that every segment handed over IS drawable by the
+  // renderer's definition, which `segments.length` could never say. It fires if the slice bound
+  // and the cap arithmetic drift apart -- a `slice(0, NETWORK_ARC_CAP)` under a caller-supplied
+  // `limit` -- or if an undrawable segment ever reached the array, which the same-airport
+  // exclusion upstream is what prevents.
+  const expected = Math.min(routes.length, limit);
+  const drawable = drawableSegments(segments).length;
+  if (expected !== drawable) {
     throw new Error(
-      `fetchCarrierTypeNetwork: drawnRoutes ${drawnRoutes} disagrees with ${segments.length} ` +
-        "segments -- the disclosure line would state a count the map does not draw.",
+      `fetchCarrierTypeNetwork: cap arithmetic says ${expected} routes but the renderer would ` +
+        `draw ${drawable} of the ${segments.length} segments handed over -- the disclosure ` +
+        "line would state a count the map does not draw.",
     );
   }
 
   return {
     segments,
     window: `${timeFrom} → ${timeTo}`,
-    drawnRoutes,
     // The TRUE count before the cap, which is the whole reason this file fetches past it, PLUS
     // the pairs excluded as quarantined -- the carrier served those, so the denominator has to
     // describe the network it actually served. Returning `segments.length` makes the disclosure
