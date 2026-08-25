@@ -96,6 +96,8 @@ STATED: dict[str, tuple[str, ...]] = {
         "app/src/lib/map/greatCircle.test.ts",
         "app/src/lib/map/greatCircle.ts",
         "app/src/lib/map/networkMap.ts",
+        "app/src/lib/map/segmentMap.test.ts",
+        "app/src/lib/map/segmentMap.ts",
         "app/src/lib/sitemap.test.ts",
         "docs/architecture/hosting.md",
         "docs/data/invariants.md",

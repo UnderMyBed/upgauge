@@ -5,8 +5,8 @@ constraints; **this file owns the answer** — tokens, components, chart and map
 states. Working mockups with real numbers: [`mockups/`](mockups/).
 
 Product truths that constrain this (mono numerics, `DATA AS OF`, density, permalinks,
-honest labels) live in [`../product/overview.md`](../product/overview.md) and are not
-restated here.
+honest labels) are owned by [`../product/overview.md`](../product/overview.md); where a section
+below applies one, it states the constraint it is applying rather than deferring.
 
 ---
 
@@ -475,7 +475,7 @@ below — it binds every time-series mark, not only lines.
 
 **Not deck.gl, not MapLibre**, though a `GreatCircleLayer` over a MapLibre basemap is the
 obvious reach. The map is a from-scratch, dependency-free, server-rendered SVG engine
-(`app/src/lib/map/{albers,greatCircle,arcs,networkMap,basemap}.ts`, composed by
+(`app/src/lib/map/{albers,greatCircle,arcs,segmentMap,networkMap,basemap}.ts`, composed by
 `app/src/components/NetworkMap.tsx`) — the same "in the served HTML, visible with JS off"
 property `AircraftMixChart.tsx` has, extended to a map: no client charting/mapping
 library ever touches the render path, so the map works with JavaScript off and needs no tile
@@ -519,11 +519,14 @@ must be negated or the country renders upside down — asserting that two projec
 merely *present* does not catch this; only their relative screen order does.
 
 **An arc crossing a panel boundary cannot be a great circle**, so `PDX–ANC` and `PDX–HNL` are
-drawn as straight lines into their inset, and the page says so — in the legend rail's
-"Arc rendering" group (`LegendRail`'s `map` prop) and in the map's own `aria-label`, which names the exact count of straight-line
-destinations rather than calling every one a great-circle arc (`networkMap.ts`'s
-`describeMap`). Every US map makes this compromise; this one admits it, twice over — once for
-a sighted reader, once for a screen reader.
+drawn as straight lines **across the boundary** — never "into an inset", which is true only when
+the subject is conterminous. An inset-origin subject (`ANC`, `HNL`, `SJU`, `GUM`) crosses OUT of
+its own inset, and the point-to-point engine draws inset-to-inset segments such as `HNL–ANC` that
+enter no inset at all. The page says so — in the legend rail's "Arc rendering" group
+(`LegendRail`'s `map` prop) and in the map's own `aria-label`, which names the exact count of
+straight-line segments rather than calling every one a great-circle arc (`segmentMap.ts`'s
+`arcsSentence`, shared by both maps). Every US map makes this compromise; this one admits it,
+twice over — once for a sighted reader, once for a screen reader.
 
 ### Basemap coastline
 
@@ -603,8 +606,9 @@ fact-present airports have at least one over the trailing 12 months; ORD alone i
 76,236 seats. Such a row's great circle has zero angular length, and `greatCircle`'s own
 degenerate-endpoint branch (`om < 1e-9`) would emit `steps + 1` identical points — several
 hundred bytes of polyline drawing an invisible mark directly on top of the origin disc. So
-the drawn arc set always excludes any row whose code equals the origin's (`app/src/lib/map/
-networkMap.ts`'s `renderNetworkMap`) — an airport with a same-airport filing draws one fewer arc
+the drawn arc set always excludes any row whose two endpoints are the same airport
+(`app/src/lib/map/segmentMap.ts`'s `drawableSegments`, which both maps filter through) — an
+airport with a same-airport filing draws one fewer arc
 than it has routes, 267 from 268 for ORD over 2025-05 → 2026-04, the fixed window
 `app/src/lib/map/airportNetwork.test.ts` pins it at. But the row's seats stay in whatever total
 the map states, passed in separately (`sameAirportSeats`), never derived

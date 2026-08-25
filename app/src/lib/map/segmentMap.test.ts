@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  disclosureNotes,
   drawableSegments,
   NETWORK_ARC_CAP,
   reachedPanelsFor,
@@ -104,6 +105,23 @@ function dashOrder(svg: string): string[] {
   return [...svg.matchAll(/<polyline[^>]*\/>/g)].map((m) =>
     m[0].includes('stroke-dasharray="5 3"') ? "dashed" : "solid",
   );
+}
+
+/** Every `<text>` at font-size 10 and its right edge in px. IBM Plex Mono is monospaced with a
+ * single advance width of 600/1000 em (read from the committed
+ * app/src/lib/og/fonts/IBMPlexMono-Regular.ttf), so a run's width is exactly
+ * `codePoints * 0.6 * fontSize`. `text-anchor="end"` runs leftward, so x IS their right edge. */
+function textRightEdges(svg: string): { text: string; right: number }[] {
+  return [...svg.matchAll(/<text x="([\d.-]+)"[^>]*font-size="10"([^>]*)>([^<]*)<\/text>/g)].map((m) => {
+    const text = m[3]
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, "&");
+    const x = Number(m[1]);
+    const right = m[2].includes('text-anchor="end"') ? x : x + [...text].length * 0.6 * 10;
+    return { text, right };
+  });
 }
 
 function visibleText(svg: string): string {
@@ -312,28 +330,78 @@ describe("renderSegmentMap", () => {
     expect(labelsInOrder(svg)).toEqual(["PDX", "SEA"]);
   });
 
+  it("treats endpoints sharing a display code as one airport -- by CODE, not by id", () => {
+    // CHARACTERIZATION, not endorsement. `sameAirport` keys on the display code, which departs
+    // from CLAUDE.md's "key on AIRPORT_ID, never letter codes" -- see its comment for why
+    // (`GeoNode` carries no id and `NetworkMapInput` is pinned without one), for the
+    // measurement that makes it safe today (zero collisions among the 1,047 fact-present
+    // airports; `dim_airport` has 20+ overall, `AUS` being both 10423 and 16440), and for what
+    // a fact-present collision would cost: a legitimate route between two DISTINCT airports
+    // read as a self-segment and dropped.
+    //
+    // The coordinates below are deliberately unequal and deliberately arbitrary: only the CODE
+    // decides the outcome, and that is precisely the property being pinned. If this ever goes
+    // red because `GeoNode` gained an id, that is the fix landing rather than a regression --
+    // update it deliberately, and update `sameAirport`'s comment with it.
+    const ausA = { code: "AUS", lat: 30.19, lon: -97.67 };
+    const ausB = { code: "AUS", lat: 30.32, lon: -97.76 };
+    const collided: SegmentDatum = {
+      from: ausA,
+      to: ausB,
+      seats: 100,
+      departures: 50,
+      loadFactor: 0.8,
+    };
+    expect(drawableSegments([collided])).toEqual([]);
+
+    // ...and the SAME identity governs the node dedupe, so two distinct airports filing one
+    // code collapse to ONE dot. This needs two SEPARATE drawable segments, not the collided
+    // one above: that segment is filtered before `tallyNodes` ever sees it, so asserting the
+    // dedupe on it passes whatever the dedupe does. (Measured -- an earlier version of this
+    // assertion did exactly that and survived a mutant that keyed the tally on code+lat.)
+    //
+    // Summed: SEA 100, PDX 900, AUS 1,000 -> ascending, exactly one AUS. Under a tally keyed
+    // on anything finer than the code, AUS splits into a 100 and a 900 and appears twice.
+    const twoEnds: SegmentDatum[] = [
+      { from: node("SEA"), to: ausA, seats: 100, departures: 50, loadFactor: 0.8 },
+      { from: node("PDX"), to: ausB, seats: 900, departures: 50, loadFactor: 0.8 },
+    ];
+    expect(labelsInOrder(renderSegmentMap(input(twoEnds)))).toEqual(["SEA", "PDX", "AUS"]);
+  });
+
   it("draws no subject marker -- a point-to-point map has no hub", () => {
     const svg = renderSegmentMap(input([seg("SEA", "PDX")]));
     expect(svg).not.toContain('r="4.5"');
     expect(svg).not.toContain("var(--signal)");
   });
 
-  it("states a capped view's true total, on the map itself and not only in the aria-label", () => {
-    // Catches: capping silently. `NetworkMapInput` has no field for this at all, which is why
-    // /airport can truncate with no on-page disclosure; the point-to-point maps must not.
-    const svg = renderSegmentMap(input([seg("SEA", "PDX")], { totalRoutes: 1_622 }));
-    expect(visibleText(svg)).toContain("1 of 1,622 routes drawn.");
-    expect(ariaLabel(svg)).toContain("1 of 1,622 routes drawn.");
+  it("hands the capped view's true total to the component, and puts it in the aria-label", () => {
+    // The cap disclosure is TEXT the component paints as HTML, not a `<text>` in the raster --
+    // see `disclosureNotes` and the footer-budget comment for the measurement that forced that.
+    // The `aria-label` carries the identical sentence, the same way AircraftMixChart's gapNote
+    // is both an HTML span and part of its accessible description.
+    const capped = input([seg("SEA", "PDX")], { totalRoutes: 1_622 });
+    expect(disclosureNotes(capped)).toEqual(["1 of 1,622 routes drawn."]);
+    expect(ariaLabel(renderSegmentMap(capped))).toContain("1 of 1,622 routes drawn.");
   });
 
-  it("renders no disclosure line when nothing was capped", () => {
-    const svg = renderSegmentMap(input([seg("SEA", "PDX")], { totalRoutes: 1 }));
-    expect(svg).not.toContain("routes drawn.");
+  it("discloses nothing when nothing was capped, quarantined or same-airport", () => {
+    const clean = input([seg("SEA", "PDX")], { totalRoutes: 1 });
+    expect(disclosureNotes(clean)).toEqual([]);
+    expect(renderSegmentMap(clean)).not.toContain("routes drawn.");
+  });
+
+  it("says 'route' rather than 'routes' when the total is one", () => {
+    // arcsSentence and quarantinedNote both handle N=1; this sentence used to hard-code the
+    // plural, so a one-route view read "0 of 1 routes drawn."
+    expect(disclosureNotes(input([seg("SEA", "SEA")], { totalRoutes: 1 }))).toEqual([
+      "0 of 1 route drawn.",
+    ]);
   });
 
   it("never states two different drawn counts in one aria-label", () => {
     // Catches: taking the drawn count from the caller. `arcsSentence` reports what was actually
-    // drawn and the disclosure used to report a caller-supplied drawn count, with nothing
+    // drawn and the disclosure used to report a caller-supplied `drawnRoutes`, with nothing
     // reconciling them -- so one accessible description could read "2 routes drawn as
     // great-circle arcs ... 3 of 10 routes drawn." That is the compound-claim failure CLAUDE.md
     // records for /watch/new-routes: every clause re-derived, never triaged by how true it
@@ -341,38 +409,27 @@ describe("renderSegmentMap", () => {
     //
     // The fixture makes them disagree if anything can: three segments, one of them a
     // self-segment the renderer drops, against a caller total of 10. Both sentences must say 2.
-    const svg = renderSegmentMap(
-      input([seg("SEA", "PDX"), seg("ORD", "JFK"), seg("HNL", "HNL")], { totalRoutes: 10 }),
+    const label = ariaLabel(
+      renderSegmentMap(
+        input([seg("SEA", "PDX"), seg("ORD", "JFK"), seg("HNL", "HNL")], { totalRoutes: 10 }),
+      ),
     );
-    const label = ariaLabel(svg);
     expect(label).toContain("2 routes drawn as great-circle arcs");
     expect(label).toContain("2 of 10 routes drawn.");
     expect(label).not.toContain("3 of 10");
   });
 
-  it("states same-airport seats it excluded, on the map itself and not only in the aria-label", () => {
-    // The honesty property the hub map already had. A first version of the equivalent test on
-    // networkMap.ts asserted over the WHOLE string and missed a mutant that zeroed the number
-    // only in the visible note -- the aria-label carries the same figure, so the substring was
-    // still present. Stripping aria-label first is what makes this a pin on the visible text.
-    const svg = renderSegmentMap(
-      input([seg("SEA", "PDX")], { sameAirportSeats: 598_829 }),
-    );
-    expect(visibleText(svg)).toContain("598,829 same-airport seats");
-    expect(ariaLabel(svg)).toContain("598,829 same-airport seats");
-  });
-
   it("does not claim same-airport seats are 'in this total' -- no total here carries them", () => {
     // Catches: reusing the HUB map's tail verbatim. On /airport "this total" is the stat strip's
     // SEATS figure, which does carry them. This map's only totals are ROUTE counts --
-    // `totalRoutes` and what it drew -- and both exclude same-airport pairs, so
-    // the hub wording points at a total that neither exists on the map face nor contains these
-    // seats. The falsifying pair is in networkMap.test.ts: the hub must still say it.
+    // `totalRoutes` and what it drew -- and both exclude same-airport pairs, so the hub wording
+    // points at a total that neither exists nor contains these seats. The falsifying pair is in
+    // networkMap.test.ts: the hub must still say it.
     const svg = renderSegmentMap(
       input([seg("SEA", "PDX")], { sameAirportSeats: 598_829, totalRoutes: 519 }),
     );
     expect(svg).not.toContain("included in this total");
-    expect(visibleText(svg)).toContain(
+    expect(ariaLabel(svg)).toContain(
       "598,829 same-airport seats excluded from the arcs above, and from the route counts.",
     );
   });
@@ -383,40 +440,36 @@ describe("renderSegmentMap", () => {
     // no map at all for a reason the reader never sees. Measured: 34 such groups over the
     // trailing 12, every one of which performed departures (quarantined `zero_seats`).
     // CLAUDE.md requires count + reason; "never clamped" is the reason the count exists.
-    const svg = renderSegmentMap(input([seg("SEA", "PDX")], { quarantinedRoutes: 34 }));
-    expect(visibleText(svg)).toContain(
+    const many = input([seg("SEA", "PDX")], { quarantinedRoutes: 34 });
+    expect(disclosureNotes(many)).toEqual([
       "34 quarantined routes not drawn — failed an invariant, never clamped.",
-    );
-    expect(ariaLabel(svg)).toContain("34 quarantined routes not drawn");
+    ]);
+    expect(ariaLabel(renderSegmentMap(many))).toContain("34 quarantined routes not drawn");
 
-    const one = renderSegmentMap(input([seg("SEA", "PDX")], { quarantinedRoutes: 1 }));
-    expect(visibleText(one)).toContain("1 quarantined route not drawn");
+    expect(disclosureNotes(input([seg("SEA", "PDX")], { quarantinedRoutes: 1 }))[0]).toContain(
+      "1 quarantined route not drawn",
+    );
   });
 
   it("says nothing about quarantine when there is none", () => {
     expect(renderSegmentMap(input([seg("SEA", "PDX")]))).not.toContain("quarantined");
-    expect(
-      renderSegmentMap(input([seg("SEA", "PDX")], { quarantinedRoutes: 0 })),
-    ).not.toContain("quarantined");
+    expect(disclosureNotes(input([seg("SEA", "PDX")], { quarantinedRoutes: 0 }))).toEqual([]);
   });
 
   it("orders the three disclosures widest-claim-first, and states each exactly once", () => {
-    // All three at once -- the footer and the aria-label must agree, and neither may state a
-    // sentence twice. Asserted as one whole string rather than three `toContain`s, because
-    // three independent substring checks pass under any ordering.
-    const svg = renderSegmentMap(
-      input([seg("SEA", "PDX")], {
-        totalRoutes: 519,
-        quarantinedRoutes: 34,
-        sameAirportSeats: 598_829,
-      }),
-    );
-    const expected =
-      "2025-06 → 2026-05 · 1 of 519 routes drawn. · " +
-      "34 quarantined routes not drawn — failed an invariant, never clamped. · " +
-      "598,829 same-airport seats excluded from the arcs above, and from the route counts.";
-    expect(visibleText(svg)).toContain(`>${expected}</text>`);
-    expect(ariaLabel(svg)).toBe(
+    // Asserted as one whole ordered array rather than three `toContain`s, because three
+    // independent substring checks pass under any ordering.
+    const all = input([seg("SEA", "PDX")], {
+      totalRoutes: 519,
+      quarantinedRoutes: 34,
+      sameAirportSeats: 598_829,
+    });
+    expect(disclosureNotes(all)).toEqual([
+      "1 of 519 routes drawn.",
+      "34 quarantined routes not drawn — failed an invariant, never clamped.",
+      "598,829 same-airport seats excluded from the arcs above, and from the route counts.",
+    ]);
+    expect(ariaLabel(renderSegmentMap(all))).toBe(
       "Route map, 2025-06 → 2026-05. 1 route drawn as great-circle arcs, thinnest to heaviest by seats. " +
         "1 of 519 routes drawn. " +
         "34 quarantined routes not drawn — failed an invariant, never clamped. " +
@@ -424,9 +477,41 @@ describe("renderSegmentMap", () => {
     );
   });
 
+  it("paints NO disclosure prose into the raster, at any combination", () => {
+    // THE regression this fix exists to prevent, and it must be asserted as PAINTABILITY rather
+    // than presence: `toContain` on markup passes on a string that is present and clipped, which
+    // is exactly how the overflow shipped. Every `<text>` at font-size 10 must end inside the
+    // 960px viewBox -- an outermost <svg> is `overflow: hidden`, so anything past it is painted
+    // outside the viewport at every viewport width.
+    //
+    // Worst measured real view: `/aircraft/CE-206%2F7`, all three sentences, 1,208px -- 41
+    // characters lost at the frame edge while the aria-label carried them all.
+    const worst = renderSegmentMap(
+      input([seg("SEA", "PDX")], {
+        window: "2025-06 → 2026-05",
+        title: "Downgauged",
+        totalRoutes: 1_622,
+        quarantinedRoutes: 34,
+        sameAirportSeats: 598_829,
+      }),
+    );
+    for (const { text, right } of textRightEdges(worst)) {
+      expect({ text, right, fits: right <= 960 }).toEqual({ text, right, fits: true });
+    }
+    // ...and the prose genuinely is absent from the PAINTED markup, not merely short enough.
+    // Stripped of aria-label first: that attribute is part of the markup and legitimately
+    // carries every sentence, so a bare `not.toContain` over the raw string asserts the
+    // opposite of what is meant and fails on correct output.
+    const painted = visibleText(worst);
+    expect(painted).not.toContain("quarantined route");
+    expect(painted).not.toContain("same-airport seats");
+    expect(painted).not.toContain("routes drawn.");
+    // The aria-label still carries all three -- that is the half a screen reader gets.
+    expect(ariaLabel(worst)).toContain("quarantined routes not drawn");
+  });
+
   it("omits the same-airport sentence entirely when there are none", () => {
-    const svg = renderSegmentMap(input([seg("SEA", "PDX")]));
-    expect(svg).not.toContain("same-airport seats");
+    expect(disclosureNotes(input([seg("SEA", "PDX")]))).toEqual([]);
   });
 
   it("stacks an optional caption under the window line, keeping the window where it always sat", () => {
@@ -456,8 +541,14 @@ describe("renderSegmentMap", () => {
 
     const crossing = renderSegmentMap(input([seg("SEA", "PDX"), seg("HNL", "ANC")]));
     expect(ariaLabel(crossing)).toContain(
-      "2 routes drawn thinnest to heaviest by seats -- 1 as great-circle arcs, 1 as straight lines across a panel boundary",
+      "2 routes drawn thinnest to heaviest by seats -- 1 as great-circle arc, 1 as straight line across a panel boundary",
     );
+
+    // Live on /airport today: PPG has exactly one drawn route and it is cross-panel, PSE has
+    // two and both are. The sentence read "0 as great-circle arcs, 1 as straight lines" -- a
+    // plural about one thing. The golden is blind to it (5 crossings, 4 curves, both plural).
+    const lone = renderSegmentMap(input([seg("SEA", "HNL")]));
+    expect(ariaLabel(lone)).toContain("0 as great-circle arcs, 1 as straight line across a panel boundary");
   });
 
   it("frames only the insets its own segments reach, and labels every one it frames", () => {

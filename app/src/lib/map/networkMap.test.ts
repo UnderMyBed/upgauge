@@ -183,7 +183,8 @@ describe("renderNetworkMap", () => {
   // Minor finding, final whole-branch review: a solid arc (above both the load-factor and
   // departure floors, `strokeFor`'s `dash: ""` branch) used to still emit
   // `stroke-dasharray=""` -- browsers ignore it (identical to the attribute's absence), but
-  // it is invalid SVG and cost ~5 KB of no-op bytes on ORD's 267 polylines. The attribute
+  // it is invalid SVG and cost ~5 KB of no-op bytes on the 267 polylines ORD drew over
+  // 2025-05..2026-04, the fixed window airportNetwork.test.ts pins. The attribute
   // should be OMITTED entirely for a solid arc, not emitted empty.
   it("omits stroke-dasharray entirely for a solid arc, rather than emitting it empty", () => {
     const svg = renderNetworkMap(fixture()); // ORD -> SEA, JFK: both solid, well above floor

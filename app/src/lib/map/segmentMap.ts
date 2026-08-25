@@ -65,11 +65,21 @@ export interface SegmentMapInput {
   segments: SegmentDatum[];
   /** Human-readable window, e.g. "2025-06 → 2026-05". Rendered on the map face. */
   window: string;
-  /** How many routes exist BEFORE the cap -- the TRUE count. Returning the capped count here
-   *  makes the disclosure read "400 of 400" and is the mutant #105 exists to kill. The renderer
-   *  cannot derive this: the query that produced these segments carried a LIMIT, so the true
-   *  total is only knowable upstream (`db.ts:251-254`). `NetworkMapInput` has no equivalent
-   *  field, which is why `AIRPORT_NETWORK_LIMIT` can truncate silently today.
+  /** The TRUE pre-cap count of DRAWABLE routes. Quarantined pairs and same-airport pairs are
+   *  BOTH excluded from it -- each surfaces through its own field instead (`quarantinedRoutes`,
+   *  `sameAirportSeats`), and counting them here would put a route in the denominator that this
+   *  map can never draw, so the disclosure could never reach "N of N". A group whose every pair
+   *  is quarantined has `totalRoutes: 0`, not 3 (#105 measured `F4` x `489` as exactly that).
+   *
+   *  Stated HERE, on the field it constrains, and not only on the neighbouring fields that
+   *  mention it: this epic already produced one bug from that shape, where two documents gave
+   *  `totalRoutes` opposite meanings and #105 and #109 each followed a different one.
+   *
+   *  Returning the CAPPED count here instead makes the disclosure read "400 of 400" and is the
+   *  mutant #105 exists to kill. The renderer cannot derive this: the query that produced these
+   *  segments carried a LIMIT, so the true total is only knowable upstream (`db.ts:251-254`).
+   *  `NetworkMapInput` has no equivalent field, which is why `AIRPORT_NETWORK_LIMIT` can
+   *  truncate silently today.
    *
    *  THE DRAWN COUNT IS NOT AN INPUT. It is `lines.length` -- what the renderer actually drew
    *  after filtering self-segments. An earlier revision took it from the caller, and the two
@@ -106,9 +116,10 @@ export interface SegmentMapInput {
    *  the field exists to prevent. Pass `0` to say "none", explicitly.
    *
    *  A same-airport pair is NOT counted in `totalRoutes`, and the renderer's own drawn count
-   *  excludes it by construction (`drawableSegments`) -- it is not one of the routes. That is why this map's note cannot
-   *  borrow the hub map's "included in this total" wording: there is no total on this map face
-   *  that carries these seats, and stating them here is the only place they surface at all.
+   *  excludes it by construction (`drawableSegments`) -- it is not one of the routes. That is
+   *  why this map's note cannot borrow the hub map's "included in this total" wording: there is
+   *  no total on this map face that carries these seats, and stating them here is the only
+   *  place they surface at all.
    *
    *  Measured for the point-to-point maps (#105): 598,829 same-airport seats across 759
    *  carrier x aircraft-type groups over the trailing 12. Dropping them silently in the
@@ -163,11 +174,41 @@ const BASEMAP_FITS: Map<Panel, PanelFit> = fitPanels(BASEMAP_FIT_POINTS);
 const WIDTH = 960;
 const HEIGHT = 500;
 
-/** Vertical step of the footer stack. Only a map with a `title` has more than one line, so on
- * every other map this constant is unreachable and the window line sits at `HEIGHT - 6`
- * exactly where it always has. */
+/** Vertical step of the footer stack. The stack is bottom-anchored, so a map with one line puts
+ * that line exactly where every map has always put it. */
 const FOOTER_LINE_HEIGHT = 12;
 
+/**
+ * PROSE DOES NOT GO IN THE SVG, and this is the constraint that decides it. An outermost `<svg>`
+ * gets `overflow: hidden` from the UA stylesheet, and `.map svg { max-width: 100% }`
+ * (`globals.css`) scales the box without changing the viewBox -- so a `<text>` past `WIDTH` is
+ * painted outside the viewport at EVERY viewport width, silently. Nothing in the markup records
+ * that it happened: a `toContain` assertion passes on a string that is present and unpaintable,
+ * and `app/smoke.sh` curls bytes, so neither gate can see it.
+ *
+ * The budget is arithmetic, not an estimate. `--font-mono` resolves to IBM Plex Mono
+ * (`globals.css:37`), whose committed `app/src/lib/og/fonts/IBMPlexMono-Regular.ttf` has
+ * `unitsPerEm` 1000 and exactly ONE advance width, 600 -- read from its own `head`/`hhea`/`hmtx`
+ * tables, not assumed from the name. Every glyph is therefore 0.6em, and at `font-size="10"`
+ * from `x="8"` a line holds `(960 - 8) / 6 = 158` characters.
+ *
+ * Measured against the real warehouse, the three disclosure sentences blew that budget on 12
+ * of the 355 wave-2 views -- `/aircraft/CE-206%2F7` ran to 1,208px and lost its last 41
+ * characters at the frame edge, while its `aria-label` carried the whole thing. A screen reader
+ * got the disclosure and the person looking at the map did not, which is the exact inversion of
+ * the property those sentences exist to hold.
+ *
+ * So the disclosures are EXPORTED as text (`disclosureNotes`) and rendered by the component as
+ * HTML, where text wraps -- the shape `AircraftMixChart.tsx:81-99` already uses for `rampNote`
+ * and `gapNote`, and `NetworkMap.tsx:39-46` for its `pac` caption. Nothing needs them inside the
+ * raster: `airport/[code]/opengraph-image.tsx:51` excludes the map from the OG card. Stacking
+ * them as extra footer rows was the other candidate and is wrong for a measured reason -- the
+ * inset frames run to y=474 while the footer grows upward from y=494 in 12px steps, so the
+ * third row lands inside a labelled inset.
+ *
+ * What stays painted is short and bounded: the window line, and an optional `title`. Keep both
+ * short -- they cannot wrap.
+ */
 /** How many airports get a text label. Labelling every node on a busy network would bury the
  * map in text; 8 is the density this 960x500 canvas was reviewed and shipped at.
  *
@@ -287,16 +328,25 @@ function quarantinedNote(routes: number): string | null {
  */
 export function arcsSentence(drawn: number, crossPanelCount: number, noun: string): string {
   const plural = drawn === 1 ? "" : "s";
+  const curved = drawn - crossPanelCount;
   return crossPanelCount === 0
     ? `${drawn} ${noun}${plural} drawn as great-circle arcs, thinnest to heaviest by seats.`
     : `${drawn} ${noun}${plural} drawn thinnest to heaviest by seats -- ` +
-        `${drawn - crossPanelCount} as great-circle arcs, ${crossPanelCount} as straight lines across a panel boundary (a great circle cannot cross one).`;
+        `${curved} as great-circle arc${curved === 1 ? "" : "s"}, ${crossPanelCount} as straight line${crossPanelCount === 1 ? "" : "s"} across a panel boundary (a great circle cannot cross one).`;
 }
 
 /** Which panel one endpoint belongs to, normalizing longitude first -- `regionOf` does not do
  * it itself, and six fact-present airports carry a positive longitude (`GeoNode`'s doc). */
 function panelOf(node: GeoNode): Panel {
   return regionOf(node.lat, normalizeLon(node.lon));
+}
+
+interface FooterLine {
+  text: string;
+  /** A caption that NAMES which map you are looking at outranks the window note beside it --
+   * the diff map's three panels are otherwise identical chrome, so its label cannot render in
+   * the same muted weight as a footnote. */
+  emphasis?: boolean;
 }
 
 /** One drawn airport disc. `belowFloor` is resolved by the BUILDER, not here, because the two
@@ -306,14 +356,6 @@ interface NodeMark {
   lat: number;
   lon: number;
   belowFloor: boolean;
-}
-
-interface FooterLine {
-  text: string;
-  /** A caption that NAMES which map you are looking at outranks the window note beside it --
-   * the diff map's three panels are otherwise identical chrome, so its label cannot render in
-   * the same muted weight as a footnote. */
-  emphasis?: boolean;
 }
 
 /**
@@ -486,12 +528,43 @@ function fitPointsOf(segments: SegmentDatum[]): GeoPoint[] {
   return points;
 }
 
+/**
+ * Whether two endpoints are the same airport -- the renderer's ONE identity decision, named so
+ * that the two places needing it (`drawableSegments` here, `tallyNodes`'s dedupe below) cannot
+ * answer it differently.
+ *
+ * KEYED ON THE DISPLAY CODE, which is NOT what CLAUDE.md asks for: "Key on `AIRLINE_ID` and
+ * `AIRPORT_ID`, never letter codes." This is the one place in the map engine that departs from
+ * that rule, and it departs because `GeoNode` carries no id to key on -- `NetworkMapInput` has
+ * none either (`ArcDatum` is code/lat/lon), and it is pinned, so the hub adapter could not
+ * supply one without breaking `/airport`'s byte-identical guard.
+ *
+ * SAFE TODAY, MEASURED: zero display-code collisions among the 1,047 fact-present airports.
+ * `dim_airport` carries 20+ overall -- `AUS` is both 10423 and 16440 -- but none of the
+ * colliding pairs is fact-present, so no two endpoints the producers can emit share a code.
+ *
+ * WHAT BREAKS IF ONE EVER BECOMES FACT-PRESENT, and it is not a wrong pixel: a legitimate route
+ * between two DISTINCT airports would be read as a self-segment and dropped -- silently
+ * narrowing the map, and putting the drawn count below what the producer expects. Producers key
+ * on `airport_id` (#105 excludes on `route_key_low = route_key_high`, the fact table's own id),
+ * so the two disagree exactly then.
+ *
+ * REQUIRED OF PRODUCERS: derive any "did the renderer draw what I expected" assertion from an
+ * id-keyed count, and let a mismatch degrade to a narrower map rather than throwing. An
+ * assertion that throws turns this into a 500 on a served page for a condition that is not a
+ * bug in the producer -- the strictly worse direction. The renderer itself never throws here.
+ */
+function sameAirport(a: GeoNode, b: GeoNode): boolean {
+  return a.code === b.code;
+}
+
 /** The segments that actually become arcs. A row whose two endpoints are the same airport has
  * a great circle of zero angular length, and `greatCircle`'s degenerate branch would emit
  * `steps + 1` identical points -- several hundred bytes drawing an invisible mark. Its seats
- * are NOT dropped; they reach the reader through `sameAirportSeats`. */
+ * are NOT dropped; they reach the reader through `sameAirportSeats`. Identity is `sameAirport`'s
+ * to decide -- read its comment before assuming this compares ids. */
 export function drawableSegments(segments: SegmentDatum[]): SegmentDatum[] {
-  return segments.filter((s) => s.from.code !== s.to.code);
+  return segments.filter((s) => !sameAirport(s.from, s.to));
 }
 
 /**
@@ -532,11 +605,18 @@ interface NodeTally {
 /**
  * One tally per distinct airport, summing every segment incident on it.
  *
- * Deduped by `code`, first-seen coordinates winning. Two tallies for one code cannot disagree
- * about position by construction: coordinates come from a single `map_airport_coords.sql`
- * lookup keyed on `airport_id`, so one code resolves to one pair of coordinates for the whole
- * of a render. This does not throw on a disagreement because a renderer on the served path
- * must not, and there is no honest thing to draw instead.
+ * Deduped by `code`, first-seen coordinates winning -- the SAME identity `sameAirport` decides,
+ * and its comment is the one that explains why this is a display code rather than an
+ * `airport_id` and what a fact-present collision would cost. Two tallies for one code cannot
+ * disagree about position TODAY, but the reason is not that the coordinate lookup is keyed on
+ * `airport_id` -- being id-keyed is what makes two coordinate pairs for one display code
+ * POSSIBLE, not impossible. The load-bearing reason is upstream and gated:
+ * `pipeline/tests/test_resolution_invariants.py:82` asserts no display code is held by more
+ * than one FACT-PRESENT airport, and would go red at the producer before such a pair could
+ * reach a map. (`dim_airport WHERE is_latest` carries 20 codes held by several ids -- `AUS`,
+ * `BER`, `HYD`, `DUR` among them -- and none of those ids is fact-present.) This does not throw
+ * on a disagreement because a renderer on the served path must not, and there is no honest
+ * thing to draw instead.
  *
  * Departures are SUMMED, which is what makes the below-floor mark mean the same thing on both
  * maps: a hub destination has exactly one incident arc, so the sum IS that arc's departures and
@@ -563,6 +643,36 @@ function tallyNodes(lines: SegmentDatum[]): NodeTally[] {
     }
   }
   return [...byCode.values()];
+}
+
+/**
+ * The sentences a point-to-point map must disclose, in order: what the cap elided, what could
+ * not be drawn at all, and what is not an arc. Widest claim first, each narrowing what the
+ * reader is looking at.
+ *
+ * EXPORTED BECAUSE THE COMPONENT PAINTS THEM, NOT THE SVG -- see the footer-budget comment
+ * above for the measurement that forced that. A component renders these as HTML beneath the
+ * map, where text wraps at any width; `renderSegmentMap` puts the identical sentences in the
+ * `aria-label` and nowhere else in the raster. That duplication is the established shape here,
+ * not an oversight: `AircraftMixChart.tsx` renders `gapNote` as HTML and says why in as many
+ * words -- "stated on the chart, not only in the aria-label."
+ *
+ * A COMPONENT THAT DOES NOT RENDER THESE SHIPS A MAP THAT LIES BY OMISSION. The `aria-label`
+ * would carry a disclosure the person looking at the map never sees, which is the exact
+ * inversion these sentences exist to prevent.
+ *
+ * The drawn count is derived here, never taken from the caller, for the reason `totalRoutes`
+ * gives: two counts of one quantity in one description is a compound claim.
+ */
+export function disclosureNotes(input: SegmentMapInput): string[] {
+  const drawn = drawableSegments(input.segments).length;
+  const capped =
+    drawn < input.totalRoutes
+      ? `${drawn.toLocaleString("en-US")} of ${input.totalRoutes.toLocaleString("en-US")} route${input.totalRoutes === 1 ? "" : "s"} drawn.`
+      : null;
+  return [capped, quarantinedNote(input.quarantinedRoutes), sameAirportNote(input.sameAirportSeats, "excluded")].filter(
+    (s): s is string => s !== null,
+  );
 }
 
 /**
@@ -601,22 +711,9 @@ export function renderSegmentMap(input: SegmentMapInput): string {
   // The disclosure states the two counts and makes no claim about WHICH routes were drawn --
   // the renderer is not told the ranking the producer capped on, and inventing one ("the
   // heaviest N") would be a claim it cannot support.
-  // ...and its first number is `lines.length`, the same quantity `arcsSentence` reports, so one
-  // aria-label can never carry two counts of one thing.
-  const disclosure =
-    lines.length < input.totalRoutes
-      ? `${lines.length.toLocaleString("en-US")} of ${input.totalRoutes.toLocaleString("en-US")} routes drawn.`
-      : null;
-  const note = sameAirportNote(input.sameAirportSeats, "excluded");
-  const quarantined = quarantinedNote(input.quarantinedRoutes);
+  const disclosures = disclosureNotes(input);
 
-  // Order: what window, then what was capped, then what could not be drawn, then what is not an
-  // arc at all -- widest claim first, each one narrowing what the reader is looking at.
-  const disclosures = [disclosure, quarantined, note].filter((s): s is string => s !== null);
-
-  const footerLines: FooterLine[] = [
-    { text: [input.window, ...disclosures].join(" · ") },
-  ];
+  const footerLines: FooterLine[] = [{ text: input.window }];
   if (input.title !== undefined) {
     footerLines.push({ text: input.title, emphasis: true });
   }
