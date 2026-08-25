@@ -99,7 +99,7 @@ function describeMap(input: NetworkMapInput, drawn: number, crossPanel: number):
   return [
     `Network map of ${input.origin.code}'s scheduled service, ${input.window}.`,
     arcsSentence(drawn, crossPanel, "destination"),
-    sameAirportNote(input.sameAirportSeats),
+    sameAirportNote(input.sameAirportSeats, "included"),
   ]
     .filter((s): s is string => s !== null)
     .join(" ");
@@ -141,7 +141,7 @@ export function renderNetworkMap(input: NetworkMapInput): string {
   ];
 
   const lines = segmentOrder(drawn);
-  const note = sameAirportNote(input.sameAirportSeats);
+  const note = sameAirportNote(input.sameAirportSeats, "included");
 
   return renderMapCore({
     lines,

@@ -223,6 +223,19 @@ describe("renderNetworkMap", () => {
     expect(visible).toContain("73,082");
   });
 
+  it("still says same-airport seats are 'included in this total' -- /airport's stat strip is", () => {
+    // The falsifying half of segmentMap.test.ts's pair. `sameAirportNote` is ONE sentence with
+    // one owner and two tails, and this is the tail that must not follow the point-to-point map
+    // when that map's wording changes: on /airport a seats total directly above the map really
+    // does carry these seats, and the note exists so the arc count and that total can disagree
+    // without reading as an error.
+    const svg = renderNetworkMap({ ...fixture(), sameAirportSeats: 73_082 });
+    expect(svg).toContain(
+      "73,082 same-airport seats excluded from the arcs above, included in this total.",
+    );
+    expect(svg).not.toContain("route counts");
+  });
+
   it("does not emit an inset frame for a panel with no points", () => {
     const svg = renderNetworkMap(conterminousOnlyFixture());
     expect(svg).not.toContain("HAWAI");

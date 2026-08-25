@@ -271,6 +271,69 @@ describe("renderSegmentMap", () => {
     expect(ariaLabel(svg)).toContain("598,829 same-airport seats");
   });
 
+  it("does not claim same-airport seats are 'in this total' -- no total here carries them", () => {
+    // Catches: reusing the HUB map's tail verbatim. On /airport "this total" is the stat strip's
+    // SEATS figure, which does carry them. This map's only totals are `drawnRoutes` /
+    // `totalRoutes`, which are ROUTE counts that deliberately exclude same-airport pairs -- so
+    // the hub wording points at a total that neither exists on the map face nor contains these
+    // seats. The falsifying pair is in networkMap.test.ts: the hub must still say it.
+    const svg = renderSegmentMap(
+      input([seg("SEA", "PDX")], { sameAirportSeats: 598_829, drawnRoutes: 400, totalRoutes: 519 }),
+    );
+    expect(svg).not.toContain("included in this total");
+    expect(visibleText(svg)).toContain(
+      "598,829 same-airport seats excluded from the arcs above, and from the route counts.",
+    );
+  });
+
+  it("discloses quarantined routes with a count and a reason, not just an absence", () => {
+    // Catches: dropping a group whose every filing was quarantined. It is not an arc and not a
+    // row in any count, so without this sentence it leaves NO trace -- and two views end up with
+    // no map at all for a reason the reader never sees. Measured: 34 such groups over the
+    // trailing 12, every one of which performed departures (quarantined `zero_seats`).
+    // CLAUDE.md requires count + reason; "never clamped" is the reason the count exists.
+    const svg = renderSegmentMap(input([seg("SEA", "PDX")], { quarantinedRoutes: 34 }));
+    expect(visibleText(svg)).toContain(
+      "34 quarantined routes not drawn — failed an invariant, never clamped.",
+    );
+    expect(ariaLabel(svg)).toContain("34 quarantined routes not drawn");
+
+    const one = renderSegmentMap(input([seg("SEA", "PDX")], { quarantinedRoutes: 1 }));
+    expect(visibleText(one)).toContain("1 quarantined route not drawn");
+  });
+
+  it("says nothing about quarantine when there is none", () => {
+    expect(renderSegmentMap(input([seg("SEA", "PDX")]))).not.toContain("quarantined");
+    expect(
+      renderSegmentMap(input([seg("SEA", "PDX")], { quarantinedRoutes: 0 })),
+    ).not.toContain("quarantined");
+  });
+
+  it("orders the three disclosures widest-claim-first, and states each exactly once", () => {
+    // All three at once -- the footer and the aria-label must agree, and neither may state a
+    // sentence twice. Asserted as one whole string rather than three `toContain`s, because
+    // three independent substring checks pass under any ordering.
+    const svg = renderSegmentMap(
+      input([seg("SEA", "PDX")], {
+        drawnRoutes: 400,
+        totalRoutes: 519,
+        quarantinedRoutes: 34,
+        sameAirportSeats: 598_829,
+      }),
+    );
+    const expected =
+      "2025-06 → 2026-05 · 400 of 519 routes drawn. · " +
+      "34 quarantined routes not drawn — failed an invariant, never clamped. · " +
+      "598,829 same-airport seats excluded from the arcs above, and from the route counts.";
+    expect(visibleText(svg)).toContain(`>${expected}</text>`);
+    expect(ariaLabel(svg)).toBe(
+      "Route map, 2025-06 → 2026-05. 1 route drawn as great-circle arcs, thinnest to heaviest by seats. " +
+        "400 of 519 routes drawn. " +
+        "34 quarantined routes not drawn — failed an invariant, never clamped. " +
+        "598,829 same-airport seats excluded from the arcs above, and from the route counts.",
+    );
+  });
+
   it("omits the same-airport sentence entirely when there are none", () => {
     const svg = renderSegmentMap(input([seg("SEA", "PDX")]));
     expect(svg).not.toContain("same-airport seats");

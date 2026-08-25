@@ -81,6 +81,17 @@ export interface SegmentMapInput {
    *  both compute `drawnRoutes` as `min(total, cap)`. */
   drawnRoutes: number;
   totalRoutes: number;
+  /** Routes the producer could not draw because every filing behind them was quarantined --
+   *  excluded from `drawnRoutes` and `totalRoutes` alike, so without this field they vanish
+   *  from the map entirely: not an arc, not a row in any count, no trace that anything was
+   *  there. Measured (#105): 34 such groups over the trailing 12, and every one of them
+   *  PERFORMED DEPARTURES -- quarantined `zero_seats`, a passenger aircraft that flew and filed
+   *  zero seats. Two views have no map at all for this reason.
+   *
+   *  CLAUDE.md: quarantined rows are "excluded from aggregates but surfaced in the UI with
+   *  count + reason. Showing the dirt is a trust feature." Optional, so the hub path -- which
+   *  has no equivalent field -- is untouched. */
+  quarantinedRoutes?: number;
   /** Optional caption under the window line -- the diff map's per-panel label. */
   title?: string;
   /** Seats from rows whose two endpoints are the SAME airport. Such a row can never be an arc
@@ -88,6 +99,11 @@ export interface SegmentMapInput {
    *  or the map's own stated total falls out of step with the stat strip above it on the page.
    *  Optional because a producer that filed none passes nothing; `NetworkMapInput` carries the
    *  same field as a required scalar for the same reason (see its own doc for the measurement).
+   *
+   *  A same-airport pair is NOT counted in `drawnRoutes` or `totalRoutes` -- it is not one of
+   *  the routes, and the producer excludes it from both. That is why this map's note cannot
+   *  borrow the hub map's "included in this total" wording: there is no total on this map face
+   *  that carries these seats, and stating them here is the only place they surface at all.
    *
    *  Measured for the point-to-point maps (#105): 598,829 same-airport seats across 759
    *  carrier x aircraft-type groups over the trailing 12. Dropping them silently in the
@@ -205,18 +221,42 @@ function fmt(n: number): string {
   return n.toFixed(1);
 }
 
+/** Where the seats this note discloses land relative to a total the reader can actually see.
+ *
+ * `"included"` -- the surrounding page states a SEATS total that carries them (`/airport`'s
+ * stat strip). The note exists so the arc count and that total can visibly disagree without
+ * reading as an error.
+ *
+ * `"excluded"` -- the map states ROUTE counts, and a same-airport pair is not one of the routes
+ * counted (`SegmentMapInput.sameAirportSeats`). "Included in this total" would point a reader
+ * at a total that neither exists on this map face nor contains these seats; stating the seats
+ * here is the only place they surface at all. */
+export type SameAirportTotal = "included" | "excluded";
+
 /** One sentence, written once, used on the visible window/note line AND in `aria-label` --
  * the number is per-subject, and two independently-authored copies of one measurement is
  * exactly how they drift (the same reasoning `AircraftMixChart.tsx`'s `gapNote` and Other-band
  * share note already apply). `null` when there is nothing to disclose, so both call sites can
  * skip the sentence with one check rather than two.
  *
- * Shared by BOTH maps since #104 -- the hub map states it about a same-airport filing at the
- * origin, the point-to-point maps about same-airport filings anywhere in the network, and it
- * is the same sentence about the same kind of row either way. */
-export function sameAirportNote(seats: number): string | null {
-  return seats > 0
-    ? `${seats.toLocaleString("en-US")} same-airport seats excluded from the arcs above, included in this total.`
+ * Shared by BOTH maps since #104. The FACT is identical either way -- these seats are real and
+ * they are not drawn -- so it stays one sentence with one owner. Only the clause naming what
+ * does carry them differs, because on a hub something does and here nothing does, and a shared
+ * tail would make one of the two maps state something false. */
+export function sameAirportNote(seats: number, total: SameAirportTotal): string | null {
+  if (seats <= 0) return null;
+  const tail = total === "included" ? "included in this total." : "and from the route counts.";
+  return `${seats.toLocaleString("en-US")} same-airport seats excluded from the arcs above, ${tail}`;
+}
+
+/** Count + reason, the form CLAUDE.md requires for quarantine everywhere else in this app
+ * (`ReasonCode.tsx`'s "Quarantined — failed an invariant", the entity pages' "N quarantined
+ * rows excluded from these totals, never clamped"). A map has no reason-code gutter to put the
+ * reason in, so it goes inline. "Never clamped" is load-bearing, not decoration: the alternative
+ * to quarantining a `load_factor > 1.0` row is clamping it, which this project refuses. */
+export function quarantinedNote(routes: number): string | null {
+  return routes > 0
+    ? `${routes.toLocaleString("en-US")} quarantined route${routes === 1 ? "" : "s"} not drawn — failed an invariant, never clamped.`
     : null;
 }
 
@@ -543,23 +583,27 @@ export function renderSegmentMap(input: SegmentMapInput): string {
     input.drawnRoutes < input.totalRoutes
       ? `${input.drawnRoutes.toLocaleString("en-US")} of ${input.totalRoutes.toLocaleString("en-US")} routes drawn.`
       : null;
-  const note = sameAirportNote(input.sameAirportSeats ?? 0);
+  const note = sameAirportNote(input.sameAirportSeats ?? 0, "excluded");
+  const quarantined = quarantinedNote(input.quarantinedRoutes ?? 0);
+
+  // Order: what window, then what was capped, then what could not be drawn, then what is not an
+  // arc at all -- widest claim first, each one narrowing what the reader is looking at.
+  const disclosures = [disclosure, quarantined, note].filter((s): s is string => s !== null);
 
   const footerLines: FooterLine[] = [
-    { text: [input.window, disclosure, note].filter((s): s is string => s !== null).join(" · ") },
+    { text: [input.window, ...disclosures].join(" · ") },
   ];
   if (input.title !== undefined) {
     footerLines.push({ text: input.title, emphasis: true });
   }
 
   const ariaLabel = [
-    input.title === undefined ? `Route map, ${input.window}.` : `${input.title}. Route map, ${input.window}.`,
+    input.title === undefined
+      ? `Route map, ${input.window}.`
+      : `${input.title}. Route map, ${input.window}.`,
     arcsSentence(lines.length, crossPanelCount(lines), "route"),
-    disclosure,
-    note,
-  ]
-    .filter((s): s is string => s !== null)
-    .join(" ");
+    ...disclosures,
+  ].join(" ");
 
   return renderMapCore({
     lines,
