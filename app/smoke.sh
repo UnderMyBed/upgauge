@@ -1049,6 +1049,32 @@ check_dataset check "carrier: the page states the chart's own window" "$BODY" 'c
 check     "carrier: carries a self-referential canonical link (Task 2)" "$BODY" \
   '<link rel="canonical" href="http://localhost:3000/carrier/DL"'
 
+# ---- #110: the diff map's three small multiples, in the SERVED bytes ----
+# Every needle below is written against what React EMITS, not what the source contains: the
+# component writes U+2019/U+2014 literally for exactly this reason, and each needle sits inside
+# ONE text node, never across a `{...}` boundary -- React's SSR puts `<!-- -->` between adjacent
+# text nodes, which is how a greppable sentence stops being greppable while every unit test
+# still passes (grainNote's comment on carrier/[code]/page.tsx carries the same rule).
+check     "carrier: the diff map renders its panels" "$BODY" 'data-testid="diff-panel-label"'
+# The `title` fix, live. Added and downgauged SHARE the trailing window, so without a per-panel
+# title BOTH of these are the string `aria-label="Route map, 2025-06 → 2026-05.` -- byte-
+# identical, and position is the only thing left telling them apart. Two needles, because that
+# is the pair that collided.
+check     "carrier: the added panel names itself and its carrier"      "$BODY" 'aria-label="DL added.'
+check     "carrier: the downgauged panel does too, distinctly"         "$BODY" 'aria-label="DL downgauged.'
+check     "carrier: the dropped panel names itself and its carrier"    "$BODY" 'aria-label="DL dropped.'
+# The two honesty claims that exist nowhere else in the product, because no other surface knows
+# this map is a diff. map_carrier_diff.sql: 3,640 of 5,959 dropped carrier-routes had another
+# carrier flying the pair inside the trailing window; 4,691 of 8,357 added ones had filed that
+# pair before the prior window.
+check     "carrier: the diff map discloses the per-carrier grain" "$BODY" 'another carrier may still be flying it'
+check     "carrier: the diff map says added is re-entry"          "$BODY" 're-entry, not first appearance'
+check_not "carrier: the diff map claims nothing about the industry" "$BODY" 'nobody flew'
+# The downgauged panel cannot render the ordering it was cut by, and says so. Without this a
+# disclosure reading "400 of 512 routes drawn." is taken to mean the largest 400 ROUTES, which
+# is not what the cut selects.
+check     "carrier: the downgauged panel names its ranking key" "$BODY" 'by the fall in seats per departure'
+
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL")
 check     "carrier: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
@@ -1059,16 +1085,18 @@ check     "carrier: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTE
 #
 # `<svg role="img"` is deliberately NOT the needle for the map. The aircraft-mix chart already
 # emits it on this very page (checked above), so it is green whether or not a map renders --
-# exactly the assertion-an-outcome-the-bug-also-produces shape. `data-testid="segment-map"`
-# discriminates; that string appears nowhere else on the page.
+# exactly the assertion-an-outcome-the-bug-also-produces shape. `data-testid="network-map"`
+# discriminates. NOT `segment-map`, which names the shared component and matches #110's three
+# diff panels on this same page -- so the positive check below would pass with the network map
+# absent entirely, green off a string the diff map supplies. The needle names the ROLE.
 check     "carrier: unfiltered renders the type picker"          "$BODY" 'data-testid="map-picker"'
-check_not "carrier: unfiltered draws no arcs"                    "$BODY" 'data-testid="segment-map"'
+check_not "carrier: unfiltered draws no arcs"                    "$BODY" 'data-testid="network-map"'
 check_not "carrier: unfiltered offers no way to clear nothing"   "$BODY" '>Clear the filter</a>'
 
 # The filtered view. `?type=` takes an aircraft SLUG, never the BTS id -- `proxy.ts` and
 # `mapFilter.ts` agree on that and `?type=614` is refused.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL?type=B737-8")
-check     "carrier?type: the map SVG is in the served HTML"      "$BODY" 'data-testid="segment-map"'
+check     "carrier?type: the map SVG is in the served HTML"      "$BODY" 'data-testid="network-map"'
 check     "carrier?type: the picker marks the showing type"      "$BODY" '<a href="/carrier/DL?type=B737-8" aria-current="page">'
 check     "carrier?type: offers the way back to the unfiltered page" "$BODY" '<a href="/carrier/DL">Clear the filter</a>'
 check     "carrier?type: the map's disclosures render as HTML too"   "$BODY" 'data-testid="map-notes"'
@@ -1083,7 +1111,7 @@ check     "carrier?type: a resolved filter stays cacheable"      "$HDRS" "$HTML_
 # refuses rather than picking one -- the silent-pick failure /carrier/PA exists to refuse -- and
 # the refusal must not be a cacheable 200.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL?type=CE-180")
-check_not "carrier?type: an ambiguous type draws no map"         "$BODY" 'data-testid="segment-map"'
+check_not "carrier?type: an ambiguous type draws no map"         "$BODY" 'data-testid="network-map"'
 check     "carrier?type: ...names every holder instead"          "$BODY" 'data-testid="mp-holder"'
 check     "carrier?type: ...and leaves the picker reachable"     "$BODY" 'data-testid="map-picker"'
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=CE-180")
@@ -1091,7 +1119,7 @@ check     "carrier?type: an ambiguous filter is never cached"    "$HDRS" 'no-sto
 
 # An unknown type is a DIFFERENT finding from an ambiguous one and is worded apart.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL?type=NOPE-1")
-check_not "carrier?type: an unknown type draws no map"           "$BODY" 'data-testid="segment-map"'
+check_not "carrier?type: an unknown type draws no map"           "$BODY" 'data-testid="network-map"'
 check     "carrier?type: ...and still offers the list"           "$BODY" 'data-testid="map-picker"'
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=NOPE-1")
 check     "carrier?type: an unknown filter is never cached"      "$HDRS" 'no-store'
@@ -1099,17 +1127,27 @@ check     "carrier?type: an unknown filter is never cached"      "$HDRS" 'no-sto
 # A type that RESOLVES for a carrier that never flew it: VX stopped filing in 2018-03, so the
 # filter is `ok` and the map is null. Without this sentence the heading sits over a silent gap.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX?type=B737-8")
-check_not "carrier?type: a carrier with no such filings draws no map" "$BODY" 'data-testid="segment-map"'
+check_not "carrier?type: a carrier with no such filings draws no map" "$BODY" 'data-testid="network-map"'
 check_dataset check "carrier?type: ...and says so, naming the window" "$BODY" 'VX filed no B737-8 routes in 2025-06 → 2026-05.'
 
 # The other branch of the window line, and the negative half of the pair. VX (Virgin America)
 # stopped filing in 2018-03; the chart is fetched over the full window and can only draw to
 # there, so naming the REQUESTED window would put "the full window · … → 2026-05" over a chart
 # that ends in 2018 -- M4c's bug, one page over. Both caveats render here too, with no table.
+# #110: F4 (Air Flamenco, 21615) is the ONE carrier of 114 whose diff has a non-zero
+# carrier-wide quarantine count and ZERO drawable arcs. A section gated on `panels.length` drops
+# that count silently -- the "no trace that anything was there" the field exists to prevent --
+# and no other carrier page can catch it. Dataset-pinned: the 3 is a measured count.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/F4")
+check_not "carrier: F4 draws no diff panel"                    "$BODY" 'data-testid="diff-panel-label"'
+check_dataset check "carrier: F4 still states what was withheld" "$BODY" '3 of F4’s route pairs are on no panel above'
+check     "carrier: ...with the reason THIS exclusion has"     "$BODY" 'window that decides the category was wholly quarantined'
+
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX")
 check     "carrier: a carrier that stopped filing names ITS range" "$BODY" 'chart: 2015-01 → 2018-03'
 check_not "carrier: ...and does not claim the full window there"   "$BODY" 'chart: the full window'
 check     "carrier: the caveats render without a table"            "$BODY" 'Operated, not marketed.'
+check_not "carrier: a dormant carrier gets no diff section"       "$BODY" 'data-testid="diff-map"'
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/carrier/dl")
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/carrier/dl")

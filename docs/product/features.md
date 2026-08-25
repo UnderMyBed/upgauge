@@ -213,7 +213,7 @@ Tied to entities, never global. A global all-routes map is a hairball.
 | **Airport network** `/airport/PDX` — **built** | Arcs from one node; weight = seats, style = LF | A **year track** (`?y=<year>`) → step through the network growing/contracting one server-rendered permalink at a time. The screenshot people post. |
 | **Carrier network** `/carrier/OO` — **built** | One aircraft type at a time; weight = seats, style = LF | "Every route SkyWest flies the E175 on" is one filter and a legible map. The type is required rather than optional: a carrier's entire fleet on one map is the hairball this table rules out, so the unfiltered page is a picker and no arcs. |
 | **Aircraft type** `/aircraft/A220` — [tracker](https://github.com/UnderMyBed/upguage/issues) | All routes flown by a type | Genuinely novel. |
-| **Diff map** — [tracker](https://github.com/UnderMyBed/upguage/issues) | new vs. dropped vs. downgauged | Death Watch + Birth Tracker rendered *spatially*. 10× more visceral. |
+| **Diff map** `/carrier/AS` — **built** | Added vs. dropped vs. downgauged, as three small multiples; category encoded by **position** | Death Watch + Birth Tracker rendered *spatially*. 10× more visceral. Added is **re-entry**, not first appearance, and a dropped pair is dropped by that carrier, not by the industry — the grain is a carrier–route pair, and the panels say so. |
 
 **Skip:** a map on the route detail page. A single arc is not information.
 

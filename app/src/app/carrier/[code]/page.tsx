@@ -7,10 +7,12 @@ import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { BASE_URL } from "@/lib/siteUrl";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
+import { DiffMap } from "@/components/DiffMap";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
+import { fetchCarrierDiff } from "@/lib/map/carrierDiff";
 import { encode } from "@/lib/pivot/urlstate";
 import {
   CARRIER_TYPE_LIMIT,
@@ -342,23 +344,33 @@ export async function CarrierView({
   // Gated on `ok` ONLY, never on `!== "none"`: `unknown` and `ambiguous` are refusals, and
   // querying on one would mean picking a filter value the server declined -- for `ambiguous`,
   // literally the silent pick `/carrier/PA` exists to refuse. The refusal renders instead.
+  //
+  // #110's diff query joins this SAME Promise.all for the same reason. It takes NO filter: the
+  // diff map is the whole carrier's change, not one aircraft type's, so it is unaffected by
+  // `?type=` -- which is why it is unconditional where the map above is not.
+  //
+  // Both pass `carrier.id`, the AIRLINE_ID off the resolved ref, never `Number(filterValue)` --
+  // CLAUDE.md keys on AIRLINE_ID, and the typed field is the one place that cannot be a re-parse
+  // of a string this page happened to build for the pivot's filter list.
   const mapFetch: Promise<Awaited<ReturnType<typeof fetchCarrierTypeNetwork>>> =
     typeFilter.kind === "ok"
       ? fetchCarrierTypeNetwork(carrier.id, typeFilter.id, TRAILING_12_FROM, asOf)
       : Promise.resolve(null);
 
-  const [result, mix, routesResult, originsResult, typeMap]: [
+  const [result, mix, routesResult, originsResult, typeMap, diff]: [
     PivotResult,
     Awaited<ReturnType<typeof fetchAircraftMix>>,
     PivotResult,
     PivotResult,
     Awaited<ReturnType<typeof fetchCarrierTypeNetwork>>,
+    Awaited<ReturnType<typeof fetchCarrierDiff>>,
   ] = await Promise.all([
     runPivot(query),
     fetchAircraftMix([["op_airline_id", [filterValue]]], EARLIEST_MONTH, asOf),
     runPivot(topNQuery(routesSpec)),
     runPivot(topNQuery(originsSpec)),
     mapFetch,
+    fetchCarrierDiff(carrier.id, asOf),
   ]);
 
   const totals = sumTotals(result.rows);
@@ -468,7 +480,17 @@ export async function CarrierView({
                 the list UNDERNEATH a refusal rather than instead of it -- a refusal that leaves
                 the reader with no way forward is a dead end. */}
             <h2>Network map</h2>
-            {hasMap ? <SegmentMap map={typeMap} /> : null}
+            {/* MERGE (#107 x #110). Wrapped, because `data-testid="segment-map"` stopped
+                identifying a ROLE the moment #110 landed: `DiffMap` mounts a `SegmentMap` per
+                panel, so that string now matches four maps on this page. Three of #107's own
+                `check_not` needles fired on the merge, and worse, its POSITIVE needle would
+                have passed with the network map absent entirely -- a gate green for the wrong
+                reason, off a string the diff panels supply. `network-map` names this one. */}
+            {hasMap ? (
+              <div data-testid="network-map">
+                <SegmentMap map={typeMap} />
+              </div>
+            ) : null}
             {/* `ok` and yet no map: the type resolved, and this carrier filed nothing on it in
                 the window. Reachable from any hand-typed URL naming a real type the carrier
                 does not operate, and `fetchCarrierTypeNetwork` returns null for exactly that --
@@ -545,6 +567,14 @@ export async function CarrierView({
                 </p>
               </>
             )}
+            {/* ---- #110: the diff map. Self-contained; renders nothing when this carrier
+                 changed nothing and had nothing withheld. ---- */}
+            <DiffMap
+              diffs={diff.panels}
+              quarantinedRoutes={diff.quarantinedRoutes}
+              carrier={carrier.code}
+            />
+            {/* ---- end #110 ---- */}
             {/* The two claims this page cannot omit, both CLAUDE.md hard rules, both stated
                 about THIS carrier rather than in the abstract -- and rendered whether or not
                 there is a table, because they qualify the subject, not the rows. */}

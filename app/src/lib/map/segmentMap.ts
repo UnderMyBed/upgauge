@@ -78,7 +78,24 @@ export interface SegmentDatum {
    *  requiring this one would force an explicit `null` onto every segment of every seats-ranked
    *  map to express nothing at all.
    *
-   *  Absence, never 0: 0 is a route whose ranked quantity did not move. */
+   *  Absence, never 0: 0 is a route whose ranked quantity did not move.
+   *
+   *  `null` AND ABSENT ARE THE SAME STATEMENT, and this sentence is the resolution of a real
+   *  ambiguity rather than a restatement of the type. The paragraph above says "absent means
+   *  this panel ranks on a field it already carries", but the only producer in the repo
+   *  (`carrierDiff.ts`'s `toSegment`) assigns `rankedBy: row.gauge_fall` UNCONDITIONALLY, so
+   *  added and dropped segments arrive with the key PRESENT and the value `null`. The type
+   *  permits both spellings, so nothing goes red, and a consumer writing the natural reading of
+   *  the contract -- `"rankedBy" in seg`, or `seg.rankedBy !== undefined` -- concludes that
+   *  EVERY panel ranks on gauge fall and states so on all three. Two readings of one field is
+   *  the drifting-duplicate failure this file keeps paying for, so it is settled here, once:
+   *  `null` is how a SQL NULL spells this absence, and translating it into a missing key at the
+   *  producer would be a second encoding of one fact.
+   *
+   *  THE ONLY CORRECT CONSUMER PREDICATE IS `typeof seg.rankedBy === "number"`. It is the only
+   *  one that is true for exactly the panels that have a ranked quantity under both spellings.
+   *  `DiffMap.tsx` keys its ranking disclosure on it against a producer-shaped fixture, so both
+   *  wrong predicates are killable rather than merely discouraged. */
   rankedBy?: number | null;
 }
 
