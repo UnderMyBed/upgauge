@@ -107,10 +107,13 @@ function dashOrder(svg: string): string[] {
   );
 }
 
-/** Every `<text>` at font-size 10 and its right edge in px. IBM Plex Mono is monospaced with a
- * single advance width of 600/1000 em (read from the committed
- * app/src/lib/og/fonts/IBMPlexMono-Regular.ttf), so a run's width is exactly
- * `codePoints * 0.6 * fontSize`. `text-anchor="end"` runs leftward, so x IS their right edge. */
+/** Every `<text>` at font-size 10 and its right edge in px. The served font is
+ * `next/font/google`'s `IBM_Plex_Mono({ subsets: ["latin"] })` (`app/src/app/layout.tsx:13-18`)
+ * -- monospaced, single advance width 0.6em -- so a run of latin-subset code points is exactly
+ * `codePoints * 0.6 * fontSize` wide. `→` (U+2192) is outside that unicode-range and renders
+ * from a fallback at an unknown advance; every string measured here is far enough inside the
+ * budget that one glyph's width cannot change the verdict. `text-anchor="end"` runs leftward,
+ * so x IS their right edge. */
 function textRightEdges(svg: string): { text: string; right: number }[] {
   return [...svg.matchAll(/<text x="([\d.-]+)"[^>]*font-size="10"([^>]*)>([^<]*)<\/text>/g)].map((m) => {
     const text = m[3]
@@ -361,7 +364,15 @@ describe("renderSegmentMap", () => {
     // assertion did exactly that and survived a mutant that keyed the tally on code+lat.)
     //
     // Summed: SEA 100, PDX 900, AUS 1,000 -> ascending, exactly one AUS. Under a tally keyed
-    // on anything finer than the code, AUS splits into a 100 and a 900 and appears twice.
+    // on anything FINER than the key (code+lat, say), AUS splits into a 100 and a 900 and
+    // appears twice -- that is what this catches, verified by mutation.
+    //
+    // What it CANNOT catch is the two call sites diverging the other way: if `airportKey`
+    // became id-keyed and the tally stayed on the display code, two distinct airports would
+    // draw two arcs and one dot, and this assertion -- which expects exactly one AUS -- would
+    // pass. No test can reach that state while `GeoNode` has no id, so it is held structurally
+    // instead: `drawableSegments` and `tallyNodes` both route through `airportKey`, so there is
+    // one edit to make and not two. That is the whole reason the function exists.
     const twoEnds: SegmentDatum[] = [
       { from: node("SEA"), to: ausA, seats: 100, departures: 50, loadFactor: 0.8 },
       { from: node("PDX"), to: ausB, seats: 900, departures: 50, loadFactor: 0.8 },
@@ -470,7 +481,7 @@ describe("renderSegmentMap", () => {
       "598,829 same-airport seats excluded from the arcs above, and from the route counts.",
     ]);
     expect(ariaLabel(renderSegmentMap(all))).toBe(
-      "Route map, 2025-06 → 2026-05. 1 route drawn as great-circle arcs, thinnest to heaviest by seats. " +
+      "Route map, 2025-06 → 2026-05. 1 route drawn as great-circle arc, thinnest to heaviest by seats. " +
         "1 of 519 routes drawn. " +
         "34 quarantined routes not drawn — failed an invariant, never clamped. " +
         "598,829 same-airport seats excluded from the arcs above, and from the route counts.",
@@ -549,6 +560,15 @@ describe("renderSegmentMap", () => {
     // plural about one thing. The golden is blind to it (5 crossings, 4 curves, both plural).
     const lone = renderSegmentMap(input([seg("SEA", "HNL")]));
     expect(ariaLabel(lone)).toContain("0 as great-circle arcs, 1 as straight line across a panel boundary");
+
+    // ...and the SAME-PANEL branch, which is the one that actually serves this: 55 airports
+    // have exactly one drawn route on the default window and 54 of them are same-panel, so this
+    // string is 54 pages and the cross-panel one above is 1 (PPG). It read "1 destination drawn
+    // as great-circle arcs" -- singular subject, plural predicate -- and was pinned as correct
+    // by the whole-label assertion below, because the golden takes the other branch.
+    const loneSamePanel = renderSegmentMap(input([seg("SEA", "PDX")]));
+    expect(ariaLabel(loneSamePanel)).toContain("1 route drawn as great-circle arc,");
+    expect(ariaLabel(loneSamePanel)).not.toContain("great-circle arcs");
   });
 
   it("frames only the insets its own segments reach, and labels every one it frames", () => {

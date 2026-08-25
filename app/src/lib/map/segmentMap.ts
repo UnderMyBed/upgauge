@@ -63,7 +63,11 @@ export interface SegmentDatum {
 
 export interface SegmentMapInput {
   segments: SegmentDatum[];
-  /** Human-readable window, e.g. "2025-06 → 2026-05". Rendered on the map face. */
+  /** Human-readable window, e.g. "2025-06 → 2026-05". PAINTED INTO THE SVG, which cannot wrap:
+   *  keep it under ~158 characters or it is clipped at the frame edge with nothing in the
+   *  markup recording that it happened (`disclosureNotes` carries the budget and its caveats).
+   *  Every producer's window is ~17 characters, so this is a ceiling, not a constraint anyone
+   *  is near. */
   window: string;
   /** The TRUE pre-cap count of DRAWABLE routes. Quarantined pairs and same-airport pairs are
    *  BOTH excluded from it -- each surfaces through its own field instead (`quarantinedRoutes`,
@@ -105,7 +109,10 @@ export interface SegmentMapInput {
    *  prevent. A compile error in #105/#109 is loud; a missing sentence is not. The hub path
    *  never sees this interface, so requiring it costs `renderNetworkMap` nothing. */
   quarantinedRoutes: number;
-  /** Optional caption under the window line -- the diff map's per-panel label. */
+  /** Optional caption under the window line -- the diff map's per-panel label. PAINTED INTO THE
+   *  SVG on its own footer row, which cannot wrap: same ~158-character ceiling as `window`, and
+   *  the two are the only unbounded strings this engine paints. #109's captions ("Added",
+   *  "Dropped", "Downgauged") are nowhere near it. */
   title?: string;
   /** Seats from rows whose two endpoints are the SAME airport. Such a row can never be an arc
    *  -- its great circle has zero angular length -- but its seats must still reach the reader,
@@ -178,37 +185,6 @@ const HEIGHT = 500;
  * that line exactly where every map has always put it. */
 const FOOTER_LINE_HEIGHT = 12;
 
-/**
- * PROSE DOES NOT GO IN THE SVG, and this is the constraint that decides it. An outermost `<svg>`
- * gets `overflow: hidden` from the UA stylesheet, and `.map svg { max-width: 100% }`
- * (`globals.css`) scales the box without changing the viewBox -- so a `<text>` past `WIDTH` is
- * painted outside the viewport at EVERY viewport width, silently. Nothing in the markup records
- * that it happened: a `toContain` assertion passes on a string that is present and unpaintable,
- * and `app/smoke.sh` curls bytes, so neither gate can see it.
- *
- * The budget is arithmetic, not an estimate. `--font-mono` resolves to IBM Plex Mono
- * (`globals.css:37`), whose committed `app/src/lib/og/fonts/IBMPlexMono-Regular.ttf` has
- * `unitsPerEm` 1000 and exactly ONE advance width, 600 -- read from its own `head`/`hhea`/`hmtx`
- * tables, not assumed from the name. Every glyph is therefore 0.6em, and at `font-size="10"`
- * from `x="8"` a line holds `(960 - 8) / 6 = 158` characters.
- *
- * Measured against the real warehouse, the three disclosure sentences blew that budget on 12
- * of the 355 wave-2 views -- `/aircraft/CE-206%2F7` ran to 1,208px and lost its last 41
- * characters at the frame edge, while its `aria-label` carried the whole thing. A screen reader
- * got the disclosure and the person looking at the map did not, which is the exact inversion of
- * the property those sentences exist to hold.
- *
- * So the disclosures are EXPORTED as text (`disclosureNotes`) and rendered by the component as
- * HTML, where text wraps -- the shape `AircraftMixChart.tsx:81-99` already uses for `rampNote`
- * and `gapNote`, and `NetworkMap.tsx:39-46` for its `pac` caption. Nothing needs them inside the
- * raster: `airport/[code]/opengraph-image.tsx:51` excludes the map from the OG card. Stacking
- * them as extra footer rows was the other candidate and is wrong for a measured reason -- the
- * inset frames run to y=474 while the footer grows upward from y=494 in 12px steps, so the
- * third row lands inside a labelled inset.
- *
- * What stays painted is short and bounded: the window line, and an optional `title`. Keep both
- * short -- they cannot wrap.
- */
 /** How many airports get a text label. Labelling every node on a busy network would bury the
  * map in text; 8 is the density this 960x500 canvas was reviewed and shipped at.
  *
@@ -325,12 +301,21 @@ function quarantinedNote(routes: number): string | null {
  *
  * `noun` is the only thing that differs between the two maps: a hub map draws one arc per
  * DESTINATION, a point-to-point map one per ROUTE. Neither noun is right for the other map.
+ *
+ * BOTH BRANCHES PLURALIZE, and the same-panel one is the one that matters: 55 airports have
+ * exactly one drawn route on the served default window and 54 of them are same-panel, so the
+ * cross-panel branch -- the one with a fixture -- serves exactly one page (PPG). An earlier
+ * revision pluralized the cross-panel branch alone and the commit claimed "both halves", which
+ * is the /watch/new-routes failure verbatim: a compound claim triaged by how true a clause
+ * sounds instead of each clause re-derived. Nothing in the suite could see it, because the
+ * golden takes the cross-panel branch (9 destinations, 5 crossings) and the only test touching
+ * the other string asserted the defect.
  */
 export function arcsSentence(drawn: number, crossPanelCount: number, noun: string): string {
   const plural = drawn === 1 ? "" : "s";
   const curved = drawn - crossPanelCount;
   return crossPanelCount === 0
-    ? `${drawn} ${noun}${plural} drawn as great-circle arcs, thinnest to heaviest by seats.`
+    ? `${drawn} ${noun}${plural} drawn as great-circle arc${plural}, thinnest to heaviest by seats.`
     : `${drawn} ${noun}${plural} drawn thinnest to heaviest by seats -- ` +
         `${curved} as great-circle arc${curved === 1 ? "" : "s"}, ${crossPanelCount} as straight line${crossPanelCount === 1 ? "" : "s"} across a panel boundary (a great circle cannot cross one).`;
 }
@@ -529,9 +514,14 @@ function fitPointsOf(segments: SegmentDatum[]): GeoPoint[] {
 }
 
 /**
- * Whether two endpoints are the same airport -- the renderer's ONE identity decision, named so
- * that the two places needing it (`drawableSegments` here, `tallyNodes`'s dedupe below) cannot
- * answer it differently.
+ * Airport identity, as ONE key function -- `drawableSegments` compares two of them and
+ * `tallyNodes` keys its `Map` on one, so the two genuinely cannot answer it differently.
+ *
+ * An earlier revision claimed exactly that while `tallyNodes` keyed on `end.code` directly, so
+ * the extraction documented a seam it had not made: changing this to an id would have moved the
+ * filter and left the dedupe on the display code, drawing two arcs and one dot for two distinct
+ * airports. Both call sites now route through `airportKey`, which is the property the comment
+ * always claimed.
  *
  * KEYED ON THE DISPLAY CODE, which is NOT what CLAUDE.md asks for: "Key on `AIRLINE_ID` and
  * `AIRPORT_ID`, never letter codes." This is the one place in the map engine that departs from
@@ -554,8 +544,12 @@ function fitPointsOf(segments: SegmentDatum[]): GeoPoint[] {
  * assertion that throws turns this into a 500 on a served page for a condition that is not a
  * bug in the producer -- the strictly worse direction. The renderer itself never throws here.
  */
+function airportKey(node: GeoNode): string {
+  return node.code;
+}
+
 function sameAirport(a: GeoNode, b: GeoNode): boolean {
-  return a.code === b.code;
+  return airportKey(a) === airportKey(b);
 }
 
 /** The segments that actually become arcs. A row whose two endpoints are the same airport has
@@ -627,9 +621,9 @@ function tallyNodes(lines: SegmentDatum[]): NodeTally[] {
   const byCode = new Map<string, NodeTally>();
   for (const s of lines) {
     for (const end of [s.from, s.to]) {
-      const existing = byCode.get(end.code);
+      const existing = byCode.get(airportKey(end));
       if (existing === undefined) {
-        byCode.set(end.code, {
+        byCode.set(airportKey(end), {
           code: end.code,
           lat: end.lat,
           lon: end.lon,
@@ -650,12 +644,47 @@ function tallyNodes(lines: SegmentDatum[]): NodeTally[] {
  * not be drawn at all, and what is not an arc. Widest claim first, each narrowing what the
  * reader is looking at.
  *
- * EXPORTED BECAUSE THE COMPONENT PAINTS THEM, NOT THE SVG -- see the footer-budget comment
- * above for the measurement that forced that. A component renders these as HTML beneath the
- * map, where text wraps at any width; `renderSegmentMap` puts the identical sentences in the
- * `aria-label` and nowhere else in the raster. That duplication is the established shape here,
- * not an oversight: `AircraftMixChart.tsx` renders `gapNote` as HTML and says why in as many
- * words -- "stated on the chart, not only in the aria-label."
+/**
+ * WHY THESE ARE TEXT AND NOT A `<text>`: an outermost `<svg>` gets `overflow: hidden` from the
+ * UA stylesheet, and `.map svg { max-width: 100% }` (`globals.css`) scales the box without
+ * changing the viewBox -- so a run past `WIDTH` is painted outside the viewport at EVERY
+ * viewport width, silently. Nothing in the markup records it: a `toContain` assertion passes on
+ * a string that is present and unpaintable, and `app/smoke.sh` curls bytes, so neither gate can
+ * see it.
+ *
+ * The budget: `--font-mono` is `next/font/google`'s `IBM_Plex_Mono({ subsets: ["latin"] })`
+ * (`app/src/app/layout.tsx:13-18`) -- monospaced, so at `font-size="10"` from `x="8"` a line
+ * holds `(960 - 8) / (0.6 * 10) = 158` characters. That 0.6em advance is IBM Plex Mono's single
+ * advance width (`unitsPerEm` 1000, one `hmtx` entry of 600), and it holds for LATIN-SUBSET code
+ * points only. It is NOT a universal bound: `→` (U+2192) is outside Google's `latin`
+ * unicode-range, renders from whatever fallback the browser picks, and appears in every window
+ * string this engine paints. Verify against `layout.tsx`'s font, never against
+ * `app/src/lib/og/fonts/IBMPlexMono-Regular.ttf` -- that is a 98-glyph subset built for the OG
+ * card renderer, a different file, and `→` is absent from it entirely.
+ *
+ * Measured against the real warehouse, the three sentences blew that budget on 12 of the 355
+ * wave-2 views -- `/aircraft/CE-206%2F7` ran to 1,208px and lost its last 41 characters at the
+ * frame edge while its `aria-label` carried the whole thing. A screen reader got the disclosure
+ * and the person looking at the map did not, which is the exact inversion these sentences exist
+ * to prevent. Shortening them was not available: the reason clause and the "and from the route
+ * counts" clause are each there because an earlier round found the map lying without them.
+ * Stacking them as extra footer rows is wrong for a measured reason -- the inset frames run to
+ * y=474 while the footer grows upward from y=494 in 12px steps, so the third row lands inside a
+ * labelled inset.
+ *
+ * So the component renders these as HTML beneath the map, where text wraps at any width -- the
+ * shape `AircraftMixChart.tsx:81-99` already uses for `rampNote`/`gapNote` and
+ * `NetworkMap.tsx:39-46` for its `pac` caption. Nothing needs them inside the raster:
+ * `airport/[code]/opengraph-image.tsx:51` excludes the map from the OG card.
+ * `renderSegmentMap` puts the identical sentences in the `aria-label` and nowhere else, which is
+ * the established shape rather than an oversight -- `AircraftMixChart.tsx` says so in as many
+ * words, "stated on the chart, not only in the aria-label."
+ *
+ * ONE PROSE SENTENCE IS STILL PAINTED, deliberately: the hub map joins `sameAirportNote` into
+ * its footer (`networkMap.ts`), which `/airport` has shipped since M7 and whose worst case is
+ * bounded -- a 7-digit seat count gives 17 + 3 + 81 = 101 characters against the 158 budget.
+ * The rule is "prose that grows with the number of disclosures does not go in the SVG", not
+ * "no prose ever".
  *
  * A COMPONENT THAT DOES NOT RENDER THESE SHIPS A MAP THAT LIES BY OMISSION. The `aria-label`
  * would carry a disclosure the person looking at the map never sees, which is the exact
