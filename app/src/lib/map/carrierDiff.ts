@@ -201,8 +201,7 @@ export async function fetchCarrierDiff(
   // So `segments[0]` is the largest of whatever that panel ranks on, which on a downgauged panel
   // is NOT the heaviest arc: OO leads with ATW-SBN at 200 seats over 4 departures, while its
   // widest drawn arc carries 367,195 -- three orders of magnitude more. (ATW-SBN's 50 is its seats
-  // PER DEPARTURE, the unit the fall is measured in, not a seat count. An earlier revision of this
-  // very comment confused the two -- in the comment whose own point is that anything writing "the
+  // PER DEPARTURE, the unit the fall is measured in, not a seat count: anything writing "the
   // biggest" about a panel must name which quantity.) `segmentMap.ts`'s `segmentOrder` still
   // imposes its own thinnest-first stroke order downstream; this order is the ranking, not the
   // draw order.

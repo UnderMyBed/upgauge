@@ -620,7 +620,7 @@ h/dy)` bound on width and left the coastline only ~26px tall inside a 76px-tall 
 wrong, but a thin sliver floating in a mostly-empty labelled box. Widened to 296×76px (aspect
 ~3.89:1, matching the measured geometry) so both dimensions bind together; height is
 unchanged so the bottom inset row (`ak`/`hi`/`nwhi`/`car`/`sam`) keeps one shared baseline.
-`networkMap.ts`'s own `INSET_RECTS.car` (the frame-drawing literal, intentionally duplicated
+`segmentMap.ts`'s own `INSET_RECTS.car` (the frame-drawing literal, intentionally duplicated
 from `albers.ts` rather than imported) was updated to match — the two tables drifting would
 mean the drawn frame border no longer matches the rectangle the coastline was actually fit
 to.
@@ -638,7 +638,7 @@ Guam–Saipan 72.232px, islands filling 44.0 × 214.4px of the frame.
 **And a correct size in the wrong place is still a defect.** Grown upward from the tray, that
 rect's frame lands *inside* the conterminous panel, whose drawn coastline occupies x[153.3,
 806.7] y[18.0, 424.0] — and `globals.css`'s `.map svg path[data-panel]` fills every basemap path
-with **opaque** `--panel-2` while `renderNetworkMap` draws frames *before* the basemap. Measured
+with **opaque** `--panel-2` while `renderMapCore` draws frames *before* the basemap. Measured
 on a 0.1px grid: **3,163 px² of drawn landmass inside that rect — 33.3% of it** — with all eight
 glyph positions of the "MARIANAS" label inside drawn Arizona or New Mexico, two of the panel's
 own islands painted over, ABQ and ELP swallowed on `/airport/SFO`, and 27 of its 147 arcs
