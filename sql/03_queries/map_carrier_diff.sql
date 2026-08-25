@@ -25,8 +25,9 @@
 -- table, so it would move every health_score in the database. docs/data/model.md owns that rule.
 --
 -- The floor does not only remove dropped routes, and that is the part that decides this file's
--- shape. Measured over the 27,732 carrier-route triples in the 24-month span: 92.8% of added
--- carrier-routes are ALSO invisible to the mart. Sourcing "dropped" here and "added" from the
+-- shape. Measured over the 27,232 arc-forming carrier-route triples in the 24-month span: 92.7%
+-- of added carrier-routes are ALSO invisible to the mart. (92.8% counting same-airport pairs in,
+-- which is the convention docs/data/model.md states it in; this file counts arcs only.) Sourcing "dropped" here and "added" from the
 -- mart would floor two panels of one small multiple differently by a factor of 14, and the
 -- panels would not be comparable -- mutual exclusivity is necessary and not sufficient.
 --
@@ -135,6 +136,13 @@
 --    rather than 5,012, and moves the count for 32 carriers. Both denominators are >= 1 by the
 --    floor, so neither ratio can divide by zero.
 --
+--    IT HAS TWO CONSUMERS, and they fail differently. The category CASE decides MEMBERSHIP, and
+--    averaging there moves the counts above. `gauge_fall` decides the downgauged panel's RANKING,
+--    and averaging only THAT leaves every count identical while moving 17-26 routes into or out
+--    of each over-cap panel's drawn 400 -- 34 on AA, whose first ten reorder. A test asserting
+--    only counts cannot see the second one; carrierDiff.test.ts asserts AA's leading order for
+--    exactly that reason.
+--
 -- The three are MUTUALLY EXCLUSIVE STRUCTURALLY, not by agreement between three filters: one
 -- CASE over one row per triple, whose arms are the disjoint truth-table cells (T,F), (F,T) and
 -- (T,T). A row cannot reach two of them. They do not PARTITION the space -- a route flown in
@@ -151,25 +159,34 @@
 --
 -- For ADDED and DROPPED the claim's magnitude IS seats, so seats ranks them. For DOWNGAUGED it
 -- is NOT: the claim is a fall in gauge, and seats is orthogonal to it. Ranking the downgauged
--- panel by seats -- which this file did until it was measured -- inverts the panel. On OO, the
--- only carrier whose downgauged panel is cut:
+-- panel by seats -- which this file did until it was measured -- inverts the panel. FOUR panels
+-- exceed the cap, not one, and every one of them inverts. Median gauge fall among the routes a
+-- SEATS ranking draws against the ones it cuts, and the largest fall it discards:
 --
---                          median fall   max fall
---   drawn (top 400 by seats)      1.50      25.45
---   cut   (ranks 401+)            7.50      26.00
+--          n    med drawn   med cut   largest fall cut
+--   OO   584         1.50      7.50      26.00  (the largest in the set)
+--   WN   535         3.01     16.00      38.00  (the largest in the set)
+--   DL   512         6.48     23.42      86.25  (the largest in the set)
+--   AA   442         6.00     29.30      65.00  (the largest in the set)
 --
--- The panel drew the SMALLEST downgauges and cut the largest, the median discarded fall being
--- five times the median drawn one, with the biggest fall in the whole set discarded -- under a
--- disclosure reading "400 of 584", which any reader takes to mean the biggest 400. arcs.ts
--- encodes seats as stroke width, so the visually dominant arcs were the least downgauged ones.
--- That is /watch/new-routes' failure shape exactly: a label true row by row while the rendering
--- encodes something else.
+-- Each panel drew the SMALLEST downgauges and cut the largest, and in all four the biggest fall
+-- in the whole set was discarded -- under a disclosure reading "400 of 584", which any reader
+-- takes to mean the biggest 400. arcs.ts encodes seats as stroke width, so the visually dominant
+-- arcs were the least downgauged ones. That is /watch/new-routes' failure shape exactly: a label
+-- true row by row while the rendering encodes something else. DL, AA and WN are the three
+-- highest-traffic carrier pages on the site.
 --
 -- So `rank_key` is per category, and its UNIT DIFFERS BY CATEGORY -- seats for added and
 -- dropped, seats-per-departure for downgauged. That is safe only because every use of it is
 -- PARTITIONED BY category, so two categories' keys are never compared; it is a ranking key and
 -- is deliberately not emitted as a measure. The precedent is this repo's own existing view of
 -- the same phenomenon: watch_gauge.sql ranks ORDER BY gauge_delta, never on seats.
+--
+-- THAT PRECEDENT IS ONLY HALF APPLICABLE, and the missing half matters. watch_gauge.sql ranks
+-- over mart_route_health, whose population is ALREADY floored at t12_departures_performed >= 30 --
+-- which is WHY nothing with one departure can lead /watch/gauge. This file floors at 1 for
+-- cross-panel comparability, so it inherits the key WITHOUT the floor that made the key safe
+-- there. The consequence is measured and stated below rather than assumed away.
 --
 -- "Seats removed" (fall x departures) was the other candidate, and it is DISQUALIFIED BY
 -- MEASUREMENT rather than by argument -- it does not actually fix the inversion. Same panel,
@@ -186,16 +203,62 @@
 -- log space (docs/data/model.md verifies the identity to 2.66e-15), which is why health_score
 -- excludes capacity_delta from its composite.
 --
--- THE COST, stated because it is real: ranking on fall lets a thinly flown route lead the panel.
--- OO's top downgauged arc is ACV-FAT at ONE performed departure, and 230 of its 400 drawn arcs
--- are below 30 departures, against 74 under the old seats key. arcs.ts draws every one of those
--- dotted and muted -- "barely flown" is already an encoding on this map -- so the fragility is
--- disclosed on the arc rather than hidden by it. A departures floor high enough to suppress them
--- would be a SECOND floor applying to one category, which is the incomparability this file's
--- whole shape exists to prevent.
+-- WHAT FALL-RANKING FIXES, AND WHAT IT DOES NOT. It fixes the CUT: the drawn 400 really are the
+-- 400 largest falls, which is what the disclosure claims. It does NOT make the panel READABLE,
+-- and that is a live defect stated in the present tense because it is still there:
 --
--- FOR #110: the downgauged panel's disclosure must say what it ranks on. "400 of 584" alone
--- reads as the largest 400 routes; the honest form names the key -- the 400 largest gauge falls.
+--        sub-30-dep    of which in    corr(seats, fall)
+--        of the 400     the top 100   inside the drawn 400
+--   OO          230              89                -0.29
+--   WN          178              97                -0.39
+--   DL          222              82                -0.32
+--   AA          199              76                -0.37
+--
+-- Two mechanisms, and neither is reachable from this file. arcs.ts:82-83 gives EVERY
+-- sub-30-departure arc the same fixed 1px dotted --ink-3 stroke, so 178-230 of each panel's 400
+-- arcs are visually identical -- a reader cannot tell rank 1 from rank 400 in the very region the
+-- disclosure points at, and 76-97 of each top 100 are in it. Meanwhile the one channel that DOES
+-- vary, width, encodes seats, which correlates NEGATIVELY with the ranking key inside the drawn
+-- set: the widest arcs are among the least downgauged.
+--
+-- Ranking on fall also lets a thinly flown route lead: DL's leader is BNA-JFK at TWO performed
+-- departures and AA's is BOS-STL at one.
+--
+-- The volume term in the ORDER BY below does NOT address this and is not claimed to. Measured on
+-- all four panels, it moves ZERO routes into or out of the drawn 400 -- gauge fall is continuous,
+-- so it only ever decides exact ties. What it does fix is which of a tied set leads: OO's leader
+-- moves from ACV-FAT (1 departure) to ATW-SBN (4), and WN's from BDL-STL (1) to JAN-MCI (2).
+--
+-- Nothing stronger is available here without breaking a claim. Demoting the thin arcs in the
+-- ranking would make "the 400 largest falls" FALSE; excluding them would be a SECOND floor on one
+-- category, which is the incomparability this file's whole shape exists to prevent.
+--
+-- FOR #110, and this is the real fix: the panel cannot render the ordering it is cut by. Either
+-- the caption says so, or arcs.ts needs a channel for fall. The disclosure must also name the key
+-- -- "400 of 584" alone reads as the largest 400 ROUTES, not the largest 400 falls.
+--
+-- NO PANEL HAS A UNIQUE TOP DOWNGAUGED ROUTE, so nothing may write "the biggest downgauge is X":
+-- 17 OO routes tie at the panel maximum of 26.0 seats per departure, and 13 WN routes at 38.0.
+-- Which of them leads is decided by the tiebreak, not by the data.
+--
+-- THE VOLUME TERM, downgauged only. `rank_key DESC` alone leaves an exact tie in gauge fall to be
+-- broken by airport id, which on OO and WN is a 17-way and a 13-way tie AT THE PANEL MAXIMUM --
+-- so the arc a reader sees first was chosen alphabetically. Ordering the tied set by performed
+-- departures picks the most-flown of them instead. The CASE evaluates to NULL for every row of a
+-- non-downgauged partition, so those partitions compare equal on it and fall straight through to
+-- the id tiebreak, unchanged.
+--
+-- IT IS CATEGORY-SCOPED AS DEFENCE, not because it changes a cut today -- and the difference is
+-- worth stating, because the obvious justification is wrong. Applying it to all three categories
+-- moves NO added or dropped panel's cut at all: every one of the 10 tie-at-cut blocks has a
+-- SINGLE distinct departure count, so ordering the tied set by departures is a no-op there (MQ's
+-- 317 routes tied at 76 seats all performed exactly 1 departure -- 76 seats is one flight of a
+-- 76-seat aircraft, so equal seats forces equal departures at the cut). What it DOES move is 7
+-- carriers' panel INTERIORS, where seats tie at a value two different frequencies can reach: in
+-- 8V's dropped panel ANV-KYU and KGX-NUL both file 6 seats over 1 and 2 departures, and an
+-- unscoped term would swap them. So the scope is kept for the same reason the id tiebreak is
+-- kept -- "no reorder at the cut today" is a property of this month's data, not of the query --
+-- and carrierDiff.test.ts pins that interior ordering so un-scoping it goes red.
 --
 -- THE TIEBREAK. The ranking ORDER BY carries route_key_low, route_key_high after rank_key
 -- because 10 of the 14 over-cap panels have a tie sitting exactly on the cut -- every added and
@@ -258,6 +321,15 @@
 -- which is what CLAUDE.md's quarantine rule requires. Both windows are counted because both
 -- participate in every category decision -- added and dropped each test one window for absence
 -- and read the other for measures, and downgauged reads both.
+--
+-- A THIRD GROUP REACHES NO COUNT AT ALL, and this section would read as exhaustive without it:
+-- 2 carrier-routes are BOTH wholly quarantined AND same-airport. `undrawable_routes` carries
+-- `route_key_low <> route_key_high`, so they are not an arc, not in category_total, not in
+-- same_airport_seats and not in undrawable_routes either. They are the "vanish with no trace"
+-- this field exists to prevent, at 2 instead of 25. Left that way deliberately: counting them in
+-- undrawable_routes would state them on a map face as routes that could not be drawn, when the
+-- reason they cannot be drawn is that they are not routes -- two different absences summed into
+-- one number is what the same-airport split exists to avoid.
 --
 -- Quarantine is a per-aggregate FILTER and never a WHERE (100_fct_route_month.sql:56-59): a
 -- WHERE would make quarantined_rows always 0, which is the bug the FILTER form exists to
@@ -420,5 +492,10 @@ LEFT JOIN dim_airport lo ON lo.airport_id = p.route_key_low  AND lo.is_latest
 LEFT JOIN dim_airport hi ON hi.airport_id = p.route_key_high AND hi.is_latest
 QUALIFY row_number() OVER (
     PARTITION BY p.category
-    ORDER BY p.rank_key DESC, p.route_key_low, p.route_key_high) <= $cap
-ORDER BY p.category, p.rank_key DESC, p.route_key_low, p.route_key_high
+    ORDER BY p.rank_key DESC,
+             CASE WHEN p.category = 'downgauged' THEN p.departures END DESC,
+             p.route_key_low, p.route_key_high) <= $cap
+ORDER BY p.category,
+         p.rank_key DESC,
+         CASE WHEN p.category = 'downgauged' THEN p.departures END DESC,
+         p.route_key_low, p.route_key_high

@@ -124,12 +124,15 @@ function toSegment(row: DiffRow): SegmentDatum {
  *
  * THAT GUARD IS ROW-CONDITIONAL, and deliberately so rather than by oversight. The month it
  * checks against is read off the query's own rows, so a carrier with no categorized route --
- * 67 of the 114 codes `sitemap_carriers.sql` emits -- returns `[]` without the check running.
- * That is sound because the failure it prevents is a window line disagreeing with the badge, and
- * a carrier with no panel renders no window line: there is nothing to disagree. Making it
- * unconditional would cost a second query on the majority of carrier pages to guard a state
- * those pages cannot reach. `refuses an asOf...` and `returns nothing at all...` in
- * `carrierDiff.test.ts` pin both halves of this, so it stays a stated property.
+ * 48 of the 114 codes `sitemap_carriers.sql` emits, since 66 carriers have at least one -- gets
+ * `[]` without the check running. It rests on soundness, not on cost: the failure it prevents is
+ * a window line disagreeing with the badge, and a carrier with no panel renders no window line,
+ * so there is nothing that could disagree. (An earlier revision justified it as "a second query
+ * on the majority of carrier pages"; 48 of 114 is 42%, so that argument was false and is not the
+ * reason.) What it leaves open is narrow and worth naming: a caller asking for a window this
+ * query does not serve gets `[]` for an empty carrier rather than a refusal, which reads as "no
+ * change in the window you asked for". `refuses an asOf...` and `does NOT check asOf...` in
+ * `carrierDiff.test.ts` pin both halves, so it stays a stated property rather than an accident.
  */
 export async function fetchCarrierDiff(
   airlineId: number,
@@ -155,10 +158,13 @@ export async function fetchCarrierDiff(
     );
   }
 
-  // Grouped in arrival order, which the query has already sorted by seats DESC with a
-  // deterministic tiebreak inside each category -- so the panel draws heaviest-first over the
-  // same routes on every run, and `arcOrder` still gets to impose its own thinnest-first
-  // stroke order downstream.
+  // Grouped in arrival order, which the query has already sorted by each category's OWN ranking
+  // key with a total-order tiebreak -- seats for added and dropped, GAUGE FALL for downgauged.
+  // So `segments[0]` is the largest of whatever that panel ranks on, which on a downgauged panel
+  // is NOT the heaviest arc: OO leads with ATW-SBN at 50 seats over 4 departures while its widest
+  // drawn arc is three orders of magnitude bigger. Anything writing "the biggest" about a panel
+  // must name which quantity. `arcOrder` still imposes its own thinnest-first stroke order
+  // downstream; this order is the ranking, not the draw order.
   const byCategory = new Map<DiffCategory, DiffRow[]>();
   for (const row of rows) {
     if (!isDiffCategory(row.category)) {
@@ -209,8 +215,20 @@ export async function fetchCarrierDiff(
         totalRoutes: head.category_total,
         // Routes no category could reach because a window was wholly quarantined -- absent from
         // `segments` and from `totalRoutes` alike, so without this they leave no trace at all.
-        // Carrier-wide rather than per-category by construction: an uncategorized route has no
-        // category to be counted under. segmentMap.ts owns the field's contract.
+        //
+        // CARRIER-WIDE, not per-panel, and unavoidably so: an uncategorized route has no category
+        // to be counted under, and attributing it to one would be inventing the very fact the
+        // quarantine destroyed. The consequence for #110 is that ALL THREE panels of one carrier
+        // carry the SAME number -- 8V's three each say 16, the same 16 -- so a reader summing the
+        // small multiple gets 48. It belongs in a page-level disclosure, next to the one the SQL
+        // header already hands over for the 5 carrier-category pairs whose only member is a
+        // same-airport pair. Rendering it per panel face-value triple-counts it.
+        //
+        // NOTE the contract text at segmentMap.ts says "every filing behind them was
+        // quarantined". True of #105's 34; NOT true of these 25, where ONE window is wholly
+        // quarantined and the other can be clean -- 8V BTI-VEE has 8 clean prior-window
+        // departures. Both are "could not be drawn because quarantine destroyed what decides
+        // them", which is the property the field actually carries.
         quarantinedRoutes: head.undrawable_routes,
         // Seats on pairs whose two endpoints are the same airport: never an arc, never in
         // `totalRoutes`, but disclosed rather than lost. REQUIRED, and an explicit 0 when the

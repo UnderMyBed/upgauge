@@ -8,11 +8,14 @@ import { DEPARTURE_FLOOR } from "./arcs";
 // predicate that produced it, which is what makes them re-derivable after a refresh.
 const AS = 19930; // Alaska -- every panel under the cap, so cap behaviour cannot mask a bug
 const OO = 20304; // SkyWest -- every panel OVER the cap
+const WN = 19393; // Southwest -- 13 downgauged routes tied at its panel maximum fall of 38.0
 const MQ = 20398; // Envoy -- 317 added routes tied at exactly 76 seats across the 400th row
 const WRIGHT = 20333; // 8V -- owns 16 of the 25 wholly-quarantined windows in this span
 const ZW = 20046; // Air Wisconsin -- 92 dropped, 0 added, 0 downgauged
 const VIRGIN_AMERICA = 21171; // dormant since 2018: nothing in either window
 const FOUR_W = 20323; // 4W -- downgauged panel UNDER the cap, and averaging moves it 10 -> 5
+const AA = 19805; // American -- downgauged panel over the cap, and its first ten reorder if
+                  // `gauge_fall` (the RANKING key) is averaged rather than a ratio of sums
 const AS_OF = "2026-05";
 
 function panel(diffs: CarrierDiff[], category: string): CarrierDiff {
@@ -120,6 +123,31 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     expect(added.map.segments).toHaveLength(400);
   });
 
+  it("keeps the volume term OFF the added and dropped panels", async () => {
+    // Catches: dropping the `category = 'downgauged'` guard on the volume term. Added and dropped
+    // rank on seats alone, so a seats tie there must fall through to the airport-id tiebreak and
+    // NOT be reordered by frequency.
+    //
+    // The obvious fixture does not work and the reason is worth knowing: every one of the ten
+    // tie-at-cut blocks has a single distinct departure count -- MQ's 317 routes tied at 76 seats
+    // all flew exactly 1 -- so an unscoped term cannot move any CUT. It moves panel INTERIORS.
+    // 8V's dropped panel ties ANV-KYU and KGX-NUL at 6 seats over 1 and 2 departures; ranked on
+    // seats then airport id, ANV-KYU (id 10990) comes first, and only a departures term reverses
+    // that.
+    const dropped = panel(await fetchCarrierDiff(WRIGHT, AS_OF), "dropped");
+    const codes = pairs(dropped);
+    const anv = codes.indexOf("ANV-KYU");
+    const kgx = codes.indexOf("KGX-NUL");
+    expect(anv).toBeGreaterThanOrEqual(0);
+    expect(kgx).toBeGreaterThanOrEqual(0);
+    expect(anv).toBeLessThan(kgx);
+    // ...and the two really are the tie this claims: same seats, and the FIRST one flew LESS.
+    expect(dropped.map.segments[anv].seats).toBe(dropped.map.segments[kgx].seats);
+    expect(dropped.map.segments[anv].departures).toBeLessThan(
+      dropped.map.segments[kgx].departures,
+    );
+  });
+
   it("cuts a tied panel at a deterministic place", async () => {
     // Catches: dropping the (route_key_low, route_key_high) tiebreak from the ranking ORDER BY.
     // EVERY one of the 14 over-cap panels has a seats tie sitting on the cut; MQ added is the
@@ -155,7 +183,7 @@ describe("fetchCarrierDiff, against the warehouse", () => {
   });
 
   it("omits a category the carrier has nothing in, rather than returning an empty panel", async () => {
-    // fetchAirportNetwork's rule -- no panel rather than an empty panel -- and it is live: 33 of
+    // fetchAirportNetwork's rule -- no panel rather than an empty panel -- and it is live: 26 of
     // the 66 carriers with any change have at least one empty category. ZW dropped 92
     // carrier-routes and added none. A caller rendering a fixed three-panel layout must handle
     // this; that consequence belongs to #110.
@@ -220,6 +248,42 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     const fourW = panel(await fetchCarrierDiff(FOUR_W, AS_OF), "downgauged");
     expect(fourW.map.totalRoutes).toBe(10);
     expect(fourW.map.segments).toHaveLength(10);
+  });
+
+  it("computes the downgauged RANKING key as a ratio of sums too, not just the category test", async () => {
+    // `gauge_fall` has two consumers and they fail differently. The category CASE decides
+    // MEMBERSHIP -- averaging there moves totalRoutes, which the test above catches. `gauge_fall`
+    // decides the panel's RANKING, and averaging only THAT leaves every count in this file
+    // identical while moving 34 routes into and out of AA's drawn 400 and reordering its first
+    // ten. No count assertion anywhere can see it; only the ORDER can.
+    const aa = panel(await fetchCarrierDiff(AA, AS_OF), "downgauged");
+    expect(aa.map.totalRoutes).toBe(442);
+    expect(pairs(aa).slice(0, 10)).toEqual([
+      "BOS-STL",
+      "ATL-JAX",
+      "FLL-ILM",
+      "MCO-MSY",
+      "MSY-MYR",
+      "PHL-XNA",
+      "GEG-ORD",
+      "ABQ-DEN",
+      "DFW-ILM",
+      "OKC-TUS",
+    ]);
+  });
+
+  it("breaks a tie at the panel maximum by departures, on the downgauged panel only", async () => {
+    // 17 OO routes tie at the maximum fall of 26.0 and 13 WN routes at 38.0, so which arc a
+    // reader sees first was decided ALPHABETICALLY. The volume term picks the most-flown of the
+    // tied set instead: OO moves from ACV-FAT (1 performed departure) to ATW-SBN (4), WN from
+    // BDL-STL (1) to JAN-MCI (2).
+    //
+    // The scoping is pinned by the next test, not by this one.
+    const oo = panel(await fetchCarrierDiff(OO, AS_OF), "downgauged");
+    expect(pairs(oo)[0]).toBe("ATW-SBN");
+    expect(oo.map.segments[0].departures).toBe(4);
+    const wn = panel(await fetchCarrierDiff(WN, AS_OF), "downgauged");
+    expect(pairs(wn)[0]).toBe("JAN-MCI");
   });
 
   it("cuts each panel exactly where its own pre-cap total and the cap say it should", async () => {
