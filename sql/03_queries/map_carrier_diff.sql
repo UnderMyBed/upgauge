@@ -288,7 +288,12 @@
 -- category_total is count(*) OVER (PARTITION BY category), computed in `ranked` over the full
 -- partition BEFORE `rn <= $cap` filters it, so it is the TRUE pre-cap count and cannot be the
 -- capped one. Returning the capped count is
--- the mutant #105 exists to kill; here it is unwritable.
+-- the mutant #105 exists to kill. NOT "unwritable" -- an earlier revision said so and it was the
+-- same over-claim this file exists to avoid: replacing `r.category_total` in the final SELECT with
+-- `count(*) OVER (PARTITION BY r.category)` compiles and yields 400 of 400, because by then the
+-- cap filter has already run. What is true is narrower and is the reason for the CTE: the count is
+-- taken inside `ranked`, over the PRE-CUT partition, and carrierDiff.test.ts is what keeps it
+-- there.
 --
 -- ============================================================================================
 -- SAME-AIRPORT PAIRS ARE EXCLUDED FROM THE ARCS AND DISCLOSED IN SEATS
@@ -469,7 +474,12 @@ panel AS (
         route_key_low,
         route_key_high,
         route_key_low = route_key_high AS is_same_airport,
-        t12_end_month,
+        -- t12_end_month is deliberately NOT carried out of this CTE, though the CASE below reads
+        -- it from `categorized`. It was the column the pre-anchor query sourced dataset_end_month
+        -- from, so leaving it on an arc row would make `a.dataset_end_month` -> `r.t12_end_month`
+        -- a one-token edit that compiles and silently reverts the asOf guard to arc-conditional --
+        -- i.e. skipped for the 48 of 114 carriers with no arc. Removing the column removes the
+        -- re-source path.
         CASE WHEN category = 'dropped' THEN p12_start_month ELSE t12_start_month END AS window_start_month,
         CASE WHEN category = 'dropped' THEN p12_end_month   ELSE t12_end_month   END AS window_end_month,
         CASE WHEN category = 'dropped' THEN p12_seats                ELSE t12_seats                END AS seats,

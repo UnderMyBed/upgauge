@@ -171,11 +171,19 @@ export async function fetchCarrierDiff(
   );
   // The query returns an anchor row unconditionally, so this cannot be empty and the two carrier-
   // wide facts below are always readable -- including for a carrier with no drawable arc.
+  //
+  // STRUCTURALLY UNREACHABLE, and the scenario an earlier revision named for it does not produce
+  // it: run against an EMPTY fct_route_month the query returns ONE row, not zero, because
+  // `bounds` is a bare aggregate and `anchor` selects from `windows`. That row carries a NULL
+  // `dataset_end_month`, so control reaches the asOf guard below and is refused there instead.
+  // This branch can only fire if `anchor` or `windows` has been edited into something that can
+  // return no rows -- which is what it should say when it fires.
   if (rows.length === 0) {
     throw new Error(
-      "fetchCarrierDiff: map_carrier_diff.sql returned no rows at all. Its anchor CTE selects " +
-        "from `windows`, which is a single row by construction, so an empty result means the " +
-        "fact table has no months and every window bound is NULL.",
+      "fetchCarrierDiff: map_carrier_diff.sql returned no rows. Its `anchor` CTE selects from " +
+        "`windows`, which is one row by construction, so this is not an empty-warehouse " +
+        "condition (that yields one row with a NULL dataset_end_month) -- `anchor` or `windows` " +
+        "has been changed into something that can return nothing.",
     );
   }
 

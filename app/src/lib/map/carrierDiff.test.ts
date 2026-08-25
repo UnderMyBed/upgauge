@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  DIFF_CATEGORIES,
-  fetchCarrierDiff,
-  type CarrierDiff,
-  type CarrierDiffResult,
-} from "./carrierDiff";
+import { DIFF_CATEGORIES, fetchCarrierDiff, type CarrierDiff } from "./carrierDiff";
 import { DEPARTURE_FLOOR } from "./arcs";
 
 // Live-database tests, not fixtures, for the reason lib/resolve.ts's header gives: this codebase
