@@ -25,7 +25,7 @@ describe("basemapPathsFor", () => {
   });
 
   it("emits nothing for a panel that was not requested", () => {
-    // Catches: shipping all five panels' coastlines on every page. Most airports
+    // Catches: shipping all seven panels' coastlines on every page. Most airports
     // touch two; the Pacific and Caribbean outlines are dead weight on them.
     expect(basemapPathsFor(["us"])).not.toContain('data-panel="pac"');
   });
@@ -65,7 +65,7 @@ describe("basemapPathsFor", () => {
   it("emits paths for the American Samoa panel (#111)", () => {
     // `sam` is a panel rather than part of `pac` because ONE Albers fit cannot carry both:
     // the two are ~5,000 km apart, so a shared fit puts Tinian and Saipan 2.73px apart even
-    // at full canvas width, and PPG at (1006.8, 771.6) under a Marianas-scaled one. Catches a
+    // at full canvas width, and PPG at (1892.5, 1102.0) under this commit's own `pac` fit. Catches a
     // regression that puts American Samoa back into `pac`'s input or its region test.
     expect(basemapPathsFor(["sam"])).toMatch(/data-panel="sam"/);
     expect(basemapPathsFor(["sam"])).toContain('data-name="AS"');
@@ -323,26 +323,37 @@ describe("the Pacific panels' committed geometry (#111)", () => {
   });
 
   it("American Samoa's committed geometry", () => {
-    // Ground truth: ONE subpath (Tutuila), 162.6 x 56.1px, area ~9,121.9 px^2. Threshold
-    // 2000 px^2 -- a 4.6x margin.
+    // Ground truth: ONE subpath (Tutuila), 180.5 x 62.2px, area 11,227.10 px^2. Threshold
+    // 3000 px^2 -- a 3.7x margin, matching VA's.
     //
-    // Known limitation, recorded rather than hidden: Natural Earth's 1:50m Tutuila is 8
-    // vertices and RDP keeps 5, so `sam` draws roughly 57px of outline per source vertex
-    // against the 6-10px `hi` and `car` manage, and the dropped vertices were 11px and 15px
-    // off the kept chords. The shape is coarse at this scale. It is sized for the tray anyway
-    // because the frame has to hold PPG's 2px node and its 9px label; a fidelity-matched box
-    // would be about 28x13px, narrower than the word printed on top of it.
+    // The drawn box is 62.2 tall inside a fit whose extent fills 76.0 (`PANEL_RECTS.sam`'s
+    // comment), and the difference is not a bug: the fit is taken on all 8 source vertices
+    // while the path is drawn from the 5 RDP keeps, and one of the three drops is the vertex
+    // defining Tutuila's northern edge. Known limitation, recorded rather than hidden --
+    // Natural Earth's 1:50m Tutuila is 8 vertices, so `sam` draws about 48.5px of outline per
+    // source vertex (387.9px of drawn perimeter over 8) against the 6-10px `hi` and `car`
+    // manage. The shape is coarse at this scale. It is sized for the tray anyway because the
+    // frame has to hold PPG's 2px node and its 9px label; a fidelity-matched box would be
+    // about 30x13px, narrower than the word printed on top of it.
     const subpaths = subpathsOf(pathDataFor("AS", "sam"));
     expect(subpaths).toHaveLength(1);
     const { w, h } = boxOf(subpaths[0]);
-    expect(w * h).toBeGreaterThan(2000);
+    expect(w * h).toBeGreaterThan(3000);
   });
 });
 
 describe("every Pacific-reaching airport lands inside its own inset (#111)", () => {
-  // The acceptance property of #111, asserted where it actually lives: on the projection of
-  // the REAL warehouse coordinates through the REAL committed fit, against albers.ts's own
-  // PANEL_RECTS rather than a copy of it. `PANEL_RECTS` is exported for exactly this.
+  // The acceptance property of #111, asserted through the REAL committed fit and against
+  // albers.ts's own PANEL_RECTS rather than a copy of it. `PANEL_RECTS` is exported for
+  // exactly this.
+  //
+  // The coordinates below are HAND-COPIED LITERALS, not a warehouse read -- this file has no
+  // database dependency and gains none here. They were checked against `dim_airport`
+  // (`is_latest`) on 2026-08-25 and matched to the digit. State the limitation rather than the
+  // convenience: a BTS refresh that revises a coordinate leaves this test green against a stale
+  // number, which is the class that renamed aircraft type 699 out from under the `/aircraft`
+  // slug fixtures. What it does still prove under that drift is the projection and the layout,
+  // which is what #111 is about.
   //
   // Seven fact-present airports reach a Pacific panel over the trailing 12: GUM, HNL, PPG,
   // ROP, SFO, SPN and TIQ. Before #111 they were stated as six everywhere, and the omitted
@@ -378,8 +389,10 @@ describe("every Pacific-reaching airport lands inside its own inset (#111)", () 
 
   it("keeps the four Marianas airports mutually distinguishable", () => {
     // A node is r=2 and a label is font-size 9, so anything under ~6px renders as one dot.
-    // The binding pair is SPN-TIQ (Saipan and Tinian, 18 km apart, and a route filing 39,908
-    // seats over the trailing 12), NOT the more obvious GUM-SPN: under the old 100x76 rect
+    // The binding pair is SPN-TIQ (Saipan and Tinian, 18 km apart, on an undirected route
+    // filing 78,420 seats over the trailing 12 -- `fct_route_month`, because the map draws one
+    // arc per undirected route; the directed `fct_segment_month` halves are 39,908 and 38,512
+    // and neither is the arc's own figure), NOT the more obvious GUM-SPN: under the old 100x76 rect
     // with Marianas-only geometry, GUM-SPN measures 25.60px and passes while SPN-TIQ measures
     // 2.21px. A test written against GUM-SPN could not have died for its stated reason.
     //
@@ -451,5 +464,126 @@ describe("the panels #111 must not have moved", () => {
       hi: { k: 1221.0803508579845, ox: 247.8265564145108, oy: 442.31592580205955 },
       car: { k: 5304.317346044431, ox: 603.4689616699768, oy: 440.65076212255065 },
     });
+  });
+});
+
+describe("no inset frame is drawn over the conterminous landmass", () => {
+  // THE GATE WHOSE ABSENCE SHIPPED #111'S ONE BLOCKING DEFECT. `pac` was first sized correctly
+  // (44x216, every airport inside it, Tinian and Saipan 6.23px apart) and placed at
+  // (308,252)-(352,468), whose frame lands inside the conterminous panel. `globals.css`'s
+  // `.map svg path[data-panel]` fills every basemap path with OPAQUE `--panel-2`, and
+  // `renderNetworkMap` draws frames BEFORE the basemap -- so the lower 48 painted over the
+  // frame border, the "MARIANAS" label, and two of the panel's own islands. Measured on a 0.1px
+  // grid: 3,163 px^2 of drawn landmass inside that rect (33.3% of it), and all eight glyph
+  // positions of the label inside drawn Arizona or New Mexico. 25 served views affected.
+  //
+  // Nothing caught it because both the acceptance criterion and the frame-overlap test that
+  // implements it enumerate the six INSET panels. `us` is the unframed, full-canvas panel that
+  // paints the land, so it was in neither list. This test is the one that looks at it.
+  //
+  // Against the DRAWN SUBPATHS, not the coastline's bounding box: `hi`'s frame sits inside that
+  // bbox (x[153.3, 806.7] y[18.0, 424.0]) while containing no land at all, so a bbox test would
+  // fail a panel that is genuinely clear. And an exact rect-vs-polygon test, not a
+  // vertex-in-rect one: a frame could sit wholly inside one state's interior with no vertex
+  // near it and still be entirely behind paint.
+  const FRAME_PAD = 6;
+
+  function subpathsOf(d: string): string[] {
+    return d
+      .split(/(?<=Z)\s*/)
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+  }
+  function pointsOf(subpath: string): [number, number][] {
+    return [...subpath.matchAll(/[ML](-?[\d.]+),(-?[\d.]+)/g)].map((m) => [
+      Number(m[1]),
+      Number(m[2]),
+    ]);
+  }
+  function pointInPolygon([px, py]: [number, number], poly: [number, number][]): boolean {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const [xi, yi] = poly[i];
+      const [xj, yj] = poly[j];
+      if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+  function segmentsCross(
+    a: [number, number],
+    b: [number, number],
+    c: [number, number],
+    d: [number, number],
+  ): boolean {
+    const side = (p: [number, number], q: [number, number], r: [number, number]) =>
+      Math.sign((q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]));
+    return side(a, b, c) !== side(a, b, d) && side(c, d, a) !== side(c, d, b);
+  }
+  /** Exact: a vertex inside the rect, a rect corner inside the polygon, or any edge crossing. */
+  function rectOverlapsPolygon(
+    rect: [number, number, number, number],
+    poly: [number, number][],
+  ): boolean {
+    const [x0, y0, x1, y1] = rect;
+    const corners: [number, number][] = [
+      [x0, y0],
+      [x1, y0],
+      [x1, y1],
+      [x0, y1],
+    ];
+    if (poly.some(([x, y]) => x >= x0 && x <= x1 && y >= y0 && y <= y1)) return true;
+    if (corners.some((c) => pointInPolygon(c, poly))) return true;
+    for (let i = 0; i < poly.length; i++) {
+      const a = poly[i];
+      const b = poly[(i + 1) % poly.length];
+      for (let j = 0; j < 4; j++) {
+        if (segmentsCross(a, b, corners[j], corners[(j + 1) % 4])) return true;
+      }
+    }
+    return false;
+  }
+
+  const LAND = [...basemapPathsFor(["us"]).matchAll(/data-name="([A-Z]{2})" d="([^"]*)"/g)].flatMap(
+    (m) => subpathsOf(m[2]).map((sp) => ({ name: m[1], poly: pointsOf(sp) })),
+  );
+
+  it("reads real conterminous subpaths, so the check is not vacuous", () => {
+    // Without this, a regression that emptied `us` would make every assertion below pass.
+    expect(LAND.length).toBeGreaterThan(40);
+  });
+
+  it.each(["ak", "hi", "pac", "nwhi", "sam"] as const)(
+    "%s's frame is clear of drawn lower-48 land",
+    (panel) => {
+      const [x0, y0, x1, y1] = PANEL_RECTS[panel];
+      const frame: [number, number, number, number] = [
+        x0 - FRAME_PAD,
+        y0 - FRAME_PAD,
+        x1 + FRAME_PAD,
+        y1 + FRAME_PAD,
+      ];
+      const over = [...new Set(LAND.filter((l) => rectOverlapsPolygon(frame, l.poly)).map((l) => l.name))];
+      expect(`${panel} over [${over}]`).toBe(`${panel} over []`);
+    },
+  );
+
+  it("records `car` as the one pre-existing violation, rather than omitting it", () => {
+    // `car` (M7 Task 7b) is the same class of defect and shipped a milestone earlier: its rect
+    // (424,392)-(720,468) overlaps drawn Florida and Texas, measured at 1,396 px^2 -- 6.2% of
+    // its rect, against `pac`'s 33.3%. Out of scope for #111 and deliberately not fixed, but a
+    // test that simply left `car` out of the list above would read as though the property held
+    // everywhere. This asserts the exemption is EXACTLY those two states: if `car` ever grows
+    // past them, or is fixed, this goes red and someone re-reads the rule.
+    const [x0, y0, x1, y1] = PANEL_RECTS.car;
+    const frame: [number, number, number, number] = [
+      x0 - FRAME_PAD,
+      y0 - FRAME_PAD,
+      x1 + FRAME_PAD,
+      y1 + FRAME_PAD,
+    ];
+    const over = [
+      ...new Set(LAND.filter((l) => rectOverlapsPolygon(frame, l.poly)).map((l) => l.name)),
+    ].sort();
+    expect(over).toEqual(["FL", "TX"]);
   });
 });

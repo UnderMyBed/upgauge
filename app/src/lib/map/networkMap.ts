@@ -47,7 +47,8 @@ import { BASEMAP_FIT_POINTS } from "./basemap";
  * no coastline to align to, so a subject-derived fit is the legitimate, documented fallback --
  * see the merge in `renderNetworkMap` below. That branch is not dead code kept for symmetry:
  * `/airport/MDY?y=2021` and `/airport/HNL?y=2021` are the pages it carries, and giving Midway
- * the baked `pac` fit instead would project it to (1635.6, -207.7), off a 960x500 canvas.
+ * the baked `pac` fit instead would project it to (1367.6, -429.7) under this commit's own
+ * `pac` fit, off a 960x500 canvas.
  * An airport that lands slightly outside the simplified coastline renders slightly outside it;
  * that is geographically honest and must not be "fixed" by rescaling.
  */
@@ -87,21 +88,35 @@ const HEIGHT = 500;
 const TOP_LABEL_COUNT = 8;
 
 /**
- * Screen rects for the four labelled insets, mirroring `albers.ts`'s own (unexported)
- * `PANEL_RECTS` layout table verbatim. Not derivable from `fitPanels`'s return value, which
- * carries only each panel's data-dependent SCALE and OFFSET (`k`/`ox`/`oy`), not its fixed
- * on-canvas frame -- and Task 6 must not edit Task 4's file to export the constant. Keep the
- * two literal tables in sync if the canvas layout ever changes; this copy is chrome only
- * (drawing the frame border), never projection math, which `fitPanels`/`project` alone own.
+ * Screen rects for the labelled insets, mirroring `albers.ts`'s `PANEL_RECTS` layout table
+ * verbatim. Not derivable from `fitPanels`'s return value, which carries only each panel's
+ * data-dependent SCALE and OFFSET (`k`/`ox`/`oy`), not its fixed on-canvas frame. This copy is
+ * chrome only (drawing the frame border), never projection math, which `fitPanels`/`project`
+ * alone own.
+ *
+ * THE ORIGINAL REASON FOR THE COPY IS GONE, and saying so matters more than the copy does: it
+ * was "Task 6 must not edit Task 4's file to export the constant", and #111 exported
+ * `PANEL_RECTS` anyway so a test could assert an airport lands inside its own panel against the
+ * real table. What is left is a hand-copy with no justification, kept for one commit only
+ * because #104 is concurrently relocating this table into `segmentMap.ts` and collapsing it
+ * here would turn a two-literal merge into a structural one. The follow-up is to import
+ * `PANEL_RECTS` and delete this.
+ *
+ * Until then the sync is GATED rather than asked for: `networkMap.test.ts` asserts this table
+ * deep-equals `PANEL_RECTS` minus `us`. That is why it is exported -- a frame border drawn to a
+ * different rect than the one the coastline was fit to would visibly not match the landmass
+ * inside it, and #111 edited both tables by hand, which is precisely the operation the missing
+ * gate existed to catch.
  */
-const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, number]> = {
+export const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, number]> = {
   ak: [36, 322, 176, 468],
   hi: [192, 392, 292, 468],
-  // Reshaped by #111 from the original 100x76 placeholder to match albers.ts's own
-  // PANEL_RECTS.pac -- real Guam + Northern Marianas geometry is 0.2052:1, five times taller
-  // than wide, and 216px of height is what puts Tinian and Saipan 6px apart. See that file's
-  // comment for the arithmetic.
-  pac: [308, 252, 352, 468],
+  // Reshaped AND relocated by #111 to match albers.ts's own PANEL_RECTS.pac -- real Guam +
+  // Northern Marianas geometry is 0.2052:1, five times taller than wide, 216px of height is
+  // what puts Tinian and Saipan 6px apart, and the top-left margin is the only place a rect
+  // that tall does not end up underneath the opaque lower-48 landmass. See that file's comment
+  // for both measurements. This is the one inset outside the bottom tray.
+  pac: [40, 30, 84, 246],
   // Midway. No committed geometry, so the coastline cannot disagree with this frame -- but the
   // frame must still be drawn, or the arc that reaches Midway floats in unlabelled space.
   nwhi: [368, 392, 408, 468],
@@ -111,8 +126,10 @@ const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, number]
   // a different rect than the one the coastline was actually fit to would visibly not match
   // the landmass inside it.
   car: [424, 392, 720, 468],
-  // American Samoa (#111), aspect-matched to its 2.1419:1 extent at the tray's own height.
-  sam: [736, 392, 899, 468],
+  // American Samoa (#111), aspect-matched to its 2.3801:1 extent -- measured under
+  // PANEL_PARAMS.sam, not PANEL_PARAMS.pac, and on the rounded points fitPanels reads -- at
+  // the tray's own height.
+  sam: [736, 392, 917, 468],
 };
 
 /** Order and label text for the four insets. `us` never gets a frame -- it is the base map

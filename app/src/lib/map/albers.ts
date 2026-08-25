@@ -1,12 +1,12 @@
 /**
- * Composite Albers USA projection -- five panels, zero dependencies.
+ * Composite Albers USA projection -- seven panels, zero dependencies.
  *
  * Ported from the committed design mockup, `docs/design/mockups/map-network.html` (its
  * inline `<script>`, `albersRaw`/`regionOf`/`PARAMS`/`RECTS`/the per-panel fit loop/`proj`).
  * The mockup shipped three panels (`us`/`ak`/`hi`) and two region tests written in
  * lower-48-centric terms that silently misfile six real, fact-present airports. This module
- * carries the mockup's math across unchanged and adds two panels (`pac`, `car`) plus
- * longitude normalization to fix that. Full measurement and reasoning:
+ * carries the mockup's math across unchanged and adds four panels (`pac`, `nwhi`, `car`,
+ * `sam`) plus longitude normalization to fix that. Full measurement and reasoning:
  * `docs/data/invariants.md` § Airport coordinates, and the six that are east of the
  * antimeridian. Contract: `docs/design/system.md` § The map § Projection.
  */
@@ -63,8 +63,11 @@ export function normalizeLon(lon: number): number {
  *   makes the split provably fit-preserving for the other four panels, not merely observed to
  *   be. They are three panels rather than one because a SINGLE Albers fit cannot carry them:
  *   the Marianas, American Samoa and Midway span roughly 5,000 km, and one panel scaled to
- *   that extent puts Saipan and Tinian -- 18 km apart, and a route carrying 39,908 seats over
- *   the trailing 12 -- 2.73px apart even at the full width of a 960x500 canvas. Measured; the
+ *   that extent puts Saipan and Tinian -- 18 km apart, and an undirected route carrying 78,420
+ *   seats over the trailing 12 -- 2.73px apart even at the full width of a 960x500 canvas. The
+ *   seat figure is `fct_route_month`'s, because the map draws one arc per UNDIRECTED route;
+ *   `fct_segment_month`'s directed halves are 39,908 and 38,512, and quoting either as a route
+ *   total understates the arc by half. Measured; the
  *   arithmetic is in `PANEL_RECTS` below.
  *   - `sam` is American Samoa (PPG, lat -14.3, lon -170.7), the one territory in this dataset
  *     south of the equator. Testing it before `hi` is what keeps the mockup's
@@ -80,8 +83,11 @@ export function normalizeLon(lon: number): number {
  *     produces no fit for it and a page reaching it takes `networkMap.ts`'s subject-derived
  *     fallback, which is the ONLY panel that branch still serves. Folding Midway into `pac`
  *     instead is not a simplification, it is a regression: `pac`'s baked fit is scaled to the
- *     Marianas' own extent, so Midway projects to (1635.6, -207.7) -- off the canvas entirely --
- *     and `/airport/MDY?y=2021` loses its own subject. The gap is stated on the page itself
+ *     Marianas' own extent, so Midway projects to (1367.6, -429.7) -- off the canvas entirely --
+ *     and `/airport/MDY?y=2021` loses its own subject. (That coordinate, and the American Samoa
+ *     one in `PANEL_RECTS`, are counterfactuals under THIS commit's `pac` fit specifically:
+ *     `ox`/`oy` move with the rect, so a figure quoted from an earlier revision of that rect is
+ *     a true statement about a layout that no longer exists. Re-derive, never copy.) The gap is stated on the page itself
  *     (`NetworkMap.tsx`'s caption), never silently drawn wrong.
  * - `car` catches Puerto Rico and the USVI (lat 17.70-18.49, lon -67.15 to -64.71), which sit
  *   east of every conterminous airport (PQI, Maine, -68.05) and 6.86 degrees south of the
@@ -139,16 +145,18 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
   // `th = n * (lon - lam0)` term then rotates it about 13 degrees. A sheared island is a
   // drawing of somewhere else. Southern standard parallels give a negative `n`; the resulting
   // orientation was checked rather than assumed (north maps to smaller screen y, east to
-  // larger x -- `albers.test.ts`).
+  // larger x -- `albers.test.ts`'s "puts a northern point above a southern one" pair is
+  // repeated against THESE parameters, not just the `us` ones, because a negative `n` is
+  // exactly where that could differ).
   sam: { p1: -14.4, p2: -14.2, lam0: -170.7, phi0: -14.3 },
 };
 
 // Canvas 960x500 (mockup's W/H), 16px outer pad. us/ak/hi rects are the mockup's own,
-// unchanged. The other four sit in the bottom inset tray, laid out left to right after ak
-// (36-176) and hi (192-292) with the mockup's own 16px rect-to-rect gutter, every one of them
-// ending on the tray's shared 468 baseline: pac 308-352, nwhi 368-408, car 424-720, sam
-// 736-899. Frames are drawn at rect +/- 6px (`networkMap.ts`), so a 16px gutter leaves 4px
-// between neighbouring frames -- which is what hi and pac have measured today.
+// unchanged. `nwhi` (368-408), `car` (424-720) and `sam` (736-918) sit in the bottom inset
+// tray with ak (36-176) and hi (192-292), left to right, all five ending on the tray's shared
+// 468 baseline with the mockup's own 16px rect-to-rect gutter. Frames are drawn at rect +/- 6px
+// (`networkMap.ts`), so a 16px gutter leaves 4px between neighbouring frames -- which is what
+// hi and nwhi measure. `pac` is the one inset NOT in the tray; see below for why.
 //
 // `car`'s width was widened by M7 Task 7b once real geometry existed to check the original
 // 100x76 square against (Task 4/7's own open item -- there was nothing to measure it
@@ -169,11 +177,34 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
 // because the chain is a ~617 km north-south arc only ~129 km across. The old 100x76
 // placeholder (aspect 1.32:1) bound on height and left the islands a 15.6px-wide sliver.
 //
+// AND THEN IT HAD TO MOVE, which is the part worth reading. A 44x216 rect grown upward from
+// the tray (308,252)-(352,468) is a correct SIZE in the wrong PLACE: its frame lands inside
+// the conterminous panel, whose drawn coastline occupies x[153.3, 806.7] y[18.0, 424.0], and
+// `globals.css`'s `.map svg path[data-panel]` fills every basemap path with OPAQUE
+// `--panel-2`. Draw order in `renderNetworkMap` is frames, then basemap, then arcs -- so the
+// lower 48 paints straight over the frame border and the label. Measured on a 0.1px grid:
+// 3,163 px^2 of drawn landmass inside that rect -- 33.3% of it -- and ALL EIGHT glyph
+// positions of "MARIANAS" (drawn at rect x0-4, y0+6) inside drawn Arizona or New Mexico. Two
+// of the panel's OWN islands (MP rings 0 and 3, 3.91 and 1.20 px^2) sat on top of that land in
+// the identical fill. An inset that is not legible is exactly what `networkMap.ts`'s INSETS
+// comment calls a lie. On a served /airport/SFO it also swallowed ABQ and ELP and was crossed
+// by 27 of 147 arcs that had no business in the Pacific.
+//
+// `fitPanels`'s `k` depends only on a rect's WIDTH and HEIGHT, never its position, so
+// relocating preserved every measured figure verbatim -- TIQ-SPN still 6.232px, GUM-ROP still
+// 31.447px. It went to the top-left margin, which the tray never uses and no lower-48 coastline
+// reaches (`us` land spans x[153.3, 806.7]): frame (34,24)-(90,252), 0 px^2 of drawn land, all
+// eight label glyphs clear, and on a served /airport/SFO exactly one arc crosses it -- SFO-GUM,
+// which terminates inside it and must. `basemap.test.ts` asserts the land property against the
+// real drawn subpaths, per panel, because the earlier frame-vs-frame check iterated the six
+// INSET panels and `us` -- the unframed one that paints the land -- was in neither list.
+//
 // Height, not width, is what this rect is really buying, and the number is forced rather than
 // chosen. `dy` is the chain's latitude span in radians, which no projection parameter can
 // change, so `k` is capped at `h / 0.096983` however wide the rect gets (to bind on width
 // instead you would need `h >= 4.873w`, the same constraint again). Tinian and Saipan are
-// 0.002819 raw units apart -- 18 km, and a route filing 39,908 seats over the trailing 12 --
+// 0.002819 raw units apart -- 18 km, and an undirected route filing 78,420 seats over the
+// trailing 12 (`fct_route_month`; the directed segment halves are 39,908 and 38,512) --
 // so drawing them 6px apart, one node diameter of clear air at r=2, needs k >= 2129 and
 // therefore h >= 206.4px. Hence 44x216 at k=2211: Tinian-Saipan 6.23px, Guam-Rota 31.45px,
 // Guam-Saipan 72.23px, and the islands fill 44.0 x 214.4px of the frame.
@@ -183,12 +214,28 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
 // filling the whole canvas less the 16px pad caps k at 964.7 and leaves Tinian and Saipan
 // 2.73px apart. That is why `sam` is a panel and not a rect change -- see `regionOf`.
 //
-// `sam` is 163x76: the tray's own height, and the width its 2.1419:1 extent asks for so both
-// dimensions bind. Known limitation, stated rather than hidden: Natural Earth's 1:50m Tutuila
-// is 8 vertices, of which RDP keeps 5, so this frame draws roughly 57px of outline per source
-// vertex against the 6-10px `hi` and `car` manage. The shape is coarse at this scale. It is
-// sized for the tray anyway because the frame has to hold PPG's 2px node and its 9px label,
-// and a fidelity-matched box would be about 28x13px -- smaller than the word on top of it.
+// `sam` is 181x76: the tray's own height, and the width its extent asks for so both dimensions
+// bind -- 76 * 2.3801, rounded, exactly the derivation `car`'s 296 uses. TWO THINGS HAVE TO BE
+// RIGHT HERE, and an earlier revision of this line got both wrong.
+//
+// Measure the extent under the PANEL'S OWN PARAMETERS. That line said 2.1419:1, which is
+// American Samoa under `PANEL_PARAMS.pac` -- the sheared projection the `sam` entry above
+// exists to avoid -- and sized the rect to 163px off it, whereupon WIDTH bound alone and
+// Tutuila sat in a 7.5px letterbox under a comment claiming both dimensions bound.
+//
+// And measure it on the same points `fitPanels` actually reads, which are `BASEMAP_FIT_POINTS`
+// -- rounded to 3 decimals by the generator before the fit is taken (see build-basemap.mjs's
+// `round3`). Off the raw 4-decimal committed file the aspect is 2.3884 and the arithmetic says
+// 182; off the rounded points it is 2.3801 and says 181. At 181 height binds at k=42272.46 and
+// the extent fills 180.9 x 76.0, one tenth of a pixel of slack. At 182 the same k leaves 1.1px.
+//
+// Known limitation, stated rather than hidden: Natural Earth's 1:50m Tutuila is 8 vertices, of
+// which RDP keeps 5, so this frame draws about 48.5px of outline per source vertex against the
+// 6-10px `hi` and `car` manage. The shape is coarse at this scale, and visibly so: the drawn
+// outline spans 180.5 x 62.2px inside an extent fitted to 180.9 x 76.0, because the vertex that
+// defined Tutuila's northern edge is one of the three RDP drops. It is sized for the tray
+// anyway because the frame has to hold PPG's 2px node and its 9px label, and a fidelity-matched
+// box would be about 30x13px -- smaller than the word printed on top of it.
 //
 // `nwhi` is 40x76 and has no geometry at all; a single-point subject fit degenerates to
 // `k = min(w, h)` and centres Midway in the frame, which is exactly what it did inside `pac`
@@ -201,10 +248,10 @@ export const PANEL_RECTS: Record<Panel, PanelRect> = {
   us: [26, 18, 934, 424],
   ak: [36, 322, 176, 468],
   hi: [192, 392, 292, 468],
-  pac: [308, 252, 352, 468],
+  pac: [40, 30, 84, 246],
   nwhi: [368, 392, 408, 468],
   car: [424, 392, 720, 468],
-  sam: [736, 392, 899, 468],
+  sam: [736, 392, 917, 468],
 };
 
 const PANEL_ORDER: Panel[] = ["us", "ak", "hi", "pac", "nwhi", "car", "sam"];

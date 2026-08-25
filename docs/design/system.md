@@ -514,10 +514,15 @@ specific panels ever run. The extra panels exist precisely because a two-test sp
   spans 2.3°. **`pac`** is the Marianas — Guam/Rota/Tinian/Saipan and the uninhabited northern
   islands, everything west of the antimeridian (`lon < −200`).
 - **One Albers fit cannot carry all three.** They span roughly 5,000 km, and a fit scaled to that
-  extent puts Tinian and Saipan — 18 km apart, on a route filing 39,908 seats over the trailing
-  12 — **2.73px** apart even in a `pac` rect filling the whole canvas. American Samoa under a
-  Marianas-scaled fit projects to (1006.8, 771.6), off the canvas. This is arithmetic, not a
-  layout preference: see § Basemap coastline.
+  extent puts Tinian and Saipan — 18 km apart, on an **undirected** route filing 78,420 seats over
+  the trailing 12 — **2.73px** apart even in a `pac` rect filling the whole canvas. (That figure is
+  `fct_route_month`'s, because the map draws one arc per undirected route. `fct_segment_month`'s
+  directed halves are 39,908 and 38,512; quoting either as a route total understates the arc by
+  half.) American Samoa, were `regionOf` to send it to `pac`, projects to (1892.5, 1102.0) under
+  the shipped `pac` fit — off the canvas. A counterfactual pixel coordinate like that one is only
+  true of the `pac` rect current when it was taken, since `ox`/`oy` move with the rect; re-derive
+  it rather than carrying it forward. This is arithmetic, not a layout preference: see § Basemap
+  coastline.
 - **`car`** holds Puerto Rico and the USVI, which extend the conterminous bounding box in
   *both* directions at once (east past PQI, Maine, and south of EYW, Key West) — no single
   rectangle holds them and the lower 48 legibly.
@@ -560,16 +565,23 @@ opposite in six places for a milestone on the strength of a comment nobody check
 points, N. Mariana Is. 46 across 6 rings, American Samoa 8. The rule that generalizes: a claim
 that an upstream source *lacks* something is a measurement, and expires like any other.
 
-**Midway is the one gap, and it belongs to the source.** At 1:10m it exists only inside a
-13-ring `U.S. Minor Outlying Is.` feature that also contains **Navassa Island, in the
-Caribbean** — and `build-basemap.mjs` classifies a whole feature by `regionOf` of its first
-ring's first point, so taking Midway that way projects Navassa into the Pacific inset. Midway
+**Midway is the one gap, and the reason is a scope decision, not a missing polygon.** 1:50m
+genuinely has no Midway. At 1:10m it exists, but only inside a 13-ring `U.S. Minor Outlying Is.`
+feature whose other rings include **Navassa Island, in the Caribbean** — and `build-basemap.mjs`
+classifies a whole feature by `regionOf` of its first ring's first point, so taking that feature
+whole projects Navassa into the Pacific inset. A ring-level filter would extract Midway, and this
+repo already hand-filters its inputs at the feature level, so that is the same class of
+operation, not a new one. **What rules it out is that ring indices are not stable across a
+Natural Earth refresh**: a committed input that says "ring 4 of this feature" silently becomes a
+different island when upstream reorders, and this project has already paid once for a fixture
+that stopped exercising what it named (aircraft type 699). Say that, rather than "the source
+does not have it" — the last claim of that shape in this file was false for a milestone. Midway
 therefore has its own panel, `nwhi`, with zero reference points; `networkMap.ts`'s
 subject-derived fit is what renders it, and `nwhi` is now the only panel that branch serves.
 
 **Folding Midway into `pac` instead would be a regression, not a simplification.** `pac`'s baked
-fit is scaled to the Marianas' own extent, so Midway lands at (1635.6, −207.7) — off a 960×500
-canvas — and `/airport/MDY?y=2021` loses its own subject while the page's caption still says
+fit is scaled to the Marianas' own extent, so Midway lands at (1367.6, −429.7) under the shipped
+fit — off a 960×500 canvas — and `/airport/MDY?y=2021` loses its own subject while the caption says
 only the landmass is missing. MDY has exactly one filing in the window (MDY–HNL, HA, 2021-09,
 278 seats), so `/airport/MDY?y=2021` and `/airport/HNL?y=2021` are the two pages this decision
 is about.
@@ -602,17 +614,46 @@ bound on height and left the islands a 15.6px-wide sliver. Height is what the re
 buying, and the number is forced rather than chosen: `dy` is the chain's latitude span in
 radians, which no projection parameter changes, so `k ≤ h / 0.096983` at any width. Drawing
 Tinian and Saipan 6px apart — one node diameter of clear air at r=2 — needs `k ≥ 2129` and
-therefore **h ≥ 206.4px**. Hence **44×216 at k=2211**: Tinian–Saipan 6.23px, Guam–Rota 31.45px,
-Guam–Saipan 72.23px, islands filling 44.0 × 214.4px of the frame. `pac` grew *upward* from the
-tray rather than moving, so the bottom row keeps its shared 468 baseline. **`sam` is 163×76**
-(the tray's height, aspect-matched to its 2.1419:1 extent) and **`nwhi` is 40×76**, with a 16px
-rect-to-rect gutter throughout.
+therefore **h ≥ 206.4px**. Hence **44×216 at k=2211**: Tinian–Saipan 6.232px, Guam–Rota 31.447px,
+Guam–Saipan 72.232px, islands filling 44.0 × 214.4px of the frame.
+
+**And a correct size in the wrong place is still a defect.** Grown upward from the tray, that
+rect's frame lands *inside* the conterminous panel, whose drawn coastline occupies x[153.3,
+806.7] y[18.0, 424.0] — and `globals.css`'s `.map svg path[data-panel]` fills every basemap path
+with **opaque** `--panel-2` while `renderNetworkMap` draws frames *before* the basemap. Measured
+on a 0.1px grid: **3,163 px² of drawn landmass inside that rect — 33.3% of it** — with all eight
+glyph positions of the "MARIANAS" label inside drawn Arizona or New Mexico, two of the panel's
+own islands painted over, ABQ and ELP swallowed on `/airport/SFO`, and 27 of its 147 arcs
+crossing the box, across 25 served views. `fitPanels`'s `k` depends only on a rect's **width and
+height, never its position**, so relocating to the top-left margin — frame (34,24)–(90,252),
+which no lower-48 coastline reaches, since `us` land spans x[153.3, 806.7] — preserved every
+figure above verbatim. There it measures **0 px² of land**, every label glyph clear, and exactly
+one arc crossing on `/airport/SFO`: SFO–GUM, which terminates inside the panel and must enter it.
+`pac` is therefore the one inset outside the bottom tray; the other five keep the shared 468
+baseline. **`sam` is 181×76** and **`nwhi` is 40×76**.
+
+**A panel's aspect is measured under that panel's own parameters, and on the points `fitPanels`
+actually reads.** Both halves bite. American Samoa's extent under `PANEL_PARAMS.pac` — the
+sheared projection `sam` exists to avoid — is a different number from its extent under
+`PANEL_PARAMS.sam`, and sizing a rect from the wrong one makes one dimension bind alone and
+letterboxes the island under a comment claiming otherwise. And `fitPanels` reads
+`BASEMAP_FIT_POINTS`, which the generator rounds to 3 decimals before taking the fit, so the raw
+4-decimal committed file is not the right measurement either: the aspect is **2.3801:1** rounded
+and 2.3884:1 raw, giving a width of 76 × 2.3801 ≈ **181** rather than 182 — 0.1px of slack
+against 1.1. Height binds at k=42272.46 with the extent filling 180.9 × 76.0.
 
 *Known limitation, stated rather than hidden:* Natural Earth's 1:50m Tutuila is 8 vertices, of
-which RDP keeps 5, so `sam` draws roughly 57px of outline per source vertex against the 6–10px
-`hi` and `car` manage. The shape is coarse at this scale. It is sized for the tray anyway
-because the frame has to hold PPG's 2px node and its 9px label; a fidelity-matched box would be
-about 28×13px, narrower than the word printed on top of it.
+which RDP keeps 5, so `sam` draws about 48.5px of outline per source vertex against the 6–10px
+`hi` and `car` manage. The shape is coarse at this scale, and visibly: the drawn outline spans
+180.5 × 62.2px inside an extent fitted to 180.9 × 76.0, because one of the three RDP drops is the
+vertex defining Tutuila's northern edge. It is sized for the tray anyway because the frame has to
+hold PPG's 2px node and its 9px label; a fidelity-matched box would be about 30×13px, narrower
+than the word printed on top of it.
+
+**`car` has the same defect, at 1,396 px² over drawn Florida and Texas — 6.2% of its rect,
+against `pac`'s 33.3%.** It shipped in M7 Task 7b and is not fixed here. It is recorded
+because `basemap.test.ts` asserts every other inset frame is clear of drawn land, and a test that
+simply omitted `car` would read as though the property held everywhere.
 
 **The generated paths carry no presentation attributes, so the paint is a stylesheet rule and
 must stay one.** `basemapPaths.generated.ts` emits geometry alone — `<path data-panel="us"

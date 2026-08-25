@@ -38,11 +38,18 @@
  *   rings) and American Samoa (8 points) are all in the very file `ne_50m_car.json` was cut
  *   from. The claim was never checked; it is now, and the check is the committed file.
  *
- *   MIDWAY genuinely is absent, and is the one gap left: at 1:10m it exists only inside a
- *   13-ring `U.S. Minor Outlying Is.` feature that also contains Navassa Island in the
- *   CARIBBEAN. `main()` below classifies a WHOLE feature by `regionOf` of its first ring's
- *   first point, so taking Midway that way would project Navassa into the Pacific inset --
- *   ring-level selection inside a committed input is a different design, not this one. Midway
+ *   MIDWAY is the one gap left, and the honest reason is SCOPE, not absence. 1:50m genuinely
+ *   has no Midway. 1:10m does, but only inside a 13-ring `U.S. Minor Outlying Is.` feature
+ *   whose other rings include Navassa Island in the CARIBBEAN, and `main()` below classifies a
+ *   WHOLE feature by `regionOf` of its first ring's first point -- so taking that feature whole
+ *   would project Navassa into the Pacific inset. A ring-level filter WOULD extract Midway, and
+ *   these inputs are already hand-filtered artifacts (`ne_50m_pac.json`'s `_source` records a
+ *   `NAME in (...)` predicate), so that is the same class of operation rather than a new one.
+ *   What rules it out is that RING INDICES ARE NOT STABLE across a Natural Earth refresh: a
+ *   committed input meaning "ring 4 of this feature" silently becomes a different island when
+ *   upstream reorders, and this repo has already paid for a fixture that stopped exercising
+ *   what it named. Given the header directly above this one was wrong for a milestone about
+ *   what the source contains, the distinction is worth spelling out. Midway
  *   therefore has its own panel (`nwhi`) with no reference points at all, keeps `project()`'s
  *   subject-derived fallback, and the gap is disclosed on the page itself
  *   (`app/src/components/NetworkMap.tsx`'s `nwhi`-empty caption) and in

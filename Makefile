@@ -120,7 +120,7 @@ check-gate-counts:  ## Fail if the committed gate counts no longer match the sui
 	       echo "       in the SAME commit as the test that moved it."; exit 1; }
 	@echo "  gate counts match ... ok"
 
-basemap:  ## Regenerate the pre-projected basemap (app/src/lib/map/basemapPaths.generated.ts) from the two committed inputs, app/geo/ne_110m_us.json and app/geo/ne_50m_car.json
+basemap:  ## Regenerate the pre-projected basemap (app/src/lib/map/basemapPaths.generated.ts) from the three committed inputs: app/geo/ne_110m_us.json, app/geo/ne_50m_car.json and app/geo/ne_50m_pac.json
 	$(MISE) node --no-warnings app/scripts/build-basemap.mjs
 
 card-fonts:  ## Regenerate the OG card fonts module (app/src/lib/og/fonts.generated.ts) from the committed app/src/lib/og/fonts/*.ttf sources

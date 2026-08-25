@@ -914,7 +914,8 @@ check     "airport map: the network SVG is in the served HTML" "$BODY" \
 check_dataset check_re "airport map: exactly 273 polylines (same-airport arc excluded)" \
   "$(count "$BODY" '<polyline')" '^273$'
 # An inset label -- ORD's own network reaches ak/hi/car (measured against this served build;
-# see the `pac` absence below), each drawn as a labelled `<rect>`+`<text>` frame (INSETS,
+# no ORD route touches a Pacific panel, which is why section 10b uses GUM), each drawn as a
+# labelled `<rect>`+`<text>` frame (INSETS,
 # networkMap.ts). Plain "ALASKA", not the bare `>ALASKA<` M5-style checks use elsewhere in this
 # file: the RSC payload escapes this SVG string's `>`/`<` to `>`/`<` (see the polyline
 # comment just above) but NOT the plain word between them, so the bracketed form appears once
@@ -926,8 +927,8 @@ check     "airport map: an inset is labelled (ALASKA)" "$BODY" 'ALASKA'
 # insets, window line and cache pair reach the served bytes, but NONE of them proves the
 # COASTLINE does -- the one output produced by a committed GENERATED module
 # (basemapPaths.generated.ts) rather than by code under test. A collapsed or empty basemap
-# renders a map with no landmass, which is visually IDENTICAL to the legitimately-empty `pac`
-# panel (docs/design/system.md § The map) -- so this is the map's own analogue of the
+# renders a map with no landmass, which is visually IDENTICAL to the legitimately-empty `nwhi`
+# (Midway) panel (docs/design/system.md § The map) -- so this is the map's own analogue of the
 # aircraft-mix chart's ramp-fill checks, and the one thing this section was missing.
 # `data-panel="us"` is the attribute `build-basemap.mjs` stamps on every `<path>` it emits
 # (basemapPathsFor's own docstring); ORD's network reaches `us` on every build (it IS the
@@ -1013,7 +1014,7 @@ check_dataset check     "airport map HNL 2021: the Midway gap is disclosed on th
   'The Midway inset has no coastline under its arcs'
 # And the page that would have LOST ITS OWN SUBJECT. Baking a `pac` fit takes `pac` off
 # networkMap.ts's subject-derived fallback; folding Midway in with it would project MDY to
-# (1635.6, -207.7), off a 960x500 canvas, so /airport/MDY?y=2021's origin disc would simply not
+# (1367.6, -429.7), off a 960x500 canvas, so /airport/MDY?y=2021's origin disc would simply not
 # be drawn while the caption still said only the landmass was missing. The origin disc is
 # r="4.5" (networkMap.ts) and its cx/cy are asserted EXACTLY: a presence check on `<circle`
 # passes under that bug, since the destination dot is still emitted.

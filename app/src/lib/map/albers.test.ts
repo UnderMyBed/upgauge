@@ -28,16 +28,17 @@ describe("regionOf", () => {
     // spans 2.3.
     //
     // `not pac` is #111's: `pac`'s fit is baked to Guam + the Northern Marianas, whose extent
-    // is ~5,000 km away, so a PPG that falls into `pac` projects to (1006.8, 771.6) -- off a
-    // 960x500 canvas. Measured before the split, against the same committed geometry this
-    // file's other tests read.
+    // is ~5,000 km away, so a PPG that falls into `pac` projects to (1892.5, 1102.0) -- off a
+    // 960x500 canvas. Counterfactual under THIS commit's `pac` fit: `ox`/`oy` move with the
+    // rect, so re-derive rather than copying a figure from an earlier revision of it.
     expect(regionOf(-14.3, -170.7)).toBe("sam");
   });
   it("puts Midway in its own panel, not Hawaii and not the Marianas", () => {
     // Same shape as American Samoa above, at the other end. Midway (MDY, 28.2 / -177.4) is
     // 28.2 degrees north, so the mockup's Hawaii test catches it too; and folding it into
     // `pac` -- which is what happened before #111 gave `pac` real geometry -- projects it to
-    // (1635.6, -207.7), taking `/airport/MDY?y=2021`'s own subject off the canvas.
+    // (1367.6, -429.7) under this commit's `pac` fit, taking `/airport/MDY?y=2021`'s own
+    // subject off the canvas.
     expect(regionOf(28.2, -177.4)).toBe("nwhi");
   });
   it("keeps the Hawaiian islands together", () => {
@@ -57,6 +58,22 @@ describe("regionOf", () => {
 });
 
 describe("albersRaw", () => {
+  it("keeps north up and east right under SOUTHERN standard parallels", () => {
+    // `PANEL_PARAMS.sam` is the only panel whose standard parallels are negative, which makes
+    // `n = (sin(p1) + sin(p2)) / 2` negative and flips the sign of both `rho` and the `y`
+    // negation's operand. The behaviour is correct, but the two tests below only ever exercise
+    // `PANEL_PARAMS.us` -- so before this, `albers.ts`'s own comment cited this file for a
+    // check that did not exist. Tutuila spans lat -14.36 to -14.26 and lon -170.82 to -170.57;
+    // a mirrored panel would draw American Samoa upside down or back to front and every
+    // presence-based assertion in the suite would stay green.
+    const north = albersRaw(-14.2574, -170.6892, PANEL_PARAMS.sam);
+    const south = albersRaw(-14.3598, -170.6892, PANEL_PARAMS.sam);
+    expect(north[1]).toBeLessThan(south[1]);
+    const west = albersRaw(-14.3, -170.8205, PANEL_PARAMS.sam);
+    const east = albersRaw(-14.3, -170.5681, PANEL_PARAMS.sam);
+    expect(west[0]).toBeLessThan(east[0]);
+  });
+
   it("puts a northern point above a southern one on screen", () => {
     // Catches: removing the y negation. Raw Albers grows northward while screen y
     // grows down, so an un-negated y renders the country upside down. Asserting
@@ -124,11 +141,16 @@ describe("PANEL_RECTS", () => {
   });
 
   it("keeps the bottom inset tray on one baseline", () => {
-    // The tray's shared bottom edge. `pac` grew UPWARD in #111 rather than moving, precisely
-    // so this stayed true -- a taller panel that also dropped its baseline would leave the
-    // row visibly ragged, and nothing else in this file would notice.
-    for (const panel of ["ak", "hi", "pac", "nwhi", "car", "sam"] as const) {
+    // The tray's shared bottom edge, and it is a claim about the TRAY -- five panels, not six.
+    // `pac` is deliberately not one of them: at 216px tall it cannot sit in a 76px tray, and
+    // the only place a rect that tall clears the opaque lower-48 landmass is the top-left
+    // margin (see PANEL_RECTS' own comment, and basemap.test.ts's frame-vs-land test). An
+    // earlier revision of this test listed `pac` here and passed only because the rect happened
+    // to end at 468 while starting 140px above the tray -- a ragged row the assertion could not
+    // see. Naming the tray explicitly is what keeps it honest.
+    for (const panel of ["ak", "hi", "nwhi", "car", "sam"] as const) {
       expect(`${panel}: ${PANEL_RECTS[panel][3]}`).toBe(`${panel}: 468`);
     }
+    expect(PANEL_RECTS.pac[3]).toBeLessThan(392);
   });
 });

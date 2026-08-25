@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { renderNetworkMap, type NetworkMapInput } from "./networkMap";
+import { INSET_RECTS, renderNetworkMap, type NetworkMapInput } from "./networkMap";
+import { PANEL_RECTS } from "./albers";
 import type { ArcDatum } from "./arcs";
 
 /** Real coordinates throughout, per this task's brief -- a synthetic grid would make the
@@ -212,9 +213,30 @@ describe("renderNetworkMap", () => {
   });
 
   it("does not emit an inset frame for a panel with no points", () => {
+    // EVERY inset label, not a sample. #111 renamed `pac`'s from "PACIFIC" to "MARIANAS" and
+    // left this assertion naming the old string, which made it unreachable for any input --
+    // `grep -c PACIFIC networkMap.ts` returns 0 -- so this test proved only its `hi` half.
+    // Demonstrated rather than argued: making the inset loop draw `pac` unconditionally leaves
+    // the old `not.toContain("PACIFIC")` GREEN and reddens the list below. Any future label
+    // rename must break this test, so the literals are spelled out rather than paraphrased.
     const svg = renderNetworkMap(conterminousOnlyFixture());
     expect(svg).not.toContain("HAWAI");
-    expect(svg).not.toContain("PACIFIC");
+    expect(svg).not.toContain("MARIANAS");
+    expect(svg).not.toContain("MIDWAY");
+    expect(svg).not.toContain("AMERICAN SAMOA");
+    expect(svg).not.toContain("CARIBBEAN");
+    expect(svg).not.toContain("ALASKA");
+  });
+
+  it("draws its frames to the same rects albers.ts fits the panels into", () => {
+    // INSET_RECTS is a hand-copy of PANEL_RECTS that no test guarded, because PANEL_RECTS was
+    // unexported. #111 exported it (to assert airports land inside their own panel) and then
+    // edited BOTH tables by hand -- the exact operation the missing gate existed to catch, and
+    // it caught a real one-sided edit during this task's own mutant run. A frame drawn to a
+    // different rect than the one the coastline was fit to would visibly not match the landmass
+    // inside it, and nothing else in this suite looks at absolute frame position.
+    const { us: _us, ...insetPanels } = PANEL_RECTS;
+    expect(INSET_RECTS).toEqual(insetPanels);
   });
 
   it("labels every inset it does draw", () => {

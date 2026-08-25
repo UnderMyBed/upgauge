@@ -600,9 +600,13 @@ reason — the fallback branch catches whatever the two explicit tests miss:
   both, giving a "Hawai'i" population spanning 42° of latitude when Hawai'i itself spans 2.3°.
   Pulling them out of Hawai'i is necessary and **not sufficient**: a single Pacific panel holding
   the Marianas, American Samoa and Midway spans roughly 5,000 km, so a fit scaled to that extent
-  puts Tinian and Saipan — 18 km apart, on a route filing 39,908 seats over the trailing 12 —
-  **2.73px** apart even at full canvas width, and a fit scaled to the Marianas alone throws PPG
-  to (1006.8, 771.6) and MDY to (1635.6, −207.7), both off a 960×500 canvas. Three panels, not
+  puts Tinian and Saipan — 18 km apart, on an **undirected** route filing 78,420 seats over the
+  trailing 12 (`fct_route_month`, since a map draws one arc per undirected route;
+  `fct_segment_month`'s directed halves are 39,908 and 38,512) — **2.73px** apart even at full
+  canvas width. Conversely, under the shipped Marianas-scaled `pac` fit, PPG would land at
+  (1892.5, 1102.0) and MDY at (1367.6, −429.7), both off a 960×500 canvas. Those two are
+  counterfactuals under one specific rect: `fitPanels`'s `ox`/`oy` move with it, so re-derive
+  them rather than carrying them forward. Three panels, not
   one: `pac` (west of the antimeridian, `lon < −200`), `sam` (`lat < 0`) and `nwhi` (Midway).
   Their union is exactly the one `lat < 30 AND lon < −160` test they replace, which is what makes
   the split unable to move a point into or out of any other panel. Encoding and rects:
