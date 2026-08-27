@@ -27,7 +27,7 @@ import { presetSlugFromPath } from "@/lib/watch";
  * and percent-encoding is its own escape mechanism, so it is exempt from the spelling rule too:
  * `docs/architecture/hosting.md` § "What this does not close" has that residual and the
  * rate-limit thresholds it is left to -- which cover `/explore` as well as `/api/` only since
- * #83, and the three entity prefixes only since #113; before #83, this sentence deferred to an
+ * #83, and all four entity prefixes only since #113; before #83, this sentence deferred to an
  * edge rule that did not match this page.
  *
  * Measured on a served build at 4aa8087, before this file existed: every cacheable path accepted

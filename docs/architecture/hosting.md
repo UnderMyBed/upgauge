@@ -1944,8 +1944,8 @@ it are easy to get wrong and both matter here:
   the route count alone answers a different question and understates the coverage. `robots.ts`
   disallows only `/search` and `/api/`, and calls the entity families "the crawl graph this
   milestone exists to open up" — so the published crawl surface and the rate-limited surface are
-  now very nearly the same set. #113 brought 1,271 entity URLs inside the rule; #117 brings the
-  route family, and the route family is the site. A well-behaved crawler fetching faster than
+  now very nearly the same set. #113 brought the airport, carrier and aircraft families inside the
+  rule; #117 brings the route family, and the route family is the site. A well-behaved crawler fetching faster than
   1 req/s per colo now gets 429s on the graph we publish for it. That is ACCEPTED here, not
   measured as harmful — no crawler has been observed tripping it, and no threshold change is
   justified until someone measures a real crawler's rate against this zone. Tracked as **#126**,
