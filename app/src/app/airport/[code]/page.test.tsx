@@ -221,6 +221,34 @@ describe("/airport/<code>", () => {
   });
 });
 
+// #114, at the page. The unit tests prove the producer counts and the renderer states; this
+// proves the served page mounts the map that carries it.
+describe("/airport/<code> whose whole network is one quarantined route pair", () => {
+  // Kantishna (A18) has exactly one filing in the trailing 12 and it is quarantined
+  // `zero_seats`, having PERFORMED a departure. Before #114 this page drew that pair as an arc
+  // reading 0 seats and 0 departures -- dotted and muted, "barely flown" -- which is a claim the
+  // data cannot support. A18 is sitemap-listed (`sitemap.test.ts` pins it as one of four
+  // airports resolving ONLY because quarantined rows are counted), so this is a live page.
+  it("renders the map and its disclosure rather than dropping the section", async () => {
+    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "A18" }) }));
+    // The map is mounted at all -- a gate on `arcs.length` would take the whole section, and
+    // with it the only thing on this page saying anything was filed.
+    expect(container.querySelector("svg[role='img']")).not.toBeNull();
+    expect(container.querySelectorAll("polyline").length).toBe(0);
+    expect(container.querySelector('[data-testid="network-notes"]')!.textContent).toContain(
+      "1 quarantined route not drawn — failed an invariant, never clamped.",
+    );
+  });
+
+  it("does not draw an arc claiming the pair carried nothing", async () => {
+    // The defect stated as an absence. `LMA` is A18's only far endpoint in this window; a
+    // destination label for it means the fabricated arc is back.
+    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "A18" }) }));
+    const svg = container.querySelector("svg[role='img']")!;
+    expect(svg.textContent).not.toContain("LMA");
+  });
+});
+
 describe("/airport/<code> with nothing in the trailing 12 months", () => {
   // ISN, Sloulin Field International (airport_id 12389): 515 fact rows over 58 months,
   // 2015-01 to 2019-10, and nothing since (measured). Every airport that RESOLVES has some

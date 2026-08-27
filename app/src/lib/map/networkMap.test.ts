@@ -149,6 +149,13 @@ function fixtureIncludingSelfArc(originCode: string): NetworkMapInput {
   };
 }
 
+/** The map's accessible name, read off the rendered attribute rather than rebuilt from the
+ * input -- the same reason `SegmentMap.test.tsx` has one. Reconstructing the expected label in
+ * the test would assert the test's own idea of the wording, not the renderer's. */
+function ariaLabelOf(svg: string): string {
+  return /aria-label="([^"]*)"/.exec(svg)![1];
+}
+
 function fixtureArcCount(): number {
   return SELF_ARC_FIXTURE_ARC_COUNT;
 }
@@ -242,6 +249,99 @@ describe("renderNetworkMap", () => {
       "73,082 same-airport seats excluded from the arcs above, included in this total.",
     );
     expect(svg).not.toContain("route counts");
+  });
+
+  // ---- #114: quarantine-only route pairs -------------------------------------------------
+
+  it("states quarantined routes in the accessible name, with a count and a reason", () => {
+    // Catches: adding `quarantinedRoutes` to the interface and the producer, and never wiring
+    // it into what the map SAYS -- which is the whole point of the field. The full sentence,
+    // not a substring: the count alone is not a disclosure, and "never clamped" is load-bearing
+    // (the alternative to quarantining a load_factor > 1.0 row is clamping it, which this
+    // project refuses).
+    const svg = renderNetworkMap({ ...fixture(), quarantinedRoutes: 3 });
+    expect(ariaLabelOf(svg)).toContain(
+      "3 quarantined routes not drawn — failed an invariant, never clamped.",
+    );
+  });
+
+  it("pluralizes the quarantine sentence at exactly one route", () => {
+    // The count that actually ships. Every one of the 19 affected airports reports 1 over the
+    // trailing 12 except AET, which reports 2 -- so a hard-coded plural is wrong on 18 of 19
+    // live pages, and the fixture that would catch it is the COMMON case, not the exotic one.
+    const svg = renderNetworkMap({ ...fixture(), quarantinedRoutes: 1 });
+    expect(ariaLabelOf(svg)).toContain("1 quarantined route not drawn");
+    expect(ariaLabelOf(svg)).not.toContain("1 quarantined routes");
+  });
+
+  it("puts the quarantine clause BEFORE the same-airport clause", () => {
+    // AN ORDERING PROPERTY, ASSERTED AS AN ORDERING -- and that distinction is the test, not a
+    // detail of it. Both sentences are present under EITHER arrangement, so an assertion that
+    // the label contains both passes when they are swapped; only their relative POSITION
+    // distinguishes correct from buggy. This is the shape CLAUDE.md records M4c paying for four
+    // times, most exactly in the stack-order case where six correct fills were emitted in the
+    // wrong sequence and a fill-set assertion could not see it.
+    //
+    // The order itself is not arbitrary: it is `disclosureNotes`'s, so the point-to-point map
+    // and the hub map state the same two facts in the same sequence.
+    const label = ariaLabelOf(
+      renderNetworkMap({ ...fixture(), quarantinedRoutes: 2, sameAirportSeats: 5_000 }),
+    );
+    const quarantine = label.indexOf("2 quarantined routes not drawn");
+    const sameAirport = label.indexOf("5,000 same-airport seats");
+    expect(quarantine).toBeGreaterThan(-1);
+    expect(sameAirport).toBeGreaterThan(-1);
+    expect(quarantine).toBeLessThan(sameAirport);
+  });
+
+  it("says nothing about quarantine when there is none", () => {
+    // Catches `routes > 0` written as `routes !== undefined` or `>= 0`, either of which paints
+    // "0 quarantined routes not drawn" onto the ~1,000 airport pages that have nothing to
+    // disclose. `quarantin` as the stem, so a mutant that emitted the sentence with a zero in
+    // it cannot slip past a needle that only looked for the plural noun.
+    expect(ariaLabelOf(renderNetworkMap({ ...fixture(), quarantinedRoutes: 0 }))).not.toContain(
+      "quarantin",
+    );
+  });
+
+  it("renders an absent quarantinedRoutes byte-identically to an explicit zero", () => {
+    // THE GOLDEN'S SAFETY PROPERTY, stated directly rather than inferred from the golden test
+    // passing. `quarantinedRoutes` is OPTIONAL so that `networkGolden.fixture.ts` -- #104's
+    // byte-identity guard, which this unit must not edit -- keeps typechecking and keeps
+    // rendering the same bytes. "Absent" and "nothing to disclose" must therefore be the same
+    // answer all the way down to the markup, not merely the same sentence.
+    const absent = fixture();
+    const explicit = { ...fixture(), quarantinedRoutes: 0 };
+    expect(renderNetworkMap(absent)).toBe(renderNetworkMap(explicit));
+  });
+
+  it("keeps the quarantine sentence OFF the painted map face", () => {
+    // Deliberate, measured, and the opposite of the same-airport note two tests up. The hub
+    // map's footer is ONE line against a ~158-character budget; window + sameAirportNote
+    // already reach 121 at a 7-digit seat count, and this sentence is 69 more, so joining it
+    // there clips at the frame edge with NOTHING in the markup recording that it happened.
+    // `NetworkMap.tsx` renders it as HTML beneath the map instead, where text wraps -- and
+    // `NetworkMap.test.tsx` binds that block to the same one owner, so this exclusion cannot
+    // become a silent omission.
+    const svg = renderNetworkMap({ ...fixture(), quarantinedRoutes: 3 });
+    const visible = svg.replace(/aria-label="[^"]*"/, "");
+    expect(visible).not.toContain("quarantin");
+  });
+
+  it("still draws the origin disc for a network whose every pair was quarantined", () => {
+    // /airport/A18, /airport/JZM and /airport/OQZ over the trailing 12: nothing drawable and
+    // something real to say. The map must still render -- a subject disc, its label, and the
+    // disclosure -- because the alternative leaves no trace on the page that anything was filed.
+    const svg = renderNetworkMap({
+      origin: originArc("ORD"),
+      arcs: [],
+      window: "2025-06 → 2026-05",
+      sameAirportSeats: 0,
+      quarantinedRoutes: 1,
+    });
+    expect(svg).not.toContain("<polyline");
+    expect(svg).toContain('fill="var(--field)" stroke="var(--signal)"');
+    expect(ariaLabelOf(svg)).toContain("1 quarantined route not drawn");
   });
 
   it("does not emit an inset frame for a panel with no points", () => {

@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { NetworkMap } from "@/components/NetworkMap";
-import type { NetworkMapInput } from "@/lib/map/networkMap";
+import { networkDisclosureNotes, type NetworkMapInput } from "@/lib/map/networkMap";
 import type { ArcDatum } from "@/lib/map/arcs";
 
 const COORDS = {
@@ -183,6 +183,83 @@ describe("NetworkMap", () => {
     const [x, y] = [Number(nodes[0][1]), Number(nodes[0][2])];
     expect(`(${x}, ${y}) on canvas: ${x >= 0 && x <= 960 && y >= 0 && y <= 500}`).toBe(
       `(${x}, ${y}) on canvas: true`,
+    );
+  });
+
+  // ---- #114: the disclosure a sighted reader can actually see ------------------------------
+
+  /** Bettles' shape over the trailing 12: real destinations plus one route pair whose every
+   *  filing was quarantined (BTT-UMT), which is counted and not drawn. */
+  function quarantinedNetwork(): NetworkMapInput {
+    return { ...conterminousNetwork(), quarantinedRoutes: 1 };
+  }
+
+  it("renders the disclosure as visible HTML, not only inside the aria-label", () => {
+    // THE INVERSION THIS BLOCK EXISTS TO PREVENT, and it has shipped in this repo before: the
+    // sentence reaches the `aria-label` from `describeMap` whether or not this component does
+    // anything, so a component that omits the notes block is MORE honest to a screen reader
+    // than to the person looking at the map. Twelve real views shipped that way on the
+    // point-to-point map (SegmentMap.tsx's header carries the measurement).
+    //
+    // Asserted on the notes container specifically, with the aria-label stripped from the
+    // haystack -- a `container.textContent` check would be satisfied by the accessible
+    // description alone and could never fail for the reason this test exists.
+    const { container } = render(<NetworkMap network={quarantinedNetwork()} />);
+    const notes = container.querySelector('[data-testid="network-notes"]');
+    expect(notes).not.toBeNull();
+    expect(notes!.textContent).toContain(
+      "1 quarantined route not drawn — failed an invariant, never clamped.",
+    );
+  });
+
+  it("renders the notes verbatim from their one owner, never a sentence composed here", () => {
+    // THE BINDING ASSERTION, the shape SegmentMap.test.tsx already uses. The copy has ONE owner
+    // (`quarantinedNote`, shared with the point-to-point map since #114); a component that
+    // rebuilt the sentence from `quarantinedRoutes` would drift from the map it is supposed to
+    // agree with, and "N routes withheld" reads as a cap rather than as a data-quality refusal.
+    // Measured precedent: a hand-rolled sentence on 8V x 035 read "14 smaller routes are not
+    // drawn" about 14 routes that were quarantined, not smaller.
+    const network = quarantinedNetwork();
+    const { container } = render(<NetworkMap network={network} />);
+    const rendered = [...container.querySelectorAll('[data-testid="network-notes"] p')].map(
+      (n) => n.textContent,
+    );
+    expect(rendered).toEqual(networkDisclosureNotes(network));
+    expect(rendered).toHaveLength(1);
+  });
+
+  it("puts the same sentence in the accessible name and in the visible text", () => {
+    // The two renderings come from two separate calls -- `renderNetworkMap` builds the label,
+    // this component builds the block -- so nothing structural stops them disagreeing. Binding
+    // them here is what keeps the map from telling two readers two different things.
+    const network = quarantinedNetwork();
+    const { container } = render(<NetworkMap network={network} />);
+    const label = container.querySelector("svg")!.getAttribute("aria-label")!;
+    expect(label).toContain(networkDisclosureNotes(network).join(" "));
+  });
+
+  it("renders no notes container at all when there is nothing to disclose", () => {
+    // `.foot` carries a border-top, so an unconditional container draws a hairline rule under
+    // every one of the ~1,000 airport maps that have nothing to say.
+    const { container } = render(<NetworkMap network={conterminousNetwork()} />);
+    expect(container.querySelector('[data-testid="network-notes"]')).toBeNull();
+  });
+
+  it("discloses even when the network has no drawable arc at all", () => {
+    // /airport/A18: nothing to draw, something to say. Gating the notes on the arcs -- the
+    // obvious "no arcs, nothing to show" shortcut -- deletes the only thing on the page saying
+    // anything was filed, on precisely the pages where it is the only thing there is.
+    const empty: NetworkMapInput = {
+      origin: { code: "ORD", ...COORDS.ORD, seats: 0, departures: 0, loadFactor: null },
+      arcs: [],
+      window: "2025-06 → 2026-05",
+      sameAirportSeats: 0,
+      quarantinedRoutes: 1,
+    };
+    const { container } = render(<NetworkMap network={empty} />);
+    expect(container.querySelectorAll("polyline").length).toBe(0);
+    expect(container.querySelector('[data-testid="network-notes"]')!.textContent).toContain(
+      "1 quarantined route not drawn",
     );
   });
 
