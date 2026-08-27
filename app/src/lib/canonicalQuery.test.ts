@@ -41,6 +41,62 @@ describe("canonicalize", () => {
     expect(canonicalize("/airport/ORD", "y=2019")).toEqual({ kind: "clean" });
   });
 
+  // #106. `/carrier/:code` and `/aircraft/:name` stopped being `NO_KEYS` rows: each reads ONE
+  // map-filter key. This file decides only the KEY set -- whether `B737-8` names anything is a
+  // fact about the warehouse, which is why `lib/map/mapFilter.ts` owns the VALUE and this module
+  // still inspects none.
+  it.each([
+    ["/carrier/DL", "type=B737-8"],
+    ["/aircraft/B737-8", "carrier=DL"],
+    // The value is never inspected here, so a value naming nothing is still a canonical KEY set.
+    // It is refused by `mapFilter.ts` and answered `no-store` by proxy.ts -- not redirected.
+    ["/carrier/DL", "type=NOPE-1"],
+    ["/aircraft/B737-8", "carrier=%44L"],
+  ])("leaves %s's own filter key alone: %s", (pathname, rawQuery) => {
+    expect(canonicalize(pathname, rawQuery)).toEqual({ kind: "clean" });
+  });
+
+  it.each([
+    ["/carrier/DL", "carrier=DL", "/carrier/DL"],
+    ["/aircraft/B737-8", "type=B737-8", "/aircraft/B737-8"],
+  ])("strips %s's SIBLING's key, which it does not read: %s", (pathname, rawQuery, location) => {
+    // The two keys are not interchangeable and each row declares only its own. A shared key set
+    // across both rows would make `/carrier/DL?carrier=DL` a cacheable 200 for a key the page
+    // never reads -- one more distinct CDN entry per spelling.
+    expect(canonicalize(pathname, rawQuery)).toEqual({ kind: "strip", location });
+  });
+
+  it.each([
+    ["/carrier/DL", "type=B737-8&type=A320-1-2"],
+    ["/aircraft/B737-8", "carrier=DL&carrier=AA"],
+  ])("rejects a duplicated filter key on %s rather than choosing one", (pathname, rawQuery) => {
+    // Neither key is repeatable: two types is a DIFFERENT map, not a second spelling of one, so
+    // there is no canonical form to redirect to -- choosing an occurrence renders a query the
+    // URL does not encode. `no-store`, no redirect, exactly as a duplicated `d` on /explore.
+    const verdict = canonicalize(pathname, rawQuery);
+    expect(verdict.kind).toBe("reject");
+  });
+
+  it("keeps the filter while stripping a tracking param beside it", () => {
+    // The rejoin is byte-for-byte in the ORIGINAL order, so the surviving key keeps its exact
+    // spelling -- this is what makes the 307 target itself clean rather than a second redirect.
+    expect(canonicalize("/carrier/DL", "utm_source=x&type=B737-8")).toEqual({
+      kind: "strip",
+      location: "/carrier/DL?type=B737-8",
+    });
+  });
+
+  it("sends a doubled-'?' filter to the same URL its single-'?' spelling reaches", () => {
+    // `GET /carrier/DL??type=x`: proxy.ts's non-global `.replace(/^\?/, "")` strips one `?` of
+    // two and hands this module `?type=x`. Rule 0 drops the run, and the strip lands on the URL
+    // the single-`?` form is already clean at. Uncovered by any check in this repo before #106
+    // -- `app/smoke.sh`'s section-15 loop now carries this row against a served build.
+    expect(canonicalize("/carrier/DL", "?type=B737-8")).toEqual({
+      kind: "strip",
+      location: "/carrier/DL?type=B737-8",
+    });
+  });
+
   it("collapses a whole run of leading '?'s to the same canonical URL", () => {
     // `/airport/ORD???y=2019` -- `search` "???y=2019", one `?` stripped by proxy.ts, "??y=2019"
     // arrives here. Stripping ONE `?` per pass would send this to `/airport/ORD` (key "?y" is in
@@ -346,7 +402,9 @@ describe("QUERY_ROWS", () => {
   it("has exactly one row per proxy matcher entry", () => {
     // The third list that must agree with config.matcher -- and with THAT list only. This comment
     // used to name ENTITY_ROUTES as well, which the assertion below does not check and could not:
-    // QUERY_ROWS (one row per matcher entry) is a strict superset of ENTITY_ROUTES (3), so
+    // QUERY_ROWS (one row per matcher entry) is a strict superset of ENTITY_ROUTES (1 row since
+    // #106 -- `/route/:pair` alone; the other three entity pages each grew a second cacheability
+    // input and moved to their own proxy branch), so
     // row-for-row agreement with the latter is not a property that holds. docs/architecture/
     // hosting.md § "One canonical key set per cacheable URL" states the same thing. A row missing
     // here ships a path with no query protection; a matcher entry missing ships a page with no

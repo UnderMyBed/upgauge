@@ -19,13 +19,14 @@ import { BY_AIRCRAFT_TYPE, type MixDimension } from "@/lib/chart/aircraftMix";
  * reader how to read the thing next to it. Defaulted, so `/explore`, `/route`, `/airport` and
  * `/carrier` are untouched.
  *
- * `map` is the M7 counterpart, opt-in for the same reason: `/airport/<code>` is the only page
- * that draws the network map, and the final whole-branch review found this group entirely
- * missing -- the map encodes three independent facts (stroke width by seats, dash by load
- * factor, dotted/muted by the departure floor) that nothing else on the served page explains.
- * An earlier revision of this header comment said outright "this page has no map," which was
- * true when it was written and false as of M7 Task 8; corrected here rather than left to
- * describe a page that no longer matches it. */
+ * `map` is the M7 counterpart, opt-in for the same reason: three pages draw a map and the rest
+ * do not. `/airport/<code>` draws a hub network, `/carrier/<code>` a point-to-point network for
+ * one aircraft type, and `/aircraft/<name>` the same for one carrier -- `/carrier` also carries
+ * the diff map's three panels, covered by the same rail. Opt-in because the map encodes three
+ * independent facts (stroke width by seats, dash by load factor, dotted/muted by the departure
+ * floor) that nothing else on a served page explains, and a page without a map must not claim
+ * them. The wording is deliberately route-scoped rather than destination-scoped: on every one
+ * of these maps an arc is a ROUTE, which is true of the hub map too. */
 export function LegendRail({
   fleetMix = false,
   stack = BY_AIRCRAFT_TYPE,
@@ -113,8 +114,8 @@ export function LegendRail({
  * "Nodes" groups. Three independent channels, stated as three rows rather than folded into
  * one, since `strokeFor` itself treats them as independent (a floor arc's load factor is never
  * even consulted): stroke WIDTH scales with seats: `0.7 + 2.9*sqrt(seats/max)`; a DASHED
- * stroke (`"5 3"`) means this destination's load factor is below 70%; a DOTTED, muted stroke
- * (`"1 3"`, `--ink-3`) overrides both of the above when the destination is below the
+ * stroke (`"5 3"`) means this route's load factor is below 70%; a DOTTED, muted stroke
+ * (`"1 3"`, `--ink-3`) overrides both of the above when the route is below the
  * 30-departure floor -- "barely flown" is the whole story for that arc, so it is never also
  * scaled by seats or dashed by load factor. */
 function ArcRendering() {
@@ -143,7 +144,7 @@ function ArcRendering() {
             />
           </svg>
         </span>
-        <em>dashed -- this destination&rsquo;s load factor is below 70%</em>
+        <em>dashed -- this route&rsquo;s load factor is below 70%</em>
       </div>
       <div className="lrow">
         <span className="g" aria-hidden="true">

@@ -21,9 +21,9 @@ export class MissingRawQueryError extends Error {
   constructor() {
     super(
       `request header '${RAW_QUERY_HEADER}' is absent -- proxy.ts did not run for this ` +
-        "request. /explore cannot read a permalink without the raw query string, and will " +
+        "request. This route cannot read a permalink without the raw query string, and will " +
         "not guess one from the decoded searchParams. Check that app/src/proxy.ts is " +
-        "deployed and that its matcher covers /explore.",
+        "deployed and that its matcher covers this route.",
     );
     this.name = "MissingRawQueryError";
   }

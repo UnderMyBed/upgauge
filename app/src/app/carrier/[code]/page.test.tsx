@@ -1,9 +1,34 @@
 // @vitest-environment jsdom
+
+// `next/headers` throws "called outside a request scope" when invoked directly in a test -- the
+// same reason `/airport`'s page test carries this identical mock, and for the identical cause:
+// #106 gave this page's REDIRECT branch a `headers()` call, so that the raw query survives the
+// case-normalization 308 instead of being silently dropped. That branch is already exercised by
+// the pre-existing lowercase-redirect test below, so the module has to be mocked rather than
+// left real. The factory awaits a dynamic `import()` for `RAW_QUERY_HEADER` -- a top-level
+// import binding referenced inside `vi.mock` would break on hoisting, since `vi.mock` calls are
+// hoisted above every import statement in the file.
+import { vi } from "vitest";
+vi.mock("next/headers", async () => {
+  const { RAW_QUERY_HEADER } = await import("@/lib/rawQuery");
+  // Default: an empty raw query, matching a bare request with no `?` at all -- which is what
+  // keeps every PRE-EXISTING test in this file (none of which anticipated `headers()` being
+  // called) passing unmodified, including the lowercase-redirect digest, which must stay exactly
+  // the bare canonical path with no stray `?`.
+  return { headers: vi.fn(async () => new Headers({ [RAW_QUERY_HEADER]: "" })) };
+});
 import { describe, expect, it } from "vitest";
+import { headers } from "next/headers";
+import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { render, screen } from "@testing-library/react";
-import CarrierPage, { CarrierView, generateMetadata } from "@/app/carrier/[code]/page";
+import CarrierPage, {
+  CarrierView,
+  carrierRedirectTarget,
+  generateMetadata,
+} from "@/app/carrier/[code]/page";
 import { decode } from "@/lib/pivot/urlstate";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
+import { fetchCarrierDiff } from "@/lib/map/carrierDiff";
 import { resolveCarrier } from "@/lib/carrier";
 
 /** Every figure asserted below was measured against the built warehouse for
@@ -250,6 +275,46 @@ describe("/carrier/<code> with nothing in the trailing 12 months", () => {
 });
 
 describe("/carrier/<code> redirect and 404", () => {
+  // #106. This redirect used to build `/carrier/DL` from the slug alone, silently dropping
+  // every query key -- so `/carrier/dl?type=B737-8` would have 308ed to `/carrier/DL` with the
+  // filter gone entirely, and the destination would have rendered the unfiltered view with no
+  // error anywhere. The identical measured bug `/airport` fixed with `airportRedirectTarget`.
+  //
+  // Asserting the digest STRING, not merely that a redirect fired: "a redirect happened" is true
+  // both before and after the fix, so the test immediately below would keep passing under the
+  // bug. The string is what discriminates.
+  it("preserves a filter query across the case-normalization redirect", async () => {
+    vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: "type=B737-8" }));
+    expect(await catchDigest("dl")).toBe(
+      "NEXT_REDIRECT;replace;/carrier/DL?type=B737-8;308;",
+    );
+  });
+
+  it("preserves an UNRESOLVABLE filter across the same redirect, rather than dropping it", async () => {
+    // A redirect that stripped a bad filter would be the same silent-fallback bug in a different
+    // coat: the canonical URL must reach the same refusal the direct URL does -- `no-store` from
+    // proxy.ts, and (once #107/#108 land the page surface) a named error -- not quietly render
+    // the unfiltered view because the redirect erased the evidence anything was wrong.
+    vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: "type=NOPE-1" }));
+    expect(await catchDigest("dl")).toBe(
+      "NEXT_REDIRECT;replace;/carrier/DL?type=NOPE-1;308;",
+    );
+  });
+
+  it("appends nothing for an empty raw query, rather than a stray '?'", () => {
+    // The bare-request case, and the reason the helper tests the LENGTH rather than appending
+    // unconditionally: every pre-existing redirect on this page carries no query at all.
+    expect(carrierRedirectTarget("DL", "")).toBe("/carrier/DL");
+    expect(carrierRedirectTarget("DL", "type=B737-8")).toBe("/carrier/DL?type=B737-8");
+  });
+
+  it("passes the raw query through VERBATIM, without re-encoding it", () => {
+    // Reassembling a query from decoded params is the corruption `lib/rawQuery.ts`'s header
+    // exists to prevent -- a `,` inside a value becomes indistinguishable from a separator. This
+    // helper concatenates bytes and must never normalize them.
+    expect(carrierRedirectTarget("DL", "type=%42%37")).toBe("/carrier/DL?type=%42%37");
+  });
+
   it("308s a lower-case code to the canonical URL", async () => {
     // The exact digest, read from Next 16's own source the way the route page's test is:
     // `permanentRedirect` throws `.digest === 'NEXT_REDIRECT;${type};${url};${statusCode};'`,
@@ -417,5 +482,260 @@ describe("/carrier/<code> truncation disclosure", () => {
     if (r.kind !== "ok") throw new Error("expected DL to resolve for this fixture");
     render(await CarrierView({ carrier: r.carrier, filterValue: r.filterValue }));
     expect(screen.queryByText(/top \d+ aircraft types/i)).toBeNull();
+  });
+});
+
+/**
+ * #107 -- the network map section.
+ *
+ * The filter is driven as a RESOLVED `MapFilter`, taken from the real `resolveTypeFilter`
+ * against the real warehouse rather than hand-built, so these fixtures cannot drift from what
+ * the page is actually handed: `CE-180` really is ambiguous (BTS codes 030 and 031, both
+ * fact-present), and `NOPE-1` really is unknown. The one exception is the raw-query pair at the
+ * bottom, which drives `CarrierPage` end-to-end because the header read is the thing under test.
+ */
+import { resolveTypeFilter } from "@/lib/map/mapFilter";
+
+// MERGE (#107 x #110): `segment-map` matches #110's three diff panels too, so this must name
+// the ROLE. Queried un-scoped it found DL's "added" panel and the no-map assertions inverted.
+const mapOf = (c: HTMLElement) => c.querySelector('[data-testid="network-map"]');
+const pickerOf = (c: HTMLElement) => c.querySelector('[data-testid="map-picker"]');
+const clearOf = (c: HTMLElement) =>
+  [...c.querySelectorAll("a")].find((a) => a.textContent === "Clear the filter") ?? null;
+
+async function viewOf(code: string, typeFilter?: Awaited<ReturnType<typeof resolveTypeFilter>>) {
+  const r = await resolveCarrier(code);
+  if (r.kind !== "ok") throw new Error(`expected ${code} to resolve for this fixture`);
+  return render(
+    await CarrierView({ carrier: r.carrier, filterValue: r.filterValue, typeFilter }),
+  );
+}
+
+describe("/carrier/<code> network map", () => {
+  it("renders the picker and draws no map when no type is selected", async () => {
+    // BOTH halves, in one test, on purpose: a `CarrierView` that threw or rendered nothing
+    // would satisfy the "no map" clause alone, and prove nothing.
+    const { container } = await viewOf("DL");
+    expect(pickerOf(container)).not.toBeNull();
+    expect(mapOf(container)).toBeNull();
+  });
+
+  it("offers no way back when there is nothing to go back from", async () => {
+    // The clear link's ABSENCE is the property. Rendered unconditionally it is a live link to
+    // the page you are already on, which reads as a control that does nothing.
+    const { container } = await viewOf("DL");
+    expect(clearOf(container)).toBeNull();
+  });
+
+  it("draws the map when a type resolves", async () => {
+    const { container } = await viewOf("DL", await resolveTypeFilter("B737-8"));
+    expect(mapOf(container)).not.toBeNull();
+  });
+
+  it("marks the showing type in the picker, so the reader can see which view this is", async () => {
+    // POSITION, not presence: `aria-current="page"` must land on the B737-8 option and on no
+    // other. Asserting merely that some option carries it passes under a picker that marks the
+    // wrong one, and asserting the option EXISTS passes under one that marks nothing -- which
+    // is what shipped, because `selected` compared a slug against a BTS id.
+    const { container } = await viewOf("DL", await resolveTypeFilter("B737-8"));
+    const current = [...container.querySelectorAll('[data-testid="map-picker"] a[aria-current="page"]')];
+    expect(current.map((a) => a.getAttribute("href"))).toEqual(["/carrier/DL?type=B737-8"]);
+  });
+
+  it("returns to the unfiltered page, not to the filtered URL", async () => {
+    const { container } = await viewOf("DL", await resolveTypeFilter("B737-8"));
+    expect(clearOf(container)?.getAttribute("href")).toBe("/carrier/DL");
+  });
+
+  it("refuses an ambiguous type rather than picking one of its holders", async () => {
+    // `CE-180` names BTS codes 030 and 031, both fact-present. Picking one is the silent-pick
+    // failure `/carrier/PA` exists to refuse.
+    //
+    // THE CARRIER IS Q5 (40-Mile Air, airline_id 20342) AND THAT IS THE WHOLE TEST. On DL --
+    // the obvious fixture, and the one this test was first written with -- a page that silently
+    // picked a holder would fetch DL x 030 or DL x 031, get NULL from both because DL flies no
+    // Cessna 180s, and render no map. The assertion below would pass over the defect: an
+    // outcome the buggy implementation also produces. Q5 is the only carrier in the warehouse
+    // that flies either code (measured over the trailing 12: 031, four rows), and Q5 x 031
+    // returns a real 2-segment map -- so under a silent pick a map APPEARS here and this goes
+    // red.
+    //
+    // Residual, stated rather than papered over: the 030 direction stays unobservable, because
+    // no carrier in this dataset flies 030 at all. No fixture can fix that, and the sibling
+    // catalog test in picker.test.ts pins the reason (no carrier flies both codes of one short
+    // name). The holder list below is what covers the rest: naming one holder and drawing its
+    // map is the half-wrong state a bare "no map" assertion would miss.
+    const filter = await resolveTypeFilter("CE-180");
+    expect(filter.kind).toBe("ambiguous");
+    const { container } = await viewOf("Q5", filter);
+    expect(mapOf(container)).toBeNull();
+    expect([...container.querySelectorAll('[data-testid="mp-holder"]')].map((li) => li.textContent))
+      .toEqual(["030", "031"]);
+  });
+
+  it("keeps the picker and the way back reachable under a refusal", async () => {
+    // A refusal that leaves the reader with nothing to do is a dead end. Both refusal kinds,
+    // because they are two different findings and the page renders them through one branch.
+    for (const raw of ["CE-180", "NOPE-1"]) {
+      const { container } = await viewOf("DL", await resolveTypeFilter(raw));
+      expect(container.querySelector(".mp-list")).not.toBeNull();
+      expect(clearOf(container)?.getAttribute("href")).toBe("/carrier/DL");
+    }
+  });
+
+  it("refuses an unknown type and draws no map", async () => {
+    const filter = await resolveTypeFilter("NOPE-1");
+    expect(filter.kind).toBe("unknown");
+    const { container } = await viewOf("DL", filter);
+    expect(mapOf(container)).toBeNull();
+  });
+
+  it("says so when a real type resolved but this carrier filed none of it", async () => {
+    // VX stopped filing in 2018-03, so every type is `ok` and every map is null. Reachable from
+    // any hand-typed URL naming a type the carrier does not operate; without this the heading
+    // would sit above a silent gap.
+    const { container } = await viewOf("VX", await resolveTypeFilter("B737-8"));
+    expect(mapOf(container)).toBeNull();
+    expect(screen.getByText(/VX filed no B737-8 routes in/)).toBeDefined();
+  });
+
+  it("discloses a truncated picker list", async () => {
+    const r = await resolveCarrier("DL");
+    if (r.kind !== "ok") throw new Error("expected DL to resolve for this fixture");
+    const { container } = render(
+      await CarrierView({ carrier: r.carrier, filterValue: r.filterValue, limit: 5 }),
+    );
+    expect(container.querySelector(".mp-note")).not.toBeNull();
+  });
+
+  it("does not claim a truncated picker below the limit", async () => {
+    const { container } = await viewOf("DL");
+    expect(container.querySelector(".mp-note")).toBeNull();
+  });
+});
+
+describe("/carrier/<code> reads the filter from the raw query bytes", () => {
+  it("draws the map for a filter that arrives on the raw-query header", async () => {
+    vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: "type=B737-8" }));
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    expect(mapOf(container)).not.toBeNull();
+  });
+
+  it("refuses a percent-spelled filter the proxy already declined to cache", async () => {
+    // THE DIVERGENCE, and the reason this page must not read `searchParams`. `?type=%42737-8`
+    // decodes to "B737-8", so a `searchParams`-based page draws the map -- while `proxy.ts`
+    // reads the same key on the RAW bytes, fails the no-percent bound and sets `no-store`. The
+    // page would then be applying a filter the server's admission policy refused: one value,
+    // two readings. The needle is the MAP, not the header, because the header is the proxy's.
+    vi.mocked(headers).mockResolvedValueOnce(
+      new Headers({ [RAW_QUERY_HEADER]: "type=%42737-8" }),
+    );
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    expect(mapOf(container)).toBeNull();
+    expect(pickerOf(container)).not.toBeNull();
+  });
+});
+
+/* ---- #110: the diff map, driven against the REAL warehouse through the real page ---- */
+/* Fixtures prove the component; these prove the WIRING -- that `carrier.id` reaches
+ * `fetchCarrierDiff`, that the section lands inside the content column, and that the three
+ * carriers whose shapes the plan names actually render the way the shapes predict. A component
+ * test cannot see any of that: it is handed its `diffs` by the test. */
+describe("/carrier/<code> diff map (#110)", () => {
+  function diffPanels(container: HTMLElement): HTMLElement[] {
+    return [...container.querySelectorAll<HTMLElement>('[data-testid="diff-panel"]')];
+  }
+
+  it("renders all three panels, in order, on a carrier that has all three", async () => {
+    // AS: 225 added, 138 dropped, 128 downgauged, every panel UNDER the cap
+    // (map_carrier_diff.sql's per-carrier table), so nothing here is masked by truncation.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "AS" }) }));
+    const labels = diffPanels(container).map(
+      (p) => p.querySelector('[data-testid="diff-panel-label"]')?.textContent,
+    );
+    expect(labels).toEqual(["Added", "Dropped", "Downgauged"]);
+  });
+
+  it("gives the three real panels three DISTINCT accessible names", async () => {
+    // The live half of the `title` fix. Added and downgauged SHARE the trailing window, so
+    // before this unit two of these three were byte-identical strings.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "AS" }) }));
+    const labels = diffPanels(container).map(
+      (p) => p.querySelector("svg[role='img']")?.getAttribute("aria-label") ?? "",
+    );
+    expect(labels).toHaveLength(3);
+    expect(new Set(labels).size).toBe(3);
+    expect(labels[0]).toContain("AS added.");
+    expect(labels[1]).toContain("AS dropped.");
+    expect(labels[2]).toContain("AS downgauged.");
+  });
+
+  it("labels a single-category carrier by ITS category, not by panel index", async () => {
+    // ZW (Air Wisconsin): 92 dropped, 0 added, 0 downgauged. A component that labelled panels by
+    // POSITION in DIFF_CATEGORIES rather than by each panel's own `category` calls this one
+    // "Added" -- and on AS, where all three are present, index and category agree, so the test
+    // above cannot fail that way. 26 of the 66 carriers with any change have an empty category.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "ZW" }) }));
+    const panels = diffPanels(container);
+    expect(panels).toHaveLength(1);
+    expect(panels[0].querySelector('[data-testid="diff-panel-label"]')?.textContent).toBe("Dropped");
+    expect(panels[0].querySelector("svg[role='img']")?.getAttribute("aria-label")).toContain(
+      "ZW dropped.",
+    );
+  });
+
+  it("states the carrier-wide quarantine count on a carrier with NO drawable arc", async () => {
+    // F4 (Air Flamenco, 21615) is the one carrier of 114 in this state: 3 undrawable
+    // carrier-routes, zero arcs. `panels` is empty and `quarantinedRoutes` is not, so a section
+    // gated on the panels drops the count entirely -- the "no trace that anything was there"
+    // this field exists to prevent, on a page that is live in the sitemap.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "F4" }) }));
+    expect(diffPanels(container)).toHaveLength(0);
+    expect(
+      container.querySelector('[data-testid="diff-quarantine"]')?.textContent,
+    ).toMatch(/^3 of F4’s route pairs are on no panel above/);
+  });
+
+  it("renders THIS carrier's diff, not some other carrier's", async () => {
+    // THE WIRING ITSELF, as a round trip rather than a shape check. Every other test here passes
+    // unchanged if `carrier.id` is replaced by a hardcoded id -- WN, DL and AA all have three
+    // non-empty categories too, so "three panels, in order, with distinct names" is TRUE of the
+    // wrong carrier's data. Measured: swapping in WN's 19393 left every one of them green.
+    //
+    // So the binding is to the NUMBERS: the page's rendered pre-cap totals must equal what the
+    // producer returns for the id this page resolved. No figure is hardcoded, so this does not
+    // rot on a BTS refresh -- it re-derives both sides from the same warehouse.
+    const r = await resolveCarrier("AS");
+    if (r.kind !== "ok") throw new Error("expected AS to resolve for this fixture");
+    const expected = await fetchCarrierDiff(r.carrier.id, await dataAsOf());
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "AS" }) }));
+    const rendered = diffPanels(container).map((p) => {
+      const text = p.querySelector('[data-testid="diff-panel-count"]')?.textContent ?? "";
+      const m = /^AS (added|dropped|downgauged) ([\d,]+) route pair/.exec(text);
+      if (m === null) throw new Error(`count sentence did not parse: ${text}`);
+      return { category: m[1], total: Number(m[2].replace(/,/g, "")) };
+    });
+    expect(rendered).toEqual(
+      expected.panels.map((d) => ({ category: d.category, total: d.map.totalRoutes })),
+    );
+    // The fixture only bites if the categories actually carry different totals -- otherwise a
+    // wrong-carrier id could coincide. AS's three are 225 / 138 / 128 on the 2026-05 warehouse.
+    expect(new Set(rendered.map((x) => x.total)).size).toBe(rendered.length);
+  });
+
+  it("puts the section inside the content column, where the page's own claims live", async () => {
+    // `content()` excludes the legend rail on purpose (see its docstring). The diff map's
+    // sentences are claims about THIS carrier and have to be reachable there, not parked in a
+    // generic rail that has its own tests.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "AS" }) }));
+    expect(content(container)).toContain("another carrier may still be flying it");
+    expect(content(container)).toContain("re-entry, not first appearance");
+  });
+
+  it("renders no diff section at all for a carrier that filed in neither window", async () => {
+    // VX (Virgin America) has been dormant since 2018-03: no panels and nothing withheld, so
+    // there is no orphan heading and no empty map.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
+    expect(container.querySelector('[data-testid="diff-map"]')).toBeNull();
   });
 });

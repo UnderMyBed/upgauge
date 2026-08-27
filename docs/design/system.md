@@ -5,8 +5,8 @@ constraints; **this file owns the answer** — tokens, components, chart and map
 states. Working mockups with real numbers: [`mockups/`](mockups/).
 
 Product truths that constrain this (mono numerics, `DATA AS OF`, density, permalinks,
-honest labels) live in [`../product/overview.md`](../product/overview.md) and are not
-restated here.
+honest labels) are owned by [`../product/overview.md`](../product/overview.md); where a section
+below applies one, it states the constraint it is applying rather than deferring.
 
 ---
 
@@ -475,7 +475,7 @@ below — it binds every time-series mark, not only lines.
 
 **Not deck.gl, not MapLibre**, though a `GreatCircleLayer` over a MapLibre basemap is the
 obvious reach. The map is a from-scratch, dependency-free, server-rendered SVG engine
-(`app/src/lib/map/{albers,greatCircle,arcs,networkMap,basemap}.ts`, composed by
+(`app/src/lib/map/{albers,greatCircle,arcs,segmentMap,networkMap,basemap}.ts`, composed by
 `app/src/components/NetworkMap.tsx`) — the same "in the served HTML, visible with JS off"
 property `AircraftMixChart.tsx` has, extended to a map: no client charting/mapping
 library ever touches the render path, so the map works with JavaScript off and needs no tile
@@ -486,12 +486,12 @@ draws the coastline.)
 
 ### Projection
 
-**Composite Albers USA, five panels** (`app/src/lib/map/albers.ts`). Conterminous conic
-(standard parallels 29.5/45.5, central meridian −96), plus **labelled insets for Alaska,
-Hawai'i, the Pacific (`pac`), and the Caribbean (`car`)** — each panel fit independently to
-its own points, in its own screen rect. Letting AK and HI into a single fit compresses the
-lower 48 into an unreadable smear — it was tried — which is also why `pac` and `car` are their
-own panels rather than folded into `us` or `hi`.
+**Composite Albers USA, seven panels** (`app/src/lib/map/albers.ts`). Conterminous conic
+(standard parallels 29.5/45.5, central meridian −96), plus **labelled insets for Alaska, Hawai'i,
+the Marianas (`pac`), Midway (`nwhi`), the Caribbean (`car`) and American Samoa (`sam`)** — each
+panel fit independently to its own points, in its own screen rect. Letting AK and HI into a
+single fit compresses the lower 48 into an unreadable smear — it was tried — which is the same
+reason the other four are panels rather than folded into `us` or `hi`.
 
 **Longitude is normalized before any panel decision.** Six fact-present airports carry a
 positive longitude — GUM, UAM, ROP, TIQ, SPN, and Alaska's own SYA (Eareckson AS, Shemya, at
@@ -501,15 +501,28 @@ runs first at every call site, never only inside one helper. Measurements and th
 airport list: `docs/data/invariants.md` § Airport coordinates, and the six that are east of
 the antimeridian.
 
-**`regionOf` is ordered most-specific first** (`pac`, `car`, `hi`, `ak`, then `us` as the
-fallback) — reversing that order (testing `us` first) is a real mutant, not a hypothetical:
-`us`'s test is unconditional, so it would swallow every point before the more specific panels
-ever run. Two panels exist precisely because a two-test split (conterminous / Alaska /
-Hawai'i) gets two populations wrong, not just Shemya:
-- **`pac`** holds Guam/Saipan/Tinian/Rota, American Samoa, and Midway — American Samoa sits in
-  the *southern* hemisphere and Midway at 28.2°N, so the mockup's Hawai'i test
-  (`lon < −150 && lat < 30`) caught both, stretching a "Hawai'i" panel to 42° of latitude when
-  Hawai'i itself spans 2.3°.
+**`regionOf` is ordered most-specific first** (`sam`, `pac`, `nwhi`, `car`, `hi`, `ak`, then
+`us` as the fallback) — reversing that order (testing `us` first) is a real mutant, not a
+hypothetical: `us`'s test is unconditional, so it would swallow every point before the more
+specific panels ever run. The extra panels exist precisely because a two-test split
+(conterminous / Alaska / Hawai'i) gets two populations wrong, not just Shemya:
+- **`sam`, `pac` and `nwhi`** are a three-way split of one `lat < 30 && lon < −160` test, and
+  their union is exactly that test again — which is what makes the split provably unable to move
+  a point into or out of `us`/`ak`/`hi`/`car`. **`sam`** is American Samoa, in the *southern*
+  hemisphere; **`nwhi`** is Midway at 28.2°N; both were caught by the mockup's Hawai'i test
+  (`lon < −150 && lat < 30`), stretching a "Hawai'i" panel to 42° of latitude when Hawai'i itself
+  spans 2.3°. **`pac`** is the Marianas — Guam/Rota/Tinian/Saipan and the uninhabited northern
+  islands, everything west of the antimeridian (`lon < −200`).
+- **One Albers fit cannot carry all three.** They span roughly 5,000 km, and a fit scaled to that
+  extent puts Tinian and Saipan — 18 km apart, on an **undirected** route filing 78,420 seats over
+  the trailing 12 — **2.73px** apart even in a `pac` rect filling the whole canvas. (That figure is
+  `fct_route_month`'s, because the map draws one arc per undirected route. `fct_segment_month`'s
+  directed halves are 39,908 and 38,512; quoting either as a route total understates the arc by
+  half.) American Samoa, were `regionOf` to send it to `pac`, projects to (1892.5, 1102.0) under
+  the shipped `pac` fit — off the canvas. A counterfactual pixel coordinate like that one is only
+  true of the `pac` rect current when it was taken, since `ox`/`oy` move with the rect; re-derive
+  it rather than carrying it forward. This is arithmetic, not a layout preference: see § Basemap
+  coastline.
 - **`car`** holds Puerto Rico and the USVI, which extend the conterminous bounding box in
   *both* directions at once (east past PQI, Maine, and south of EYW, Key West) — no single
   rectangle holds them and the lower 48 legibly.
@@ -519,42 +532,84 @@ must be negated or the country renders upside down — asserting that two projec
 merely *present* does not catch this; only their relative screen order does.
 
 **An arc crossing a panel boundary cannot be a great circle**, so `PDX–ANC` and `PDX–HNL` are
-drawn as straight lines into their inset, and the page says so — in the legend rail's
-"Arc rendering" group (`LegendRail`'s `map` prop) and in the map's own `aria-label`, which names the exact count of straight-line
-destinations rather than calling every one a great-circle arc (`networkMap.ts`'s
-`describeMap`). Every US map makes this compromise; this one admits it, twice over — once for
-a sighted reader, once for a screen reader.
+drawn as straight lines **across the boundary** — never "into an inset", which is true only when
+the subject is conterminous. An inset-origin subject (`ANC`, `HNL`, `SJU`, `GUM`) crosses OUT of
+its own inset, and the point-to-point engine draws inset-to-inset segments such as `HNL–ANC` that
+enter no inset at all. The page says so — in the legend rail's "Arc rendering" group
+(`LegendRail`'s `map` prop) and in the map's own `aria-label`, which names the exact count of
+straight-line segments rather than calling every one a great-circle arc (`segmentMap.ts`'s
+`arcsSentence`, shared by both maps). Every US map makes this compromise; this one admits it,
+twice over — once for a sighted reader, once for a screen reader.
 
 ### Basemap coastline
 
-The committed basemap (`app/geo/ne_110m_us.json` → `app/scripts/build-basemap.mjs` → `app/
-src/lib/map/basemapPaths.generated.ts`) is Natural Earth **1:110m**, which has no polygon at
-all for Guam/CNMI/American Samoa/Midway (`pac`) or Puerto Rico/the USVI (`car`), which on its
-own leaves both insets empty. Measured against the real warehouse (trailing 12 months): 74
-of 1,047 fact-present airports reach `car`, 6 reach `pac` — `/airport/SJU` alone drew 65 arcs
-inside a labelled Caribbean frame with no landmass under it, and San Juan is a major airport,
-not an edge case.
+The committed basemap (`app/geo/*.json` → `app/scripts/build-basemap.mjs` → `app/src/lib/map/
+basemapPaths.generated.ts`) starts at Natural Earth **1:110m**, which has no polygon at all for
+Guam/CNMI/American Samoa/Midway or Puerto Rico/the USVI, which on its own leaves those insets
+empty. Measured against the real warehouse over the trailing 12 months, in which **757**
+airports are fact-present: **79** of them reach `car` and **7** reach a Pacific panel (GUM, HNL,
+PPG, ROP, SFO, SPN, TIQ). 757 is the denominator these two are shares of — 1,047 is the
+fact-present population across the *whole* window and is the wrong one to read them against.
+`/airport/SJU` alone drew 65 arcs inside a labelled Caribbean frame with no landmass under it,
+and San Juan is a major airport, not an edge case. None of 757, 79 or 7 is generated; all three
+must be re-measured when quoted.
 
-**A second, finer input is fetched for `car` only** (`app/geo/ne_50m_car.json`,
-Natural Earth 1:50m Admin-0 Countries, `SOVEREIGNT == 'United States of America'` AND `NAME
-in ('Puerto Rico', 'U.S. Virgin Is.')` — 2 features). 1:110m's own Admin-0-countries file
-does carry a lone 9-point "Puerto Rico" polygon, but no separate USVI feature at any
-resolution below 1:50m; 1:50m is the first resolution with both as real, multi-island
-features (PR: main island + Vieques + Culebra; USVI: St. Thomas + St. Croix + St. John) —
-confirmed by fetching and inspecting both resolutions before choosing, not assumed.
-`build-basemap.mjs` now reads both committed files and merges their features before the
+**Two panels are simplified at their own RDP epsilon, and one is the reason.** The shared
+0.05° (~5.5 km) is ~1.93px at `pac`'s scale — wider than four of the six Northern Mariana
+islands — so RDP collapsed each of those rings to a two-point segment enclosing **zero area**: a
+hairline where the map claims an island. One of them is **Rota**, ~19 km across, inhabited, with
+its own `/airport/ROP` page and 4,672 + 16,270 seats over the trailing 12 — so its destination
+dot sat on top of a hairline. `ne_50m_pac.json` is therefore simplified at **0.01°** (~0.39px),
+at which every ring regains real fill (Rota 7.80 px² of its unsimplified 8.23) and Tutuila keeps
+all 8 of its source vertices instead of 5. Per input, never global: lowering the shared value
+would rewrite every `us`/`ak`/`hi`/`car` path, and those are pinned. It moves no fit — the
+generator builds its reference points from the raw rings, before simplification — so every
+projected airport is identical either way.
+
+**A second, finer input carries every territory** (Natural Earth 1:50m Admin-0 Countries, same
+mirror): `app/geo/ne_50m_car.json` (`NAME in ('Puerto Rico', 'U.S. Virgin Is.')` — 2 features)
+and `app/geo/ne_50m_pac.json` (`NAME in ('Guam', 'N. Mariana Is.', 'American Samoa')` — 3
+features). 1:110m's own Admin-0-countries file does carry a lone 9-point "Puerto Rico" polygon,
+but no separate USVI feature at any resolution below 1:50m; 1:50m is the first resolution with
+both as real, multi-island features (PR: main island + Vieques + Culebra; USVI: St. Thomas +
+St. Croix + St. John) — confirmed by fetching and inspecting both resolutions before choosing.
+`build-basemap.mjs` reads all three committed files and merges their features before the
 existing sort/simplify/project pipeline runs unchanged — no second projection path, no new
-RDP variant. **`pac` is untouched**: still zero committed reference points, a deliberate
-scope decision (6 airports doesn't justify the same fetch-and-filter work `car`'s 74 did),
-and still real rather than hacked around — `project()`'s `us`-fit fallback still renders
-every `pac` arc correctly, just with no coastline under it.
+RDP variant.
 
-**An empty, labelled inset must not read as a rendering bug to a site visitor.** Now that
-`car` has real coastline, `pac` is the one panel left with a frame and nothing in it — so
-`NetworkMap.tsx` states the gap on the page itself, in a `.foot` caption, whenever a
-network's own points actually reach `pac` (derived from `basemapPathsFor(["pac"]) === ""`,
-never hardcoded, so the caption retires itself the day `pac` gains geometry without a code
-change here).
+**The Pacific territories were in that same 1:50m file all along**, and this repo asserted the
+opposite in six places for a milestone on the strength of a comment nobody checked. Guam is 12
+points, N. Mariana Is. 46 across 6 rings, American Samoa 8. The rule that generalizes: a claim
+that an upstream source *lacks* something is a measurement, and expires like any other.
+
+**Midway is the one gap, and the reason is a scope decision, not a missing polygon.** 1:50m
+genuinely has no Midway. At 1:10m it exists, but only inside a 13-ring `U.S. Minor Outlying Is.`
+feature whose other rings include **Navassa Island, in the Caribbean** — and `build-basemap.mjs`
+classifies a whole feature by `regionOf` of its first ring's first point, so taking that feature
+whole projects Navassa into the Pacific inset. A ring-level filter would extract Midway, and this
+repo already hand-filters its inputs at the feature level, so that is the same class of
+operation, not a new one. **What rules it out is that ring indices are not stable across a
+Natural Earth refresh**: a committed input that says "ring 4 of this feature" silently becomes a
+different island when upstream reorders, and this project has already paid once for a fixture
+that stopped exercising what it named (aircraft type 699). Say that, rather than "the source
+does not have it" — the last claim of that shape in this file was false for a milestone. Midway
+therefore has its own panel, `nwhi`, with zero reference points; the subject-derived fit in
+`segmentMap.ts`'s `renderMapCore` is what renders it, and `nwhi` is the only panel that branch
+serves.
+
+**Folding Midway into `pac` instead would be a regression, not a simplification.** `pac`'s baked
+fit is scaled to the Marianas' own extent, so Midway lands at (1367.6, −429.7) under the shipped
+fit — off a 960×500 canvas — and `/airport/MDY?y=2021` loses its own subject while the caption says
+only the landmass is missing. MDY has exactly one filing in the window (MDY–HNL, HA, 2021-09,
+278 seats), so `/airport/MDY?y=2021` and `/airport/HNL?y=2021` are the two pages this decision
+is about.
+
+**An empty, labelled inset must not read as a rendering bug to a site visitor.** `nwhi` is the
+one panel left with a frame and nothing in it — so `NetworkMap.tsx` states the gap on the page
+itself, in a `.foot` caption, whenever a network's own points actually reach it (derived from
+`basemapPathsFor(["nwhi"]) === ""`, never hardcoded, so the caption retires itself the day
+Midway gains geometry without a code change there — which is exactly what it just did for
+`pac`).
 
 **`PANEL_RECTS.car` (`albers.ts`) was widened once there was real geometry to check it
 against** — Task 4/7's own open item, carried forward twice with nothing to measure.
@@ -564,11 +619,61 @@ latitude). The original rect was 100×76px (aspect 1.32:1), so `fitPanels`'s `k 
 h/dy)` bound on width and left the coastline only ~26px tall inside a 76px-tall frame — not
 wrong, but a thin sliver floating in a mostly-empty labelled box. Widened to 296×76px (aspect
 ~3.89:1, matching the measured geometry) so both dimensions bind together; height is
-unchanged so the bottom inset row (`ak`/`hi`/`pac`/`car`) keeps one shared baseline.
-`networkMap.ts`'s own `INSET_RECTS.car` (the frame-drawing literal, intentionally duplicated
+unchanged so the bottom inset row (`ak`/`hi`/`nwhi`/`car`/`sam`) keeps one shared baseline.
+`segmentMap.ts`'s own `INSET_RECTS.car` (the frame-drawing literal, intentionally duplicated
 from `albers.ts` rather than imported) was updated to match — the two tables drifting would
 mean the drawn frame border no longer matches the rectangle the coastline was actually fit
 to.
+
+**`PANEL_RECTS.pac` was reshaped the same way, for the opposite mismatch.** Guam + the Northern
+Marianas measure dx=0.019902, dy=0.096983 — an aspect of **0.2052:1**, five times *taller* than
+wide, since the chain is a ~617 km north–south arc only ~129 km across. The 100×76 placeholder
+bound on height and left the islands a 15.6px-wide sliver. Height is what the rect is really
+buying, and the number is forced rather than chosen: `dy` is the chain's latitude span in
+radians, which no projection parameter changes, so `k ≤ h / 0.096983` at any width. Drawing
+Tinian and Saipan 6px apart — one node diameter of clear air at r=2 — needs `k ≥ 2129` and
+therefore **h ≥ 206.4px**. Hence **44×216 at k=2211**: Tinian–Saipan 6.232px, Guam–Rota 31.447px,
+Guam–Saipan 72.232px, islands filling 44.0 × 214.4px of the frame.
+
+**And a correct size in the wrong place is still a defect.** Grown upward from the tray, that
+rect's frame lands *inside* the conterminous panel, whose drawn coastline occupies x[153.3,
+806.7] y[18.0, 424.0] — and `globals.css`'s `.map svg path[data-panel]` fills every basemap path
+with **opaque** `--panel-2` while `renderMapCore` draws frames *before* the basemap. Measured
+on a 0.1px grid: **3,163 px² of drawn landmass inside that rect — 33.3% of it** — with all eight
+glyph positions of the "MARIANAS" label inside drawn Arizona or New Mexico, two of the panel's
+own islands painted over, ABQ and ELP swallowed on `/airport/SFO`, and 27 of its 147 arcs
+crossing the box, across 25 served views. `fitPanels`'s `k` depends only on a rect's **width and
+height, never its position**, so relocating to the top-left margin — frame (34,24)–(90,252),
+which no lower-48 coastline reaches, since `us` land spans x[153.3, 806.7] — preserved every
+figure above verbatim. There it measures **0 px² of land**, every label glyph clear, and exactly
+one arc crossing on `/airport/SFO`: SFO–GUM, which terminates inside the panel and must enter it.
+`pac` is therefore the one inset outside the bottom tray; the other five keep the shared 468
+baseline. **`sam` is 181×76** and **`nwhi` is 40×76**.
+
+**A panel's aspect is measured under that panel's own parameters, and on the points `fitPanels`
+actually reads.** Both halves bite. American Samoa's extent under `PANEL_PARAMS.pac` — the
+sheared projection `sam` exists to avoid — is a different number from its extent under
+`PANEL_PARAMS.sam`, and sizing a rect from the wrong one makes one dimension bind alone and
+letterboxes the island under a comment claiming otherwise. And `fitPanels` reads
+`BASEMAP_FIT_POINTS`, which the generator rounds to 3 decimals before taking the fit, so the raw
+4-decimal committed file is not the right measurement either: the aspect is **2.3801:1** rounded
+and 2.3884:1 raw, giving a width of 76 × 2.3801 ≈ **181** rather than 182 — 0.1px of slack
+against 1.1. Height binds at k=42272.46 with the extent filling 180.9 × 76.0.
+
+*Known limitation, stated rather than hidden, and purely a SOURCE limitation:* Natural Earth's
+1:50m Tutuila is 8 vertices, and at `PAC_RDP_EPSILON_DEG` all 8 survive, so `sam` draws 50.5px of
+outline per source vertex against the 4.4px `hi` and 6.0px `car` manage on that same denominator
+— drawn perimeter over source vertices. Mixing that with a drawn-vertex denominator is what
+produces a spurious "6–10px" comparison band. The shape is coarse at this scale because the source
+is, not because anything was thrown away: the drawn outline spans 180.5 × 75.6px inside an extent
+fitted to 180.9 × 76.0. It is sized for the tray anyway because the frame has to hold PPG's 2px
+node and its 9px label; a fidelity-matched box would be about 30×13px, narrower than the word
+printed on top of it.
+
+**`car` has the same defect, at ~1,392 px² over drawn Florida and Texas — 6.2% of its rect,
+against `pac`'s 33.3%.** It shipped in M7 Task 7b and is not fixed here. It is recorded
+because `basemap.test.ts` asserts every other inset frame is clear of drawn land, and a test that
+simply omitted `car` would read as though the property held everywhere.
 
 **The generated paths carry no presentation attributes, so the paint is a stylesheet rule and
 must stay one.** `basemapPaths.generated.ts` emits geometry alone — `<path data-panel="us"
@@ -603,9 +708,12 @@ fact-present airports have at least one over the trailing 12 months; ORD alone i
 76,236 seats. Such a row's great circle has zero angular length, and `greatCircle`'s own
 degenerate-endpoint branch (`om < 1e-9`) would emit `steps + 1` identical points — several
 hundred bytes of polyline drawing an invisible mark directly on top of the origin disc. So
-the drawn arc set always excludes any row whose code equals the origin's (`app/src/lib/map/
-networkMap.ts`'s `renderNetworkMap`: ORD draws 267 arcs, not 268) — but the row's seats stay
-in whatever total the map states, passed in separately (`sameAirportSeats`), never derived
+the drawn arc set always excludes any row whose two endpoints are the same airport
+(`app/src/lib/map/segmentMap.ts`'s `drawableSegments`, which both maps filter through) — an
+airport with a same-airport filing draws one fewer arc
+than it has routes, 267 from 268 for ORD over 2025-05 → 2026-04, the fixed window
+`app/src/lib/map/airportNetwork.test.ts` pins it at. But the row's seats stay in whatever total
+the map states, passed in separately (`sameAirportSeats`), never derived
 from the already-filtered arc list. A map that dropped these seats from its own total as well
 as from its arcs would disagree with the stat strip directly above it on the same page. Both
 halves are required; shipping one without the other is a defect.
@@ -613,9 +721,11 @@ halves are required; shipping one without the other is a defect.
 **Step count is adaptive, not fixed** (`app/src/lib/map/greatCircle.ts`'s `stepsFor`): points
 scale with the arc's length ON SCREEN (`round(projectedLengthPx / 22)`, floor 4, cap 48), not
 with its angular distance — a 40px hop needs a handful of points and a transcontinental arc
-needs dozens. Measured on ORD's 268 arcs: a flat 48 emits 192,231 bytes of polyline; adaptive
-emits 132,178 with no visible change to the long arcs, and a flat 12 would save more but
-visibly polygonizes them. A great circle cannot cross a panel boundary at all (above), so
+needs dozens. Adaptive beats a flat 48 outright, and it also beats a flat 12 — most arcs on a
+960px-wide canvas are short enough that adaptive's floor of 4 undercuts a flat 12, which would
+still visibly polygonize the long arcs it does not help. The byte counts behind that comparison
+are measured in `stepsFor`'s own header, against a named window. A great circle cannot
+cross a panel boundary at all (above), so
 `stepsFor` is only ever consulted for an arc `greatCircle` actually draws — a cross-panel arc
 is the two projected endpoints, straight, regardless of its geographic length.
 

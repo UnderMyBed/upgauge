@@ -2,13 +2,21 @@ import type { Metadata } from "next";
 import { cache } from "react";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveAircraftSlug } from "@/lib/aircraftSlug";
+import { headers } from "next/headers";
+import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { BASE_URL } from "@/lib/siteUrl";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
+import { MapPicker } from "@/components/MapPicker";
+import { SegmentMap } from "@/components/SegmentMap";
 import { BY_CARRIER, fetchAircraftMix } from "@/lib/chart/aircraftMix";
+import { fetchCarrierTypeNetwork } from "@/lib/map/carrierTypeNetwork";
+import { rawFilterValue, resolveCarrierFilter } from "@/lib/map/mapFilter";
+import { pickerOptions } from "@/lib/map/picker";
+import type { SegmentMapInput } from "@/lib/map/segmentMap";
 import { encode } from "@/lib/pivot/urlstate";
 import {
   AIRCRAFT_CARRIER_LIMIT,
@@ -37,6 +45,15 @@ const resolveAircraftSlugForRequest = cache((slug: string) => resolveAircraftSlu
 // asked for -- the stat strip surfaces the count, but they are not pivot-vocabulary columns and
 // must never appear as a table column.
 const NON_DISPLAY_COLUMNS = new Set(["quarantined_rows", "quarantine_reasons"]);
+
+/** WHAT THE FILTER DOES NOT DO, said out loud. `?carrier=` narrows the MAP and nothing else --
+ * the stat strip, the chart and the table are the same on `/aircraft/B737-8?carrier=DL` as on
+ * `/aircraft/B737-8`, because the map is the only element on this page that needs a carrier to
+ * exist at all. A reader who assumes the whole page moved with the filter has been misled by
+ * omission, and no other element here says otherwise. One string for the reason `chartWindow`
+ * is one string: adjacent JSX expressions put a `<!-- -->` inside a served-bytes needle. */
+const MAP_SCOPE_NOTE =
+  "The filter applies to the map only — the stat strip, chart and table above cover every carrier.";
 
 const KIND: Record<string, ColumnSpec["kind"]> = {
   seats: "seats",
@@ -109,19 +126,27 @@ function AircraftEmptyState({ query, type }: { query: PivotQuery; type: Aircraft
   );
 }
 
-/** The "ok" branch's whole render, taking the resolved type AND the carrier limit as explicit
- * inputs -- same split, same reason, as `RouteView` and `ExploreView`: nothing here reaches
- * Next's routing plumbing, so a test can drive it with a real, live-database render (this
- * codebase has no mocks), and the truncation disclosure is reachable without waiting for a type
- * with 50 operators. */
+/** The "ok" branch's whole render, taking the resolved type, the carrier limit AND the raw map
+ * filter as explicit inputs -- same split, same reason, as `RouteView` and `ExploreView`:
+ * nothing here reaches Next's routing plumbing, so a test can drive it with a real,
+ * live-database render (this codebase has no mocks), the truncation disclosure is reachable
+ * without waiting for a type with 50 operators, and every outcome of the map section --
+ * unfiltered, drawn, nothing to draw, unknown, ambiguous -- is reachable without a request. */
 export async function AircraftView({
   type,
   canonical,
   limit = AIRCRAFT_CARRIER_LIMIT,
+  carrierFilter = null,
 }: {
   type: AircraftRef;
   canonical: string;
   limit?: number;
+  /** `?carrier=`'s value as RAW, still-percent-encoded BYTES, or null when the key is absent.
+   *  Raw and not decoded: `resolveCarrierFilter` admits on the raw bytes, and handing it a
+   *  decoded value is how this page and `proxy.ts` end up with two readings of one URL --
+   *  `AircraftPage` below has the full argument. Resolved here rather than by the caller so a
+   *  test can drive every outcome of the section with a live database and no header at all. */
+  carrierFilter?: string | null;
 }) {
   const allowlist = await loadAllowlist();
   const asOf = await dataAsOf();
@@ -140,26 +165,52 @@ export async function AircraftView({
     limit,
   });
 
-  // CONCURRENT, not two sequential awaits -- same reasoning and the same measured saving as
-  // /route (docs/architecture/hosting.md): the two pivots share nothing, and connect() hands
-  // each its own DuckDBConnection off the single memoized instance, so the pair now costs what
-  // its slower half costs.
+  // RESOLVED BEFORE THE WAVE BELOW, not as a fourth member of it: the map query needs
+  // `filter.id`, so joining the resolve into the Promise.all would push the map -- the
+  // expensive member -- behind the whole wave instead of alongside it. An absent key costs
+  // nothing at all: `resolveCarrierFilter(null)` returns `{ kind: "none" }` without touching
+  // the database (mapFilter.ts), which is every crawler hit and every URL in `sitemap.xml`.
+  const filter = await resolveCarrierFilter(carrierFilter);
+
+  // CONCURRENT, not sequential awaits -- same reasoning and the same measured saving as /route
+  // (docs/architecture/hosting.md): the three share nothing, and connect() hands each its own
+  // DuckDBConnection off the single memoized instance, so the wave costs what its slowest
+  // member costs.
   //
   // The mix takes the FULL window, not `query`'s trailing 12. "Who adopted this type, and when"
   // is a decade-long question -- the 737-800's answer is that Southwest overtook American in
   // 2018 (measured, and the chart derives that annotation itself) -- and twelve points cannot
   // carry it. The two windows are therefore genuinely different, which is why the `.window`
-  // line below names both.
-  const [result, mix]: [PivotResult, Awaited<ReturnType<typeof fetchAircraftMix>>] =
-    await Promise.all([
-      runPivot(query),
-      // BY_CARRIER, and this is the point of the page: stacking by aircraft type here would
-      // draw ONE band, since the page IS one aircraft type. Stacked by operating carrier the
-      // ramp isolates CONFIGURATION choice from FLEET choice -- something /route cannot
-      // separate -- and it still encodes something real (measured: F9 fits 230.0 seats into
-      // the A321 to B6's 172.3, a 33% spread on identical metal).
-      fetchAircraftMix(filters, EARLIEST_MONTH, asOf, BY_CARRIER),
-    ]);
+  // line below names both. The map takes the TABLE's window, and states it itself.
+
+  const [result, mix, map]: [
+    PivotResult,
+    Awaited<ReturnType<typeof fetchAircraftMix>>,
+    SegmentMapInput | null,
+  ] = await Promise.all([
+    runPivot(query),
+    // BY_CARRIER, and this is the point of the page: stacking by aircraft type here would
+    // draw ONE band, since the page IS one aircraft type. Stacked by operating carrier the
+    // ramp isolates CONFIGURATION choice from FLEET choice -- something /route cannot
+    // separate -- and it still encodes something real (measured: F9 fits 230.0 seats into
+    // the A321 to B6's 172.3, a 33% spread on identical metal).
+    fetchAircraftMix(filters, EARLIEST_MONTH, asOf, BY_CARRIER),
+    // `/carrier?type=` and `/aircraft?carrier=` are ONE view entered from two sides -- same
+    // query, same renderer, same cap -- so this is `fetchCarrierTypeNetwork` with the two
+    // arguments swapped end for end: the type is fixed by the page, the carrier by the
+    // filter. It runs ONLY on a resolved filter. An unfiltered page issues no map query,
+    // because the query needs both halves and there is no honest default for the missing
+    // one: drawing every carrier's routes on this type would be a different map answering a
+    // different question, and picking a carrier for the reader is the silent pick the
+    // refusal states below exist to refuse.
+    //
+    // The window is the TABLE's trailing 12, deliberately, not the chart's full window: the
+    // map's own footer line states it (`renderSegmentMap`), so the `.window` line above does
+    // not restate it. Two hand-written statements of one measurement is how they drift.
+    filter.kind === "ok"
+      ? fetchCarrierTypeNetwork(filter.id, type.id, query.timeFrom, query.timeTo)
+      : null,
+  ]);
 
   const totals = sumTotals(result.rows);
   const truncated = result.rows.length >= limit;
@@ -178,6 +229,57 @@ export async function AircraftView({
   const chartWindow = `chart: ${drawsFullWindow ? "the full window · " : ""}${drawnFrom} → ${drawnTo}`;
 
   const columns = buildColumns(allowlist, result.columns);
+
+  const hasMap = map !== null;
+  const basePath = `/aircraft/${canonical}`;
+  // The picker reads the rows the page ALREADY awaited -- this page groups by `op_airline_id`,
+  // which is exactly the dimension its map filters on, so the control costs no second query.
+  //
+  // `filterValueOf` returns the LABEL, which for `op_airline_id` is `displayValue`'s answer:
+  // the carrier CODE. `?carrier=` is a code vocabulary, not an id one -- `resolveCarrierFilter`
+  // resolves `OO` and refuses `20304` -- so an href built from the raw id would name nothing
+  // this server can filter by. It fails LOUDLY if a row's id ever fails to resolve: the label
+  // is then the raw id, the href is `?carrier=<id>`, and the server answers with a named
+  // refusal rather than a map of the wrong airline.
+  //
+  // `selected` is the RESOLVED code, never the raw bytes: `aria-current="page"` claims "this is
+  // the view you are looking at", and only an `ok` filter has a view.
+  const options = pickerOptions({
+    rows: result.rows,
+    resolved: result.resolved,
+    dimKey: "op_airline_id",
+    basePath,
+    filterKey: "carrier",
+    selected: filter.kind === "ok" ? filter.code : null,
+    filterValueOf: (_rawId, label) => label,
+  });
+
+  // NO SECTION AT ALL on a page whose window is empty and whose reader asked nothing -- the
+  // MD-80, retired 2023-04. `AircraftEmptyState` already states that finding in words, and a
+  // second panel repeating it is the card soup /route's chart rule refuses. A filter PRESENT on
+  // such a page still renders: the reader asked a question and gets an answer, even if the
+  // answer is that there is nothing to draw.
+  const showMapSection = !isEmpty || filter.kind !== "none";
+
+  // ONE string per note, never adjacent JSX expressions: React's SSR emits `<!-- -->` between
+  // adjacent text nodes, which `textContent` skips and a raw-bytes grep in app/smoke.sh does
+  // not. Same trap, same fix, as `chartWindow` above.
+  //
+  // The `ok`-with-no-map arm is EXACT, not a hedge. `fetchCarrierTypeNetwork` returns null only
+  // when all three of its categories are empty (`hasNothingToShow`), and a NULL-measure group
+  // lands in `quarantinedRoutes` while a same-airport one lands in `sameAirportRoutes` -- so
+  // null means every group this carrier filed on this type performed zero departures, or it
+  // filed none at all. "Performed no departures" is true of both and claims nothing else.
+  //
+  // The `unknown` and `ambiguous` kinds get NOTHING here: `MapPicker` owns those two sentences,
+  // wires the resolver's own `reason` through, and names every holder. A second wording of a
+  // refusal on this page is how the two drift.
+  const mapNote =
+    filter.kind === "none"
+      ? "Pick a carrier to draw the routes it flew this type on — the map draws one carrier at a time."
+      : filter.kind === "ok" && !hasMap
+        ? `No routes to draw: ${filter.code} performed no departures on the ${type.code} over ${query.timeFrom} → ${query.timeTo}.`
+        : null;
 
   return (
     <div className="wrap">
@@ -203,6 +305,35 @@ export async function AircraftView({
           Table: trailing 12 months · {query.timeFrom} → {query.timeTo}
           {hasMix ? <> · {chartWindow}</> : null}
         </p>
+        {/* THE MAP, above the two-column body -- `/airport`'s placement for the same element
+            (airport/[code]/page.tsx: the network map and its year track sit under `main`, not
+            inside `.body`), so the two maps on this site are not framed two different ways.
+
+            No heading: `MapPicker` is a labelled `<nav>` carrying its own legend, which is the
+            `.year-track` idiom this control was built to follow. A heading here would be the
+            only one on the page. */}
+        {showMapSection ? (
+          <>
+            {map !== null ? <SegmentMap map={map} /> : null}
+            {mapNote !== null ? <p className="foot">{mapNote}</p> : null}
+            <MapPicker options={options} filter={filter} legend="Carrier" truncated={truncated} />
+            {/* The way back, which the picker cannot offer: it holds per-option hrefs and no
+                base path, so only the page knows the URL of its own unfiltered view. Rendered
+                ONLY when a filter value was supplied -- an unfiltered page has nothing to
+                clear, and a control that does nothing is worse than no control.
+
+                `MAP_SCOPE_NOTE` is gated on `ok` because on a refusal no filter was applied,
+                so "applies to the map only" would describe something that did not happen. */}
+            {filter.kind !== "none" ? (
+              <div className="foot">
+                {filter.kind === "ok" ? <p>{MAP_SCOPE_NOTE}</p> : null}
+                <p>
+                  <a href={basePath}>Clear the filter</a>
+                </p>
+              </div>
+            ) : null}
+          </>
+        ) : null}
         <div className="body">
           <div>
             {hasMix ? (
@@ -236,8 +367,14 @@ export async function AircraftView({
           </div>
           {/* `stack` and not just `fleetMix`: the rail describes the encodings THIS page uses,
               and this chart's bands are carriers, so the type-stack wording ("larger metal",
-              "the five types with the most seats") would be false here. */}
-          <LegendRail fleetMix={hasMix} stack={BY_CARRIER} />
+              "the five types with the most seats") would be false here.
+
+              `map` is that same rule applied to the section above: the arcs encode three
+              independent facts -- width by seats, dash below a 70% load factor, dotted and
+              muted below the 30-departure floor (`lib/map/arcs.ts`) -- and nothing else on the
+              served page explains any of them. Asked for only when a map was drawn, so an
+              unfiltered page does not carry a legend for an element it does not have. */}
+          <LegendRail fleetMix={hasMix} stack={BY_CARRIER} map={hasMap} />
         </div>
       </main>
     </div>
@@ -288,6 +425,28 @@ export async function generateMetadata({
   };
 }
 
+/** The redirect target for a case-normalized aircraft type slug, carrying the ORIGINAL raw query string
+ * through UNCHANGED.
+ *
+ * #106, and the identical measured bug `/airport` fixed with `airportRedirectTarget`
+ * (`app/airport/[code]/page.tsx:497-499`, whose own doc comment has the full account). This
+ * page built `/aircraft/${{resolved.canonical}}` from the slug alone, silently dropping every query
+ * key -- so once `carrier` became a legitimate key here, `/aircraft/b737-8?carrier=DL` would have 308ed to
+ * `/aircraft/B737-8` with the filter gone entirely, and the destination would have rendered the
+ * unfiltered view with no error anywhere. That is precisely the "silently renders a different
+ * query than the URL encodes" failure this project refuses everywhere else.
+ *
+ * The query is appended VERBATIM from the raw string, never reconstructed from parsed
+ * `searchParams` -- reassembling a query from decoded params is the re-encoding corruption
+ * `lib/rawQuery.ts`'s whole header exists to prevent. An empty raw query (no `?` at all on the
+ * original request) appends nothing, so a bare `/aircraft/b737-8` still redirects to the bare
+ * `/aircraft/B737-8`. */
+export function aircraftRedirectTarget(canonical: string, rawQuery: string): string {
+  return rawQuery.length > 0
+    ? `/aircraft/${canonical}?${rawQuery}`
+    : `/aircraft/${canonical}`;
+}
+
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the four-way
  * `AircraftSlugResult` before handing the "ok" case to `AircraftView`. Same split as
  * `RoutePage`/`RouteView`.
@@ -300,12 +459,36 @@ export async function generateMetadata({
  * link for each, which is the honest form of "we will not pick one for you". */
 export default async function AircraftPage({ params }: { params: Promise<{ name: string }> }) {
   const { name: slug } = await params;
+
+  // ONE READING OF THE QUERY STRING, off the raw bytes `proxy.ts` set, feeding BOTH of this
+  // page's uses of it: the 308 below, which must carry `?carrier=` through (#106), and the map
+  // filter, which must reach the SAME verdict `proxy.ts` already reached about this URL.
+  //
+  // NEVER `searchParams`, and here that is a stronger rule than the `/airport` `?y=` precedent
+  // it resembles. Next decodes `searchParams`; `?y=` tolerates that because `proxy.ts` decodes
+  // too (`new URLSearchParams(rawQuery).get("y")`, proxy.ts:430), so both ends agree and the
+  // residue is a duplicate cache key. `?carrier=` is admitted on the RAW BYTES --
+  // `CARRIER_FILTER_VALUE` forbids `%` structurally (`lib/map/mapFilter.ts`) -- so only one end
+  // would decode: a decoded read hands this page `DL` for `?carrier=%44L` while `proxy.ts`
+  // refuses that spelling and declines the cache, and the page then applies a filter this
+  // server's own admission policy rejected. One owner, two readers, one input.
+  //
+  // Reconstructing a query string from decoded params is separately the corruption
+  // `lib/rawQuery.ts`'s whole header exists to prevent, which is why the redirect target takes
+  // this string verbatim.
+  //
+  // This page therefore takes no `searchParams` prop. A prop nothing reads is a seam that looks
+  // wired and is not.
+  const rawQuery = rawQueryFromHeaders(await headers());
   const resolved = await resolveAircraftSlugForRequest(slug);
 
   if (resolved.kind === "redirect") {
     // permanentRedirect -> 308, not redirect()'s 307: the uppercased slug IS the canonical URL
     // for this type. Same source-verified digest as /route (page.test.tsx pins it).
-    permanentRedirect(`/aircraft/${resolved.canonical}`);
+    // #106: the raw query must survive this redirect, or the map filter is silently lost on a
+    // miscased slug -- `/aircraft/b737-8?carrier=DL` would 308 to `/aircraft/B737-8` with the
+    // filter gone and the destination would render the unfiltered view with no error anywhere.
+    permanentRedirect(aircraftRedirectTarget(resolved.canonical, rawQuery));
   }
   if (resolved.kind === "notFound" || resolved.kind === "ambiguous") {
     notFound();
@@ -318,5 +501,8 @@ export default async function AircraftPage({ params }: { params: Promise<{ name:
   return await AircraftView({
     type: resolved.type,
     canonical: resolved.canonical,
+    // Still ENCODED. `rawFilterValue` walks the query with the codec's own `splitPairs` and
+    // hands back the bytes as they arrived, which is what `resolveCarrierFilter` admits on.
+    carrierFilter: rawFilterValue(rawQuery, "carrier"),
   });
 }

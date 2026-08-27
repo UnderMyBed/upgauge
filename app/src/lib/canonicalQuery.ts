@@ -73,6 +73,19 @@ const NONE_REPEATABLE: ReadonlySet<string> = new Set();
 const EXPLORE_REPEATABLE: ReadonlySet<string> = new Set(["f"]);
 /** `y` selects one calendar year's network map (app/airport/[code]/page.tsx, M7 Task 9). */
 const AIRPORT_KEYS: ReadonlySet<string> = new Set(["y"]);
+/** `type` filters `/carrier/:code`'s network map to ONE aircraft type, and `carrier` filters
+ * `/aircraft/:name`'s to ONE carrier (#106). Neither is repeatable: two types is a different
+ * map, not a spelling of one, so a duplicate has no canonical form -- rule 3 rejects it.
+ *
+ * These two are the first keys here whose VALUE cannot be admitted structurally: whether
+ * `B737-8` names anything is a fact about the warehouse, which is exactly why this file does
+ * not answer it (see this module's header). `lib/map/mapFilter.ts` owns the value rule --
+ * a raw-byte spelling bound plus an actual entity resolution -- and `proxy.ts` reads its
+ * verdict before committing to a `Cache-Control`, the same division `AIRPORT_KEYS` has with
+ * `lib/year.ts` and `ALLOWED_KEYS` has with `lib/pivot/bounds.ts`. Declaring the key here and
+ * bounding the value there is one mechanism; neither half is sufficient alone. */
+const CARRIER_KEYS: ReadonlySet<string> = new Set(["type"]);
+const AIRCRAFT_KEYS: ReadonlySet<string> = new Set(["carrier"]);
 /** `/search`'s only key -- `app/search/page.tsx` reads `searchParams.q` and nothing else.
  * Declared truthfully even though nothing consumes this row's verdict today: `exempt` means "the
  * proxy does not redirect this path", never "the rules do not exist for it". */
@@ -200,13 +213,13 @@ export const QUERY_ROWS: ReadonlyArray<QueryRow> = [
   {
     matcher: "/carrier/:code",
     matches: (p) => carrierSlugFromPath(p) !== null,
-    keys: NO_KEYS,
+    keys: CARRIER_KEYS,
     repeatable: NONE_REPEATABLE,
   },
   {
     matcher: "/aircraft/:name",
     matches: (p) => aircraftSlugFromPath(p) !== null,
-    keys: NO_KEYS,
+    keys: AIRCRAFT_KEYS,
     repeatable: NONE_REPEATABLE,
   },
   { matcher: "/watch", matches: (p) => p === "/watch", keys: NO_KEYS, repeatable: NONE_REPEATABLE },

@@ -65,9 +65,12 @@ describe("fetchAirportNetwork, against the warehouse", () => {
   });
 
   it("passes the same-airport seat total through rather than discarding it", async () => {
-    // Measured directly against fct_route_month: ORD's same-airport rows sum to 76,236 seats
-    // over 2025-06..2026-05 -- the identical figure docs/design/system.md's own arc-encoding
-    // section states (53 segment-grain rows folding to this same total at route grain).
+    // Measured directly against fct_route_month: ORD's same-airport rows sum to 73,082 seats
+    // over 2025-05..2026-04, the FIXED window this test queries. docs/design/system.md and
+    // docs/data/invariants.md state 76,236 for the trailing 12 (2025-06..2026-05) -- a
+    // different window, not a different answer. A re-pin sweep once updated this comment to
+    // the trailing-12 figure while leaving the assertion on its own fixed window, which is how
+    // a green test came to be documented by a number it does not assert.
     const result = await fetchAirportNetwork(
       airport(ORD_ID, "ORD", "Chicago O'Hare Intl"),
       "2025-05",
@@ -78,9 +81,11 @@ describe("fetchAirportNetwork, against the warehouse", () => {
   });
 
   it("resolves exactly 268 route-grain rows for ORD, and renders 267 arcs", async () => {
-    // 268 is ORD's measured trailing-12 route count (M7 Task 8) -- one of those 268 is the
-    // same-airport row itself, which renderNetworkMap must exclude from the drawn set
-    // (system.md's arc-encoding section: "ORD draws 267 arcs, not 268").
+    // 268 is ORD's route count over 2025-05..2026-04, the FIXED window this test queries --
+    // not the trailing 12, which is 274 far-endpoints and 273 drawable (docs/data/invariants.md
+    // § Route identity). One of the 268 is the same-airport row itself, which renderNetworkMap
+    // must exclude from the drawn set (system.md's arc-encoding section states the same rule
+    // against this same fixed window).
     const result = await fetchAirportNetwork(
       airport(ORD_ID, "ORD", "Chicago O'Hare Intl"),
       "2025-05",

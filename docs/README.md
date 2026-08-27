@@ -37,9 +37,8 @@ That split is not tidiness: the same backlog item used to be stated three ways i
 and drift independently. The either-endpoint filter was described as missing in four places for
 a full milestone after it shipped — two of them on served pages a visitor could read.
 
-Some passages here still explain *why* an unbuilt thing is worth building (the Maps table in
-[product/features.md](product/features.md) is the clearest case). That is design rationale and
-it belongs here. Only status and scheduling belong in the tracker.
+Some passages here explain *why* a thing is worth building, whether or not it is built yet.
+That is design rationale and it belongs here. Only status and scheduling belong in the tracker.
 
 ## How these docs work
 

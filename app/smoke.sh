@@ -136,7 +136,7 @@ BASE="http://127.0.0.1:${PORT}"
 CACHE_EXPECTED="public, s-maxage=2592000, stale-while-revalidate=86400"
 # M5 Task 7, Part B split proxy.ts's one 30-day CACHE constant into two: /api/pivot (its own
 # route.ts, untouched) and, as of M5 Task 8, /sitemap.xml and /robots.txt keep CACHE_EXPECTED
-# above; /explore and every ENTITY_ROUTES page (/route, /airport, /carrier, /aircraft) -- both
+# above; /explore and all four entity pages (/route, /airport, /carrier, /aircraft) -- both
 # their 200s and their 308s -- get the shorter HTML_CACHE instead (docs/architecture/hosting.md
 # § "The gap": bounding a 5xx's cache exposure to an hour rather than a month, since the
 # route-handler fix that would have closed the gap outright turned out not to be reachable).
@@ -914,7 +914,8 @@ check     "airport map: the network SVG is in the served HTML" "$BODY" \
 check_dataset check_re "airport map: exactly 273 polylines (same-airport arc excluded)" \
   "$(count "$BODY" '<polyline')" '^273$'
 # An inset label -- ORD's own network reaches ak/hi/car (measured against this served build;
-# see the `pac` absence below), each drawn as a labelled `<rect>`+`<text>` frame (INSETS,
+# no ORD route touches a Pacific panel, which is why section 10b uses GUM), each drawn as a
+# labelled `<rect>`+`<text>` frame (INSETS,
 # networkMap.ts). Plain "ALASKA", not the bare `>ALASKA<` M5-style checks use elsewhere in this
 # file: the RSC payload escapes this SVG string's `>`/`<` to `>`/`<` (see the polyline
 # comment just above) but NOT the plain word between them, so the bracketed form appears once
@@ -926,8 +927,8 @@ check     "airport map: an inset is labelled (ALASKA)" "$BODY" 'ALASKA'
 # insets, window line and cache pair reach the served bytes, but NONE of them proves the
 # COASTLINE does -- the one output produced by a committed GENERATED module
 # (basemapPaths.generated.ts) rather than by code under test. A collapsed or empty basemap
-# renders a map with no landmass, which is visually IDENTICAL to the legitimately-empty `pac`
-# panel (docs/design/system.md § The map) -- so this is the map's own analogue of the
+# renders a map with no landmass, which is visually IDENTICAL to the legitimately-empty `nwhi`
+# (Midway) panel (docs/design/system.md § The map) -- so this is the map's own analogue of the
 # aircraft-mix chart's ramp-fill checks, and the one thing this section was missing.
 # `data-panel="us"` is the attribute `build-basemap.mjs` stamps on every `<path>` it emits
 # (basemapPathsFor's own docstring); ORD's network reaches `us` on every build (it IS the
@@ -966,6 +967,61 @@ check_not "airport map ?y=nonsense: ...and is never long-cached"           "$HDR
 BODY=$(curl -s --max-time 15 "${BASE}/airport/ORD?y=nonsense")
 check     "airport map ?y=nonsense: names the offending year" "$BODY" "unknown year 'nonsense'"
 
+# 10b. The Pacific panels' coastline (#111). Before this block `grep -in "pac" app/smoke.sh`
+# returned two COMMENTS and zero checks -- so the one thing a unit test structurally cannot
+# see (that the committed generated artifact's paths reach the SERVED bytes) had no coverage
+# at all on the panels that were about to change. ORD's own `data-panel="us"` check above
+# exists for exactly this reason and says so; this is its Pacific half.
+#
+# /airport/GUM is the subject: its trailing-12 network reaches `pac` (SPN, ROP), `hi` (HNL)
+# and `us` (SFO). Needles measured against a real served build, not copied from source --
+# `data-panel="pac"` occurs twice (the GU path and the MP path) and `MARIANAS` twice (the
+# `<text>` label, plus the RSC payload's copy, which escapes the SVG string's own angle
+# brackets but not the plain word between them -- see the ALASKA comment above).
+BODY=$(curl -s --max-time 30 "${BASE}/airport/GUM")
+check     "airport map GUM: the network SVG is in the served HTML" "$BODY" \
+  '<svg viewBox="0 0 960 500" width="960" height="500" role="img"'
+# The label, not just the frame: `pac` was "PACIFIC" until #111 split American Samoa and
+# Midway into their own panels, at which point a panel holding only the Marianas could not
+# keep a name that also covers the two panels beside it.
+check     "airport map GUM: the Marianas inset is labelled for what it holds" "$BODY" 'MARIANAS'
+# Both `data-name`s, not just the panel attribute. MP is a 6-ring MultiPolygon and GU a single
+# polygon; a regression dropping one feature while keeping the other would pass a check that
+# only looked for `data-panel="pac"`.
+check     "airport map GUM: Guam's own coastline reaches the served bytes"    "$BODY" 'data-name="GU"'
+check     "airport map GUM: the Northern Marianas coastline reaches the bytes" "$BODY" 'data-name="MP"'
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/airport/GUM")
+check     "airport map GUM: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# The other two Pacific panels, and the one gap left. Dataset-pinned as a block: MDY has
+# EXACTLY ONE filing in the whole window (MDY-HNL, HA, 2021-09, 278 seats), so a BTS revision
+# that dropped it would take `nwhi` off this page entirely -- which is a real signal, not
+# noise, but it is a claim about the dataset rather than about the build.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/HNL?y=2021")
+check_dataset check     "airport map HNL 2021: American Samoa is labelled"   "$BODY" 'AMERICAN SAMOA'
+check_dataset check     "airport map HNL 2021: its coastline reaches the bytes" "$BODY" 'data-name="AS"'
+check_dataset check     "airport map HNL 2021: the Midway inset is labelled" "$BODY" 'MIDWAY'
+# The paired positive for the check_not below is the four checks above, on this same body --
+# an empty body would fail them, so the negative cannot pass vacuously. `nwhi` is the one panel
+# with a frame and no coastline: Natural Earth carries Midway only inside a feature that also
+# spans the Caribbean (build-basemap.mjs's header). If it ever gains geometry, this check and
+# the caption check below must BOTH be rewritten -- they are two halves of one claim.
+check_dataset check_not "airport map HNL 2021: Midway genuinely has no coastline" "$BODY" 'data-panel="nwhi"'
+# CLAUDE.md: a correction is not landed until the user-facing copy carries it. This is the
+# only served-build coverage the caption has. ASCII prefix only -- the sentence continues into
+# a U+2014 em dash, which React emits raw from a JS string literal.
+check_dataset check     "airport map HNL 2021: the Midway gap is disclosed on the page" "$BODY" \
+  'The Midway inset has no coastline under its arcs'
+# And the page that would have LOST ITS OWN SUBJECT. Baking a `pac` fit takes `pac` off
+# networkMap.ts's subject-derived fallback; folding Midway in with it would project MDY to
+# (1367.6, -429.7), off a 960x500 canvas, so /airport/MDY?y=2021's origin disc would simply not
+# be drawn while the caption still said only the landmass was missing. The origin disc is
+# r="4.5" (networkMap.ts) and its cx/cy are asserted EXACTLY: a presence check on `<circle`
+# passes under that bug, since the destination dot is still emitted.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/MDY?y=2021")
+check_dataset check     "airport map MDY 2021: Midway's own origin disc is inside its inset" "$BODY" \
+  '<circle cx="388.0" cy="430.0" r="4.5"'
+
 # 11. /carrier/<code> -- the page has to say what it is counting.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL")
 check     "carrier: renders the code"        "$BODY" '>DL<'
@@ -993,17 +1049,105 @@ check_dataset check "carrier: the page states the chart's own window" "$BODY" 'c
 check     "carrier: carries a self-referential canonical link (Task 2)" "$BODY" \
   '<link rel="canonical" href="http://localhost:3000/carrier/DL"'
 
+# ---- #110: the diff map's three small multiples, in the SERVED bytes ----
+# Every needle below is written against what React EMITS, not what the source contains: the
+# component writes U+2019/U+2014 literally for exactly this reason, and each needle sits inside
+# ONE text node, never across a `{...}` boundary -- React's SSR puts `<!-- -->` between adjacent
+# text nodes, which is how a greppable sentence stops being greppable while every unit test
+# still passes (grainNote's comment on carrier/[code]/page.tsx carries the same rule).
+check     "carrier: the diff map renders its panels" "$BODY" 'data-testid="diff-panel-label"'
+# The `title` fix, live. Added and downgauged SHARE the trailing window, so without a per-panel
+# title BOTH of these are the string `aria-label="Route map, 2025-06 → 2026-05.` -- byte-
+# identical, and position is the only thing left telling them apart. Two needles, because that
+# is the pair that collided.
+check     "carrier: the added panel names itself and its carrier"      "$BODY" 'aria-label="DL added.'
+check     "carrier: the downgauged panel does too, distinctly"         "$BODY" 'aria-label="DL downgauged.'
+check     "carrier: the dropped panel names itself and its carrier"    "$BODY" 'aria-label="DL dropped.'
+# The two honesty claims that exist nowhere else in the product, because no other surface knows
+# this map is a diff. map_carrier_diff.sql: 3,640 of 5,959 dropped carrier-routes had another
+# carrier flying the pair inside the trailing window; 4,691 of 8,357 added ones had filed that
+# pair before the prior window.
+check     "carrier: the diff map discloses the per-carrier grain" "$BODY" 'another carrier may still be flying it'
+check     "carrier: the diff map says added is re-entry"          "$BODY" 're-entry, not first appearance'
+check_not "carrier: the diff map claims nothing about the industry" "$BODY" 'nobody flew'
+# The downgauged panel cannot render the ordering it was cut by, and says so. Without this a
+# disclosure reading "400 of 512 routes drawn." is taken to mean the largest 400 ROUTES, which
+# is not what the cut selects.
+check     "carrier: the downgauged panel names its ranking key" "$BODY" 'by the fall in seats per departure'
+
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL")
 check     "carrier: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# 11b. #107 -- /carrier's network map, filtered by aircraft type. Every needle below was read
+# out of a SERVED body, never copied from the JSX: this file has shipped three self-defects, one
+# of them a needle carrying an entity that JSX had already decoded at compile time, so it printed
+# `ok` unconditionally. The two anchors here are quoted verbatim from `curl` output.
+#
+# `<svg role="img"` is deliberately NOT the needle for the map. The aircraft-mix chart already
+# emits it on this very page (checked above), so it is green whether or not a map renders --
+# exactly the assertion-an-outcome-the-bug-also-produces shape. `data-testid="network-map"`
+# discriminates. NOT `segment-map`, which names the shared component and matches #110's three
+# diff panels on this same page -- so the positive check below would pass with the network map
+# absent entirely, green off a string the diff map supplies. The needle names the ROLE.
+check     "carrier: unfiltered renders the type picker"          "$BODY" 'data-testid="map-picker"'
+check_not "carrier: unfiltered draws no arcs"                    "$BODY" 'data-testid="network-map"'
+check_not "carrier: unfiltered offers no way to clear nothing"   "$BODY" '>Clear the filter</a>'
+
+# The filtered view. `?type=` takes an aircraft SLUG, never the BTS id -- `proxy.ts` and
+# `mapFilter.ts` agree on that and `?type=614` is refused.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL?type=B737-8")
+check     "carrier?type: the map SVG is in the served HTML"      "$BODY" 'data-testid="network-map"'
+check     "carrier?type: the picker marks the showing type"      "$BODY" '<a href="/carrier/DL?type=B737-8" aria-current="page">'
+check     "carrier?type: offers the way back to the unfiltered page" "$BODY" '<a href="/carrier/DL">Clear the filter</a>'
+check     "carrier?type: the map's disclosures render as HTML too"   "$BODY" 'data-testid="map-notes"'
+# The cap sentence, which is the disclosure a reader needs and the one A13 warns is easy to
+# assert vacuously: `not.toContain("not drawn")` cannot die, because "not drawn" belongs to the
+# QUARANTINE sentence. This is the real cap wording, with both counts.
+check_dataset check "carrier?type: states the cap it drew under" "$BODY" '400 of 519 routes drawn.'
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=B737-8")
+check     "carrier?type: a resolved filter stays cacheable"      "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# CE-180 names BTS codes 030 (CESSNA 180) and 031 (CESSNA 180A/B), both fact-present. The page
+# refuses rather than picking one -- the silent-pick failure /carrier/PA exists to refuse -- and
+# the refusal must not be a cacheable 200.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL?type=CE-180")
+check_not "carrier?type: an ambiguous type draws no map"         "$BODY" 'data-testid="network-map"'
+check     "carrier?type: ...names every holder instead"          "$BODY" 'data-testid="mp-holder"'
+check     "carrier?type: ...and leaves the picker reachable"     "$BODY" 'data-testid="map-picker"'
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=CE-180")
+check     "carrier?type: an ambiguous filter is never cached"    "$HDRS" 'no-store'
+
+# An unknown type is a DIFFERENT finding from an ambiguous one and is worded apart.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL?type=NOPE-1")
+check_not "carrier?type: an unknown type draws no map"           "$BODY" 'data-testid="network-map"'
+check     "carrier?type: ...and still offers the list"           "$BODY" 'data-testid="map-picker"'
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=NOPE-1")
+check     "carrier?type: an unknown filter is never cached"      "$HDRS" 'no-store'
+
+# A type that RESOLVES for a carrier that never flew it: VX stopped filing in 2018-03, so the
+# filter is `ok` and the map is null. Without this sentence the heading sits over a silent gap.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX?type=B737-8")
+check_not "carrier?type: a carrier with no such filings draws no map" "$BODY" 'data-testid="network-map"'
+check_dataset check "carrier?type: ...and says so, naming the window" "$BODY" 'VX filed no B737-8 routes in 2025-06 → 2026-05.'
 
 # The other branch of the window line, and the negative half of the pair. VX (Virgin America)
 # stopped filing in 2018-03; the chart is fetched over the full window and can only draw to
 # there, so naming the REQUESTED window would put "the full window · … → 2026-05" over a chart
 # that ends in 2018 -- M4c's bug, one page over. Both caveats render here too, with no table.
+# #110: F4 (Air Flamenco, 21615) is the ONE carrier of 114 whose diff has a non-zero
+# carrier-wide quarantine count and ZERO drawable arcs. A section gated on `panels.length` drops
+# that count silently -- the "no trace that anything was there" the field exists to prevent --
+# and no other carrier page can catch it. Dataset-pinned: the 3 is a measured count.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/F4")
+check_not "carrier: F4 draws no diff panel"                    "$BODY" 'data-testid="diff-panel-label"'
+check_dataset check "carrier: F4 still states what was withheld" "$BODY" '3 of F4’s route pairs are on no panel above'
+check     "carrier: ...with the reason THIS exclusion has"     "$BODY" 'window that decides the category was wholly quarantined'
+
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX")
 check     "carrier: a carrier that stopped filing names ITS range" "$BODY" 'chart: 2015-01 → 2018-03'
 check_not "carrier: ...and does not claim the full window there"   "$BODY" 'chart: the full window'
 check     "carrier: the caveats render without a table"            "$BODY" 'Operated, not marketed.'
+check_not "carrier: a dormant carrier gets no diff section"       "$BODY" 'data-testid="diff-map"'
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/carrier/dl")
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/carrier/dl")
@@ -1055,6 +1199,78 @@ check     "carrier 404: names the unrelated same-code holder" "$BODY" 'Florida C
 # own tests reading the reason and calling it the slug; this is that finding, in the served bytes.
 BODY=$(curl -s --max-time 15 "${BASE}/carrier/zz")
 check_re  "carrier 404: the SENTENCE carries the slug as typed" "$BODY" 'We can.{1,3}t show .{1,12}zz'
+
+# 11b. #106: /carrier/<code>?type=<aircraft slug>, the map filter -- and the cache-header split
+#      that only a served build can see. THE FIRST QUERY KEY ON THIS SITE WHOSE VALIDATION NEEDS A
+#      DATABASE READ. `?y=` above looks like the precedent and is not: `parseYear` is a regex plus
+#      a range and touches no database (lib/year.ts's own header says so), and #87 reads a type
+#      off the already-loaded catalog. Whether `B737-8` names anything is a fact about the
+#      WAREHOUSE, so the value is RESOLVED -- only when the key is present, so unfiltered requests
+#      and every crawler hit pay nothing.
+#
+#      Each block opens its OWN `HDRS=`, and every `check_not` is paired with a positive on the
+#      same headers: a `no-store`-everywhere regression would satisfy the negatives vacuously,
+#      which is exactly what the `?y=1999` pair above exists to prevent. Status is asserted as
+#      '200', never `check_not '500'` -- a dead server scores 000 and passes the negative form.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/carrier/DL?type=B737-8")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=B737-8")
+check     "carrier?type: a resolvable filter renders"                "$CODE" '200'
+check     "carrier?type: ...and keeps the project Cache-Control"     "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# MUTANT 1's target: an unresolvable filter must not be a CACHEABLE 200. Under a structural-bound-
+# only design this renders DL's ordinary unfiltered page under a one-hour shared cache, once per
+# spelling -- a distinct CDN entry for a filter that names nothing.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/carrier/DL?type=NOPE-1")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=NOPE-1")
+check     "carrier?type=NOPE-1: an unresolvable filter still renders" "$CODE" '200'
+check     "carrier?type=NOPE-1: ...but is no-store"                   "$HDRS" 'no-store'
+check_not "carrier?type=NOPE-1: ...and is never long-cached"          "$HDRS" 's-maxage'
+
+# MUTANTS 2 and 5's target. `CE-180` names BTS codes 030 (CESSNA 180) and 031 (CESSNA 180A/B),
+# both of which really flew -- so the filter is AMBIGUOUS, not unknown. Picking one is the
+# silent-pick failure `AUS` already cost this project once; a `!== "unknown"` predicate would
+# long-cache the page for a filter the server refuses to apply.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/carrier/DL?type=CE-180")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=CE-180")
+check     "carrier?type=CE-180: an ambiguous filter still renders"  "$CODE" '200'
+check     "carrier?type=CE-180: ...but is no-store"                 "$HDRS" 'no-store'
+check_not "carrier?type=CE-180: ...and is never long-cached"        "$HDRS" 's-maxage'
+
+# MUTANT 3's target, and the reason the value is read from RAW BYTES rather than through
+# URLSearchParams the way `?y=` is. `%42737-8` percent-DECODES to `B737-8`, a real type: under a
+# decoded-value bound this resolves and is long-cached, giving a byte-identical page a second CDN
+# key. That is the live `/airport/SEA?y=%32019` hole, which is pre-existing, bounded for a
+# four-digit year, and deliberately NOT fixed here -- these values are textual, so the family is
+# far larger.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/carrier/DL?type=%42737-8")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=%42737-8")
+check     "carrier?type=%42737-8: a percent-spelling still renders" "$CODE" '200'
+check     "carrier?type=%42737-8: ...but is no-store"               "$HDRS" 'no-store'
+check_not "carrier?type=%42737-8: ...and is never long-cached"      "$HDRS" 's-maxage'
+
+# One value, one spelling (lib/pivot/bounds.ts's LITERAL_KEYS rule). The path segment 308s on
+# case; a query VALUE has no redirect mechanism available to it, so refusing is the honest answer
+# -- and it is what makes the resolver's `redirect` outcome unreachable from the filter path.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/carrier/DL?type=b737-8")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=b737-8")
+check     "carrier?type=b737-8: a lower-case spelling still renders" "$CODE" '200'
+check     "carrier?type=b737-8: ...but is no-store"                  "$HDRS" 'no-store'
+check_not "carrier?type=b737-8: ...and is never long-cached"         "$HDRS" 's-maxage'
+
+# The 308 must carry the filter. This page built `/carrier/DL` from the slug alone until #106, so
+# `/carrier/dl?type=B737-8` 308ed to `/carrier/DL` with the filter gone and the destination
+# rendered the unfiltered view with no error anywhere -- the identical measured bug `/airport`
+# fixed with `airportRedirectTarget`. The Location is anchored with `$` through `re_escape`
+# against the MEASURED wire form (relative, not absolute -- measured on this served build, not
+# assumed from proxy.test.ts, which pins the pre-relativization value); a substring needle would
+# pass for `/carrier/DL` too, which is the bug.
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/dl?type=B737-8")
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/carrier/dl?type=B737-8")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check     "carrier?type: the case-redirect is a 308"                 "$CODE" '308'
+check_re  "carrier?type: the 308 preserves the filter, not just the code" "$LOC" \
+  "^[Ll]ocation: $(re_escape '/carrier/DL?type=B737-8')$"
+check     "carrier?type: the 308 keeps the project Cache-Control"    "$HDRS" "$HTML_CACHE_EXPECTED"
 
 # 12. /aircraft/<slug> -- the slug is not a key, and the chart stacks by carrier.
 BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8")
@@ -1149,6 +1365,107 @@ check_re  "aircraft 404: refuses to pick one"       "$BODY" 'We won.{1,3}t pick 
 # There is no fixed buffer here -- these bodies land in shell variables -- but the `grep -q`
 # hazard at the top of this file was invisible until a page crossed 64 KB, so the numbers are
 # kept where the next person will see them.
+# 12b. #106: /aircraft/<slug>?carrier=<code>, the mirror of 11b's filter on the other page. Same
+#      five-part discipline, same pairing rule, and the same reason it can only be seen here.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/B737-8?carrier=DL")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8?carrier=DL")
+check     "aircraft?carrier: a resolvable filter renders"            "$CODE" '200'
+check     "aircraft?carrier: ...and keeps the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/B737-8?carrier=ZZ")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8?carrier=ZZ")
+check     "aircraft?carrier=ZZ: an unresolvable filter still renders" "$CODE" '200'
+check     "aircraft?carrier=ZZ: ...but is no-store"                   "$HDRS" 'no-store'
+check_not "aircraft?carrier=ZZ: ...and is never long-cached"          "$HDRS" 's-maxage'
+
+# THE CARRIER SIDE OF MUTANTS 2 AND 5, and the finding that shaped this resolver: `/carrier/PA` is
+# `notFound`, NOT `ambiguous` -- `CarrierResult` is a three-way union with no ambiguous kind.
+# `lookupCarriersByCode(["PA"])` returns nothing because it filters to fact-present airlines, so
+# the collision only surfaces through the SECOND query `resolveCarrier` makes to word its 404:
+# `PA` is held by airline_id 20384 and 20386 (both "Pan American World Airways") plus 20389
+# "Florida Coastal Airlines", an unrelated carrier sharing the code. More than one holder is a
+# refusal to choose; ZERO or ONE is merely unknown, which is the boundary the unit tests pin.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/B737-8?carrier=PA")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8?carrier=PA")
+check     "aircraft?carrier=PA: an ambiguous filter still renders" "$CODE" '200'
+check     "aircraft?carrier=PA: ...but is no-store"                "$HDRS" 'no-store'
+check_not "aircraft?carrier=PA: ...and is never long-cached"       "$HDRS" 's-maxage'
+
+# `%44L` percent-decodes to `DL`. Same raw-bytes rule as 11b's `%42737-8`.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/B737-8?carrier=%44L")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8?carrier=%44L")
+check     "aircraft?carrier=%44L: a percent-spelling still renders" "$CODE" '200'
+check     "aircraft?carrier=%44L: ...but is no-store"               "$HDRS" 'no-store'
+check_not "aircraft?carrier=%44L: ...and is never long-cached"      "$HDRS" 's-maxage'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/B737-8?carrier=dl")
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/B737-8?carrier=dl")
+check     "aircraft?carrier=dl: a lower-case spelling still renders" "$CODE" '200'
+check     "aircraft?carrier=dl: ...but is no-store"                  "$HDRS" 'no-store'
+check_not "aircraft?carrier=dl: ...and is never long-cached"         "$HDRS" 's-maxage'
+
+HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/aircraft/b737-8?carrier=DL")
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}/aircraft/b737-8?carrier=DL")
+LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
+check     "aircraft?carrier: the case-redirect is a 308"             "$CODE" '308'
+check_re  "aircraft?carrier: the 308 preserves the filter, not just the slug" "$LOC" \
+  "^[Ll]ocation: $(re_escape '/aircraft/B737-8?carrier=DL')$"
+check     "aircraft?carrier: the 308 keeps the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+
+# 12c. #108: the /aircraft network map itself -- what 12b's header checks cannot see. Every check
+#      above this block reads a Cache-Control; a page can carry the right header and still draw
+#      the wrong map, or none. These read the BODY.
+#
+#      Needles are the bytes React EMITS, not the bytes the source contains. Nothing here carries
+#      an apostrophe, an entity or an angle-bracketed pair for that reason: `check_not` on a JSX
+#      string containing `&rsquo;` has printed a silent `ok` in this file before, because JSX
+#      decodes entities at compile time and React emits raw U+2019.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8")
+check     "aircraft: unfiltered renders the picker"          "$BODY" 'data-testid="map-picker"'
+# The map query needs BOTH a carrier and a type, so the unfiltered page issues none at all.
+check_not "aircraft: unfiltered draws no arcs"               "$BODY" 'data-testid="segment-map"'
+check     "aircraft: unfiltered says what the picker is for" "$BODY" 'Pick a carrier to draw the routes'
+# THE FILTER VOCABULARY, in the served bytes. `?carrier=` resolves CODES and refuses ids, so an
+# href built from the raw `airline_id` is live, looks deliberate, and is refused at the far end.
+check     "aircraft: the picker links a carrier CODE"        "$BODY" 'href="/aircraft/B737-8?carrier=WN"'
+check_not "aircraft: ...never the raw AIRLINE_ID"            "$BODY" 'carrier=19393'
+# Nothing to clear on the page a reader arrives at first.
+check_not "aircraft: unfiltered offers no clear-filter link" "$BODY" '>Clear the filter</a>'
+
+# WN files more B737-8 pairs than the 400-arc cap (1,318 measured over the trailing 12 to
+# 2026-05), so this view states the cap. The count is a PATTERN: a BTS refresh moves it.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8?carrier=WN")
+check     "aircraft?carrier=WN: draws the map"               "$BODY" 'data-testid="segment-map"'
+check     "aircraft?carrier=WN: the map SVG is in the served HTML" "$BODY" 'aria-label="Route map, '
+check_re  "aircraft?carrier=WN: states the cap it hit"       "$BODY" '400 of [0-9,]+ routes drawn\.'
+check     "aircraft?carrier=WN: says the filter scopes to the map" "$BODY" 'The filter applies to the map only'
+check     "aircraft?carrier=WN: offers the way back"         "$BODY" '<a href="/aircraft/B737-8">Clear the filter</a>'
+# The arc encodings reach the rail, which is the only thing on the page that explains them.
+check     "aircraft?carrier=WN: the rail explains the arcs"  "$BODY" 'Arc rendering'
+
+# AS files 325 pairs on the same type -- UNDER the cap, and with no quarantined or same-airport
+# group either, so this view states NOTHING. A cap note rendered unconditionally reads "325 of
+# 325 routes drawn." here and looks entirely plausible, which is why the pair is on one page.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8?carrier=AS")
+check     "aircraft?carrier=AS: draws the map"               "$BODY" 'data-testid="segment-map"'
+check_not "aircraft?carrier=AS: states no cap it did not hit" "$BODY" 'routes drawn.'
+
+# THE ONE CHECK NO UNIT TEST CAN MAKE, and the reason this block exists. `%57%4E` percent-decodes
+# to `WN`. `proxy.ts` admits `?carrier=` on the RAW bytes and refuses this spelling (12b's
+# `%44L` block proves the header side), so the page must refuse it too -- reading the value off
+# `searchParams`, which Next hands over already decoded, would draw WN's map under a URL this
+# server rejected and no unit test could see it, because no unit test crosses Next's decoding.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8?carrier=%57%4E")
+check_not "aircraft?carrier=%57%4E: a percent-spelling draws NO map" "$BODY" 'data-testid="segment-map"'
+check     "aircraft?carrier=%57%4E: ...and names which way it failed" "$BODY" 'without percent-encoding'
+
+# Every holder NAMED, none chosen. The two Pan Am rows are byte-identical by name, so the
+# airline_id is what makes the list legible rather than the same string twice.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8?carrier=PA")
+check_not "aircraft?carrier=PA: refuses to pick a holder"    "$BODY" 'data-testid="segment-map"'
+check     "aircraft?carrier=PA: names the unrelated holder"  "$BODY" 'Florida Coastal Airlines (airline_id 20389)'
+check     "aircraft?carrier=PA: ...and both Pan Am eras"     "$BODY" 'Pan American World Airways (airline_id 20386)'
+
 for U in /airport/SEA /airport/ATL /airport/ORD /carrier/DL /aircraft/B737-8; do
   printf '  note %8s bytes of HTML for %s\n' "$(curl -s --max-time 30 "${BASE}${U}" | wc -c)" "$U"
 done
@@ -1323,7 +1640,7 @@ check_re "db: proxy, page and API share ONE DuckDBInstance (open handles = 1)" "
 # ---------------------------------------------------------------------------------------------
 # 14. M6 Task 8: /watch and the four Top-N leaderboard presets. proxy.ts's matcher grew to
 #     ELEVEN entries for this (M6 Task 7) -- `/watch` (exact path, same shape as `/search`) and
-#     `/watch/:preset` (dynamic segment, same shape as the four ENTITY_ROUTES rows, but gated by
+#     `/watch/:preset` (dynamic segment, the same shape an entity page's slug has, but gated by
 #     a static slug registry plus `isDataLayerHealthy()` rather than a per-slug resolve()). This
 #     is the section that closes the one gap M5's own whole-branch review left explicit in
 #     hosting.md: "unit-verified only, not yet smoke-curled" -- proxy.test.ts calls proxy()
@@ -1557,7 +1874,7 @@ check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize 
 # trigger". proxy() has no try/catch around that call, so `GET /watch??x=1` was a 500 on every one
 # of the twelve matcher paths, `/` and `/sitemap.xml` included, for any client. Measured at
 # d109845, and re-measured against a served build by restoring the throw on top of the fix: the
-# five doubled-`?` rows below all 500, while their single-`?` neighbours all stay 307 -- so the
+# seven doubled-`?` rows below all 500, while their single-`?` neighbours all stay 307 -- so the
 # branch that exists to bound an unbounded cache family had introduced an unbounded family of
 # origin-hitting 500s. (Note which checks discriminate: the `is never cached` / `is never
 # long-cached` pair stays GREEN on a 500, because Next's error response carries no-store of its
@@ -1572,6 +1889,8 @@ for U in "/?utm_source=twitter|/" \
          "/route/JFK-LAX??cachebust=99|/route/JFK-LAX" \
          "/carrier/DL?utm_source=x|/carrier/DL" \
          "/airport/ORD??y=2019|/airport/ORD?y=2019" \
+         "/carrier/DL??type=x|/carrier/DL?type=x" \
+         "/aircraft/B737-8??carrier=x|/aircraft/B737-8?carrier=x" \
          "/robots.txt?x=1|/robots.txt" \
          "/sitemap.xml?x=1|/sitemap.xml" \
          "/sitemap.xml??x=1|/sitemap.xml"; do

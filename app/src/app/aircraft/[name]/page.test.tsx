@@ -1,9 +1,36 @@
 // @vitest-environment jsdom
+
+// `next/headers` throws "called outside a request scope" when invoked directly in a test -- the
+// same reason `/airport`'s page test carries this identical mock, and for the identical cause:
+// #106 gave this page's REDIRECT branch a `headers()` call, so that the raw query survives the
+// case-normalization 308 instead of being silently dropped. That branch is already exercised by
+// the pre-existing lowercase-redirect test below, so the module has to be mocked rather than
+// left real. The factory awaits a dynamic `import()` for `RAW_QUERY_HEADER` -- a top-level
+// import binding referenced inside `vi.mock` would break on hoisting, since `vi.mock` calls are
+// hoisted above every import statement in the file.
+import { vi } from "vitest";
+vi.mock("next/headers", async () => {
+  const { RAW_QUERY_HEADER } = await import("@/lib/rawQuery");
+  // Default: an empty raw query, matching a bare request with no `?` at all -- which is what
+  // keeps every PRE-EXISTING test in this file (none of which anticipated `headers()` being
+  // called) passing unmodified, including the lowercase-redirect digest, which must stay exactly
+  // the bare canonical path with no stray `?`.
+  return { headers: vi.fn(async () => new Headers({ [RAW_QUERY_HEADER]: "" })) };
+});
 import { describe, expect, it } from "vitest";
+import { headers } from "next/headers";
+import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { render, screen } from "@testing-library/react";
-import AircraftPage, { generateMetadata } from "@/app/aircraft/[name]/page";
+import AircraftPage, {
+  AircraftView,
+  aircraftRedirectTarget,
+  generateMetadata,
+} from "@/app/aircraft/[name]/page";
 import { decode } from "@/lib/pivot/urlstate";
-import { dataAsOf, loadAllowlist } from "@/lib/db";
+import { dataAsOf, loadAllowlist, runPivot } from "@/lib/db";
+import { resolveAircraftSlug } from "@/lib/aircraftSlug";
+import { resolveCarrierFilter } from "@/lib/map/mapFilter";
+import { AIRCRAFT_CARRIER_LIMIT, trailing12Query } from "@/lib/entityFacts";
 
 /** `permanentRedirect`/`notFound` throw rather than return -- calling `AircraftPage` on a slug
  * that hits either branch rejects with that thrown Error. Same narrowing as
@@ -22,6 +49,26 @@ async function catchDigest(name: string): Promise<string> {
 
 function page(name: string) {
   return AircraftPage({ params: Promise.resolve({ name }) });
+}
+
+/** The page as `proxy.ts` hands it over: the map filter arrives on `RAW_QUERY_HEADER` as raw,
+ * still-percent-encoded bytes, and never through `searchParams`.
+ *
+ * DRIVEN THROUGH `AircraftPage`, not `AircraftView`, and that is the point of this helper. A
+ * test that called the view directly would pass the filter value in by hand and so could not
+ * tell a header read from a `searchParams` read -- and which of those two this page does is the
+ * whole of #106's admission policy here (`AircraftPage`'s own comment has the argument). */
+function filtered(name: string, rawQuery: string) {
+  vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: rawQuery }));
+  return AircraftPage({ params: Promise.resolve({ name }) });
+}
+
+/** `B737-8` resolved once, for the tests that need to drive `AircraftView`'s explicit inputs
+ * (the row limit) rather than a request. Same shape, same reason, as /airport's `view(limit)`. */
+async function view(opts: { limit?: number; carrierFilter?: string | null } = {}) {
+  const r = await resolveAircraftSlug("B737-8");
+  if (r.kind !== "ok") throw new Error("expected B737-8 to resolve for this fixture");
+  return await AircraftView({ type: r.type, canonical: r.canonical, ...opts });
 }
 
 describe("/aircraft/<slug>", () => {
@@ -157,6 +204,46 @@ describe("/aircraft/<slug> for a zero-padded BTS code", () => {
 });
 
 describe("/aircraft/<slug> redirect and 404", () => {
+  // #106. This redirect used to build `/aircraft/B737-8` from the slug alone, silently dropping
+  // every query key -- so `/aircraft/b737-8?carrier=DL` would have 308ed to `/aircraft/B737-8` with the
+  // filter gone entirely, and the destination would have rendered the unfiltered view with no
+  // error anywhere. The identical measured bug `/airport` fixed with `airportRedirectTarget`.
+  //
+  // Asserting the digest STRING, not merely that a redirect fired: "a redirect happened" is true
+  // both before and after the fix, so the test immediately below would keep passing under the
+  // bug. The string is what discriminates.
+  it("preserves a filter query across the case-normalization redirect", async () => {
+    vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: "carrier=DL" }));
+    expect(await catchDigest("b737-8")).toBe(
+      "NEXT_REDIRECT;replace;/aircraft/B737-8?carrier=DL;308;",
+    );
+  });
+
+  it("preserves an UNRESOLVABLE filter across the same redirect, rather than dropping it", async () => {
+    // A redirect that stripped a bad filter would be the same silent-fallback bug in a different
+    // coat: the canonical URL must reach the same refusal the direct URL does -- `no-store` from
+    // proxy.ts, and (once #107/#108 land the page surface) a named error -- not quietly render
+    // the unfiltered view because the redirect erased the evidence anything was wrong.
+    vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: "carrier=ZZ" }));
+    expect(await catchDigest("b737-8")).toBe(
+      "NEXT_REDIRECT;replace;/aircraft/B737-8?carrier=ZZ;308;",
+    );
+  });
+
+  it("appends nothing for an empty raw query, rather than a stray '?'", () => {
+    // The bare-request case, and the reason the helper tests the LENGTH rather than appending
+    // unconditionally: every pre-existing redirect on this page carries no query at all.
+    expect(aircraftRedirectTarget("B737-8", "")).toBe("/aircraft/B737-8");
+    expect(aircraftRedirectTarget("B737-8", "carrier=DL")).toBe("/aircraft/B737-8?carrier=DL");
+  });
+
+  it("passes the raw query through VERBATIM, without re-encoding it", () => {
+    // Reassembling a query from decoded params is the corruption `lib/rawQuery.ts`'s header
+    // exists to prevent -- a `,` inside a value becomes indistinguishable from a separator. This
+    // helper concatenates bytes and must never normalize them.
+    expect(aircraftRedirectTarget("B737-8", "carrier=%42%37")).toBe("/aircraft/B737-8?carrier=%42%37");
+  });
+
   it("redirects a lower-case slug permanently (308) to the canonical URL", async () => {
     // Fails if the redirect branch is dropped, if `permanentRedirect` regresses to plain
     // `redirect()` (digest would end ';307;'), or if the target carries the raw short name --
@@ -262,5 +349,215 @@ describe("/aircraft/<slug> for a type that has stopped flying", () => {
     const chartHalf = line.slice(line.indexOf("chart:"));
     expect(chartHalf).toContain("2015-01 → 2023-04");
     expect(chartHalf).not.toContain(asOf);
+  });
+});
+
+/** #108: the carrier x aircraft-type network map, entered from the type side.
+ *
+ * FIXTURES, measured against this warehouse over the trailing 12 to 2026-05 (B737-8 is BTS code
+ * 614): WN files 1,318 distinct undirected pairs on it and AS files 325, against a
+ * `NETWORK_ARC_CAP` of 400. Neither carrier has a quarantined or a same-airport group on this
+ * type, so WN's map carries exactly one disclosure sentence and AS's carries none -- which is
+ * what makes the pair able to tell a conditional cap note from an unconditional one. One page,
+ * two sides of one boundary.
+ *
+ * The counts are asserted as a PATTERN, never as the literal 1,318: a BTS refresh moves it, and
+ * a fixture that has to be re-typed every month is a fixture that gets deleted. */
+describe("/aircraft/<slug> network map (#108)", () => {
+  it("draws no map until a carrier is chosen, and says why", async () => {
+    // The map query needs BOTH halves -- one carrier and one type -- so an unfiltered page
+    // issues none at all. The bug this catches is the obvious mount, `<SegmentMap map={map}/>`
+    // ungated, which on a null map throws, and whose "fixed" form (drawing every carrier's
+    // routes) answers a different question than the one the page asks.
+    const { container } = render(await page("B737-8"));
+    expect(container.querySelector("[data-testid='segment-map']")).toBeNull();
+    expect(container.querySelector("[data-testid='map-picker']")).not.toBeNull();
+    expect(container.textContent).toContain("Pick a carrier to draw the routes it flew this type on");
+  });
+
+  it("draws the map once a carrier is chosen", async () => {
+    const { container } = render(await filtered("B737-8", "carrier=AS"));
+    const map = container.querySelector("[data-testid='segment-map']");
+    expect(map).not.toBeNull();
+    // Scoped INSIDE the map: the aircraft-mix chart on this same page also emits an
+    // `svg[role='img']`, so an unscoped query is satisfied by the chart alone and this test
+    // would stay green with the map removed entirely.
+    expect(map?.querySelector("svg[role='img']")).not.toBeNull();
+    expect(container.textContent).not.toContain("Pick a carrier to draw");
+  });
+
+  it("refuses a percent-spelling instead of decoding it into a filter", async () => {
+    // `%57%4E` percent-decodes to `WN`. THE PRODUCTION HALF OF THIS IS IN app/smoke.sh: no unit
+    // test can cross Next's own decoding of `searchParams`, so what this one pins is the half
+    // that is visible from here -- the page resolves the RAW bytes, so a value `proxy.ts`
+    // refused (and declined to cache) is refused by the page too. Reading it off `searchParams`
+    // instead would hand this page `WN` and draw WN's map under a URL the server rejected.
+    const { container } = render(await filtered("B737-8", "carrier=%57%4E"));
+    expect(container.querySelector("[data-testid='segment-map']")).toBeNull();
+    // The resolver's own curated reason, wired through rather than swallowed for a generic
+    // message -- it is the only thing that says WHICH way this value failed.
+    expect(container.textContent).toContain("without percent-encoding");
+    expect(container.textContent).toContain("%57%4E");
+  });
+
+  it("refuses an ambiguous carrier code and names every holder, in id order", async () => {
+    // `/carrier/PA` holds THREE airline_ids -- two Pan Am eras plus an unrelated Florida
+    // Coastal -- and picking one is the silent-pick failure this project has already paid for.
+    // Asserting a count of three alone would pass under an implementation that named the same
+    // holder three times; asserting the ORDER as well pins the resolver's sort, which exists so
+    // one URL does not render two ways across restarts.
+    const { container } = render(await filtered("B737-8", "carrier=PA"));
+    expect(container.querySelector("[data-testid='segment-map']")).toBeNull();
+    const holders = [...container.querySelectorAll("[data-testid='mp-holder']")].map(
+      (li) => li.textContent ?? "",
+    );
+    expect(holders).toEqual([
+      "Pan American World Airways (airline_id 20384)",
+      "Pan American World Airways (airline_id 20386)",
+      "Florida Coastal Airlines (airline_id 20389)",
+    ]);
+    // The id suffix is load-bearing and this fixture proves it: the two Pan Am rows really are
+    // BYTE-IDENTICAL by name, so a bare name list would print one string twice and tell a reader
+    // nothing about why the code cannot resolve. The unrelated carrier is the third.
+    expect(container.textContent).toContain("Florida Coastal Airlines");
+  });
+
+  it("states the cap when it hit one, and states nothing when it did not", async () => {
+    // A cap note rendered UNCONDITIONALLY reads "325 of 325 routes drawn." under AS and looks
+    // entirely plausible, so the over-cap half alone cannot catch it. The negative is written
+    // against the REAL sentence, never a substring that happens to be absent from both.
+    const over = render(await filtered("B737-8", "carrier=WN")).container;
+    expect(over.querySelector("[data-testid='map-notes']")?.textContent).toMatch(
+      /^400 of [\d,]+ routes drawn\./,
+    );
+
+    const under = render(await filtered("B737-8", "carrier=AS")).container;
+    // Positive first, so the absence below cannot pass vacuously on a page that drew no map.
+    expect(under.querySelector("[data-testid='segment-map']")).not.toBeNull();
+    expect(under.querySelector("[data-testid='map-notes']")?.textContent ?? "").not.toMatch(
+      /routes drawn\./,
+    );
+  });
+
+  it("emits filter values the server's own admission policy resolves, back to the same ids", async () => {
+    // THE ROUND TRIP, over every option this real page emits rather than one hand-built row.
+    // `?carrier=` is a CODE vocabulary: `resolveCarrierFilter("OO")` resolves and
+    // `resolveCarrierFilter("20304")` does not, so a picker that emitted the raw `airline_id`
+    // would produce links that are live, look deliberate, and are refused at the far end. The
+    // types line up either way -- both are `string` -- so only executing the far end can tell.
+    const r = await resolveAircraftSlug("B737-8");
+    if (r.kind !== "ok") throw new Error("expected B737-8 to resolve for this fixture");
+    const result = await runPivot(
+      trailing12Query({
+        dimensions: ["op_airline_id"],
+        filters: [["aircraft_type", [r.type.id]]],
+        asOf: await dataAsOf(),
+        limit: AIRCRAFT_CARRIER_LIMIT,
+      }),
+    );
+    const idsFromWarehouse = new Set(result.rows.map((row) => String(row.op_airline_id)));
+    expect(idsFromWarehouse.size).toBeGreaterThan(1);
+
+    const { container } = render(await page("B737-8"));
+    const hrefs = [...container.querySelectorAll(".mp-list a")].map((a) => a.getAttribute("href"));
+    expect(hrefs.length).toBe(idsFromWarehouse.size);
+
+    const idsFromLinks = new Set<string>();
+    for (const href of hrefs) {
+      // A carrier code is `[A-Z0-9]{2,3}` so percent-encoding is the identity over it; parsing
+      // rather than string-slicing keeps this honest if that ever stops being true.
+      const value = new URL(href ?? "", "http://example.test").searchParams.get("carrier");
+      const verdict = await resolveCarrierFilter(value);
+      if (verdict.kind !== "ok") {
+        throw new Error(`picker emitted '${value}', which the server refuses: ${verdict.kind}`);
+      }
+      idsFromLinks.add(String(verdict.id));
+    }
+    expect(idsFromLinks).toEqual(idsFromWarehouse);
+  });
+
+  it("marks the showing carrier as the current view, and only that one", async () => {
+    const { container } = render(await filtered("B737-8", "carrier=AS"));
+    const current = [...container.querySelectorAll(".mp-list a[aria-current='page']")];
+    expect(current.length).toBe(1);
+    expect(current[0].textContent).toContain("AS");
+  });
+
+  it("offers a way back to the unfiltered view, and only when there is one to offer", async () => {
+    // `MapPicker` holds per-option hrefs and no base path, so only the page knows the URL of its
+    // own unfiltered view. Rendered unconditionally it is a control that does nothing on the
+    // page a reader arrives at first.
+    const clear = (c: HTMLElement) =>
+      [...c.querySelectorAll("a")].filter((a) => a.textContent === "Clear the filter");
+
+    expect(clear(render(await page("B737-8")).container)).toHaveLength(0);
+
+    const drawn = clear(render(await filtered("B737-8", "carrier=AS")).container);
+    expect(drawn).toHaveLength(1);
+    expect(drawn[0].getAttribute("href")).toBe("/aircraft/B737-8");
+
+    // A REFUSED filter needs the way out most of all -- the reader is looking at a page with no
+    // map and a value the server would not apply.
+    expect(clear(render(await filtered("B737-8", "carrier=ZZ")).container)).toHaveLength(1);
+  });
+
+  it("says the filter applies to the map only, and only when a filter applied", async () => {
+    // Nothing else on this page says so, and the stat strip, chart and table do NOT move with
+    // `?carrier=`. A reader who assumes they did has been misled by omission.
+    const scope = "The filter applies to the map only";
+    expect(render(await filtered("B737-8", "carrier=AS")).container.textContent).toContain(scope);
+    expect(render(await page("B737-8")).container.textContent).not.toContain(scope);
+    // On a refusal NOTHING was applied, so the sentence would describe an event that did not
+    // happen.
+    expect(render(await filtered("B737-8", "carrier=ZZ")).container.textContent).not.toContain(
+      scope,
+    );
+  });
+
+  it("asks the rail for the arc encodings only when arcs are drawn", async () => {
+    // The arcs encode three independent facts (width by seats, dash by load factor, dotted below
+    // the departure floor) and nothing else on the served page explains any of them. The
+    // converse matters too: a rail explaining arcs on a page with no map is the stale "how to
+    // read this" the legend rail exists to replace.
+    const rail = (c: HTMLElement) => c.querySelector(".legend")?.textContent ?? "";
+    expect(rail(render(await filtered("B737-8", "carrier=AS")).container)).toContain(
+      "Arc rendering",
+    );
+    expect(rail(render(await page("B737-8")).container)).not.toContain("Arc rendering");
+  });
+
+  it("discloses a partial picker when the page's own pivot was truncated", async () => {
+    // The picker lists the rows the page already awaited, so it inherits that pivot's limit --
+    // and only the page knows what its limit was. Undisclosed, the list reads as the complete
+    // set of carriers flying this type.
+    const short = render(await view({ limit: 2 })).container;
+    expect(short.textContent).toContain("This picker lists the largest by seats");
+    expect(render(await view()).container.textContent).not.toContain(
+      "This picker lists the largest by seats",
+    );
+  });
+});
+
+describe("/aircraft/<slug> network map on a type with nothing in the window", () => {
+  // The MD-80 again: 68 filed months, none since 2023-04, so the trailing-12 table is empty.
+  it("draws no map section at all when nobody asked for one", async () => {
+    // `AircraftEmptyState` already states this finding in words. A picker offering nothing,
+    // under a map that cannot exist, is the second panel repeating it -- the card soup /route's
+    // chart rule refuses.
+    const { container } = render(await page("MD-80"));
+    expect(container.querySelector("[data-testid='map-picker']")).toBeNull();
+    expect(container.querySelector("[data-testid='segment-map']")).toBeNull();
+    expect(container.querySelector(".empty-state")).not.toBeNull();
+  });
+
+  it("still answers a filter that WAS asked for", async () => {
+    // The reader typed a question into the URL; silence is not an answer to it. `DL` resolves,
+    // so this is the `ok`-with-no-map arm: the finding stated in words, not a blank panel.
+    const { container } = render(await filtered("MD-80", "carrier=DL"));
+    expect(container.querySelector("[data-testid='map-picker']")).not.toBeNull();
+    expect(container.querySelector("[data-testid='segment-map']")).toBeNull();
+    expect(container.textContent).toContain(
+      "No routes to draw: DL performed no departures on the MD-80",
+    );
   });
 });

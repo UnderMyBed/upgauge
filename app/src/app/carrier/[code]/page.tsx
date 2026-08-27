@@ -2,13 +2,17 @@ import type { Metadata } from "next";
 import { cache } from "react";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveCarrier } from "@/lib/carrier";
+import { headers } from "next/headers";
+import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { BASE_URL } from "@/lib/siteUrl";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
+import { DiffMap } from "@/components/DiffMap";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
+import { fetchCarrierDiff } from "@/lib/map/carrierDiff";
 import { encode } from "@/lib/pivot/urlstate";
 import {
   CARRIER_TYPE_LIMIT,
@@ -21,6 +25,12 @@ import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/f
 import { resolutionKey, displayValue, type CarrierRef, type Resolved } from "@/lib/resolve";
 import { routeHrefFromCodes } from "@/lib/entityLink";
 import { topNQuery, topNPermalink, type TopNSpec } from "@/lib/topn";
+import { MapPicker } from "@/components/MapPicker";
+import { SegmentMap } from "@/components/SegmentMap";
+import { pickerOptions } from "@/lib/map/picker";
+import { fetchCarrierTypeNetwork } from "@/lib/map/carrierTypeNetwork";
+import { rawFilterValue, resolveTypeFilter, type MapFilter } from "@/lib/map/mapFilter";
+import { slugFor } from "@/lib/aircraftSlug";
 import type { Allowlist } from "@/lib/pivot/allowlist";
 import type { PivotQuery } from "@/lib/pivot/types";
 
@@ -240,10 +250,21 @@ function CarrierEmptyState({ query, carrier }: { query: PivotQuery; carrier: Car
 export async function CarrierView({
   carrier,
   filterValue,
+  typeFilter = { kind: "none" },
   limit = CARRIER_TYPE_LIMIT,
 }: {
   carrier: CarrierRef;
   filterValue: string;
+  /** #107. The `?type=` map filter, ALREADY RESOLVED -- same split as `carrier` itself, which
+   *  `CarrierPage` resolves and hands in. Resolution needs a database read and belongs with the
+   *  other routing plumbing; taking the verdict rather than the raw string is also what lets a
+   *  test drive all four outcomes (including `ambiguous`, which no `/carrier/DL` URL can reach
+   *  by accident) without a resolver round-trip.
+   *
+   *  Defaulted so the call sites that predate the map keep compiling and keep meaning what they
+   *  meant: no filter key on the request is `none`, which is a DIFFERENT thing from a filter
+   *  that was provided and refused. */
+  typeFilter?: MapFilter<string>;
   limit?: number;
 }) {
   const allowlist = await loadAllowlist();
@@ -313,16 +334,43 @@ export async function CarrierView({
   // carrier's fleet says almost nothing, and the arrival of the A321 and the 737-9 across a
   // decade is the entire point of putting a chart on this page. The two windows are genuinely
   // different, which is why the `.window` line below names both.
-  const [result, mix, routesResult, originsResult]: [
+  // #107. The map JOINS this Promise.all rather than adding a sequential await after it, for
+  // the reason directly above -- and it is the only member that is conditional. An UNFILTERED
+  // page issues no map query at all: `carrierTypeNetworkQuery` requires both a carrier and a
+  // type by design, so there is no whole-network query to run and nothing to fall back to.
+  // `Promise.resolve(null)` keeps the tuple one shape instead of splitting the await into two
+  // code paths that could drift.
+  //
+  // Gated on `ok` ONLY, never on `!== "none"`: `unknown` and `ambiguous` are refusals, and
+  // querying on one would mean picking a filter value the server declined -- for `ambiguous`,
+  // literally the silent pick `/carrier/PA` exists to refuse. The refusal renders instead.
+  //
+  // #110's diff query joins this SAME Promise.all for the same reason. It takes NO filter: the
+  // diff map is the whole carrier's change, not one aircraft type's, so it is unaffected by
+  // `?type=` -- which is why it is unconditional where the map above is not.
+  //
+  // Both pass `carrier.id`, the AIRLINE_ID off the resolved ref, never `Number(filterValue)` --
+  // CLAUDE.md keys on AIRLINE_ID, and the typed field is the one place that cannot be a re-parse
+  // of a string this page happened to build for the pivot's filter list.
+  const mapFetch: Promise<Awaited<ReturnType<typeof fetchCarrierTypeNetwork>>> =
+    typeFilter.kind === "ok"
+      ? fetchCarrierTypeNetwork(carrier.id, typeFilter.id, TRAILING_12_FROM, asOf)
+      : Promise.resolve(null);
+
+  const [result, mix, routesResult, originsResult, typeMap, diff]: [
     PivotResult,
     Awaited<ReturnType<typeof fetchAircraftMix>>,
     PivotResult,
     PivotResult,
+    Awaited<ReturnType<typeof fetchCarrierTypeNetwork>>,
+    Awaited<ReturnType<typeof fetchCarrierDiff>>,
   ] = await Promise.all([
     runPivot(query),
     fetchAircraftMix([["op_airline_id", [filterValue]]], EARLIEST_MONTH, asOf),
     runPivot(topNQuery(routesSpec)),
     runPivot(topNQuery(originsSpec)),
+    mapFetch,
+    fetchCarrierDiff(carrier.id, asOf),
   ]);
 
   const totals = sumTotals(result.rows);
@@ -332,6 +380,30 @@ export async function CarrierView({
   const routeCols = routeDimColumns(allowlist);
   const hasRoutes = routesResult.rows.length > 0;
   const hasOrigins = originsResult.rows.length > 0;
+  const hasMap = typeMap !== null;
+
+  // #107. The picker reads the pivot THIS PAGE ALREADY AWAITED -- `query` groups by
+  // `aircraft_type`, which is exactly the dimension the map filters on -- so the control costs
+  // no query of its own.
+  //
+  // `filterValueOf` supplies the FILTER VOCABULARY, and it is `slugFor(label)` rather than the
+  // row's BTS id for a measured reason: `resolveTypeFilter` admits an aircraft slug and refuses
+  // an id outright (`673` -> unknown, `ERJ-175` -> ok, id `673`), so an id-valued link is dead
+  // on arrival. It is not the bare label either -- `CRJ-2/4` is a live SkyWest short name whose
+  // percent-encoding the no-percent bound refuses; `slugFor` maps it to `CRJ-2-4`.
+  //
+  // `selected` is derived from the RESOLVED type's own code, never from the raw query string:
+  // on `ok` the two are equal, and deriving it from the entity means the marked option cannot
+  // disagree with the map actually drawn above it.
+  const typeOptions = pickerOptions({
+    rows: result.rows,
+    resolved: result.resolved,
+    dimKey: "aircraft_type",
+    basePath: `/carrier/${carrier.code}`,
+    filterKey: "type",
+    filterValueOf: (_rawId, label) => slugFor(label),
+    selected: typeFilter.kind === "ok" ? slugFor(typeFilter.code) : null,
+  });
 
   // The range the chart can DRAW, which is not the range it was fetched over. 45 of 114
   // fact-present carriers last filed before the trailing-12 window, so a chart whose x axis
@@ -395,6 +467,62 @@ export async function CarrierView({
                 these rows.
               </p>
             )}
+            {/* #107, the network map. Placed directly under the aircraft-type table because the
+                picker IS that table's rows, and above the map for `/airport`'s reason: the map
+                is the subject, the control that changes it sits beneath.
+
+                An unfiltered page draws NO map, deliberately -- `carrierTypeNetworkQuery` needs
+                both a carrier and a type, and a whole-network hairball is what
+                docs/product/features.md rules out. The picker alone is the honest unfiltered
+                state, so there is no empty panel and no "select a type" placeholder.
+
+                The three refusal states and the option list are `MapPicker`'s, which renders
+                the list UNDERNEATH a refusal rather than instead of it -- a refusal that leaves
+                the reader with no way forward is a dead end. */}
+            <h2>Network map</h2>
+            {/* MERGE (#107 x #110). Wrapped, because `data-testid="segment-map"` stopped
+                identifying a ROLE the moment #110 landed: `DiffMap` mounts a `SegmentMap` per
+                panel, so that string now matches four maps on this page. Three of #107's own
+                `check_not` needles fired on the merge, and worse, its POSITIVE needle would
+                have passed with the network map absent entirely -- a gate green for the wrong
+                reason, off a string the diff panels supply. `network-map` names this one. */}
+            {hasMap ? (
+              <div data-testid="network-map">
+                <SegmentMap map={typeMap} />
+              </div>
+            ) : null}
+            {/* `ok` and yet no map: the type resolved, and this carrier filed nothing on it in
+                the window. Reachable from any hand-typed URL naming a real type the carrier
+                does not operate, and `fetchCarrierTypeNetwork` returns null for exactly that --
+                so it gets its own sentence rather than a silent gap under the heading. Named
+                with the resolved type's own code, not the raw query value. */}
+            {typeFilter.kind === "ok" && !hasMap ? (
+              <p className="foot">
+                {`${carrier.code} filed no ${typeFilter.code} routes in ${TRAILING_12_FROM} → ${asOf}.`}
+              </p>
+            ) : null}
+            <MapPicker
+              options={typeOptions}
+              filter={typeFilter}
+              legend="Aircraft type"
+              truncated={truncated}
+            />
+            {/* THE WAY BACK. `MapPicker` has no `basePath` -- only per-option hrefs -- so
+                returning to the unfiltered view is the page's job, and without this a reader who
+                picks a type is stuck in it. Rendered on every filter state EXCEPT `none`,
+                refusals included: someone who typed a bad `?type=` is precisely who needs it.
+
+                It states what clearing DOES, because clearing removes the map rather than
+                drawing every type at once -- an unlabelled "clear" would promise the hairball
+                this page refuses to draw. `/airport`'s year track makes the same affordance its
+                first tick ("Trailing 12 months"); this one sits outside the nav because the nav
+                is a shared component two pages mount. */}
+            {typeFilter.kind !== "none" ? (
+              <p className="foot">
+                <a href={`/carrier/${carrier.code}`}>Clear the filter</a> — the map draws one
+                aircraft type at a time.
+              </p>
+            ) : null}
             {/* The Top-N builder's first two callers (M6 Task 4). Gated on each table's OWN
                 row count, not on `isEmpty` above -- a carrier with nothing in the trailing 12
                 months has nothing in either of these groupings either, but deriving that from
@@ -439,6 +567,14 @@ export async function CarrierView({
                 </p>
               </>
             )}
+            {/* ---- #110: the diff map. Self-contained; renders nothing when this carrier
+                 changed nothing and had nothing withheld. ---- */}
+            <DiffMap
+              diffs={diff.panels}
+              quarantinedRoutes={diff.quarantinedRoutes}
+              carrier={carrier.code}
+            />
+            {/* ---- end #110 ---- */}
             {/* The two claims this page cannot omit, both CLAUDE.md hard rules, both stated
                 about THIS carrier rather than in the abstract -- and rendered whether or not
                 there is a table, because they qualify the subject, not the rows. */}
@@ -458,7 +594,7 @@ export async function CarrierView({
           </div>
           {/* The rail describes the encodings THIS page uses and no others; the fleet-shading
               group is asked for only when a chart is actually drawn. */}
-          <LegendRail fleetMix={hasMix} />
+          <LegendRail fleetMix={hasMix} map={hasMap} />
         </div>
       </main>
     </div>
@@ -509,6 +645,28 @@ export async function generateMetadata({
   };
 }
 
+/** The redirect target for a case-normalized carrier code slug, carrying the ORIGINAL raw query string
+ * through UNCHANGED.
+ *
+ * #106, and the identical measured bug `/airport` fixed with `airportRedirectTarget`
+ * (`app/airport/[code]/page.tsx:497-499`, whose own doc comment has the full account). This
+ * page built `/carrier/${{resolved.canonical}}` from the slug alone, silently dropping every query
+ * key -- so once `type` became a legitimate key here, `/carrier/dl?type=B737-8` would have 308ed to
+ * `/carrier/DL` with the filter gone entirely, and the destination would have rendered the
+ * unfiltered view with no error anywhere. That is precisely the "silently renders a different
+ * query than the URL encodes" failure this project refuses everywhere else.
+ *
+ * The query is appended VERBATIM from the raw string, never reconstructed from parsed
+ * `searchParams` -- reassembling a query from decoded params is the re-encoding corruption
+ * `lib/rawQuery.ts`'s whole header exists to prevent. An empty raw query (no `?` at all on the
+ * original request) appends nothing, so a bare `/carrier/dl` still redirects to the bare
+ * `/carrier/DL`. */
+export function carrierRedirectTarget(canonical: string, rawQuery: string): string {
+  return rawQuery.length > 0
+    ? `/carrier/${canonical}?${rawQuery}`
+    : `/carrier/${canonical}`;
+}
+
 /** Thin wrapper: the ONLY job here is resolving the slug and handling the three-way
  * `CarrierResult` before handing the "ok" case to `CarrierView`. Same split as
  * route/[pair]/page.tsx's `RoutePage`/`RouteView`. */
@@ -520,13 +678,22 @@ export default async function CarrierPage({
   const { code: slug } = await params;
   const resolved = await resolveCarrierForRequest(slug);
 
+  // ONE `headers()` read, feeding BOTH the redirect below and the map filter further down --
+  // #106 already needed it here, and a second call would be a second thing to keep in step.
+  const rawQuery = rawQueryFromHeaders(await headers());
+
   if (resolved.kind === "redirect") {
     // 308, not 307: /carrier/DL IS the canonical URL for this carrier, not a temporary
     // relocation. `permanentRedirect` throws a digest of the literal form
     // `NEXT_REDIRECT;${type};${url};${statusCode};` (node_modules/next/dist/client/components/
     // redirect.js), which page.test.tsx pins exactly -- a regression to plain `redirect()`
     // would show up there as ';307;'.
-    permanentRedirect(`/carrier/${resolved.canonical}`);
+    // #106: the raw query must survive this redirect, or the map filter is silently
+    // lost on a miscased slug. Read off the same RAW_QUERY_HEADER proxy.ts sets, never
+    // off `searchParams` -- this page takes no `searchParams` at all, and even if it
+    // did, reconstructing a query string from decoded params is the exact corruption
+    // that header exists to avoid.
+    permanentRedirect(carrierRedirectTarget(resolved.canonical, rawQuery));
   }
   if (resolved.kind === "notFound") {
     // Throws `NEXT_HTTP_ERROR_FALLBACK;404` and terminates this segment's render, which
@@ -538,5 +705,21 @@ export default async function CarrierPage({
   // result of `await CarrierPage(...)` through react-dom's ordinary client renderer, which --
   // unlike Next's RSC renderer -- cannot await a nested async component reached via JSX.
   // Equivalent under Next's real rendering either way. See route/[pair]/page.tsx's note.
-  return await CarrierView({ carrier: resolved.carrier, filterValue: resolved.filterValue });
+  // #107. THE FILTER VALUE IS READ FROM THE RAW QUERY BYTES, never from `searchParams`, and
+  // that is a correctness requirement rather than a style choice. `searchParams`
+  // percent-DECODES: `?type=%42737-8` arrives there as `"B737-8"` and would draw the map, while
+  // `proxy.ts:477` reads the same key with this exact `rawFilterValue` on the raw bytes, sees
+  // `%42737-8`, fails the no-percent bound and declines the cache. The page would then be
+  // applying a filter the server's own admission policy refused -- two readings of one value,
+  // which is what `mapFilter.ts:105-145` exists to prevent. One reader, one answer.
+  //
+  // Resolved HERE rather than inside `CarrierView` for the same reason the carrier is: this
+  // function owns Next's routing plumbing and `CarrierView` owns the render.
+  const typeFilter = await resolveTypeFilter(rawFilterValue(rawQuery, "type"));
+
+  return await CarrierView({
+    carrier: resolved.carrier,
+    filterValue: resolved.filterValue,
+    typeFilter,
+  });
 }

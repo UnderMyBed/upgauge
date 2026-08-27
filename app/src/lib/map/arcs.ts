@@ -25,6 +25,12 @@ export interface ArcDatum {
   loadFactor: number | null;
 }
 
+/** The three fields the stroke encoding actually reads. `ArcDatum` satisfies it, and so does
+ * `SegmentDatum` -- which carries two endpoints rather than one `code`/`lat`/`lon`, and so is
+ * not an `ArcDatum` however identical its weights are. Narrowing the parameter is what lets
+ * ONE copy of the encoding serve both maps; the encoding itself is unchanged. */
+export type ArcWeight = Pick<ArcDatum, "seats" | "departures" | "loadFactor">;
+
 /** Below this many trailing-window departures, an arc is drawn dotted, fixed-width, and in
  * the muted `--ink-3` rather than scaled by seats -- system.md's "below the 30-departure
  * floor" row. This overrides the seat-width and load-factor-dash encodings entirely: a floor
@@ -44,11 +50,17 @@ export const LOAD_FACTOR_FLOOR = 0.7;
  * identical whether or not this sort runs, so a test asserting only that set would pass under
  * a dropped sort (CLAUDE.md's standing warning: M4c's stack-order mutant survived exactly this
  * shape of assertion). Only the drawn SEQUENCE distinguishes correct from buggy, which is why
- * `networkMap.test.ts`'s draw-order test reads `stroke-width` values off the document in the
- * order they appear, not as a set.
+ * every draw-order test reads `stroke-width` values off the document in the order they appear,
+ * not as a set.
  *
  * Tiebreak on `code` for determinism: two arcs at an identical seat count must still draw in
  * the same order on every run over the same data.
+ *
+ * NOT ON ANY RENDER PATH since #104. Both maps draw segments, so the ordering that executes is
+ * `segmentMap.ts`'s `segmentOrder` -- which is this comparator generalized (seats, then
+ * `from.code`, then `to.code`), and which reduces to exactly this one on a hub, where every
+ * segment shares an origin. This is retained as `arcs.test.ts`'s subject: it is the per-arc
+ * statement of the rule, and the file that owns the arc encoding is where that rule belongs.
  */
 export function arcOrder(arcs: ArcDatum[]): ArcDatum[] {
   return [...arcs].sort((a, b) => a.seats - b.seats || a.code.localeCompare(b.code));
@@ -78,7 +90,7 @@ export interface ArcStroke {
  * the formula's own floor at seats/max = 0 -- rather than dividing by zero and propagating
  * NaN into the rendered attribute.
  */
-export function strokeFor(a: ArcDatum, maxSeats: number): ArcStroke {
+export function strokeFor(a: ArcWeight, maxSeats: number): ArcStroke {
   if (a.departures < DEPARTURE_FLOOR) {
     return { width: 1, dash: "1 3", opacity: 0.75, stroke: "var(--ink-3)" };
   }
