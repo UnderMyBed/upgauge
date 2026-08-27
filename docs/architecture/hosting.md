@@ -1494,11 +1494,14 @@ only destination-only airports fails it by 50 rows.
 **It is still the largest single query on the route path**, and a 404 runs it **three times** —
 proxy, page, then `not-found.tsx`'s reason (`proxy.ts:750`) — with no CDN absorption, over an
 unbounded URL space. Each of the three also runs `airportCodesExist` on the unknown-code branch
-(`routePair.ts:48`), so one 404 is ~3 × (8 + 2) ≈ **30 ms of DuckDB**. **The edge bounds the RATE
-of that walk, never what any single miss costs**: `/route/` is inside the rate limit's expression
-since #117 (§ What this does not close), which holds the walk to 1 req/s per IP per colo — about
-30 ms of database work a second — and does nothing about the size of the space. The per-request cost is still the query's own, which is why the rewrite above matters. Do
-not
+(`routePair.ts:48`), so a 404 costs **three runs of the 8 ms lookup plus three dimension-only
+probes**. The probe has not been timed under this file's own conditions — warm, read-only, five
+runs, DuckDB's default thread count — so it is stated as a shape and not added into a total; a
+figure carrying fewer conditions than its neighbours is how the numbers in this repo rot. **The
+edge bounds the RATE of that walk, never what any single miss costs**: `/route/` is inside the
+rate limit's expression since #117 (§ What this does not close), which holds the walk to
+1 req/s per IP per colo and does nothing about the size of the space. The per-request cost is
+still the query's own, which is why the rewrite above matters. Do not
 "optimise" it by dropping the fact-presence filter: that filter is what takes colliding
 airport codes from 36 to 0, and `AUS` resolves to an airport closed since 1999 without it
 ([invariants.md § Entity resolution](../data/invariants.md)).
@@ -1837,8 +1840,16 @@ it are easy to get wrong and both matter here:
   axis the three prefixes above were added to close does not exist here. Its residual is an
   unbounded 404 space instead: an unknown pair is a `no-store` 404 that runs the reverse lookup
   **three times** — proxy, page, then `not-found.tsx`'s reason (`proxy.ts:750`) — with no CDN
-  absorption, ~30 ms of DuckDB per miss (§ What the proxy's query actually costs). Different
-  door, same room, and a strictly worse per-request shape than the family #113 closed.
+  absorption, three runs of the 8 ms lookup plus three dimension-only probes (§ What the proxy's
+  query actually costs).
+
+  **It is CHEAPER per miss than the family #113 closed, and BROADER in surface** — say both, and
+  do not collapse them into "worse". A refused `?type=` renders the whole carrier page at
+  82–104 ms; a `/route/` miss is roughly a third of that. What makes it worth covering is not
+  cost per request but the shape of the space: `/carrier/:code` has a refused-value gate in front
+  of it and its family is unbounded in the VALUE, all of it under one path that a CDN could in
+  principle key on, whereas `/route/` has no gate at all and every miss is a DISTINCT PATH — so
+  the family is unbounded per-URL and uncacheable per-URL. Different door, same room.
 
   **The rule matches a PATH, so it matches those prefixes' cached 200s along with it.**
   Cloudflare's `http.request.uri.path` excludes the query string, so neither residual — the
@@ -1858,10 +1869,13 @@ it are easy to get wrong and both matter here:
   | `/favicon.ico` | 1 | 0 — matched by no clause |
   | `og:image` → `/route/JFK-LAX/opengraph-image` | 1 | unfurlers only, not a page view |
 
-  **Count the fonts off the `Link:` RESPONSE HEADER, not the body.** All four `.woff2` preloads
-  are header-only, so a body-only inventory reports 9 and silently misses them; counting body
-  *attributes* rather than distinct URLs also double-counts the one chunk that appears as both
-  `<script src>` and a preload `<link href>`. 13 is the distinct-URL figure.
+  **The counting rule is DISTINCT URLs across the body and the `Link:` response header.** State
+  it, because three plausible methods give three different answers and only one of them is the
+  number of requests a browser makes. The four `.woff2` appear in the header as `rel=preload`
+  AND in the body inside the RSC flight payload as React `:HL[…,"font",…]` hint records, so they
+  are not header-only; what misses them is counting `src=`/`href=` *attributes*, which also
+  double-counts the one chunk present as both `<script src>` and a preload `<link href>`. 13 is
+  the distinct-URL figure, and it is the only one of the three that means anything.
 
   The page additionally renders **10 `<a>` tags** — 8 plain anchors (5 `/carrier/`, 2 `/airport/`,
   1 `/explore`) plus 2 emitted BY `<Link>` (`/` and `/watch`, from `TopBar.tsx:29,76`). A browser
@@ -1923,15 +1937,23 @@ it are easy to get wrong and both matter here:
   Since #117 that bucket is shared with ordinary browsing of all four entity page types,
   `/route/` included — the most-shared page type on the site, and the widest this coupling has
   been. **The accepted consequences, stated rather than hedged.** First and
-  largest: this puts **22,509 of the 23,785 URLs `sitemap.xml` publishes (94.6%)** under a rule
-  that blocks past 1 req/s per `(ip.src, cf.colo.id)` and counts cache HITs. `robots.ts`
+  largest: this puts **23,780 of the 23,785 URLs `sitemap.xml` publishes (99.98%)** under a rule
+  that blocks past 1 req/s per `(ip.src, cf.colo.id)` and counts cache HITs — 22,509 of them
+  route pages. The **five** URLs left outside are `/watch` and its four presets. The quantity
+  this paragraph is about is the ENTITY total against the sitemap total; a share computed from
+  the route count alone answers a different question and understates the coverage. `robots.ts`
   disallows only `/search` and `/api/`, and calls the entity families "the crawl graph this
   milestone exists to open up" — so the published crawl surface and the rate-limited surface are
   now very nearly the same set. #113 brought 1,271 entity URLs inside the rule; #117 brings the
   route family, and the route family is the site. A well-behaved crawler fetching faster than
   1 req/s per colo now gets 429s on the graph we publish for it. That is ACCEPTED here, not
-  measured as harmful — no crawler has been observed tripping it, and the bot-exemption question
-  is tracked rather than settled here. Second, and much smaller: a visitor middle-clicking ten
+  measured as harmful — no crawler has been observed tripping it, and no threshold change is
+  justified until someone measures a real crawler's rate against this zone. Tracked as **#126**,
+  which also records why the obvious narrowing is not available: `and not cf.client.bot` is
+  EDGE-evaluated rather than client-asserted, so it is not the bypass the `RSC` header would have
+  been — but `test_rate_limit_expression_has_no_client_controlled_escape_hatch` bans the ` and `
+  and ` not ` operators outright, so the safe narrowing trips the same net as the unsafe one.
+  Second, and much smaller: a visitor middle-clicking ten
   route links into background tabs inside ten seconds trips the rule and is blocked for ten.
   MEASURED
   2026-08-24 against the served site: 14 requests to `/route/JFK-LAX/opengraph-image` went

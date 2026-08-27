@@ -100,10 +100,12 @@ COVERED = (
     # prefix was added for. The unknown pair is what distinguishes a prefix from a fixture;
     # delete it and that mutant lives.
     #
-    # The two fixtures deliberately share NO SUFFIX. While the unknown one ended `-LAX` like the
-    # known one, `ends_with(path, "-LAX")` substituted for the prefix passed every test in this
-    # file -- it covers both fixtures and nothing in UNCOVERED ends that way, so it is an outcome
-    # the buggy expression also produces. Fixtures for a PREFIX must differ in the suffix too.
+    # FIXTURES FOR A PREFIX MUST DIFFER IN THE SUFFIX TOO. Two /route/ fixtures sharing a suffix
+    # are both matched by `ends_with(<shared suffix>)` substituted for the prefix, and nothing in
+    # UNCOVERED ends that way either -- so that substitution passes every test in this file while
+    # bounding none of the space. An outcome the buggy expression also produces is not evidence.
+    #
+    # /route/ has no single-literal narrowing escape left; the other five prefixes do (#129).
     (
         "/route/ZZZZ-QQQ",
         "an unknown pair is a no-store 404 that runs the reverse lookup THREE times (proxy, "
@@ -143,8 +145,16 @@ def test_rate_limit_covers_every_surface_that_can_reach_the_origin_uncached():
     #117 added `/route/`, and for a DIFFERENT reason: it is the one entity path with
     `keys: NO_KEYS` (`lib/canonicalQuery.ts`), so it has no refused-value family at all. Its
     residual is a 404 space instead -- an unknown pair is a `no-store` 404 running the site's
-    largest query twice, uncached, over an unbounded URL space. Different door, same room, and
-    a strictly worse per-request shape than the family #113 closed.
+    largest query THREE times (proxy, page, then not-found.tsx's reason -- proxy.ts:750),
+    uncached, over an unbounded URL space.
+
+    It is CHEAPER per miss than the family #113 closed and BROADER in surface, which are two
+    claims and not one: a refused `?type=` renders a whole page at 82-104 ms while a /route/ miss
+    is three runs of the 8 ms lookup plus three dimension-only probes. What earns it a place here
+    is the SHAPE of the space, not the cost -- `/carrier/:code` is unbounded in the VALUE under
+    one path, `/route/` has no value gate at all and every miss is a DISTINCT PATH, so its family
+    is unbounded and uncacheable per-URL. Do not compress this to "strictly worse"; on the only
+    axis either sentence names, it is not.
 
     `can reach`, not `reaches`: all four prefixes' resolving values are cacheable 200s and a
     real visitor's page view is one of them. They are matched anyway because Cloudflare's
@@ -155,10 +165,12 @@ def test_rate_limit_covers_every_surface_that_can_reach_the_origin_uncached():
     pulls is under the excluded `/_next/`. MEASURED 2026-08-27 against the served route page:
     every serialized `<Link>` ref carries `"prefetch":false` (5 refs, 5 props, 1:1 -- 2 rendered
     by `TopBar` on a 200, the other 3 inside the not-found boundary subtree), and the 13
-    subresources a browser fetches are all under the excluded `/_next/`: 8 `.js` + 1 `.css` from
-    the body, plus 4 `.woff2` preloaded by the `Link:` RESPONSE HEADER, which a body-only count
-    misses. One slot per view. A `<Link>` with prefetch on an entity page would break that
-    arithmetic, which is why this note names the mechanism rather than the number.
+    subresources a browser fetches are all under the excluded `/_next/`. 13 counts DISTINCT URLs
+    across the body AND the `Link:` response header -- the counting rule matters, because the 4
+    `.woff2` sit in both (header `rel=preload`, body RSC flight payload as `:HL[...,"font",...]`
+    hint records) and counting `src=`/`href=` attributes instead both misses them and
+    double-counts a chunk. One slot per view. A `<Link>` with prefetch on an entity page would
+    break that arithmetic, which is why this note names the mechanism rather than the number.
 
     Asserting coverage path by path is what distinguishes this from the check it replaces --
     that one asserted the string `"/api/"` appeared, which an expression matching only `/api/`

@@ -23,9 +23,11 @@ import { describe, expect, it } from "vitest";
  * route page rather than extended by assumption. Served `/route/JFK-LAX`, 2026-08-27: 5
  * serialized `<Link>` refs against 5 `"prefetch":false` props -- 1:1, so none takes the default
  * (only 2 render on a 200; the other 3 are inside the not-found boundary subtree) -- plus 13
- * `/_next/` subresources, which is 8 `.js` + 1 `.css` from the body AND 4 `.woff2` that appear
- * only in the `Link:` response header, so a body-only count reports 9. One slot per view. A `<Link>` added to an entity page without `prefetch={false}` spends a second slot
- * per view and falsifies that argument -- silently, because nothing renders differently and no
+ * `/_next/` subresources. 13 counts DISTINCT URLs across the body AND the `Link:` response
+ * header; the 4 `.woff2` are in both (header `rel=preload`, body RSC flight payload as
+ * `:HL[...]` hint records), so counting `src=`/`href=` attributes instead misses them and
+ * double-counts a chunk. One slot per view. A `<Link>` added to an entity page without
+ * `prefetch={false}` spends a second slot per view and falsifies that argument -- silently, because nothing renders differently and no
  * existing test would go red. That is the regression this file exists to catch.
  *
  * Read off the SOURCE, not the DOM. `prefetch` is a `Link` prop and leaves no attribute on the

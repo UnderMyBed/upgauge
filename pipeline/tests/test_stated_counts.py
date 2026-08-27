@@ -126,6 +126,11 @@ STATED: dict[str, tuple[str, ...]] = {
         "app/src/lib/sitemap.test.ts",
         "app/src/proxy.test.ts",
         "app/src/proxy.ts",
+        # #117: hosting.md states the rate-limited share of the published sitemap, which is this
+        # measure over `sitemap_urls_total`. THIS MANIFEST IS TO BE REGISTERED AGAINST, NEVER
+        # ROUTED AROUND: reaching for a smaller measure that is already registered, because the
+        # right one is not, buys a green gate with prose that answers a different question.
+        "docs/architecture/hosting.md",
     ),
     "sitemap_route_and_airport_urls": (
         "app/src/app/route/[pair]/page.test.tsx",
