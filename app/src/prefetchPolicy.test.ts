@@ -21,9 +21,10 @@ import { describe, expect, it } from "vitest";
  *
  * #117 brought the most-shared page type inside the rule, so that property was RE-MEASURED on a
  * route page rather than extended by assumption. Served `/route/JFK-LAX`, 2026-08-27: 5
- * serialized `<Link>` refs against 5 `"prefetch":false` props -- 1:1, so none takes the default --
- * plus 10 `/_next/` assets and one `/favicon.ico`. One slot per view, the same arithmetic #113
- * rested on. A `<Link>` added to an entity page without `prefetch={false}` spends a second slot
+ * serialized `<Link>` refs against 5 `"prefetch":false` props -- 1:1, so none takes the default
+ * (only 2 render on a 200; the other 3 are inside the not-found boundary subtree) -- plus 13
+ * `/_next/` subresources, which is 8 `.js` + 1 `.css` from the body AND 4 `.woff2` that appear
+ * only in the `Link:` response header, so a body-only count reports 9. One slot per view. A `<Link>` added to an entity page without `prefetch={false}` spends a second slot
  * per view and falsifies that argument -- silently, because nothing renders differently and no
  * existing test would go red. That is the regression this file exists to catch.
  *

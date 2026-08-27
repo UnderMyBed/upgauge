@@ -17,7 +17,8 @@ import json
 import re
 from pathlib import Path
 
-CLOUDFLARE = Path(__file__).parents[2] / "deploy" / "cloudflare"
+ROOT = Path(__file__).parents[2]
+CLOUDFLARE = ROOT / "deploy" / "cloudflare"
 
 
 def _load(name: str) -> dict:
@@ -80,7 +81,7 @@ def _covered(expression: str, path: str) -> bool:
 
 # Every surface the rule must match, with the cost that puts it there. Three shapes, matched for
 # three different reasons: `/api/pivot`, `/explore` and the four cards reach the origin on EVERY
-# request; `/route/ZZZZ-LAX` is an unbounded 404 family that no cache absorbs (#117); the rest are
+# request; `/route/ZZZZ-QQQ` is an unbounded 404 family that no cache absorbs (#117); the rest are
 # cacheable 200s matched as collateral, because `http.request.uri.path` carries no query string,
 # so neither the refused-value family (#113) nor the 404 family (#117) can be addressed apart from
 # its cached siblings.
@@ -98,10 +99,16 @@ COVERED = (
     # satisfies every assertion the KNOWN pair makes while bounding ZERO of the 404 family the
     # prefix was added for. The unknown pair is what distinguishes a prefix from a fixture;
     # delete it and that mutant lives.
+    #
+    # The two fixtures deliberately share NO SUFFIX. While the unknown one ended `-LAX` like the
+    # known one, `ends_with(path, "-LAX")` substituted for the prefix passed every test in this
+    # file -- it covers both fixtures and nothing in UNCOVERED ends that way, so it is an outcome
+    # the buggy expression also produces. Fixtures for a PREFIX must differ in the suffix too.
     (
-        "/route/ZZZZ-LAX",
-        "an unknown pair is a no-store 404 that runs the reverse lookup TWICE (proxy, then "
-        "not-found.tsx's reason) with no CDN absorption, over an unbounded URL space",
+        "/route/ZZZZ-QQQ",
+        "an unknown pair is a no-store 404 that runs the reverse lookup THREE times (proxy, "
+        "page, then not-found.tsx's reason -- proxy.ts:750) with no CDN absorption, over an "
+        "unbounded URL space",
     ),
     (
         "/route/JFK-LAX",
@@ -146,10 +153,12 @@ def test_rate_limit_covers_every_surface_that_can_reach_the_origin_uncached():
     is exactly ONE request against this bucket -- `DataTable` emits a plain `<a href>`
     (components/DataTable.tsx:78,93), `TopBar` pins `prefetch={false}`, and every asset the page
     pulls is under the excluded `/_next/`. MEASURED 2026-08-27 against the served route page:
-    5 serialized `<Link>` refs and 5 `"prefetch":false` props (1:1, so none takes the default),
-    10 `/_next/` assets, one `/favicon.ico` -- one slot per view. A `<Link>` with prefetch on an
-    entity page would break that arithmetic, which is why this note names the mechanism rather
-    than the number.
+    every serialized `<Link>` ref carries `"prefetch":false` (5 refs, 5 props, 1:1 -- 2 rendered
+    by `TopBar` on a 200, the other 3 inside the not-found boundary subtree), and the 13
+    subresources a browser fetches are all under the excluded `/_next/`: 8 `.js` + 1 `.css` from
+    the body, plus 4 `.woff2` preloaded by the `Link:` RESPONSE HEADER, which a body-only count
+    misses. One slot per view. A `<Link>` with prefetch on an entity page would break that
+    arithmetic, which is why this note names the mechanism rather than the number.
 
     Asserting coverage path by path is what distinguishes this from the check it replaces --
     that one asserted the string `"/api/"` appeared, which an expression matching only `/api/`
@@ -202,6 +211,20 @@ def test_the_og_cards_stay_covered_by_their_own_clause_when_the_entity_prefixes_
     assert cards_only, (
         "no `ends_with` clause is left in the expression -- the four `*/opengraph-image` paths "
         "are now covered only incidentally, by whichever entity prefixes happen to remain"
+    )
+    # The premise, asserted against the DISK rather than against this file's own COVERED tuple.
+    # Counting COVERED entries would let a FIFTH card route be added -- `/watch/[preset]/` is the
+    # plausible one -- with no test noticing: the clause would silently become load-bearing again,
+    # the "BACKSTOP, not load-bearing" paragraph in hosting.md would become false, and every
+    # assertion here would stay green. Same shape as `canonicalQuery.test.ts` agreeing with
+    # `config.matcher` rather than restating it.
+    card_dirs = sorted(
+        f.relative_to(ROOT / "app" / "src" / "app").parts[0]
+        for f in (ROOT / "app" / "src" / "app").rglob("opengraph-image.tsx")
+    )
+    assert card_dirs == ["aircraft", "airport", "carrier", "route"], (
+        f"the card routes on disk are {card_dirs}, not the four entity prefixes this clause is "
+        "redundant with -- a card outside those prefixes makes `ends_with` load-bearing again"
     )
     cards = [(path, why) for path, why in COVERED if path.endswith("/opengraph-image")]
     assert len(cards) == 4, "all four card paths must be listed in COVERED"

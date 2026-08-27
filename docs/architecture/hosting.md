@@ -1491,12 +1491,13 @@ against the real database, not sampled: `pipeline/tests/test_resolution_invarian
 file's result set against the `EXISTS` form's, both directions, and a mutation that drops
 only destination-only airports fails it by 50 rows.
 
-**It is still the largest single query on the route path**, and a 404 runs it twice (proxy,
-then `not-found.tsx`'s reason) with no CDN absorption, over an unbounded URL space. **The edge
-bounds the RATE of that walk, never what any single miss costs**: `/route/` is inside the rate
-limit's expression since #117 (§ What this does not close), which holds the walk to 1 req/s per
-IP per colo — two runs of the 8 ms lookup a second — and does nothing about the size of the
-space. The per-request cost is still the query's own, which is why the rewrite above matters. Do
+**It is still the largest single query on the route path**, and a 404 runs it **three times** —
+proxy, page, then `not-found.tsx`'s reason (`proxy.ts:750`) — with no CDN absorption, over an
+unbounded URL space. Each of the three also runs `airportCodesExist` on the unknown-code branch
+(`routePair.ts:48`), so one 404 is ~3 × (8 + 2) ≈ **30 ms of DuckDB**. **The edge bounds the RATE
+of that walk, never what any single miss costs**: `/route/` is inside the rate limit's expression
+since #117 (§ What this does not close), which holds the walk to 1 req/s per IP per colo — about
+30 ms of database work a second — and does nothing about the size of the space. The per-request cost is still the query's own, which is why the rewrite above matters. Do
 not
 "optimise" it by dropping the fact-presence filter: that filter is what takes colliding
 airport codes from 36 to 0, and `AUS` resolves to an airport closed since 1999 without it
@@ -1835,9 +1836,9 @@ it are easy to get wrong and both matter here:
   with `keys: NO_KEYS` (`lib/canonicalQuery.ts`), so it has no refused-value family at all — the
   axis the three prefixes above were added to close does not exist here. Its residual is an
   unbounded 404 space instead: an unknown pair is a `no-store` 404 that runs the reverse lookup
-  **twice** — proxy, then `not-found.tsx`'s reason — with no CDN absorption (§ What the proxy's
-  query actually costs). Different door, same room, and a strictly worse per-request shape than
-  the family #113 closed, not a smaller one.
+  **three times** — proxy, page, then `not-found.tsx`'s reason (`proxy.ts:750`) — with no CDN
+  absorption, ~30 ms of DuckDB per miss (§ What the proxy's query actually costs). Different
+  door, same room, and a strictly worse per-request shape than the family #113 closed.
 
   **The rule matches a PATH, so it matches those prefixes' cached 200s along with it.**
   Cloudflare's `http.request.uri.path` excludes the query string, so neither residual — the
@@ -1850,17 +1851,25 @@ it are easy to get wrong and both matter here:
   the excluded `/_next/`. MEASURED 2026-08-27 against the served `/route/JFK-LAX` — the
   highest-traffic, most-shared page type, and the one #117 brought inside the rule:
 
-  | what one page view emits | count | slots spent |
+  | what one page view fetches | count | slots spent |
   |---|---|---|
   | the HTML document itself | 1 | **1** |
-  | `/_next/static/chunks/*.js` + `.css` | 10 | 0 — excluded prefix |
+  | `/_next/` subresources — 8 `.js` + 1 `.css` + 4 `.woff2` | 13 | 0 — excluded prefix |
   | `/favicon.ico` | 1 | 0 — matched by no clause |
-  | `<a href>` links (5 `/carrier/`, 2 `/airport/`, `/explore`, `/`, `/watch`) | 10 | 0 — not fetched on view |
   | `og:image` → `/route/JFK-LAX/opengraph-image` | 1 | unfurlers only, not a page view |
 
-  Read off the served bytes rather than the source, because the source cannot show it: the
-  document serializes **5 `<Link>` refs against 5 `"prefetch":false` props** — 1:1, so none takes
-  the prefetching default — with no `rel="prefetch"` and no `_rsc` anywhere in it.
+  **Count the fonts off the `Link:` RESPONSE HEADER, not the body.** All four `.woff2` preloads
+  are header-only, so a body-only inventory reports 9 and silently misses them; counting body
+  *attributes* rather than distinct URLs also double-counts the one chunk that appears as both
+  `<script src>` and a preload `<link href>`. 13 is the distinct-URL figure.
+
+  The page additionally renders **10 `<a>` tags** — 8 plain anchors (5 `/carrier/`, 2 `/airport/`,
+  1 `/explore`) plus 2 emitted BY `<Link>` (`/` and `/watch`, from `TopBar.tsx:29,76`). A browser
+  fetches none of them on view. That is a separate inventory from the subresources above, and it
+  OVERLAPS the `<Link>` count rather than adding to it: the document serializes **5 `<Link>` refs
+  against 5 `"prefetch":false` props** — 1:1, so none takes the prefetching default — of which
+  only those **2 render on a 200**; the other 3 sit inside the not-found boundary subtree and are
+  never emitted on a successful page view. No `rel="prefetch"` and no `_rsc` appear anywhere.
 
   Putting a prefetching `<Link>` on an entity page spends a second slot per view and falsifies
   this paragraph **silently**: nothing renders differently, and no render-based test can see it,
@@ -1873,7 +1882,7 @@ it are easy to get wrong and both matter here:
   **What is left out is left out on purpose, and widening is the mutant to fear.** `/_next/`
   assets are immutable, and a single real page load asks for more static chunks than 1 req/s
   allows, so `starts_with(path, "/")` would throttle every genuine visitor while still passing
-  any check that merely looks for `"/api/"` in the string. Since #113 the rule matches three
+  any check that merely looks for `"/api/"` in the string. Since #117 the rule matches all four
   whole entity prefixes, which makes `/_next/`'s exclusion the load-bearing one, and
   `pipeline/tests/test_cloudflare_desired_state.py`'s `UNCOVERED` list is the only thing
   asserting it. That file therefore *evaluates* the expression against named paths in **both**
@@ -1913,8 +1922,17 @@ it are easy to get wrong and both matter here:
   `/api/pivot`, `/explore`, a card and an entity page all draw on the same 10-per-10 s bucket.
   Since #117 that bucket is shared with ordinary browsing of all four entity page types,
   `/route/` included — the most-shared page type on the site, and the widest this coupling has
-  been. **The accepted consequence, stated rather than hedged: a visitor middle-clicking ten
-  route links into background tabs inside ten seconds trips the rule and is blocked for ten.**
+  been. **The accepted consequences, stated rather than hedged.** First and
+  largest: this puts **22,509 of the 23,785 URLs `sitemap.xml` publishes (94.6%)** under a rule
+  that blocks past 1 req/s per `(ip.src, cf.colo.id)` and counts cache HITs. `robots.ts`
+  disallows only `/search` and `/api/`, and calls the entity families "the crawl graph this
+  milestone exists to open up" — so the published crawl surface and the rate-limited surface are
+  now very nearly the same set. #113 brought 1,271 entity URLs inside the rule; #117 brings the
+  route family, and the route family is the site. A well-behaved crawler fetching faster than
+  1 req/s per colo now gets 429s on the graph we publish for it. That is ACCEPTED here, not
+  measured as harmful — no crawler has been observed tripping it, and the bot-exemption question
+  is tracked rather than settled here. Second, and much smaller: a visitor middle-clicking ten
+  route links into background tabs inside ten seconds trips the rule and is blocked for ten.
   MEASURED
   2026-08-24 against the served site: 14 requests to `/route/JFK-LAX/opengraph-image` went
   `200`×9 then `429`×5, and the very next request — to `/airport/SEA/opengraph-image`, a

@@ -271,7 +271,15 @@ renaming it in the committed file would assert something no `make cloudflare-app
 true. `pipeline/tests/test_cloudflare_desired_state.py` pins the name for that reason.
 
 **The thresholds are `deploy/cloudflare/rate-limit.json`, not a sentence here.** That file is the
-record and is applied verbatim. Note the plan constrains both numbers: the window must be 10s and
+record and is applied verbatim.
+
+> ⚠️ **Its `description` is long and nothing in this repo bounds it.** The ruleset description
+> carries the reasoning for every path in the expression, and it grew from 2,277 to 3,935
+> characters when #117 added `/route/`. Whatever limit the Rulesets API enforces on that field is
+> discoverable only by PUTting to the zone, so `make cloudflare-apply` is where a too-long
+> description would first surface. It fails loud rather than shipping a truncated rule, so the
+> blast radius is a failed apply — but know it before you run the target, not after.
+ Note the plan constrains both numbers: the window must be 10s and
 the mitigation timeout must be 10s, so the sustained rate is 1 req/s per IP on every path the
 expression matches, and a blocked client resumes after 10s. It caps throughput; it is not a wall.
 
