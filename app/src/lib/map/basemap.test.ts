@@ -444,9 +444,17 @@ describe("the three rects derived from their own geometry still fit it", () => {
   // is still ~9,120 px^2, far above any floor worth setting. The frame-overlap and land tests
   // do not: the rect is legal, just wrongly proportioned.
   //
-  // EXACTLY THREE PANELS, and this must not be generalised -- `ak` fills 74.2% of its height
+  // EXACTLY THREE PANELS, and this must not be generalised -- `ak` fills 50.1% of its height
   // and `hi` 92.9%, because those are the mockup's own rects, chosen for layout rather than
   // derived from the geometry inside them. `us` fills 72.0% of its width for the same reason.
+  //
+  // `ak`'s figure was 74.2% until #115 gave that panel a declared extent reaching Attu, which
+  // took its aspect to 1.9124:1 inside a 0.96:1 rect. Reshaping the rect to match -- the move
+  // `car` and `pac` each earned -- is WRONG here, and measurably: Albers is conic, so the raw
+  // bounding box of the declared extent does not contain the images of every point inside it.
+  // IKO, ADK, AKB and FQW all sit south of that box, and at a tray-height 140x76 rect (same k,
+  // since width binds either way) IKO lands 0.4px above the frame. The vertical slack is what
+  // absorbs the curvature; it is load-bearing, not waste.
   // Only `pac`, `car` and `sam` were sized FROM their extent, so only they owe it a fit.
   // Measured today: pac 100.0% x 99.3%, car 99.8% x 100.0%, sam 99.9% x 100.0%. The failure
   // message carries the live pair, so a red names the drift rather than just the panel.
@@ -474,8 +482,8 @@ describe("the three rects derived from their own geometry still fit it", () => {
   });
 });
 
-describe("the panels #111 must not have moved", () => {
-  it("holds us/ak/hi/car to the exact path bytes they had before #111", () => {
+describe("the panels that must not have moved (#111, re-scoped by #115)", () => {
+  it("holds us/hi/car to the exact path bytes they had before #111, and ak to #115's", () => {
     // #111's acceptance criterion, stated at the only altitude that actually says it: the
     // PATH STRINGS, byte for byte. The fit assertion below names WHICH panel moved and by how
     // much, which is the useful thing when one does -- but a fit is only sensitive to a
@@ -491,6 +499,13 @@ describe("the panels #111 must not have moved", () => {
     //
     // A legitimate future basemap refresh moves these. Re-measure and say so in the commit;
     // never edit one to match a diff you have not read.
+    //
+    // #115 IS ONE OF THOSE MOVES, and only for `ak`: appending two declared-extent anchors to
+    // `BASEMAP_FIT_POINTS` (build-basemap.mjs's `AK_EXTENT_ANCHORS`) took that panel's fit from
+    // k=377.8396853372171 to k=244.54496902469134 and rewrote its four subpaths. `fitPanels`
+    // partitions its input by `regionOf` before fitting and both anchors classify as `ak`, so
+    // us/hi/car CANNOT have moved -- and the three unchanged hashes below are that argument's
+    // check, which is why they are worth more here than they were in #111.
     const hashes = Object.fromEntries(
       (["us", "ak", "hi", "car"] as const).map((panel) => [
         panel,
@@ -499,13 +514,14 @@ describe("the panels #111 must not have moved", () => {
     );
     expect(hashes).toEqual({
       us: "a1355b846c078a0d58e39957b3a95df9e2b6bc8babc1119130c860e309f0f3c6",
-      ak: "c424a4acc83b813379e6cf2cc4839aa14d7d003f2d0b26b629dac2e316303f5f",
+      // #115: was c424a4acc83b813379e6cf2cc4839aa14d7d003f2d0b26b629dac2e316303f5f.
+      ak: "c1f4b68dedacd7d4afcb932c2ec28250c11575bfaaf31558486c299279773b0b",
       hi: "bdaf4ac90b2a8dffd4d5e5cc29f1e8eea5ea434e764d5d2825eec998ce9d6743",
       car: "1d837f6ba9d12262f246c242f8e1a4a794eea6ba22127c22e60b8823ebaff49f",
     });
   });
 
-  it("holds us/ak/hi/car to the fit they were baked at before #111", () => {
+  it("holds us/hi/car to the fit they were baked at before #111, and ak to #115's", () => {
     // `fitPanels` partitions points per panel, so adding `ne_50m_pac.json`'s features CANNOT
     // move `us`, `ak`, `hi` or `car` -- and `regionOf`'s three-way split of the old `pac`
     // branch has a union identical to that branch, so it cannot either. Both are arguments;
@@ -522,7 +538,9 @@ describe("the panels #111 must not have moved", () => {
       car: fits.get("car"),
     }).toEqual({
       us: { k: 904.5131300948573, ox: 487.1120339377376, oy: 239.57188375255203 },
-      ak: { k: 377.8396853372171, ox: 87.7779935792461, oy: 481.4201810606285 },
+      // #115: was { k: 377.8396853372171, ox: 87.7779935792461, oy: 481.4201810606285 } --
+      // the fit that put ADK at (-3.1, 453.4) and SYA at (-35.2, 433.5), off the canvas.
+      ak: { k: 244.54496902469134, ox: 118.90105390013588, oy: 449.3790559215478 },
       hi: { k: 1221.0803508579845, ox: 247.8265564145108, oy: 442.31592580205955 },
       car: { k: 5304.317346044431, ox: 603.4689616699768, oy: 440.65076212255065 },
     });

@@ -55,6 +55,14 @@
  *   (`app/src/components/NetworkMap.tsx`'s `nwhi`-empty caption) and in
  *   `docs/design/system.md` § The map. That is a real, documented limitation, not a bug.
  *
+ *   THE WESTERN ALEUTIANS are the second gap, and unlike Midway they are covered by a
+ *   DECLARED EXTENT rather than by geometry. 1:110m's Alaska stops at 171.791 W, mid-chain
+ *   around Atka; 1:10m carries the rest, out to Attu at 187.524 W. It is not committed
+ *   because this panel draws 2.436 px per degree of longitude, so Shemya would be 0.25px and
+ *   most of those 26 rings would simplify to zero-area hairlines -- the Rota defect again.
+ *   `AK_EXTENT_ANCHORS` below carries the chain's two extremes as reference points with no
+ *   drawn geometry instead; see that constant for the full measurement.
+ *
  * WHY COMMITTED, NOT FETCHED AT BUILD TIME: `make verify` builds twice and diffs every
  * artifact byte-for-byte; a build step that reaches the network is not reproducible (no
  * guarantee the remote file is unchanged, reachable, or even the same bytes twice in one
@@ -267,6 +275,62 @@ export function round3(n) {
   return r === 0 ? 0 : r; // normalize -0 to 0, same reasoning as fmt/fmt2's "-0" guards
 }
 
+/**
+ * TWO REFERENCE POINTS WITH NO DRAWN GEOMETRY: the `ak` panel's DECLARED EXTENT (#115).
+ *
+ * `ne_110m_us.json`'s Alaska is 164 points spanning normalized longitude -171.791 to
+ * -129.980. Natural Earth 1:110m stops mid-chain, around Atka, and omits the western third of
+ * the Aleutians entirely -- so a fit taken over that coastline alone is correct for the
+ * coastline and too narrow for the airports beyond it. Measured against the built warehouse
+ * over all 9,796 fact-present (airport, window) views: SEVEN fact-present Alaskan airports
+ * projected outside `PANEL_RECTS.ak` (ADK, AKB, FQW, IKO, SNP, STG, SYA -- 69 of those views),
+ * and THREE of them put the subject's own r=4.5 disc or its right-anchored label off the
+ * 960x500 canvas (ADK, AKB, SYA -- 27 views), where `globals.css`'s
+ * `svg:not(:root) { overflow: hidden }` clips it away. ADK drew at (-3.1, 453.4), AKB at
+ * (7.0, 454.5) -- disc on-canvas, label running to x = -19.8, so `/airport/AKB` rendered an
+ * unlabelled disc jammed against the left edge -- and SYA at (-35.2, 433.5), so
+ * `/airport/SYA?y=2018` lost its subject completely.
+ *
+ * THE FIX IS THE FIT, NOT THE RECT, and that is arithmetic rather than preference.
+ * `fitPanels`'s `k` is `min(w/dx, h/dy)` and `ak` binds on WIDTH, so
+ * `ADK.x = rx0 + (raw_x - x0) * k = rx0 - 0.10343k` -- strictly LEFT of the rect's own left
+ * edge for every k, and widening the rect only RAISES k. Widening helps at all only once
+ * height binds (k capped at 509.33), and then ADK needs a rect 294px wide and SYA 381px,
+ * against the 140px the bottom tray has between the 16px pad and `hi`'s frame at 186.
+ * Extending the reference points westward is the only lever that reaches.
+ *
+ * THE ISLANDS ARE NOT COMMITTED, AND THE REASON IS SCALE, NOT SOURCE. Natural Earth 1:50m
+ * Alaska stops at -178.195 and does not reach Shemya at all; 1:10m does carry the whole chain
+ * (26 rings / 1,371 points west of the committed coastline, out to -187.524, Shemya's own
+ * 8-point ring included). What rules it out is that this panel draws 2.436 px per degree of
+ * longitude at the fit below: Attu is 2.35px, Adak 1.37px, Kiska 1.14px, Agattu 0.98px,
+ * Buldir 0.27px and SHEMYA 0.25px. At any RDP epsilon coarse enough not to bloat the artifact
+ * most of those collapse to a two-point segment enclosing ZERO AREA -- a hairline where the
+ * map claims an island, which is the exact defect `PAC_RDP_EPSILON_DEG` above exists to
+ * prevent for Rota. So at this panel's scale the western Aleutians are points, not polygons:
+ * the same call `nwhi` already makes for Midway, and the reason `pac` had to become its own
+ * panel rather than share one.
+ *
+ * THE VALUES are Natural Earth 1:10m Alaska's own westernmost and southernmost vertices
+ * (`ne_10m_admin_1_states_provinces.geojson`, same nvkelso mirror as the other inputs,
+ * `iso_a2 == 'US' && postal == 'AK'`), at `round3` -- re-derivable rather than invented, even
+ * though that file is deliberately not committed for the reason directly above. Raw longitude,
+ * positive for Attu, exactly as every other entry in `BASEMAP_FIT_POINTS` stores it (Guam is
+ * 144.742 in the same array); `normalizeLon` does its job at read time.
+ *
+ * BOTH MUST CLASSIFY AS `ak`, and one of them is close to a cliff: `regionOf`'s Alaska test is
+ * `lat > 51 && lon < -129`, and Amatignak is 51.215 -- 0.215 degrees above it. Retune that
+ * boundary and this anchor silently moves to `us`, collapsing the `ak` fit back to the
+ * coastline's own extent while the coastline still draws exactly as before, so nothing else
+ * would go red. `panelContainment.test.ts` asserts the classification for that reason.
+ */
+export const AK_EXTENT_ANCHORS = [
+  // Attu Island's western tip -- the western end of the Aleutians, and of the United States.
+  { lat: 52.927, lon: 172.476 },
+  // Amatignak Island -- the southernmost point of Alaska.
+  { lat: 51.215, lon: -179.119 },
+];
+
 /** Reads both committed geo files, merges and sorts their features exactly the way `main()`
  * does, and returns `{ features, referencePoints, fits }` -- the same three values `main()`
  * uses to build both `BASEMAP_PATHS` and `BASEMAP_FIT_POINTS`. Exported (rather than kept
@@ -296,8 +360,9 @@ export function loadReferencePointsAndFits() {
 
   // The fixed reference set: every raw (lat, lon) coordinate in the committed geography,
   // in the same deterministic (sorted-feature, ring-order, point-order) walk the paths
-  // themselves are built from. This is what makes the fit page-independent -- see the
-  // header comment above.
+  // themselves are built from, PLUS `AK_EXTENT_ANCHORS` (#115) appended last -- two declared
+  // `ak` extent points with no drawn geometry, see that constant for why. This is what makes
+  // the fit page-independent -- see the header comment above.
   //
   // ROUNDED TO 3 DECIMALS HERE, before `fits` is computed from them, not only when they are
   // later serialized into `BASEMAP_FIT_POINTS` (final whole-branch review, Important #6).
@@ -320,6 +385,14 @@ export function loadReferencePointsAndFits() {
         referencePoints.push({ lat: round3(lat), lon: round3(lon) });
       }
     }
+  }
+
+  // Appended AFTER all geography, in a fixed literal order, so `BASEMAP_FIT_POINTS` stays
+  // byte-deterministic; BEFORE `fitPanels`, because moving the fit is the entire point; and
+  // through `round3` for the same round-trip reason every other point gets it, so
+  // `fitPanels(BASEMAP_FIT_POINTS)` at runtime is bit-for-bit the fit baked below.
+  for (const anchor of AK_EXTENT_ANCHORS) {
+    referencePoints.push({ lat: round3(anchor.lat), lon: round3(anchor.lon) });
   }
 
   const fits = fitPanels(referencePoints);
@@ -395,7 +468,10 @@ ${pathsLiteral}
 
 /**
  * The fixed reference points every panel's coastline was fit to (raw lat/lon, 3 decimals,
- * matching app/geo/ne_110m_us.json's own precision). A per-page map
+ * matching app/geo/ne_110m_us.json's own precision), plus the two \`ak\` DECLARED-EXTENT
+ * anchors (#115) appended last -- Attu Island's western tip and Amatignak Island, which have
+ * no drawn geometry because at 2.436 px per degree of longitude the western Aleutians are
+ * smaller than a pixel. See build-basemap.mjs's \`AK_EXTENT_ANCHORS\`. A per-page map
  * (app/src/lib/map/segmentMap.ts's \`renderMapCore\`) must reuse
  * \`fitPanels(BASEMAP_FIT_POINTS)\` VERBATIM for any panel it has an entry for
  * (us/ak/hi/pac/car/sam as of #111, since ne_50m_car.json's and ne_50m_pac.json's points feed
