@@ -544,3 +544,73 @@ describe("/airport/<code>?y=<year> -- the year track (M7 Task 9)", () => {
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(`2015–${asOfYear}`);
   });
 });
+
+// ---------------------------------------------------------------------------------------
+// Issue #118, at the rendered grain. endpoints.test.ts proves the fold; this proves the null
+// actually survives DataTable -> lib/format.ts and reaches a `<td>`, which is the seam a unit
+// test of either half alone cannot see.
+//
+// A18 (Kantishna), measured 2026-08-27 at asOf 2026-05: ONE row in the entire dataset --
+// 2025-06, op_airline 20333, seats 0.0, departures_performed 1.0, is_quarantined true, with A18
+// as the DESTINATION. So its trailing-12 pivot returns a single wholly-quarantined group, and
+// under the `?? 0` bug the only row of the only table on the page read "0 / 0 / 0". If a BTS
+// refresh ever un-quarantines A18 this test goes red, which is the intended failure: a fixture
+// that stops exercising the path it exists to guard passes against the very bug it was written
+// for (CLAUDE.md, "MOVE the fixture").
+describe("/airport/<code> renders an unknowable sum as absence, not zero", () => {
+  async function a18() {
+    const r = await resolveAirportCode("A18");
+    if (r.kind !== "ok") throw new Error("expected A18 to resolve for this fixture");
+    return await AirportView({ airport: r.airport });
+  }
+
+  it("renders every measure cell as the absence marker, in order", async () => {
+    // THE SEQUENCE, not "contains a dash". Load factor and average gauge are ALREADY `—` under
+    // the bug (their denominators are zero), so `toContain("—")` passes on the broken page --
+    // the class of self-defect app/smoke.sh has produced three times. Only asserting the
+    // POSITION of each dash distinguishes the fixed page from the buggy one.
+    // MUTANT: restore `Number(r.seats ?? 0)` in endpoints.ts -> ["0","0","0","—","—"], red.
+    const { container } = render(await a18());
+    const cells = [...container.querySelectorAll("td.num")].map((c) => c.textContent);
+    expect(cells).toEqual(["—", "—", "—", "—", "—"]);
+  });
+
+  it("renders no measure cell as a zero anywhere on the page", async () => {
+    // The absence half. A page that dropped the row entirely would satisfy the test above
+    // vacuously (zero cells is not a sequence of five), so the row's presence is asserted too.
+    const { container } = render(await a18());
+    expect(container.querySelectorAll("tbody tr").length).toBe(1);
+    expect([...container.querySelectorAll("td.num")].some((c) => c.textContent === "0")).toBe(
+      false,
+    );
+  });
+
+  it("leaves the stat strip unknowable rather than reporting zero traffic", async () => {
+    // A18's whole window is that one quarantined filing, so the strip has nothing to state --
+    // but the COUNTS are still real facts about what was filed, and must not be blanked with it.
+    // MUTANT: seed airportTotals' reduce at 0 again -> "0" for seats/passengers/departures, red.
+    const { container } = render(await a18());
+    const stats = [...container.querySelectorAll(".stat")].map((s) => [
+      s.querySelector(".k")?.textContent,
+      s.querySelector(".v")?.textContent,
+    ]);
+    expect(stats).toContainEqual(["Seats", "—"]);
+    expect(stats).toContainEqual(["Passengers", "—"]);
+    expect(stats).toContainEqual(["Departures", "—"]);
+    expect(stats).toContainEqual(["Carriers", "1"]);
+    expect(stats).toContainEqual(["Quarantined", "1"]);
+  });
+
+  it("says WHY it cannot state them, in the reason-code gutter", async () => {
+    // The em dash is the claim; this is its justification, and it is the reason the other four
+    // table surfaces already carry (they hand DataTable raw pivot rows; /airport rebuilds its
+    // rows in TypeScript, so it has to carry the reason deliberately).
+    // MUTANT: drop quarantine_reasons from carrierRows' output -> the title loses ": zero_seats".
+    const { container } = render(await a18());
+    const gutter = container.querySelector("td.gut abbr");
+    expect(gutter?.textContent).toBe("Q");
+    expect(gutter?.getAttribute("title")).toBe(
+      "Quarantined — failed an invariant: zero_seats",
+    );
+  });
+});

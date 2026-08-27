@@ -149,6 +149,22 @@ trust moment, and a direct violation of the rule `app/src/lib/format.ts` opens w
 absence, zero is a measurement. Never render one as the other."*). A row whose departure count
 was never queried makes no claim about the floor in either direction.
 
+**An unknowable measure renders `—` in the same column as a real figure, never a blank cell and
+never a zero.** A group whose every filing was quarantined sums to NULL, not 0
+(`docs/data/invariants.md`), and the three states — *measured zero*, *unknowable*, *not asked
+for* — have to stay distinguishable in a table whose whole claim is that it shows the dirt. The
+em dash keeps the column's monospaced, tabular-figure, right-aligned alignment because it is one
+glyph in the same face, so a reader scanning the column sees a gap in the data rather than a gap
+in the layout; a blank cell reads as a rendering fault, and `0` is a lie. **The dash states that
+nothing can be said; the reason-code gutter states why** — `Q`, with the row's own
+`quarantine_reason` in its `abbr` title, so the pair is a complete disclosure rather than an
+unexplained hole. A row in this state carries no below-floor treatment: an unknown departure
+count makes no claim about the floor, exactly as the paragraph above requires.
+
+**A test for this asserts the dash's POSITION, not its presence.** Load factor and average gauge
+are already `—` on such a row before the bug is fixed — their denominators are zero — so
+"contains an em dash" passes on the broken page. The discriminator is the sequence of cells.
+
 **A dimension cell shows the code; the name is the `abbr` expansion.** The table is dense by
 rule, and a full carrier or airport name in every row would swamp a column sized for two or
 three letters, so `op_airline_id` renders `DL`, not "Delta Air Lines" — the name is reachable

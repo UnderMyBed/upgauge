@@ -21,6 +21,7 @@ function row(p: Partial<EndpointRow> & { carrierId: number; endpointId: number }
     passengers: 0,
     departures: 0,
     quarantinedRows: 0,
+    quarantineReasons: null,
     ...p,
   };
 }
@@ -86,7 +87,9 @@ describe("the other-endpoint airport, derived per row", () => {
     );
     expect(rows.length).toBe(2);
     expect(rows.every((r) => r.endpointId === PDX)).toBe(true);
-    expect(rows.reduce((a, r) => a + r.seats, 0)).toBe(17);
+    // Per row, not summed: the claim is that this function does NOT fold the two directions,
+    // and a total of 17 is also what a folding implementation returning one row would give.
+    expect(rows.map((r) => r.seats)).toEqual([10, 7]);
   });
 });
 
@@ -214,5 +217,194 @@ describe("aggregating the traffic rows", () => {
     );
     expect(totals.destinations).toBe(2);
     expect(totals.carriers).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Issue #118: a wholly-quarantined group sums to NULL, and NULL is not zero.
+//
+// Every measure in meta_pivot_measures is `SUM(x) FILTER (WHERE NOT is_quarantined)`
+// (sql/02_marts/301_meta_pivot_measures.sql:21-32), and a SUM over zero passing rows returns
+// NULL. So a (carrier, origin, dest) group whose every filing was quarantined arrives here
+// with NULL measures meaning "nothing filed here can be trusted" -- never "nothing flew".
+//
+// THE SECOND COERCION IS THE ONE THAT HIDES. Deleting `?? 0` from toEndpointRows is not the
+// fix on its own: `carrierRows` and `airportTotals` FOLD these values, and JS `+` coerces
+// null to 0 (`null + 5` is 5; `[null].reduce((a, b) => a + b, 0)` is 0). A fold left on `+`
+// silently reinstates the defect while a test on the mapper alone stays green -- which is why
+// "keeps the NULL" below is followed by tests that go through the fold.
+//
+// THE FOLD'S SEMANTIC IS SUM()'s, mirroring the aggregate these values came from: a NULL
+// contributes nothing, and the sum of NO known values is NULL. Poisoning a carrier's whole row
+// because one of its thirty groups was quarantined would be the opposite error, and the page
+// already discloses the excluded rows by count and reason.
+//
+// Measured 2026-08-27 against upgauge.duckdb at max(year_month) = 2026-05, trailing 12
+// (2025-06..2026-05), at the segment grain this page queries: 21 wholly-quarantined
+// (carrier x origin x dest) groups, 0 partially NULL. Folded to the grain the table actually
+// RENDERS -- one row per operating carrier -- that is 5 unknowable rows on 5 pages (A18, JZM,
+// OQZ, STT, STX), and on A18, JZM and OQZ it is the airport's entire window, so the stat strip
+// is unknowable too. docs/data/invariants.md carries the rule and the figures.
+describe("an unknowable sum is not a zero", () => {
+  it("keeps a NULL measure NULL rather than coercing it to 0", () => {
+    // MUTANT: restore `Number(r.seats ?? 0)` in toEndpointRows -> this test goes red.
+    const rows = toEndpointRows(
+      [
+        {
+          op_airline_id: 20333,
+          origin_airport_id: LAX,
+          dest_airport_id: SEA,
+          seats: null,
+          passengers: null,
+          departures_performed: null,
+          quarantined_rows: 1,
+        },
+      ],
+      String(SEA),
+    );
+    expect(rows[0].seats).toBeNull();
+    expect(rows[0].passengers).toBeNull();
+    expect(rows[0].departures).toBeNull();
+    // A COUNT is not a measure. `count(*) FILTER (WHERE is_quarantined)`
+    // (sql/03_queries/pivot_segment.sql:20) cannot return NULL, and 0 there means "none were
+    // quarantined" -- a real measurement, not an absence. It keeps its `?? 0` deliberately.
+    expect(rows[0].quarantinedRows).toBe(1);
+  });
+
+  it("sums a carrier whose every group was quarantined to NULL, not to 0", () => {
+    // THE BUG THIS EXISTS TO CATCH, and the one the mapper test above cannot see: the fold.
+    // MUTANT: replace addSum's null handling with plain `a + b` -> this goes red while
+    // "keeps a NULL measure NULL" stays green, which is the whole point of having both.
+    const rows = carrierRows([
+      row({ carrierId: 20333, endpointId: LAX, seats: null, passengers: null, departures: null }),
+      row({ carrierId: 20333, endpointId: PDX, seats: null, passengers: null, departures: null }),
+    ]);
+    expect(rows.length).toBe(1);
+    expect(rows[0].seats).toBeNull();
+    expect(rows[0].passengers).toBeNull();
+    expect(rows[0].departures_performed).toBeNull();
+  });
+
+  it("reports the KNOWN sum for a carrier with one unknowable group among several", () => {
+    // The over-correction guard. SQL NULL-poisoning semantics (`NULL + 5 = NULL`) would erase
+    // 24 of the 29 affected pages' real figures; SUM() semantics keep them, and the excluded
+    // filings are disclosed by the gutter and the foot's quarantined count instead.
+    // MUTANT: make addSum return null when EITHER side is null -> this goes red.
+    const rows = carrierRows([
+      row({ carrierId: 19930, endpointId: PDX, seats: 100, passengers: 90, departures: 4 }),
+      row({ carrierId: 19930, endpointId: LAX, seats: null, passengers: null, departures: null }),
+    ]);
+    expect(rows[0].seats).toBe(100);
+    expect(rows[0].passengers).toBe(90);
+    expect(rows[0].departures_performed).toBe(4);
+  });
+
+  it("leaves the airport's totals unknowable when every row it has is unknowable", () => {
+    // A18, JZM and OQZ, measured: one pivot row each, wholly quarantined. The stat strip is
+    // fed by this function, so under the bug the whole page reads 0 seats / 0 departures.
+    // MUTANT: restore `rows.reduce((a, r) => a + r.seats, 0)` -> this goes red.
+    const totals = airportTotals(
+      [
+        row({
+          carrierId: 20333,
+          endpointId: LAX,
+          seats: null,
+          passengers: null,
+          departures: null,
+          quarantinedRows: 1,
+        }),
+      ],
+      SEA,
+    );
+    expect(totals.seats).toBeNull();
+    expect(totals.passengers).toBeNull();
+    expect(totals.departures).toBeNull();
+    // The counts are still real facts about what was FILED: one carrier filed one route.
+    expect(totals.carriers).toBe(1);
+    expect(totals.destinations).toBe(1);
+    expect(totals.quarantinedRows).toBe(1);
+  });
+
+  it("totals the known rows when only some of the airport's rows are unknowable", () => {
+    // MUTANT: make addSum return null when either side is null -> this goes red.
+    const totals = airportTotals(
+      [
+        row({ carrierId: 19930, endpointId: PDX, seats: 100, passengers: 90, departures: 4 }),
+        row({ carrierId: 20333, endpointId: LAX, seats: null, passengers: null, departures: null }),
+      ],
+      SEA,
+    );
+    expect(totals.seats).toBe(100);
+    expect(totals.passengers).toBe(90);
+    expect(totals.departures).toBe(4);
+  });
+
+  it("sorts an unknowable carrier BELOW one that measurably flew nothing", () => {
+    // THE FIXTURE HAS TO CARRY BOTH KINDS OR IT CANNOT FAIL. A genuine 0 (the carrier filed,
+    // and carried nothing) and an unknowable NULL are different findings, and `?? 0` in the
+    // comparator collapses them into a tie whose winner is then decided by insertion order --
+    // the "right answer by accident of row order" trap CLAUDE.md names. With only a NULL
+    // carrier in the fixture, every comparator agrees and the test is worthless.
+    // Mirrors DuckDB's own DESC ordering, which places NULLS LAST.
+    // MUTANT: `(b.seats ?? 0) - (a.seats ?? 0)` -> ties 20333 with 19930, order becomes
+    // insertion order, and this goes red.
+    const rows = carrierRows([
+      row({ carrierId: 20333, endpointId: LAX, seats: null }),
+      row({ carrierId: 19930, endpointId: PDX, seats: 0 }),
+      row({ carrierId: 20304, endpointId: PDX, seats: 50 }),
+    ]);
+    expect(rows.map((r) => r.op_airline_id)).toEqual([20304, 19930, 20333]);
+  });
+
+  it("leaves a derived measure null rather than NaN when its inputs are unknowable", () => {
+    // `ratio()` typed to `number` reads `null === 0` as false and returns `null / null` --
+    // NaN, which formatGauge renders as the string "NaN" on a page under a DATA AS OF badge.
+    // MUTANT: drop the null guard from ratio() -> this goes red with NaN, not with a number.
+    const rows = carrierRows([
+      row({ carrierId: 20333, endpointId: LAX, seats: null, passengers: null, departures: null }),
+    ]);
+    expect(rows[0].load_factor).toBeNull();
+    expect(rows[0].avg_gauge).toBeNull();
+    const totals = airportTotals(
+      [row({ carrierId: 20333, endpointId: LAX, seats: null, passengers: null, departures: null })],
+      SEA,
+    );
+    expect(totals.loadFactor).toBeNull();
+    expect(totals.avgGauge).toBeNull();
+  });
+
+  it("carries each row's quarantine reason through the fold, de-duplicated", () => {
+    // The em dash says "we cannot say"; the gutter says WHY. /explore and the other three
+    // entity pages hand DataTable raw pivot rows, so `quarantine_reasons` reaches ReasonCode's
+    // `detail` and the glyph's title reads "Quarantined -- failed an invariant: zero_seats".
+    // /airport is the one page that rebuilds its rows in TypeScript, so anything this function
+    // does not carry is dropped. Folding several groups into one carrier row means unioning
+    // their reasons, matching the `string_agg(DISTINCT quarantine_reason, ',')` they came from
+    // (sql/03_queries/pivot_segment.sql:21-22).
+    // MUTANT: drop quarantine_reasons from carrierRows' output -> this goes red.
+    const rows = carrierRows([
+      row({ carrierId: 20333, endpointId: LAX, seats: null, quarantineReasons: "zero_seats" }),
+      row({ carrierId: 20333, endpointId: PDX, seats: null, quarantineReasons: "load_factor_gt_1" }),
+      row({ carrierId: 20333, endpointId: SEA, seats: null, quarantineReasons: "zero_seats" }),
+    ]);
+    expect(rows[0].quarantine_reasons).toBe("zero_seats,load_factor_gt_1");
+  });
+
+  it("reads the reason off the pivot row rather than inventing one", () => {
+    // MUTANT: drop quarantineReasons from toEndpointRows -> this goes red.
+    const rows = toEndpointRows(
+      [
+        {
+          op_airline_id: 20333,
+          origin_airport_id: LAX,
+          dest_airport_id: SEA,
+          seats: null,
+          quarantined_rows: 1,
+          quarantine_reasons: "zero_seats",
+        },
+      ],
+      String(SEA),
+    );
+    expect(rows[0].quarantineReasons).toBe("zero_seats");
   });
 });
