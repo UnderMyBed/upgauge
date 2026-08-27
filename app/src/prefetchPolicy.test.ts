@@ -12,14 +12,23 @@ import { describe, expect, it } from "vitest";
  * CDN and always reaches the box (proxy.ts, § "The cost, accepted deliberately"). One unguarded
  * `<Link>` above the fold is therefore one extra DuckDB-backed render per page view.
  *
- * WHY THIS IS A GATE AND NOT A PREFERENCE (#113). The edge rate limit
- * (`deploy/cloudflare/rate-limit.json`) now matches `/airport/`, `/carrier/` and `/aircraft/`
- * whole. `docs/architecture/hosting.md` § "What this does not close" rests the affordability of
- * that widening on a measured property: an entity page view is EXACTLY ONE request against the
- * 10-per-10s bucket, because `DataTable` emits a plain `<a href>` and every asset the page pulls
- * is under the excluded `/_next/`. A `<Link>` added to an entity page without `prefetch={false}`
- * spends a second slot per view and falsifies that argument -- silently, because nothing renders
- * differently and no existing test would go red. That is the regression this file exists to catch.
+ * WHY THIS IS A GATE AND NOT A PREFERENCE (#113, widened by #117). The edge rate limit
+ * (`deploy/cloudflare/rate-limit.json`) matches all FOUR entity prefixes whole -- `/route/`,
+ * `/airport/`, `/carrier/` and `/aircraft/`. `docs/architecture/hosting.md` § "What this does not
+ * close" rests the affordability of that on a measured property: an entity page view is EXACTLY
+ * ONE request against the 10-per-10s bucket, because `DataTable` emits a plain `<a href>` and
+ * every asset the page pulls is under the excluded `/_next/`.
+ *
+ * #117 brought the most-shared page type inside the rule, so that property was RE-MEASURED on a
+ * route page rather than extended by assumption. Served `/route/JFK-LAX`, 2026-08-27: 5
+ * serialized `<Link>` refs against 5 `"prefetch":false` props -- 1:1, so none takes the default
+ * (only 2 render on a 200; the other 3 are inside the not-found boundary subtree) -- plus 13
+ * `/_next/` subresources. 13 counts DISTINCT URLs across the body AND the `Link:` response
+ * header; the 4 `.woff2` are in both (header `rel=preload`, body RSC flight payload as
+ * `:HL[...]` hint records), so counting `src=`/`href=` attributes instead misses them and
+ * double-counts a chunk. One slot per view. A `<Link>` added to an entity page without
+ * `prefetch={false}` spends a second slot per view and falsifies that argument -- silently, because nothing renders differently and no
+ * existing test would go red. That is the regression this file exists to catch.
  *
  * Read off the SOURCE, not the DOM. `prefetch` is a `Link` prop and leaves no attribute on the
  * rendered `<a>`, so rendering cannot tell a guarded link from an unguarded one
