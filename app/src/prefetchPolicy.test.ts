@@ -41,17 +41,12 @@ const SRC = path.dirname(fileURLToPath(import.meta.url));
  * the assertion is set equality, so fixing one of these without deleting its line here is just as
  * red as adding a new unguarded `<Link>`. It may only ever shrink.
  *
- * All three are on `/watch` paths, which the edge rate limit does NOT match -- so they cost an
- * origin render per view (the `proxy.ts` reasoning above) but do not spend a rate-limit slot.
- * They are UNFIXED, not exempt, and they are listed rather than quietly excluded so that the
- * count is visible to anyone reading this file. #113 did not have a scope grant covering
- * `app/src/app/watch/`.
+ * It is EMPTY, and keeping it that way is the point. `#113` landed it holding the three
+ * `/watch` links its scope grant did not cover; integration closed them in the same pass, so the
+ * rule is now absolute rather than absolute-except-for-a-list. An exemption list that outlives
+ * the change which created it is one that grows.
  */
-const KNOWN_PREFETCHING = [
-  "app/watch/[preset]/not-found.tsx :: <Link href={`/watch/${s}`}>",
-  'app/watch/[preset]/not-found.tsx :: <Link href="/watch/gauge">',
-  "app/watch/page.tsx :: <Link href={`/watch/${slug}`}>",
-];
+const KNOWN_PREFETCHING: string[] = [];
 
 type LinkSite = { key: string; guarded: boolean };
 
@@ -93,7 +88,7 @@ describe("every next/link <Link> opts out of prefetching", () => {
     expect(sites.length).toBeGreaterThan(0);
   });
 
-  it("leaves no <Link> on prefetch={false}'s default beyond the known-unfixed three", () => {
+  it("leaves no <Link> on prefetch={false}'s default", () => {
     const prefetching = scan()
       .sites.filter((s) => !s.guarded)
       .map((s) => s.key)

@@ -38,7 +38,7 @@ export default async function WatchIndexPage() {
             return (
               <li key={slug}>
                 <h2>
-                  <Link href={`/watch/${slug}`}>{preset.title}</Link>
+                  <Link href={`/watch/${slug}`} prefetch={false}>{preset.title}</Link>
                 </h2>
                 <p>{preset.frame}</p>
               </li>
