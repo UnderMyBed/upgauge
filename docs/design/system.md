@@ -582,7 +582,8 @@ opposite in six places for a milestone on the strength of a comment nobody check
 points, N. Mariana Is. 46 across 6 rings, American Samoa 8. The rule that generalizes: a claim
 that an upstream source *lacks* something is a measurement, and expires like any other.
 
-**Midway is the one gap, and the reason is a scope decision, not a missing polygon.** 1:50m
+**Midway is one of two gaps in the committed geography, and the reason is a scope decision,
+not a missing polygon.** 1:50m
 genuinely has no Midway. At 1:10m it exists, but only inside a 13-ring `U.S. Minor Outlying Is.`
 feature whose other rings include **Navassa Island, in the Caribbean** — and `build-basemap.mjs`
 classifies a whole feature by `regionOf` of its first ring's first point, so taking that feature
@@ -603,6 +604,74 @@ fit — off a 960×500 canvas — and `/airport/MDY?y=2021` loses its own subjec
 only the landmass is missing. MDY has exactly one filing in the window (MDY–HNL, HA, 2021-09,
 278 seats), so `/airport/MDY?y=2021` and `/airport/HNL?y=2021` are the two pages this decision
 is about.
+
+**The western Aleutians are the second gap, and `ak` covers them with a declared extent rather
+than geometry.** `ne_110m_us.json`'s Alaska is 164 points spanning 171.791 W – 129.980 W: Natural
+Earth 1:110m stops mid-chain around Atka and omits the western third of the Aleutians. A fit taken
+over that coastline alone is right for the coastline and too narrow for the airports past it.
+Measured against the built warehouse over all 9,796 fact-present airport × window views: **seven**
+fact-present Alaskan airports projected outside `PANEL_RECTS.ak` — ADK, AKB, FQW, IKO, SNP, STG,
+SYA, across **69** of those views — and **three** put the subject's own `r=4.5` disc *or* its
+right-anchored label off the 960×500 canvas, where `globals.css`'s `svg:not(:root) { overflow:
+hidden }` clips it away: ADK at (−3.1, 453.4), AKB at (7.0, 454.5) and SYA at (−35.2, 433.5),
+across **27** views. `/airport/SYA?y=2018` rendered a map of a network whose centre was not on it.
+**AKB is the one a disc-only check misses** — its disc was on-canvas and its label ran to x = −19.8,
+so `/airport/AKB` drew an unlabelled subject jammed against the left edge in all 13 of its windows.
+That is why the gate asserts the label box and not just the mark.
+
+**The fix is the fit, not the rect, and that is arithmetic.** `fitPanels`'s `k` is `min(w/dx, h/dy)`
+and `ak` binds on **width**, so `ADK.x = rx0 + (raw_x − x0)·k = rx0 − 0.10343k` — strictly left of
+the rect's own left edge for every `k`, and widening the rect only *raises* `k`. Widening helps at
+all only once height binds (`k` capped at 509.33), and ADK then needs a rect 294px wide and SYA
+381px, against the 140px the bottom tray has between the 16px pad and `hi`'s frame at 186.
+`BASEMAP_FIT_POINTS` therefore carries two anchors with no drawn geometry —
+`build-basemap.mjs`'s `AK_EXTENT_ANCHORS`: Attu Island's western tip (52.927 N, 172.476 E) and
+Amatignak Island, Alaska's southernmost point (51.215 N, 179.119 W), both Natural Earth 1:10m
+Alaska's own extreme vertices. `ak`'s fit goes from k=377.8397 to **k=244.5450**, all 344
+fact-present Alaskan airports land inside the rect, and both properties above are clean. Alaska's
+easternmost airport, WHD, is the binding case at the other end: 1.0px inside the east edge, against
+1.55px before.
+
+**The islands are not committed, and the reason is scale, not source.** 1:50m Alaska stops at
+178.195 W and does not reach Shemya at all; 1:10m carries the whole chain — 26 rings / 1,371 points
+west of the committed coastline, out to 187.524 W, Shemya's own 8-point ring included. What rules
+it out is that this panel draws **2.436 px per degree of longitude**: Attu is 2.35px, Adak 1.37px,
+Kiska 1.14px, Agattu 0.98px, Buldir 0.27px and **Shemya 0.25px**. At any RDP epsilon coarse enough
+not to bloat the artifact most of those collapse to a two-point segment enclosing zero area — the
+hairline-where-the-map-claims-an-island defect `PAC_RDP_EPSILON_DEG` exists to prevent for Rota,
+eighteen times over. At this panel's scale the western Aleutians are points, not polygons: the same
+call `nwhi` makes for Midway, and the reason `pac` became its own panel rather than share one.
+
+**`PANEL_RECTS.ak` is deliberately *not* reshaped to the new 1.9124:1 extent**, which is the one
+place this differs from `car` and `pac`. Albers is conic, so the raw bounding box of a declared
+extent does not contain the images of every point inside it: IKO, ADK, AKB and FQW all sit south of
+that box. A tray-height 140×76 rect gives the identical `k` (width binds either way) and puts IKO
+0.4px above the frame. `ak` fills 100.0% × 50.1% of its rect and the vertical slack is load-bearing,
+not waste — which is also why `basemap.test.ts`'s "fills its rect" gate still covers `pac`/`car`/`sam`
+only.
+
+**The property is now stated once, for every panel, instead of one airport at a time.**
+`panelContainment.test.ts` reads every airport `/sitemap.xml` serves a page for — through
+`sitemap_airports.sql`, `lookup_airport_by_code.sql` and `map_airport_coords.sql`, the same three
+production queries the site uses, so there is no second definition of fact-presence — and asserts
+both that each projects inside its own panel's rect and that its subject disc and label stay on the
+canvas. It mirrors `renderMapCore`'s own fit merge, baked fit with a subject-derived fallback, so
+Midway is scored the way its page actually renders it rather than through the `us` fallback. Two
+exemptions are listed rather than omitted, the way the land test lists `car`: **EYW and MTH** sit
+4.7px and 0.5px below the `us` rect's bottom edge of 424, because 1:110m's Florida tip stops north
+of the Keys — both on-canvas, but both inside the drawn CARIBBEAN frame. That is **#119**, and
+fixing it means moving the `us` rect, which rewrites every path byte in the artifact.
+
+None of 9,796, 344, 69, 27 or the per-island pixel widths is generated; like 757/79/7 above they
+are measurements dated by the commit that took them, and must be re-measured when quoted. The two
+figures that *are* pinned mechanically are `ak`'s path sha256 and its fit, both in
+`basemap.test.ts`.
+
+*What the containment gate cannot see, measured:* `fitPanels` derives `ox`/`oy` from the rect, so
+**translating** a rect translates everything projected into it and the property is invariant —
+`PANEL_RECTS.ak` moved 24px right, same size, leaves it green. Rect position belongs to
+`albers.test.ts`'s frame-overlap check, the `ak` fit pin, and `networkMap.test.ts`'s golden and its
+`PANEL_RECTS`/`INSET_RECTS` sync check, all four of which do go red on it.
 
 **An empty, labelled inset must not read as a rendering bug to a site visitor.** `nwhi` is the
 one panel left with a frame and nothing in it — so `NetworkMap.tsx` states the gap on the page
