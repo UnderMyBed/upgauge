@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { cardChart, cardStats, cardSubtitle } from "./entityCard";
-import type { MixRow } from "@/lib/chart/aircraftMix";
+import { cardChart, cardSixthStat, cardStats, cardSubtitle } from "./entityCard";
+import { BY_AIRCRAFT_TYPE, type MixRow } from "@/lib/chart/aircraftMix";
+import { mixAbsenceNote } from "@/lib/chart/mixPlotConfig";
 import type { EntityTotals } from "@/lib/entityFacts";
 
 const TOTALS: EntityTotals = {
@@ -111,5 +112,102 @@ describe("cardChart", () => {
   it("draws nothing rather than an empty frame when there is no trend", () => {
     expect(cardChart([], "JFK–LAX").svg).toBeNull();
     expect(cardChart(rows(["2015-01"]), "JFK–LAX").svg).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Issue #118 design review: the card's no-chart copy must be the PAGE's finding.
+//
+// `prepareMixPlot` returns `plot: null` for two different findings -- nothing filed, and exactly
+// one filed month. `AircraftMixChart` has always distinguished them; `cardChart` threw the
+// distinction away and `card.tsx` printed a flat "No filings in this window." So the card
+// previewing /airport/A18 -- an airport whose whole window is ONE quarantined filing -- asserted
+// that nothing had ever been filed there, on the surface a shared link renders first.
+describe("cardChart's absence note", () => {
+  const month = (m: string): MixRow => ({
+    month: m,
+    code: "738",
+    label: "738",
+    seats: 100,
+    departures: 1,
+  });
+
+  it("says which of the two findings it is when there is one filed month", () => {
+    // MUTANT: hardcode `note: "No filings in this window."` in cardChart -> red.
+    const c = cardChart([month("2025-06")], "A18");
+    expect(c.svg).toBeNull();
+    expect(c.note).toBe(
+      "Only one month of filings in this window (2025-06) — a stacked area needs at least two.",
+    );
+  });
+
+  it("says nothing was filed only when nothing was filed", () => {
+    const c = cardChart([], "A18");
+    expect(c.svg).toBeNull();
+    expect(c.note).toBe("No aircraft-type filings in this window.");
+  });
+
+  it("carries no note when it has a chart to draw", () => {
+    // A note beside a drawn chart would be a caption contradicting the drawing.
+    // MUTANT: return the note unconditionally -> red.
+    const c = cardChart([month("2025-06"), month("2025-07")], "SEA");
+    expect(c.svg).not.toBeNull();
+    expect(c.note).toBeNull();
+  });
+
+  it("uses the same sentence the page renders, not a second wording of it", () => {
+    // The drift this exists to make impossible: two literals that agree today.
+    // MUTANT: give cardChart its own copy of either string -> red.
+    expect(cardChart([month("2025-06")], "A18").note).toBe(
+      mixAbsenceNote(["2025-06"], BY_AIRCRAFT_TYPE),
+    );
+    expect(cardChart([], "A18").note).toBe(mixAbsenceNote([], BY_AIRCRAFT_TYPE));
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Issue #118 design review: five dashes and no count is five unexplained holes.
+//
+// A card has no empty state, no foot and no aria-label, so the sixth stat is the only place a
+// reader can be told why the other five are em dashes. The matrix is (seats null?) x
+// (quarantinedRows > 0?) and all four cells are asserted -- the fourth is the one that shipped
+// wrong, keyed on the null alone.
+describe("cardSixthStat", () => {
+  const CARRIERS = { label: "Carriers", value: "7" };
+  const base: EntityTotals = {
+    seats: 100,
+    passengers: 90,
+    departures: 4,
+    loadFactor: null,
+    avgGauge: null,
+  };
+  const absent: EntityTotals = { ...base, seats: null, passengers: null, departures: null };
+
+  it("explains the dashes when quarantine is why no measure can be stated", () => {
+    // MUTANT: return `fallback` unconditionally -> red.
+    expect(cardSixthStat(absent, 1, CARRIERS)).toEqual({ label: "Quarantined", value: "1" });
+  });
+
+  it("does not blame quarantine for an absence quarantine did not cause", () => {
+    // THE CELL THAT SHIPPED WRONG. `seats === null` covers TWO absences, and the pages that
+    // filed nothing at all are by far the larger group. Keyed on that alone the card answers
+    // five dashes with "Quarantined 0" -- naming the one cause it is not, while withholding the
+    // count that does explain them.
+    // MUTANT: drop `&& quarantinedRows > 0` -> red. The other three cells stay green under it,
+    // which is exactly why this one had to exist.
+    expect(cardSixthStat(absent, 0, { label: "Carriers", value: "0" })).toEqual({
+      label: "Carriers",
+      value: "0",
+    });
+  });
+
+  it("keeps the entity count where real totals sit beside quarantined rows", () => {
+    // MUTANT: key on `quarantinedRows > 0` alone -> red. Wrong on 24 of the 29 /airport pages
+    // that carry a quarantined row, all of which have totals worth counting carriers for.
+    expect(cardSixthStat(base, 3, CARRIERS)).toEqual(CARRIERS);
+  });
+
+  it("keeps the entity count on an ordinary page", () => {
+    expect(cardSixthStat(base, 0, CARRIERS)).toEqual(CARRIERS);
   });
 });

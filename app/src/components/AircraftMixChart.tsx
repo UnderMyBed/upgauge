@@ -1,6 +1,6 @@
 import { renderPlotToSvg } from "@/lib/chart/svg";
 import { BY_AIRCRAFT_TYPE, type MixDimension, type MixRow } from "@/lib/chart/aircraftMix";
-import { buildMixPlotConfig, gapNote, prepareMixPlot } from "@/lib/chart/mixPlotConfig";
+import { buildMixPlotConfig, gapNote, mixAbsenceNote, prepareMixPlot } from "@/lib/chart/mixPlotConfig";
 
 /** The project's first chart (docs/design/system.md § Charts, and CLAUDE.md's workflow rule
  * that this one is built before the load-factor chart): a stacked area of monthly seats,
@@ -58,11 +58,10 @@ export function AircraftMixChart({
   if (plot === null) {
     return (
       <Frame title={title} dimension={dimension}>
-        <p className="foot">
-          {months.length === 0
-            ? `No ${dimension.absent} filings in this window.`
-            : `Only one month of filings in this window (${months[0]}) — a stacked area needs at least two.`}
-        </p>
+        {/* `mixAbsenceNote`, not a literal: the OG card renders the same finding and the two
+            drifted apart once already (the card said "No filings" about a window this page
+            described as one filed month). Shared so a fix reaches both. */}
+        <p className="foot">{mixAbsenceNote(months, dimension)}</p>
       </Frame>
     );
   }

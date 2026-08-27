@@ -1,10 +1,10 @@
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveAirportCode } from "./resolveAirport";
-import { airportTotals, fetchAirportMix, fetchAirportTraffic } from "./endpoints";
+import { airportTotals, fetchAirportMix, fetchAirportTraffic, type AirportTotals } from "./endpoints";
 import { dataAsOf } from "@/lib/db";
 import { EARLIEST_MONTH, trailing12From } from "@/lib/entityFacts";
-import { CARD_SIZE, renderEntityCard } from "@/lib/og/card";
-import { cardChart, cardStats, cardSubtitle } from "@/lib/og/entityCard";
+import { CARD_SIZE, renderEntityCard, type CardStat } from "@/lib/og/card";
+import { cardChart, cardSixthStat, cardStats, cardSubtitle } from "@/lib/og/entityCard";
 import { formatCount } from "@/lib/format";
 
 // FORCE-DYNAMIC, same line and same reason as page.tsx's: Next's convention doc states a
@@ -25,6 +25,26 @@ export const alt =
   "Upgauge data card: an airport's trailing-12-month seats, passengers, load factor, average " +
   "gauge, departures and operating carriers, counted at both endpoints, above a stacked area " +
   "of its monthly seats by aircraft type.";
+
+/** This card's six stats. `cardSixthStat` (lib/og/entityCard.ts) decides which sixth one this
+ * page needs; the fallback and the entity count are this page's to supply.
+ *
+ * EXTRACTING THIS DOES NOT PIN THE WIRING -- it moves the unpinned hop up one level, from
+ * `Image() -> cardSixthStat` to `Image() -> airportCardStats`, because a test can call an
+ * exported helper but `Image()` returns a PNG stream and hands nothing back. Measured: replacing
+ * the call below with a hard-coded `Carriers` literal left all 1,464 tests green. What actually
+ * pins it is `opengraph-image.test.tsx`'s call-through spy on `renderEntityCard`, which runs the
+ * real route and reads the `CardInput` on its way past. The extraction is still worth having --
+ * it names the composition -- but the seam is the spy, not the export. */
+export function airportCardStats(totals: AirportTotals): CardStat[] {
+  return cardStats(
+    totals,
+    cardSixthStat(totals, totals.quarantinedRows, {
+      label: "Carriers",
+      value: formatCount(totals.carriers),
+    }),
+  );
+}
 
 export default async function Image({ params }: { params: Promise<{ code: string }> }) {
   const { code: slug } = await params;
@@ -61,8 +81,9 @@ export default async function Image({ params }: { params: Promise<{ code: string
   return renderEntityCard({
     title: airport.code,
     subtitle: cardSubtitle(airport.name, trailing12, asOf),
-    stats: cardStats(totals, { label: "Carriers", value: formatCount(totals.carriers) }),
+    stats: airportCardStats(totals),
     chartSvg: chart.svg,
+    chartNote: chart.note,
     gaps: chart.gaps,
     asOf,
   });
