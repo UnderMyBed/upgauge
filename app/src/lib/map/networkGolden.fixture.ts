@@ -70,8 +70,8 @@ export const GOLDEN_NETWORK_INPUT: NetworkMapInput = {
 };
 
 /** Captured from `renderNetworkMap(GOLDEN_NETWORK_INPUT)` on c7b8be5, BEFORE any of #104's
- *  changes to the renderer, and RE-PINNED ONCE, by #115. Regenerate ONLY if the rendered bytes
- *  are intended to move.
+ *  changes to the renderer, and RE-PINNED TWICE: by #115 and by #119. Regenerate ONLY if the
+ *  rendered bytes are intended to move.
  *
  *  WHY #115 RE-PINNED IT, since re-pinning a byte-identity guard normally deserves suspicion:
  *  THE OLD BYTES WERE THE DEFECT. This fixture held
@@ -82,21 +82,63 @@ export const GOLDEN_NETWORK_INPUT: NetworkMapInput = {
  *  (build-basemap.mjs's `AK_EXTENT_ANCHORS`), which moves its fit from k=377.8396853372171 to
  *  k=244.54496902469134; the new bytes ARE the fix, not a silenced assertion.
  *
- *  EXACTLY FIVE ELEMENTS MOVED, and only the two `ak` points are in them -- diffed
- *  element-by-element old against new, 40 elements before and after:
+ *  WHY #119 RE-PINNED IT, and how the new bytes were DERIVED rather than accepted -- which,
+ *  after the paragraph above, is the only honest way to move this file. #119 gave the `us`
+ *  panel a declared southern extent (`US_EXTENT_ANCHORS`, the Marquesas Keys), taking its fit
+ *  from {k: 904.5131300948573, ox: 487.1120339377376, oy: 239.57188375255203} to
+ *  {k: 892.2437067538316, ox: 487.0155615347458, oy: 236.5663339691636}. That is a pure
+ *  similarity transform, and the whole rendered string was checked against it -- 39 elements
+ *  before and after in the same order, 20 byte-identical and 19 changed, holding 71 coordinate
+ *  pairs between them. TWO DIFFERENT LAWS GOVERN THOSE PAIRS, and conflating them is the one
+ *  mistake to avoid here, because applying the first to a label gives a residual that looks
+ *  like a defect and is not.
  *
- *    polyline ORD-SYA   points "581.4,164.2 -35.2,433.5" -> "581.4,164.2 39.3,418.4"
- *    polyline ORD-ANC   points "581.4,164.2 100.5,407.4" -> "581.4,164.2 127.1,401.5"
- *    circle   SYA node  cx -35.2 cy 433.5               -> cx 39.3  cy 418.4
- *    circle   ANC node  cx 100.5 cy 407.4               -> cx 127.1 cy 401.5
- *    text     ANC label x 105.5  y 410.4                -> x 132.1  y 404.5
+ *  PROJECTED POINTS -- the 61 that moved, being node and marker centres and every interpolated
+ *  vertex of a `us`-to-`us` arc -- satisfy
  *
- *  SYA has no label of its own to move: it is the ninth of nine destinations and the lightest,
- *  so `TOP_LABEL_COUNT` = 8 ranks it out -- the same slice this fixture already existed to pin.
- *  Everything else is byte-identical: all four inset frames (no rect changed, `PANEL_RECTS`
- *  and `INSET_RECTS` are untouched), the seven other arcs, the GUM/HNL/JFK/DEN/MIA/SEA/SJU
- *  nodes and labels, the ORD subject marker, the footer line and the `aria-label`. Total
- *  length 4,694 -> 4,692 bytes, which is the two characters `-35.2` loses becoming `39.3`,
- *  once in the polyline and once in the circle. */
+ *      new = (old - o_old) * (k_new / k_old) + o_new,      ratio 0.9864353286505205
+ *
+ *  with `o` = ox for x and oy for y. Worst residual 0.0908px, against an admissible ceiling of
+ *  0.101px: both sides are rounded to 1dp and the map is applied to an already-rounded input,
+ *  so the error is one rounding step in, scaled by the ratio, plus one rounding step out.
+ *
+ *  LABEL COORDINATES DO NOT, and the formula above is simply not about them. `segmentMap.ts`
+ *  :511 and :518 emit label text at `fmt(x + 5), fmt(y + 3)` and `fmt(x - 7), fmt(y - 8)` --
+ *  a constant screen-space offset added to the RAW point and rounded independently of the node.
+ *  So the law for a label is `label = its own node + that offset`, and because the offsets are
+ *  whole pixels while rounding is to 1dp, it holds EXACTLY: all 9 labels are byte-exact against
+ *  their own node in both the old and the new bytes, residual 0.0000px. That is a stronger
+ *  statement than the affine one, not a weaker one.
+ *
+ *  Feed a label into the projected-point formula instead and you get up to 0.1254px (the ORD
+ *  marker's label, whose offset is the largest at -7/-8) and 0.1113px for JFK -- both past the
+ *  0.101px ceiling, and both an artefact of the wrong law rather than a bad byte. Recorded
+ *  because that is the shape a reader checking this fixture will land on first.
+ *
+ *  The remaining 5 of the 71 HELD, and all 5 are the far endpoints of the cross-panel arcs.
+ *
+ *  THOSE FIVE ARE THE PARTITION ARGUMENT'S OWN CHECK, and they are why this fixture is worth
+ *  more than a hash here. `fitPanels` partitions its input by `regionOf` before fitting, so a
+ *  `us`-classified anchor CANNOT move another panel. If that were wrong, SYA (39.3,418.4),
+ *  GUM (45.7,236.6), ANC (127.1,401.5), HNL (229.4,414.3) and SJU (594.7,399.9) would have
+ *  moved. They are byte-identical, and so are their nodes and labels, and so are all four
+ *  inset frames (no rect changed -- #119 moved the FIT, not the rect, and could not have moved
+ *  the rect: see `US_EXTENT_ANCHORS` for the arithmetic).
+ *
+ *  WHAT MOVED: the ORD subject marker and its label, the four `us` destinations (MIA, JFK,
+ *  DEN, SEA) with their nodes and labels, and every interpolated point of the four `us`-to-`us`
+ *  great circles -- plus the ORD end, and only the ORD end, of the five cross-panel straights.
+ *
+ *    ORD marker  581.4,164.2 -> 580.0,162.2      ORD label  574.4,156.2 -> 573.0,154.2
+ *    MIA         711.6,406.4 -> 708.4,401.1      JFK        748.6,158.8 -> 745.0,156.9
+ *    DEN         383.2,197.2 -> 384.5,194.8      SEA        208.1, 42.9 -> 211.8, 42.5
+ *
+ *  DEN and SEA move RIGHT while MIA and JFK move LEFT: the fit shrank about its own centre, so
+ *  the sign of the shift is the sign of the point's offset from it. A uniform drift in one
+ *  direction would have been the bug.
+ *
+ *  Total length 4,692 -> 4,691 bytes. SYA still has no label of its own to move: it is the
+ *  ninth of nine destinations and the lightest, so `TOP_LABEL_COUNT` = 8 ranks it out -- the
+ *  same slice this fixture already existed to pin. */
 export const GOLDEN_NETWORK_SVG =
-  "<svg viewBox=\"0 0 960 500\" width=\"960\" height=\"500\" role=\"img\" aria-label=\"Network map of ORD's scheduled service, 2025-05 \u2192 2026-04. 9 destinations drawn thinnest to heaviest by seats -- 4 as great-circle arcs, 5 as straight lines across a panel boundary (a great circle cannot cross one). 73,082 same-airport seats excluded from the arcs above, included in this total.\" style=\"font-family:var(--font-mono);font-variant-numeric:tabular-nums\" xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"30\" y=\"316\" width=\"152\" height=\"158\" fill=\"none\" stroke=\"var(--rule-2)\" style=\"stroke-width:1\"/><text x=\"32\" y=\"328\" font-size=\"8\" letter-spacing=\"0.1em\" fill=\"var(--ink-3)\">ALASKA</text><rect x=\"186\" y=\"386\" width=\"112\" height=\"88\" fill=\"none\" stroke=\"var(--rule-2)\" style=\"stroke-width:1\"/><text x=\"188\" y=\"398\" font-size=\"8\" letter-spacing=\"0.1em\" fill=\"var(--ink-3)\">HAWAI\u2018I</text><rect x=\"34\" y=\"24\" width=\"56\" height=\"228\" fill=\"none\" stroke=\"var(--rule-2)\" style=\"stroke-width:1\"/><text x=\"36\" y=\"36\" font-size=\"8\" letter-spacing=\"0.1em\" fill=\"var(--ink-3)\">MARIANAS</text><rect x=\"418\" y=\"386\" width=\"308\" height=\"88\" fill=\"none\" stroke=\"var(--rule-2)\" style=\"stroke-width:1\"/><text x=\"420\" y=\"398\" font-size=\"8\" letter-spacing=\"0.1em\" fill=\"var(--ink-3)\">CARIBBEAN</text><path d=\"M0 0\" class=\"golden-basemap\"/><polyline points=\"581.4,164.2 39.3,418.4\" fill=\"none\" stroke=\"var(--ink-3)\" stroke-width=\"1.00\" stroke-dasharray=\"1 3\" stroke-opacity=\"0.75\" stroke-linecap=\"round\"/><polyline points=\"581.4,164.2 45.7,236.6\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"1.54\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"581.4,164.2 594.7,399.9\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"1.62\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"581.4,164.2 559.3,167.7 537.3,171.2 515.2,174.8 493.2,178.4 471.1,182.1 449.1,185.8 427.1,189.5 405.1,193.4 383.2,197.2\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"1.77\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"581.4,164.2 592.2,184.4 603.0,204.7 613.8,225.1 624.6,245.4 635.3,265.7 646.2,285.9 657.0,306.2 667.8,326.4 678.7,346.5 689.6,366.5 700.6,386.5 711.6,406.4\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"1.77\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"581.4,164.2 127.1,401.5\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"2.02\" stroke-dasharray=\"5 3\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"581.4,164.2 561.0,156.8 540.6,149.5 520.1,142.2 499.6,135.0 479.1,127.9 458.5,120.9 437.9,113.9 417.2,107.0 396.5,100.2 375.7,93.5 354.9,86.9 334.1,80.3 313.2,73.8 292.2,67.5 271.2,61.2 250.2,55.0 229.2,48.9 208.1,42.9\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"2.75\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"581.4,164.2 229.4,414.3\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"2.91\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"581.4,164.2 602.3,163.4 623.2,162.6 644.1,161.8 665.0,161.1 685.9,160.5 706.8,159.9 727.7,159.3 748.6,158.8\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"3.60\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><circle cx=\"229.4\" cy=\"414.3\" r=\"2\" fill=\"var(--ink)\"/><text x=\"234.4\" y=\"417.3\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">HNL</text><circle cx=\"711.6\" cy=\"406.4\" r=\"2\" fill=\"var(--ink)\"/><text x=\"716.6\" y=\"409.4\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">MIA</text><circle cx=\"39.3\" cy=\"418.4\" r=\"1.3\" fill=\"var(--ink-3)\"/><circle cx=\"748.6\" cy=\"158.8\" r=\"2\" fill=\"var(--ink)\"/><text x=\"753.6\" y=\"161.8\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">JFK</text><circle cx=\"383.2\" cy=\"197.2\" r=\"2\" fill=\"var(--ink)\"/><text x=\"388.2\" y=\"200.2\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">DEN</text><circle cx=\"45.7\" cy=\"236.6\" r=\"2\" fill=\"var(--ink)\"/><text x=\"50.7\" y=\"239.6\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">GUM</text><circle cx=\"127.1\" cy=\"401.5\" r=\"2\" fill=\"var(--ink)\"/><text x=\"132.1\" y=\"404.5\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">ANC</text><circle cx=\"208.1\" cy=\"42.9\" r=\"2\" fill=\"var(--ink)\"/><text x=\"213.1\" y=\"45.9\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">SEA</text><circle cx=\"594.7\" cy=\"399.9\" r=\"2\" fill=\"var(--ink)\"/><text x=\"599.7\" y=\"402.9\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">SJU</text><circle cx=\"581.4\" cy=\"164.2\" r=\"4.5\" fill=\"var(--field)\" stroke=\"var(--signal)\" style=\"stroke-width:1.8\"/><text x=\"574.4\" y=\"156.2\" text-anchor=\"end\" font-size=\"11\" font-weight=\"600\" fill=\"var(--signal)\">ORD</text><text x=\"8\" y=\"494\" font-size=\"10\" fill=\"var(--ink-2)\">2025-05 \u2192 2026-04 \u00b7 73,082 same-airport seats excluded from the arcs above, included in this total.</text></svg>";
+  "<svg viewBox=\"0 0 960 500\" width=\"960\" height=\"500\" role=\"img\" aria-label=\"Network map of ORD's scheduled service, 2025-05 \u2192 2026-04. 9 destinations drawn thinnest to heaviest by seats -- 4 as great-circle arcs, 5 as straight lines across a panel boundary (a great circle cannot cross one). 73,082 same-airport seats excluded from the arcs above, included in this total.\" style=\"font-family:var(--font-mono);font-variant-numeric:tabular-nums\" xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"30\" y=\"316\" width=\"152\" height=\"158\" fill=\"none\" stroke=\"var(--rule-2)\" style=\"stroke-width:1\"/><text x=\"32\" y=\"328\" font-size=\"8\" letter-spacing=\"0.1em\" fill=\"var(--ink-3)\">ALASKA</text><rect x=\"186\" y=\"386\" width=\"112\" height=\"88\" fill=\"none\" stroke=\"var(--rule-2)\" style=\"stroke-width:1\"/><text x=\"188\" y=\"398\" font-size=\"8\" letter-spacing=\"0.1em\" fill=\"var(--ink-3)\">HAWAI\u2018I</text><rect x=\"34\" y=\"24\" width=\"56\" height=\"228\" fill=\"none\" stroke=\"var(--rule-2)\" style=\"stroke-width:1\"/><text x=\"36\" y=\"36\" font-size=\"8\" letter-spacing=\"0.1em\" fill=\"var(--ink-3)\">MARIANAS</text><rect x=\"418\" y=\"386\" width=\"308\" height=\"88\" fill=\"none\" stroke=\"var(--rule-2)\" style=\"stroke-width:1\"/><text x=\"420\" y=\"398\" font-size=\"8\" letter-spacing=\"0.1em\" fill=\"var(--ink-3)\">CARIBBEAN</text><path d=\"M0 0\" class=\"golden-basemap\"/><polyline points=\"580.0,162.2 39.3,418.4\" fill=\"none\" stroke=\"var(--ink-3)\" stroke-width=\"1.00\" stroke-dasharray=\"1 3\" stroke-opacity=\"0.75\" stroke-linecap=\"round\"/><polyline points=\"580.0,162.2 45.7,236.6\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"1.54\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"580.0,162.2 594.7,399.9\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"1.62\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"580.0,162.2 558.2,165.6 536.5,169.1 514.7,172.6 493.0,176.2 471.3,179.8 449.6,183.5 427.9,187.2 406.2,191.0 384.5,194.8\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"1.77\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"580.0,162.2 590.7,182.2 601.3,202.2 612.0,222.2 622.6,242.3 633.2,262.3 643.9,282.3 654.6,302.3 665.3,322.2 676.0,342.0 686.8,361.8 697.6,381.5 708.4,401.1\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"1.77\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"580.0,162.2 127.1,401.5\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"2.02\" stroke-dasharray=\"5 3\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"580.0,162.2 559.9,154.9 539.7,147.7 519.6,140.6 499.3,133.5 479.1,126.4 458.8,119.5 438.4,112.6 418.0,105.8 397.6,99.1 377.1,92.5 356.6,85.9 336.0,79.5 315.4,73.1 294.8,66.8 274.1,60.6 253.3,54.5 232.6,48.4 211.8,42.5\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"2.75\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"580.0,162.2 229.4,414.3\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"2.91\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><polyline points=\"580.0,162.2 600.6,161.4 621.2,160.6 641.9,159.9 662.5,159.2 683.1,158.6 703.7,158.0 724.3,157.4 745.0,156.9\" fill=\"none\" stroke=\"var(--ink)\" stroke-width=\"3.60\" stroke-opacity=\"0.62\" stroke-linecap=\"round\"/><circle cx=\"229.4\" cy=\"414.3\" r=\"2\" fill=\"var(--ink)\"/><text x=\"234.4\" y=\"417.3\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">HNL</text><circle cx=\"708.4\" cy=\"401.1\" r=\"2\" fill=\"var(--ink)\"/><text x=\"713.4\" y=\"404.1\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">MIA</text><circle cx=\"39.3\" cy=\"418.4\" r=\"1.3\" fill=\"var(--ink-3)\"/><circle cx=\"745.0\" cy=\"156.9\" r=\"2\" fill=\"var(--ink)\"/><text x=\"750.0\" y=\"159.9\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">JFK</text><circle cx=\"384.5\" cy=\"194.8\" r=\"2\" fill=\"var(--ink)\"/><text x=\"389.5\" y=\"197.8\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">DEN</text><circle cx=\"45.7\" cy=\"236.6\" r=\"2\" fill=\"var(--ink)\"/><text x=\"50.7\" y=\"239.6\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">GUM</text><circle cx=\"127.1\" cy=\"401.5\" r=\"2\" fill=\"var(--ink)\"/><text x=\"132.1\" y=\"404.5\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">ANC</text><circle cx=\"211.8\" cy=\"42.5\" r=\"2\" fill=\"var(--ink)\"/><text x=\"216.8\" y=\"45.5\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">SEA</text><circle cx=\"594.7\" cy=\"399.9\" r=\"2\" fill=\"var(--ink)\"/><text x=\"599.7\" y=\"402.9\" font-size=\"9\" font-weight=\"600\" fill=\"var(--ink)\">SJU</text><circle cx=\"580.0\" cy=\"162.2\" r=\"4.5\" fill=\"var(--field)\" stroke=\"var(--signal)\" style=\"stroke-width:1.8\"/><text x=\"573.0\" y=\"154.2\" text-anchor=\"end\" font-size=\"11\" font-weight=\"600\" fill=\"var(--signal)\">ORD</text><text x=\"8\" y=\"494\" font-size=\"10\" fill=\"var(--ink-2)\">2025-05 \u2192 2026-04 \u00b7 73,082 same-airport seats excluded from the arcs above, included in this total.</text></svg>"
