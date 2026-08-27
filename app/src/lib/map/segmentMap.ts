@@ -121,7 +121,9 @@ export interface SegmentMapInput {
    *  mutant #105 exists to kill. The renderer cannot derive this: the query that produced these
    *  segments carried a LIMIT, so the true total is only knowable upstream (`db.ts:251-254`).
    *  `NetworkMapInput` has no equivalent field, which is why `AIRPORT_NETWORK_LIMIT` can
-   *  truncate silently today.
+   *  truncate silently today. That is about the CAP alone: #114 gave the hub map its own
+   *  `quarantinedRoutes`, so the quarantine half of this disclosure exists on both maps -- it
+   *  is the "N of M" half that the hub still cannot state.
    *
    *  THE DRAWN COUNT IS NOT AN INPUT. It is `lines.length` -- what the renderer actually drew
    *  after filtering self-segments. An earlier revision took it from the caller, and the two
@@ -145,7 +147,11 @@ export interface SegmentMapInput {
    *  REQUIRED, not optional. A producer written against an optional field compiles, renders,
    *  and silently omits the disclosure -- which is the exact failure the field exists to
    *  prevent. A compile error in #105/#109 is loud; a missing sentence is not. The hub path
-   *  never sees this interface, so requiring it costs `renderNetworkMap` nothing. */
+   *  never sees this interface, so requiring it costs `renderNetworkMap` nothing.
+   *
+   *  `NetworkMapInput.quarantinedRoutes` (#114) is the SAME quantity and is OPTIONAL there,
+   *  which is a concurrency concession and not a disagreement about the rule -- that field's
+   *  own doc carries the trade and the live tests that stand in for the compile error. */
   quarantinedRoutes: number;
   /** Optional caption under the window line -- the diff map's per-panel label. PAINTED INTO THE
    *  SVG on its own footer row, which cannot wrap: same ~158-character ceiling as `window`, and
@@ -336,8 +342,14 @@ export function sameAirportNote(seats: number, total: SameAirportTotal): string 
  * (`ReasonCode.tsx`'s "Quarantined — failed an invariant", the entity pages' "N quarantined
  * rows excluded from these totals, never clamped"). A map has no reason-code gutter to put the
  * reason in, so it goes inline. "Never clamped" is load-bearing, not decoration: the alternative
- * to quarantining a `load_factor > 1.0` row is clamping it, which this project refuses. */
-function quarantinedNote(routes: number): string | null {
+ * to quarantining a `load_factor > 1.0` row is clamping it, which this project refuses.
+ *
+ * Shared by BOTH maps since #114, exactly as `sameAirportNote` has been since #104. The FACT is
+ * identical either way -- these route pairs exist, every filing behind them failed an invariant,
+ * and none of them is drawn -- so it stays one sentence with one owner. `networkMap.ts` reaches
+ * it through `networkDisclosureNotes`; a second copy of this wording in that file is the drift
+ * this module's own "ONE OWNER PER SENTENCE" rule exists to prevent. */
+export function quarantinedNote(routes: number): string | null {
   return routes > 0
     ? `${routes.toLocaleString("en-US")} quarantined route${routes === 1 ? "" : "s"} not drawn — failed an invariant, never clamped.`
     : null;
