@@ -1828,8 +1828,13 @@ it are easy to get wrong and both matter here:
   exactly ONE request against this rule.** `DataTable` emits a plain `<a href>`
   (`components/DataTable.tsx:78,93`), `TopBar` pins `prefetch={false}` on both its `<Link>`s, and
   every asset the page pulls is under the excluded `/_next/`. Putting a prefetching `<Link>` on
-  an entity page spends a second slot per view and breaks that arithmetic — which is why this is
-  written as a mechanism to preserve, not as headroom to spend.
+  an entity page spends a second slot per view and falsifies this paragraph **silently**: nothing
+  renders differently, and no render-based test can see it, because `prefetch` leaves no attribute
+  on the emitted `<a>`. **`app/src/prefetchPolicy.test.ts` is what holds the property** — it reads
+  every `.tsx` importing `next/link` and asserts by SET EQUALITY that no `<Link>` takes the
+  prefetching default, so the list of exceptions can only ever shrink. Three `/watch` links are
+  named there as unfixed rather than exempt: they cost an origin render per view, but no slot
+  here, since `/watch` is outside this expression.
 
   **What is left out is left out on purpose, and widening is the mutant to fear.** `/_next/`
   assets are immutable, and a single real page load asks for more static chunks than 1 req/s
@@ -1848,7 +1853,8 @@ it are easy to get wrong and both matter here:
   drafted to spare React's own prefetches — is `curl -H 'RSC: 1'` away from disabling the rule
   outright, the same reasoning this file already records for `_rsc`. It is also unnecessary: every
   link to `/explore` in the app is a raw `<a href>`, and `TopBar` sets `prefetch={false}` on the
-  two `<Link>`s a data page renders, with `TopBar.test.tsx` asserting it.
+  two `<Link>`s a data page renders, with `TopBar.test.tsx` asserting it and
+  `prefetchPolicy.test.ts` extending the same rule to every `<Link>` in `app/src`.
 
   **Still uncovered, and named rather than implied: `/route/:pair`.** It is the one entity path
   with `keys: NO_KEYS` (`lib/canonicalQuery.ts`), so it has no refused-value family — but an

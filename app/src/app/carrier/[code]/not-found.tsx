@@ -54,8 +54,10 @@ export async function NotFoundView({ pathname }: { pathname: string }) {
           {/* eslint-plugin-next flags a literal <a href="/carrier/..."> against this exact
               dynamic route ([code]) as "use next/link instead" -- it does NOT flag the
               Explorer link below, whose href carries a query string, so only this one needed
-              the swap. Identical to route/[pair]/not-found.tsx's own note. */}
-          Try <Link href="/carrier/DL">DL, Delta Air Lines</Link>, or start from{" "}
+              the swap. Identical to route/[pair]/not-found.tsx's own note.
+              `prefetch={false}` is load-bearing here, not style -- TopBar.tsx's own note
+              has the why in full, and prefetchPolicy.test.ts enforces it repo-wide. */}
+          Try <Link href="/carrier/DL" prefetch={false}>DL, Delta Air Lines</Link>, or start from{" "}
           <a href="/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op">
             the Explorer
           </a>
