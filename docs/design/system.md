@@ -98,7 +98,22 @@ Counts are integers with thousands separators.
 
 - Page max width **1200px**, 20px gutters.
 - Main grid: `minmax(0,1fr) 214px` with a 24px gap — content plus legend rail. The rail
-  collapses below **920px**.
+  collapses below **920px**, and **the collapsed single-column form is `minmax(0,1fr)` too.**
+  A bare `1fr` is `minmax(auto,1fr)`, and that `auto` is a content-based minimum: the track
+  takes the widest *rendered* table's min-content as its floor, so the page body scrolls while
+  `.table-scroll` — handed exactly its own content width — never scrolls at all. **No
+  breakpoint can bound this**, because the floor moves with whatever the URL asks for.
+  Measured on the served build across 17 URLs × 15 widths, 320–1440px, with the guard removed
+  and restored — **this is the only place the sweep is stated, and the code sites cite it
+  rather than repeat it**: **72 of 255 (url, width) pairs overflowed with a bare `1fr`, 0 of
+  255 with `minmax(0,1fr)`.** The widest viewport that still overflowed was **920px, the
+  breakpoint itself**; the worst case was `/watch/empty-planes` at **+804px on a 320px
+  viewport**. The threshold is per-page and per-query, which is the entire argument:
+  `/airport/BET` failed up to 470px, `/carrier/AS` to 520px and the four `/watch` presets to
+  920px — and **`/explore` failed up to 600px with three dimensions and five measures selected
+  while its default view never failed at all.** Same template, same build, two permalinks.
+  Every flexible track in `globals.css` is therefore `minmax(0,…)`, and a bare `1fr` or `auto`
+  track anywhere in that file is a test failure, not a review note.
 - **Table row height 22px.** Hairline `--rule` between rows, `--ink` under the header. No
   card containers, no rounded corners, no drop shadows anywhere.
 - Vertical rhythm between blocks: 12/16/22px. Section heads are a `--ink` hairline with a
@@ -1211,7 +1226,13 @@ Unannounced, non-negotiable.
 - **Reduced motion**: N/A for the year track — plain, cacheable `?y=<year>` links (see § The
   map) rather than the animated slider the mockup shows, so there is no motion to reduce. Nothing on the site currently animates.
 - **Responsive**: the legend rail collapses below 920px and moves beneath the content.
-  Tables scroll horizontally within their own container — the page body never does.
+  Tables scroll horizontally within their own container — the page body never does, **at every
+  width down to 265px**. That bound is below **WCAG 1.4.10's 320px reflow width**, so the
+  guarantee covers every width the standard requires. Below 265px the body does scroll: `body`
+  is a column flex container, so `.wrap` takes its own min-content rather than the viewport,
+  and the search field's intrinsic width is that floor. Unlike the grid-track rule under
+  § Layout and density, this one is a **constant** — the same 265px on `/`, `/explore`,
+  `/airport/BET` and `/watch/new-routes` — not a threshold that moves with the query.
 - **Contrast**: every text token measured above. Non-text UI boundaries ≥ 3:1.
 - Charts carry `role="img"` and a real `aria-label` describing what the series are.
 - Colour is never the sole channel for any distinction, in any chart or map.

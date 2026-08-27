@@ -1905,13 +1905,79 @@ it are easy to get wrong and both matter here:
   the exclusion test, while adding `starts_with(path, "/_next/")` turns the exclusion test red on
   `/_next/static/chunks/main.js`. Both mutants were run.
 
-  **The exclusion that must never be added back:** narrowing the rule by anything the client
-  chooses is a bypass, not an exemption. `and not any(http.request.headers["rsc"][*] == "1")` —
+  **A narrowing may read only a signal the EDGE decides.** Narrowing the rule by anything the
+  client chooses is a bypass, not an exemption. `and not any(http.request.headers["rsc"][*] == "1")` —
   drafted to spare React's own prefetches — is `curl -H 'RSC: 1'` away from disabling the rule
   outright, the same reasoning this file already records for `_rsc`. It is also unnecessary: every
   link to `/explore` in the app is a raw `<a href>`, and `TopBar` sets `prefetch={false}` on the
   two `<Link>`s a data page renders, with `TopBar.test.tsx` asserting it and
   `prefetchPolicy.test.ts` extending the same rule to every `<Link>` in `app/src`.
+
+  > ⚠️ **Provenance is the property. The operator is not, and banning it fails in BOTH
+  > directions.** Cloudflare spells every logical operator twice — `and`/`&&`, `or`/`||`,
+  > `not`/`!` are C-like notations for the same operators with identical precedence — so a gate
+  > written as a substring ban on `" and "` and `" not "` never sees the symbol form at all.
+  > MEASURED against the shipped expression: `… && !(http.user_agent contains "bot")`, a total
+  > bypass that any `curl -A` walks through, passed every test in
+  > `test_cloudflare_desired_state.py`, while the safe `… and not cf.client.bot` was refused.
+
+  `test_rate_limit_expression_reads_only_fields_whose_value_the_edge_decides` extracts every
+  identifier an ASCII parser can see — dotted and **bare**, in either notation, in any case,
+  anywhere in the expression — and refuses any that is not the path subject, an allow-list entry,
+  an operator word, a boolean literal or an allow-listed function. The allow-list holds exactly
+  one field, `cf.client.bot`: Cloudflare resolves it against the verified-bot list it maintains,
+  keyed on network identity — reverse DNS validating that the source IP matches the requesting
+  service, published IP and ASN blocks, or a Web Bot Auth signature — and a generic User-Agent
+  pattern is rejected outright, so `curl -A Googlebot` cannot make it true. Cloudflare's own plan
+  table agrees on the set: a free zone's rate-limiting expression may use `Path` and
+  `Verified Bot`, and nothing else.
+
+  **Dotted is not the whole field space, and lower-case is not the whole spelling.** Cloudflare
+  has bare fields too, and one of them is client-choosable: `ssl`, true when the connection to
+  the client is encrypted. The client picks its own scheme, so `and not ssl` limits plain HTTP
+  alone and every `https://` client walks through — and a dotted-identifier extractor matches no
+  part of it. Case is the same axis: an `[a-z]`-anchored extractor reads `HTTP.USER_AGENT` as
+  nothing at all and reports the expression clean. Extraction is therefore case-insensitive and
+  covers bare identifiers, while the strict matchers that ADMIT a clause stay case-sensitive —
+  permissive where the gate refuses, strict where it admits, so both sides fail closed.
+
+  **Named fields, never a `cf.` prefix.** `cf.` is a namespace, not a provenance guarantee, and
+  one subtree settles it: `cf.tls_client_auth.cert_presented` is true when an mTLS client
+  presents a certificate *valid or not*, while its neighbour `cf.tls_client_auth.cert_verified`
+  requires a valid one — two adjacent fields, one validated and one not, which a prefix cannot
+  tell apart. The same subtree holds `cf.tls_client_random`, the random bytes the client itself
+  supplies. A field earns its place because someone established that the edge decides it and
+  wrote the reason down beside the name.
+
+  **POLARITY IS THE OTHER HALF OF PROVENANCE.** Reading only the field name misses it: the
+  intended narrowing is `and not cf.client.bot`, and dropping the `not` inverts it into
+  `and cf.client.bot`, which rate-limits **verified bots only** and leaves every curl, every
+  unverified scraper and every ordinary visitor outside the rule entirely. That is a total bypass
+  requiring no client action at all — the one-character sign flip of the exact edit #126 asks
+  for — and because `Path` and `Verified Bot` are the only two fields this plan accepts, it sits
+  inside the accepted vocabulary and would apply cleanly.
+
+  **And the same check refuses `and not true`, which is `and false`** — the rule then matches
+  nothing, on every path, and the edge limit is silently OFF. That is worse still than the sign
+  flip, `true` is Cloudflare's own catch-all, and no field-provenance rule sees it: a boolean
+  literal is not a field. What refuses it is the requirement that the negated thing be an
+  allow-list ENTRY, not merely a well-formed identifier.
+
+  So the admissible shape is `<path disjunction> [and not <edge signal>]*`, with each later
+  conjunct required to be exactly that and nothing else. Two other shapes fall out of the same
+  rule. `… && !starts_with(http.request.uri.path, "/route/")` deletes the whole unbounded 404
+  family #117 added that prefix for, invisibly, because the test file's `_covered` models the
+  expression as a pure disjunction of path clauses — so the evaluator is handed the disjunction
+  alone. And `… and cf.client.bot or cf.client.bot` parses as `((A) and X) or X`, since `and`
+  binds tighter than `or`: true for a verified bot on **any** path, `/_next/` included.
+
+  Two guarantees follow, and they are what keep the two tables above true statements. `UNCOVERED`
+  is sound **unconditionally**, because every later conjunct is `and not <signal>` — so the whole
+  expression is `A and X₁ and X₂ …`, a subset of `A`, and nothing outside the disjunction can be
+  pulled in. That is a consequence of the shape rule, not of conjunction in general: a stray
+  top-level `or` would break it, which is why one is refused. And `COVERED` reads "covered for
+  every client that does not satisfy the narrowing" — a set no client can put itself into,
+  precisely because a narrowing may read only an edge-evaluated field, negated.
 
   **And the other new axis, bounded but large: the newly CACHEABLE filtered URLs.** The entry
   above is about values that are *refused*. A value that RESOLVES is a cacheable 200, and #106
@@ -1948,11 +2014,12 @@ it are easy to get wrong and both matter here:
   rule; #117 brings the route family, and the route family is the site. A well-behaved crawler fetching faster than
   1 req/s per colo now gets 429s on the graph we publish for it. That is ACCEPTED here, not
   measured as harmful — no crawler has been observed tripping it, and no threshold change is
-  justified until someone measures a real crawler's rate against this zone. Tracked as **#126**,
-  which also records why the obvious narrowing is not available: `and not cf.client.bot` is
-  EDGE-evaluated rather than client-asserted, so it is not the bypass the `RSC` header would have
-  been — but `test_rate_limit_expression_has_no_client_controlled_escape_hatch` bans the ` and `
-  and ` not ` operators outright, so the safe narrowing trips the same net as the unsafe one.
+  justified until someone measures a real crawler's rate against this zone. **#126 stays open for
+  that measurement**, which is its remaining half. The gate is no longer what stands in the way:
+  `and not cf.client.bot` is admissible today (§ the narrowing rule above), because it is
+  EDGE-evaluated rather than client-asserted and so is not the bypass the `RSC` header would have
+  been. Admissible is not warranted — nothing about the threshold, the period or the mitigation
+  timeout moves until a real crawler's rate against this zone is a number somebody has.
   Second, and much smaller: a visitor middle-clicking ten
   route links into background tabs inside ten seconds trips the rule and is blocked for ten.
   MEASURED

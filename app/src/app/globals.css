@@ -600,9 +600,30 @@ svg.plot {
   gap: 24px;
   align-items: start;
 }
+/* The collapsed single-column form keeps `minmax(0, ...)` too, and that is the whole rule
+   (#125). A bare `1fr` IS `minmax(auto, 1fr)`, and that `auto` is a content-based minimum: the
+   grid item wrapping `.table-scroll` has `overflow: visible`, so it contributes its own
+   min-content -- the table's full width -- as the track's floor. The track then inflates to the
+   table, `.wrap` inflates to the track, and the PAGE BODY scrolls instead of the table. The
+   scroller never scrolls at all; it is handed exactly its content width.
+
+   THE SWEEP AND EVERY FIGURE BEHIND THIS LINE LIVE IN docs/design/system.md, "Layout and
+   density", and are deliberately not repeated here: three copies of one measurement is three
+   things to re-measure and nothing binding them together. What belongs AT this line is the
+   shape of the finding -- the failure width is NOT a constant. It is the widest RENDERED
+   table's min-content, so it moves with the query string, and that is why the fix is a rule
+   about tracks rather than a breakpoint. #125 reported it as "below roughly 470px"; that is
+   only where /airport/BET's particular table stops overflowing.
+
+   Not the top bar, which #125 named: `.top`'s min-content is 225px and it is the victim,
+   stretched by the table below it. Removing `min-width: 200px` from `.top .search` and every
+   `white-space: nowrap` in the bar moves the overflow floor by zero pixels -- all measured
+   before this line was written, and that `min-width` is additionally pinned by a wired
+   counterpart at TopBar.test.tsx:133, so removing it would go red on its own account.
+   globals.test.ts holds the file-wide rule. */
 @media (max-width: 920px) {
   .body {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .legend {
     position: static !important;

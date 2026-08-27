@@ -87,9 +87,9 @@ Current gates (`app-check`/`app-smoke` measured 2026-08-27, `verify`/`goldens` 2
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 49 skip without `data/` |
-| `make app-check` | 1,470 app tests · without a built `upgauge.duckdb`, 519 of them fail |
-| `make app-smoke` | 628 served-build checks |
-| `make image-smoke` | the host set less the 10 host-only gap checks, which print as skipped — **338 when last measured (2026-08-10); NOT re-measured since — the host set has grown by 90 checks since, so 338 is a floor and not the current figure — and it needs Docker plus the pinned release asset** — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
+| `make app-check` | 1,471 app tests · without a built `upgauge.duckdb`, 519 of them fail |
+| `make app-smoke` | 634 served-build checks |
+| `make image-smoke` | the host set less the 10 host-only gap checks, which print as skipped — **338 when last measured (2026-08-10); NOT re-measured since — the host set has grown by 96 checks since, so 338 is a floor and not the current figure — and it needs Docker plus the pinned release asset** — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
 | `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
 | `make goldens` | byte-identical |
@@ -405,7 +405,11 @@ signature element; it does not own these.
   instances in one #118 cycle, each with a full green suite: `<Chart note={null} />`, a literal
   replacing the extracted `cardSixthStat`, then the extraction meant to close THAT. Enumerate the
   matrix per CALL SITE, not per rule — the same cycle put a two-operand gate on the page foot and
-  its ungated form one file over, inside one commit.
+  its ungated form one file over, inside one commit. And when several checks
+  guard one property, **assert WHICH check refuses a fixture, not that something did** — otherwise
+  every guard but one is deletable green. Three times in #126: the allow-list, `_provenance_failures`
+  itself, then the `EDGE_EVALUATED` membership branch, whose sole catch is `and not true` — `and
+  false`, which switches the edge rate limit off on every path.
 - **`make app-smoke` exists because unit tests structurally cannot see a whole class of bug.**
   Green suite, broken production: `__dirname` under Turbopack, `decodeURIComponent` throwing,
   `process.chdir`, the DuckDB platform-switch `require`, and query normalization — every one
