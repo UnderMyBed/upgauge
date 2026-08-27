@@ -1116,6 +1116,41 @@ check_dataset check "airport A18: the strip still counts the carrier that filed"
 check_dataset check "airport A18: the gutter carries the quarantine reason, not just the glyph" \
   "$BODY" 'title="Quarantined — failed an invariant: zero_seats"'
 
+# THE PROSE THAT EXPLAINS THE DASHES, in the served bytes. Design review found the foot claiming
+# the quarantined row was "excluded from these totals" on a page whose totals are entirely em
+# dashes -- and whose Carriers and Destinations counts are counts OF that row, not figures net of
+# it. Built as ONE template literal in page.tsx so a raw-bytes grep can reach it: React's SSR puts
+# `<!-- -->` between adjacent expression children, which `textContent` skips and this does not.
+check_dataset check "airport A18: the foot explains the dashes instead of miscounting them" \
+  "$BODY" 'Every filing at A18 in this window is quarantined'
+check_dataset check_not "airport A18: ...and does not claim the counts are net of an exclusion" \
+  "$BODY" 'excluded from these totals'
+# `1 destination`, singular, on the only prose left explaining five em dashes. The other half of
+# this same sentence has always agreed with its count.
+check_dataset check_not "airport A18: the foot agrees with its own count on the plural" \
+  "$BODY" '1 destinations'
+
+# THE OTHER ABSENCE, and the branch this round's regression actually came from. 05A is
+# fact-present but filed NOTHING in the trailing 12, so its sums are unknowable for a reason
+# quarantine had no part in -- 290 airports are in that state against A18's 3. Every defect this
+# page's fixes chased was a consumer keying on "the sum is null" and answering the wrong one of
+# the two: the card said `Quarantined 0`, the foot claimed rows were "excluded from these totals"
+# that never existed, and the legend named quarantine as the cause. Unit and page tests covered
+# it; nothing served did, on a page whose whole class of bug this file exists to catch.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/05A")
+check_dataset check "airport 05A: an unfiled window is unknowable, not zero traffic" "$BODY" \
+  '<div class="k">Seats</div><div class="v">—</div>'
+# The counts are not measures: zero carriers filed is a fact. Blanking them alongside the sums
+# would be the mirror image of the defect this whole change refuses.
+check_dataset check "airport 05A: the counts are still stated" "$BODY" \
+  '<div class="k">Quarantined</div><div class="v">0</div>'
+check_dataset check "airport 05A: names which absence it is" "$BODY" 'No filings at'
+# The foot must claim NO exclusion here -- there is nothing to have been excluded from, and
+# nothing was quarantined. Both needles are served by A18 and by SEA, so neither is vacuous.
+check_dataset check_not "airport 05A: claims no exclusion that never happened" "$BODY" \
+  'excluded from these totals'
+check_dataset check_not "airport 05A: and does not blame quarantine" "$BODY" 'quarantined row'
+
 # The negative, on a page with real traffic: SEA must NOT have acquired em-dash measure cells.
 # Paired with SEA's own 53,372,100 check above so it cannot pass against an empty body.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA")

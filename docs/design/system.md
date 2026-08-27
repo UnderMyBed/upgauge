@@ -155,11 +155,24 @@ never a zero.** A group whose every filing was quarantined sums to NULL, not 0
 for* — have to stay distinguishable in a table whose whole claim is that it shows the dirt. The
 em dash keeps the column's monospaced, tabular-figure, right-aligned alignment because it is one
 glyph in the same face, so a reader scanning the column sees a gap in the data rather than a gap
-in the layout; a blank cell reads as a rendering fault, and `0` is a lie. **The dash states that
-nothing can be said; the reason-code gutter states why** — `Q`, with the row's own
-`quarantine_reason` in its `abbr` title, so the pair is a complete disclosure rather than an
-unexplained hole. A row in this state carries no below-floor treatment: an unknown departure
+in the layout; a blank cell reads as a rendering fault, and `0` is a lie. **Where quarantine is the cause, the dash states that nothing can be said and the reason-code
+gutter states why** — `Q`, with the row's own `quarantine_reasons` in its `abbr` title (plural,
+and comma-joined where one displayed row folds several filings together), so the pair is a
+complete disclosure. **A zero denominator has no such partner and the dash stands alone**: a
+derived measure over a real, un-quarantined zero is unknowable with an empty gutter, and only a
+page that carries a foot of its own (`/airport`) says so in words. 14 groups at segment grain in
+the trailing 12 are in that state. A row in this state carries no below-floor treatment: an unknown departure
 count makes no claim about the floor, exactly as the paragraph above requires.
+
+**The rule above is about a measure that was QUERIED.** A measure the query never selected is
+absent from the row, not null in it, and a component that reads both as "no value" asserts the
+unknowable treatment on every row of any permalink that did not ask for the column. **Whether
+that collapse is a defect depends on how many answers the column has.** The floor has one — a
+departure count that is absent and one that is unknowable both make no claim about the floor, so
+collapsing them there is correct, and necessary, since `departures_performed` is itself a
+`FILTER`ed sum and comes back NULL for a wholly-quarantined group. The gauge rail has two: draw
+nothing, or draw the axis to say the value cannot be stated. Same collapse, opposite
+correctness.
 
 **A test for this asserts the dash's POSITION, not its presence.** Load factor and average gauge
 are already `—` on such a row before the bug is fixed — their denominators are zero — so
@@ -1019,6 +1032,8 @@ of these are **normal** in T-100.
 | **Sparse** (below the 30-dep floor) | Dashed rule, `n` gutter code, `--ink-2`, sorted below scored rows, excluded from ranking. |
 | **Zero passengers** | `⌀` gutter code. Load factor renders `0.00%`, not `—`: it flew and carried nobody, which is a fact, not a gap. |
 | **Quarantined** | `Q` code, excluded from totals, **count always surfaced** with its reason. Never clamped, never silently dropped. |
+| **Unknowable** (a measure was queried and cannot be stated) | The measure cells render `—`, never `0` and never blank — the sum of no trusted values is not a measurement of nothing. The gauge rail keeps its axis and shows no tick. No below-floor treatment: an unknown departure count makes no claim about the floor. **Its cause is named per row and per page, never by the legend rail**, which is rendered on every view and so can only state that the mark is not a zero — and is painted in `--ink`, not `--limit`, because a dash is a data-availability mark and not an out-of-limit code. `Q` in the gutter where the cause is quarantine; the page's own foot where it has one. A zero denominator has neither, and the dash stands alone. On a card — no foot, no empty state, no `aria-label` — the sixth stat slot carries the quarantined count *where there are quarantined rows to count*, and the entity count otherwise. **True today on `/airport` only**: `/route`, `/carrier` and `/aircraft` build their totals through `sumTotals`, which still coerces an unknowable sum to `0`, so their cards rasterize `Seats 0` rather than a dash and never reach this rule. `cardSixthStat` is shared and ready for them; wiring it is part of **#121**. Distinct from *Zero passengers*, which flew and is a measurement, and from *Not queried* below. |
+| **Not queried** (the measure is absent from the row) | Draws **nothing** — no dash treatment, no axis, no glyph. The pivot templates emit only the measures a query selected, so a permalink that did not ask for `departures_performed` or `avg_gauge` has rows that make no claim about the floor or the gauge in either direction. Rendering the *Unknowable* treatment here states a finding the query never made: measured, a default top-25 `/explore` view put all 25 rows in it. |
 | **Carrier stops filing mid-series** | The line breaks. No interpolation across an absence. |
 | **Invalid permalink** | A full-page error naming the offending key and the allowed values, with a link to a valid neighbouring query. Never a silent fallback to defaults — a permalink that quietly renders a different query than it encodes is worse than one that errors, because the screenshot still looks authoritative. |
 | **`health_score IS NULL`** | Renders as **"insufficient data"**, visually distinct from a low score, and never sorts to the bottom of the range. Three distinct causes, and the largest today is *no prior window* — a route that didn't exist yet. For the zero-scheduled-departures group, **still show the four known components** even though the composite can't be computed. See [`../product/features.md`](../product/features.md). |

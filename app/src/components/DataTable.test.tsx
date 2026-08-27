@@ -314,3 +314,64 @@ describe("a wide table scrolls inside its column rather than over the legend", (
     expect(rule![0]).toMatch(/overflow-x:\s*auto/);
   });
 });
+
+// ---------------------------------------------------------------------------------------
+// Issue #118 design review: the gauge rail is a COLUMN-wide instrument, not a per-row one.
+//
+// `system.md` § The data table, written in this same change, forbids a blank cell -- "a blank
+// cell reads as a rendering fault" -- and one cell to the right of the em dash the rail was
+// returning an empty div for a null gauge, deleting the shared 0-260 axis for that row and
+// punching a hole through the instrument the rows above and below are read against.
+describe("the gauge rail with nothing to mark", () => {
+  const COLS: ColumnSpec[] = [
+    { key: "op_airline_id", label: "Carrier", kind: "identifier" },
+    { key: "seats", label: "Seats", kind: "seats" },
+  ];
+  const unknowable = [
+    { op_airline_id: "8V", seats: null, avg_gauge: null, quarantined_rows: 1 },
+  ];
+
+  it("keeps the axis when the gauge is unknowable", () => {
+    // MUTANT: `if (gauge === null) return <div className="rail" aria-hidden="true" />;`
+    // (the pre-#118 form) -> zero bands, zero gridlines, red.
+    const { container } = render(<DataTable columns={COLS} rows={unknowable} />);
+    const rail = container.querySelector(".rail");
+    expect(rail).not.toBeNull();
+    expect(rail!.querySelectorAll(".band").length).toBe(2);
+    expect(rail!.querySelectorAll(".grid").length).toBe(5);
+  });
+
+  it("marks no position on it", () => {
+    // The other half: an axis drawn WITH a tick would be a fabricated gauge, which is the same
+    // defect as the fabricated zero one column to the left. Asserting the axis alone would pass
+    // for an implementation that drew a tick at 0.
+    // MUTANT: render the tick unconditionally (e.g. `pct(gauge ?? 0)`) -> red.
+    const { container } = render(<DataTable columns={COLS} rows={unknowable} />);
+    expect(container.querySelectorAll(".rail .tick").length).toBe(0);
+  });
+
+  it("draws NOTHING for a row that never queried the gauge", () => {
+    // THE REGRESSION THIS PAIR EXISTS FOR. `num()` maps an absent key and a queried null to the
+    // same `null`, so drawing the axis on `null` alone put every row of any permalink that did
+    // not select `avg_gauge` into the wholly-quarantined visual state -- measured on a served
+    // build, all 25 rows of the default top-25 `/explore` view, none of them quarantined. The
+    // pivot templates emit only the measures a query selected; a row without the column makes
+    // no claim about the gauge, exactly as `isBelowFloor` already says for the departure count.
+    // MUTANT: `gauge={num(row.avg_gauge)}` at the call site -> red.
+    const { container } = render(
+      <DataTable columns={COLS} rows={[{ op_airline_id: "DL", seats: 100 }]} />,
+    );
+    expect(container.querySelectorAll(".rail").length).toBe(1);
+    expect(container.querySelectorAll(".rail .band").length).toBe(0);
+    expect(container.querySelectorAll(".rail .grid").length).toBe(0);
+    expect(container.querySelectorAll(".rail .tick").length).toBe(0);
+  });
+
+  it("still marks a position when the gauge is known", () => {
+    // The positive control: an implementation that dropped every tick passes both tests above.
+    const { container } = render(
+      <DataTable columns={COLS} rows={[{ op_airline_id: "DL", seats: 100, avg_gauge: 130 }]} />,
+    );
+    expect(container.querySelectorAll(".rail .tick").length).toBe(1);
+  });
+});

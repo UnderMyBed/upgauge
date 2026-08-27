@@ -553,10 +553,17 @@ describe("/airport/<code>?y=<year> -- the year track (M7 Task 9)", () => {
 // A18 (Kantishna), measured 2026-08-27 at asOf 2026-05: ONE row in the entire dataset --
 // 2025-06, op_airline 20333, seats 0.0, departures_performed 1.0, is_quarantined true, with A18
 // as the DESTINATION. So its trailing-12 pivot returns a single wholly-quarantined group, and
-// under the `?? 0` bug the only row of the only table on the page read "0 / 0 / 0". If a BTS
-// refresh ever un-quarantines A18 this test goes red, which is the intended failure: a fixture
-// that stops exercising the path it exists to guard passes against the very bug it was written
-// for (CLAUDE.md, "MOVE the fixture").
+// under the `?? 0` bug the only row of the only table on the page read "0 / 0 / 0".
+//
+// TWO THINGS TURN THIS FIXTURE RED, AND THE LIKELIER ONE IS NOT A BUG. (1) A BTS revision
+// un-quarantines that row. (2) `asOf` ADVANCES: 2025-06 is the FIRST month of the current
+// trailing 12, so one dataset month rolls it out of the window, A18 has no rows at all, and the
+// page becomes the empty state -- taking these four tests, three of app/smoke.sh's A18 needles
+// and #114's already-merged A18 map needles with it. Expiry is the likelier cause by far, so
+// triage the window before hunting an un-quarantine that never happened. JZM and OQZ carry the
+// identical single-quarantined-row property at 2025-08, two months of further runway, and are
+// the fixtures to MOVE to (CLAUDE.md, "MOVE the fixture") -- not a relaxed assertion, which
+// would keep passing against the very bug this guards.
 describe("/airport/<code> renders an unknowable sum as absence, not zero", () => {
   async function a18() {
     const r = await resolveAirportCode("A18");
@@ -601,6 +608,33 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
     expect(stats).toContainEqual(["Quarantined", "1"]);
   });
 
+  it("does not tell the reader the counts are net of the excluded row", async () => {
+    // BLOCKER FROM DESIGN REVIEW. The strip beside this sentence reads Carriers 1 ·
+    // Destinations 1 · Quarantined 1, and `airportTotals` builds those counts from EVERY row
+    // regardless of quarantine -- so on this page they are counts OF the excluded row, not
+    // figures left over after excluding it. "Excluded from these totals" is true only while
+    // there are totals left to exclude from, and here there are none. The /watch/new-routes
+    // class of defect: a compound claim whose clauses need re-deriving one at a time.
+    // MUTANT: drop the `totals.seats === null` branch from `quarantineClause` -> red.
+    const { container } = render(await a18());
+    const feet = [...container.querySelectorAll(".foot")].map((f) => f.textContent).join(" ");
+    expect(feet).toContain("Every filing at A18 in this window is quarantined");
+    expect(feet).toContain("no measure above can be summed");
+    expect(feet).not.toContain("excluded from these totals");
+  });
+
+  it("agrees with its own count on the plural, on both halves of the sentence", async () => {
+    // `1 destinations` shipped beside a correctly singularised `1 quarantined row` in the SAME
+    // sentence. Small wrongness under a DATA AS OF badge is what makes a reader doubt the large
+    // numbers, and this is now the only prose on the page explaining five em dashes.
+    // MUTANT: hardcode `destinations` -> red. In-repo precedent: networkMap.test.ts asserts
+    // `not.toContain("1 quarantined routes")` for the same class of defect.
+    const { container } = render(await a18());
+    const feet = [...container.querySelectorAll(".foot")].map((f) => f.textContent).join(" ");
+    expect(feet).toContain("1 destination counted once each");
+    expect(feet).not.toContain("1 destinations");
+  });
+
   it("says WHY it cannot state them, in the reason-code gutter", async () => {
     // The em dash is the claim; this is its justification, and it is the reason the other four
     // table surfaces already carry (they hand DataTable raw pivot rows; /airport rebuilds its
@@ -612,5 +646,73 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
     expect(gutter?.getAttribute("title")).toBe(
       "Quarantined — failed an invariant: zero_seats",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Issue #118 design review, FIX 2: the `null` seed changes 290 pages nothing else pins.
+//
+// `airportTotals` seeded at `null` also makes `airportTotals([])` unknowable, so a fact-present
+// airport with NO rows in the trailing 12 now reports `—` where it reported `0`. Measured: 290
+// such airports, against the 3 whose rows are all quarantined -- so the change's real footprint
+// is 293 pages, not 3, and 290 of them are reached by a code path no test named. A future
+// "simplify the seed back to 0" reverts all of them silently. (The airport total this is a
+// fraction of is a `test_stated_counts.py`-gated figure and lives in docs/data/invariants.md;
+// a hand-written copy here would rot silently, which is what that gate exists to prevent.)
+//
+// The rendering is correct for the reason CLAUDE.md gives for gaps: T-100 is a FILING, so a
+// window with no row is neither "nobody flew" nor "0 seats flew". The two absences are
+// different findings and `AirportEmptyState` is what names which one this page is in.
+//
+// 05A has zero rows in 2025-06..2026-05 (measured). Unlike A18 this fixture does not expire on
+// an `asOf` advance -- an airport that stopped filing stays stopped.
+describe("/airport/<code> with nothing filed in the window", () => {
+  async function empty() {
+    const r = await resolveAirportCode("05A");
+    if (r.kind !== "ok") throw new Error("expected 05A to resolve for this fixture");
+    return await AirportView({ airport: r.airport });
+  }
+
+  it("reports unknowable sums, not zero traffic", async () => {
+    // MUTANT: seed airportTotals' reduce at 0 again -> "0", red.
+    const { container } = render(await empty());
+    const stats = [...container.querySelectorAll(".stat")].map((s) => [
+      s.querySelector(".k")?.textContent,
+      s.querySelector(".v")?.textContent,
+    ]);
+    expect(stats).toContainEqual(["Seats", "—"]);
+    expect(stats).toContainEqual(["Passengers", "—"]);
+    expect(stats).toContainEqual(["Departures", "—"]);
+  });
+
+  it("still counts zero carriers and zero quarantined rows", async () => {
+    // The counts are not measures: zero carriers filed is a fact, not an absence, and blanking
+    // them with the sums would be the mirror-image error this whole change exists to refuse.
+    // MUTANT: widen `carriers`/`quarantinedRows` to null on an empty row set -> red.
+    const { container } = render(await empty());
+    const stats = [...container.querySelectorAll(".stat")].map((s) => [
+      s.querySelector(".k")?.textContent,
+      s.querySelector(".v")?.textContent,
+    ]);
+    expect(stats).toContainEqual(["Carriers", "0"]);
+    expect(stats).toContainEqual(["Quarantined", "0"]);
+  });
+
+  it("names which absence it is, rather than leaving the dashes bare", async () => {
+    // The em dash says "no measure"; only this says WHY, and it is a different why from A18's.
+    // SCOPED TO THE FOOT, and the negative is the point: `seats === null` is true here too,
+    // so a clause gated on that alone tells 290 pages that every filing at them was
+    // quarantined -- inventing a finding on 290 pages to fix it on 3. This test caught exactly
+    // that before it shipped.
+    // MUTANT: gate `quarantineClause` on `totals.seats === null` alone -> red.
+    const { container } = render(await empty());
+    const feet = [...container.querySelectorAll(".foot")].map((f) => f.textContent).join(" ");
+    expect(container.textContent).toContain("No filings at");
+    expect(feet).not.toContain("is quarantined");
+    // Nor the else-branch's claim, which is the same false shape: "0 quarantined rows excluded
+    // from these totals" under a strip that has no totals to have excluded anything from.
+    // MUTANT: collapse the nested ternary back to a two-way on `quarantinedRows > 0` -> red.
+    expect(feet).not.toContain("excluded from these totals");
+    expect(feet).not.toContain("quarantined row");
   });
 });

@@ -18,7 +18,10 @@ describe("LegendRail", () => {
     expect(screen.getByText("n")).toBeDefined();
     expect(screen.getByText(/below the 30-departure floor/)).toBeDefined();
     expect(screen.getByText("Q")).toBeDefined();
-    expect(screen.getByText(/quarantined/)).toBeDefined();
+    // Anchored, not a bare /quarantined/: the em-dash row below this group also says
+    // "quarantined", and an unscoped match is ambiguous between the two -- the same scoping
+    // this file's map-legend test already needed for "below the 30-departure floor".
+    expect(screen.getByText(/^quarantined — failed an invariant$/)).toBeDefined();
     expect(screen.getByText(/computed measure/)).toBeDefined();
   });
 
@@ -133,6 +136,46 @@ describe("LegendRail", () => {
     // re-review finding 4 found the old "into an inset panel" phrasing false for every
     // inset-origin airport (ANC, HNL, SJU, GUM), whose cross-panel arcs go the other way.
     expect(screen.getByText(/straight line instead/i)).toBeDefined();
+  });
+
+  // The rail is the methodology surface -- system.md: "there is no separate 'how to read this'
+  // page to go stale" -- so a cell treatment the tables use has to be DECLARED here. `—` was
+  // promoted to a documented state (system.md § States, "Unknowable") while the rail still
+  // listed only ⌀, n, Q and abc, leaving a reader to guess whether a dash meant zero, missing
+  // or broken.
+  // MUTANT: delete the em-dash `lrow` from LegendRail.tsx -> this goes red.
+  it("declares the em dash, not only the gutter glyphs", () => {
+    render(<LegendRail />);
+    expect(screen.getByText(/no measure to state/i)).toBeDefined();
+  });
+
+  it("does not name a cause the page may contradict", () => {
+    // This rail renders on EVERY table view, so it cannot know why a given dash is there --
+    // nothing filed, every filing quarantined, or a zero denominator are all `—`. Naming
+    // quarantine here put "every filing quarantined" beside a foot reading "0 quarantined
+    // rows" on 290 airport pages, and over-claimed on /explore besides.
+    // MUTANT: restore "— every filing quarantined" to the em-dash row -> red.
+    const { container } = render(<LegendRail />);
+    const rows = [...container.querySelectorAll(".lrow")].map((r) => r.textContent ?? "");
+    const dash = rows.find((t) => t.includes("no measure to state"));
+    expect(dash).toBeDefined();
+    expect(dash).not.toMatch(/quarantined/i);
+  });
+
+  it("paints the em dash as a data-availability mark, not an out-of-limit one", () => {
+    // A TEXT ASSERTION CANNOT SEE THIS. globals.css gives `.lrow b` --limit and `.lrow b.k`
+    // --ink, so a swatch without `.k` declares the dash in the same red as `Q` and `⌀` while
+    // the tables draw it in ordinary ink -- the legend then does not look like the mark it
+    // declares, and re-states through colour the cause-claim its words refuse.
+    // MUTANT: drop `className="k"` from the em-dash `<b>` -> red.
+    const { container } = render(<LegendRail />);
+    const dash = [...container.querySelectorAll(".lrow b")].find((b) => b.textContent === "—");
+    expect(dash).toBeDefined();
+    expect(dash!.className).toContain("k");
+    // The `n` glyph is the existing member of that class; `Q` is the contrast that proves the
+    // assertion is about this row and not about every glyph in the group.
+    const q = [...container.querySelectorAll(".lrow b")].find((b) => b.textContent === "Q");
+    expect(q!.className).not.toContain("k");
   });
 
   it("draws the map legend's swatches from the ink tokens, not copied hex", () => {

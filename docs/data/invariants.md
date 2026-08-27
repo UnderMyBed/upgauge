@@ -568,9 +568,23 @@ visitor sees. Measured 2026-08-27, trailing 12 (`2025-06 … 2026-05`):
 | **pages showing one** — `A18` `JZM` `OQZ` `STT` `STX` | **5** |
 | **pages whose entire stat strip is unknowable** — `A18` `JZM` `OQZ` | **3** |
 
-**A bare count here is what made this misleading.** On 24 of the 29 pages the quarantined group
-folds into a carrier that also flew real traffic, where a NULL contributes nothing and the figure
-shown is honest — so "29 pages are wrong" was never true. Quote the grain with the number.
+**Quote the grain with the number.** On 24 of the 29 pages the quarantined group folds into a
+carrier that also flew real traffic, where a NULL contributes nothing and the figure shown is
+honest. The group count and the rendered-row count are different measurements of this defect, and
+only the second describes what a visitor sees.
+
+**Those 3 are not the whole footprint; 293 pages is.** The table above scopes to pages holding a
+quarantined group, but `airportTotals` folds from a `null` seed, so an airport with *no rows at
+all* in the window reports its sums as unknowable rather than as zero. **290** of the 1,047
+fact-present airports are in that state (`/airport/05A` is one). They render the same `—` for a
+different reason — nothing was filed, rather than nothing filed can be trusted — and both are the
+`—` this section requires, since a month with no row is neither "nobody flew" nor "0 seats flew".
+`AirportEmptyState` names which of the two a given page is in, and the page's foot claims an
+exclusion only where there was one. **The two absences must stay separable in code, not only in
+copy:** a consumer keying on "the sum is null" alone answers the wrong one of them, and answers it
+on the 290 rather than the 3. Every surface that renders an absence therefore tests both — the
+foot, the card's sixth stat, the stat strip. `page.test.tsx` pins the rendering of both; the 290 is
+a measurement stated here, not a gated figure.
 
 **The fold is where the coercion hides, and `?? 0` is only half of it.** JS `+` coerces null to
 zero on its own: `null + 5` is `5` and `[null].reduce((a, b) => a + b, 0)` is `0`. Deleting the
@@ -593,11 +607,15 @@ than `NaN`. The cell renders `—` through `lib/format.ts`, and the reason-code 
 rebuilds its rows in TypeScript rather than handing `DataTable` a raw pivot row. Issue #118.
 
 **Still open: `sumTotals`.** `app/src/lib/entityFacts.ts` applies the same `?? 0` *inside* a `+`
-fold for `/route`, `/carrier` and `/aircraft` and their cards, where **11** `/route/<pair>` pages
-have no un-quarantined filing at all in the trailing 12 and render three fabricated zeros in the
-stat strip and on the card: `A18–LMA` · `AET–AIN` · `AET–OTZ` · `ARC–CXF` · `BTI–VEE` · `BTT–UMT` ·
-`CIK–SCC` · `GAL–OQZ` · `HSL–JZM` · `HUS–RLU` · `VEE–VEE`. `EntityTotals` is already typed
-`number | null` for `/airport`'s sake, so the type is **not** evidence this is handled. Issue #121.
+fold for `/route`, `/carrier` and `/aircraft` and their cards. **11** route pairs have no
+un-quarantined filing at all in the trailing 12, of which **10 are reachable pages** that render
+three fabricated zeros in the stat strip and on the card: `A18–LMA` · `AET–AIN` · `AET–OTZ` ·
+`ARC–CXF` · `BTI–VEE` · `BTT–UMT` · `CIK–SCC` · `GAL–OQZ` · `HSL–JZM` · `HUS–RLU`. The eleventh is
+`VEE–VEE`, which never renders: `app/src/lib/routePair.ts` 404s a same-airport slug before any
+lookup, consistent with the § Route identity rule that a same-airport filing is not a route. It is
+named here rather than dropped so the next re-derivation gets 11 and does not read this as stale.
+`EntityTotals` is already typed `number | null` for `/airport`'s sake, so the type is **not**
+evidence this is handled. Issue #121.
 
 ---
 

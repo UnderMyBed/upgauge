@@ -289,6 +289,24 @@ function minDate(a: Date, b: Date): Date {
   return a < b ? a : b;
 }
 
+/** WHY THERE IS NO CHART, in the one wording every surface that lacks one must use.
+ *
+ * `prepareMixPlot` returns `plot: null` for two DIFFERENT findings -- nothing filed in the
+ * window, and exactly one filed month (a stacked area over one month has a degenerate x domain
+ * and serializes to zero width). The page distinguished them and the OG card did not: the card
+ * printed a flat "No filings in this window." over data the page described as one filed month,
+ * which on `/airport/A18` was a card claiming nothing was ever filed about an airport whose
+ * entire window is a single quarantined filing. A social card is the surface that fires first
+ * on a shared link, so it was the wrong copy in the most-read place.
+ *
+ * One function rather than two that agree today -- the same rule `lib/og/entityCard.ts` opens
+ * with for the stats and the chart itself. */
+export function mixAbsenceNote(months: string[], dimension: MixDimension): string {
+  return months.length === 0
+    ? `No ${dimension.absent} filings in this window.`
+    : `Only one month of filings in this window (${months[0]}) \u2014 a stacked area needs at least two.`;
+}
+
 export function prepareMixPlot(
   rows: MixRow[],
   title: string,

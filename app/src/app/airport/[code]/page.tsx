@@ -295,6 +295,54 @@ export async function AirportView({
   const columns = buildColumns(allowlist);
   const explorerQuery = endpointQuery(airport.id, trailing12, asOf);
 
+  // ONE string each, not adjacent JSX expressions, for this file's own `chartWindow` reason:
+  // React's SSR emits `<!-- -->` between adjacent expression children, which `textContent`
+  // skips and a grep over the served bytes (app/smoke.sh) does not.
+  //
+  // Pluralised because the count is 1 on the three pages this page's null branch exists for,
+  // and "1 destinations" under a DATA AS OF badge is the kind of small wrongness that makes a
+  // reader doubt the large numbers. Its other half two clauses along has always agreed with
+  // its count; this half did not.
+  const destinationsClause =
+    `${formatCount(totals.destinations)} destination` +
+    `${totals.destinations === 1 ? "" : "s"} counted once each.`;
+
+  // WHAT THE QUARANTINED ROWS DID TO *THESE* NUMBERS, which is not one sentence but two cases.
+  // "Excluded from these totals" is true only while there are totals left to exclude them
+  // from. Where every filing in the window was quarantined there is no residue: the measures
+  // cannot be stated at all, and `carriers`/`destinations` are counted from every row
+  // regardless of quarantine (`airportTotals`), so those counts are not net of an exclusion --
+  // they are counts OF the excluded rows. Telling a reader otherwise, on a page whose every
+  // other figure is an em dash, describes the data as the opposite of what it is.
+  //
+  // GATED ON BOTH, and the second half is not redundant. `seats === null` covers TWO absences:
+  // every filing quarantined, and nothing filed at all (`airportTotals([])` -- 290 fact-present
+  // airports are in that state in this window; docs/data/invariants.md carries the denominator,
+  // which is a gated figure and rots in a hand-written copy). Only the first is a quarantine
+  // story; telling the second one that "every filing is quarantined — 0 rows" would invent a
+  // finding on 290 pages to fix it on 3. The nothing-filed case keeps the ordinary clause (0
+  // rows excluded, which is true and vacuous) and gets its real message from AirportEmptyState.
+  const quarantineClause =
+    totals.seats === null
+      ? // "EVERY filing is quarantined" is inferred, not counted: it follows from the sums being
+        // null ONLY because `fct_segment_month` carries no NULL `seats`/`passengers`/
+        // `departures_performed` on a non-quarantined row (measured: 0, 0, 0). One such row
+        // would make this sentence false while leaving the branch reachable -- or, if it were
+        // the group's only row, drop the page into the silent branch below with five dashes and
+        // nothing explaining them. The property is a warehouse invariant nothing asserts today.
+        totals.quarantinedRows > 0
+        ? `Every filing at ${airport.code} in this window is quarantined — ` +
+          `${totals.quarantinedRows} row${totals.quarantinedRows === 1 ? "" : "s"}, ` +
+          `each having failed an invariant — so no measure above can be summed. The carrier and ` +
+          `destination counts are counts of those rows, never clamped.`
+        : // Nothing was filed, and nothing was quarantined. "0 quarantined rows excluded from
+          // these totals" is the same false shape as the branch above it: there are no totals
+          // for anything to have been excluded from. AirportEmptyState carries this page's
+          // finding, so this clause has nothing to add and says nothing.
+          ""
+      : `${totals.quarantinedRows} quarantined row` +
+        `${totals.quarantinedRows === 1 ? "" : "s"} excluded from these totals, never clamped.`;
+
   return (
     <div className="wrap">
       <TopBar asOf={asOf} />
@@ -400,10 +448,8 @@ export async function AirportView({
             )}
             <p className="foot">
               Every figure on this page counts {airport.code} at <b>both</b> endpoints —
-              departures and arrivals — with the {formatCount(totals.destinations)} destinations
-              counted once each. {totals.quarantinedRows} quarantined row
-              {totals.quarantinedRows === 1 ? "" : "s"} excluded from these totals, never
-              clamped. <span className="deriv">Load factor</span> and{" "}
+              departures and arrivals — with the {destinationsClause} {quarantineClause}{" "}
+              <span className="deriv">Load factor</span> and{" "}
               <span className="deriv">avg gauge</span> are computed at query time from summed
               passengers, seats and performed departures — never averaged.
             </p>
