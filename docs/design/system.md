@@ -650,17 +650,99 @@ that box. A tray-height 140×76 rect gives the identical `k` (width binds either
 not waste — which is also why `basemap.test.ts`'s "fills its rect" gate still covers `pac`/`car`/`sam`
 only.
 
+**The Florida Keys are the third gap, and `us` covers them with a declared extent too (#119).**
+`ne_110m_us.json`'s Florida is 40 points and stops at lat 25.08 (lon 80.68 W), north of the Keys
+entirely, so the conterminous fit had no extent below them. Measured over the fact-present
+population: **EYW** (Key West) projected to (693.6, 428.7) and **MTH** (Marathon) to (703.4, 424.5),
+**4.7px and 0.5px below `PANEL_RECTS.us`'s bottom edge of 424**. Both stayed on the canvas, so
+unlike ADK/AKB/SYA nothing was clipped.
+
+**The fix is the fit, not the rect — and here that is not a preference, it is an impossibility.**
+`us` binds on **height** (`w/dx` = 1256.99, `h/dy` = 904.51), so its fitted extent fills 100.0% of
+the rect's height and the vertical slack a point could sit in is **exactly zero**. EYW's raw-Albers
+y exceeds the reference extent's by 0.005210, so its overshoot is `0.005210·k` below the bottom edge
+**for every `k`**, and enlarging the rect only raises `k`. Slack appears only once *width* binds
+instead, which needs **`w` ≤ 638.6px** — narrowing the lower 48 from 908px to 638px and leaving
+~300px of dead margin on a 960px canvas. Anyone proposing to move or resize this rect should read
+that number first: there is no rect that fixes this and keeps the map.
+
+**The anchor is the vertex that projects furthest south, not the one that lies furthest south.**
+Albers is conic, so those are different points, and the obvious-looking derivation is the wrong one.
+Over all 33,462 Natural Earth 1:10m US vertices that `regionOf` files as `us`, the maximum raw y
+under `PANEL_PARAMS.us` is **(24.551 N, 82.129 W)** in the Marquesas Keys; the minimum-*latitude*
+vertex is (24.543 N, 81.815 W), Key West itself, 0.54px short — enough to halve EYW's clearance from
+0.86px to 0.32px. `BASEMAP_FIT_POINTS` therefore carries **one** more anchor with no drawn geometry,
+`build-basemap.mjs`'s `US_EXTENT_ANCHORS`, and the `us` fit goes from k=904.5131 to **k=892.2437**.
+One anchor, because exactly one axis is short: measured against 1:10m, west and east already reach
+0.15px *further* in the committed 1:110m file and north is 0.62px, against **5.58px** in the south.
+The Keys are not committed as geometry for the same reason the western Aleutians are not.
+Quote the scale **at the latitude it is used at**: this panel draws **14.18 px per degree of
+longitude at lat 24.55**, where the Keys are, against 13.63 at lat 28 mid-peninsula — a 4% spread,
+so the latitude travels with the figure. Measured on the source rather than on chosen endpoints,
+NE 1:10m Florida's own 426 vertices south of 25.35 N span **24.9 × 16.2px** under the shipped fit,
+and an individual key is **0.72px**. At any RDP epsilon coarse enough not to bloat the artifact
+those collapse to zero-area hairlines — the Rota defect the whole `PAC_RDP_EPSILON_DEG` rule
+exists to prevent.
+
+**The counter-candidate is the Dry Tortugas, and the source settles it.** They lie 70km west of
+Key West and are genuinely further south in projection — Loggerhead Key's southwestern tip would
+sit 0.41px below this anchor. Natural Earth 1:10m's Florida polygon **does not contain them**: zero
+vertices west of 82.5 W. Anchoring there would be *inventing* an extent rather than declaring one,
+which is the opposite of what these constants are for. So the stated maximum is the maximum of the
+source, checked rather than scanned.
+
+**The anchor sits on a `regionOf` cliff — structurally like Amatignak's, quantitatively not.** The
+Caribbean test is `lat < 25 && lon > −70` and the anchor is at lat 24.551, *below* 25, so only the
+longitude clause keeps it in `us`. But Amatignak clears its own `lat > 51` clause by **0.215°**
+while this one clears `lon > −70` by **12.129°** — a retune that reaches it is a deliberate
+redesign of the Caribbean boundary, not a nudge, so the two are not mirror images.
+`panelContainment.test.ts` asserts the classification anyway, first because it needs no database
+and so fires where the live sweep skips, and second because it names the cause rather than
+reporting a moved `k`; it also asserts separately that the anchor *binds* the fit's southern edge
+rather than sitting inside it.
+
+**The guard is asymmetric, and the unwatched direction is south.** An anchor placed too far *north*
+is caught twice — the containment sweep, and the clearance assertion one step before it. An anchor
+placed too far *south* (a transcription typo, or an extent not in the source at all) silently
+**shrinks** the lower 48 while every airport stays comfortably inside its rect; the only thing that
+moves is the hand-pinned `us` fit constant, which the same commit is already updating. That is
+review catching it, not a gate. Both `AK_EXTENT_ANCHORS` and `US_EXTENT_ANCHORS` are hand
+transcriptions of extrema from a file the repo does not commit and no `make` target fetches, so the
+transcription is unverifiable in CI. Tracked as **#128**.
+
+**Blast radius, because the issue predicted the opposite.** #119 was filed saying the fix would
+rewrite every path byte in `basemapPaths.generated.ts`, every panel's geometry. It rewrites **one**:
+`fitPanels` partitions its input by `regionOf` before fitting, so a `us`-classified anchor cannot
+move another panel. **Exactly two data lines moved** — the `us` path literal and one appended fit
+point — and `ak`, `hi`, `pac`, `car` and `sam` are byte-identical, which is what the three
+unchanged path hashes in `basemap.test.ts` are there to check. Say *data lines*: the file's own
+diff is larger, because the generator rewrites its header comment alongside them.
+
 **The property is now stated once, for every panel, instead of one airport at a time.**
 `panelContainment.test.ts` reads every airport `/sitemap.xml` serves a page for — through
 `sitemap_airports.sql`, `lookup_airport_by_code.sql` and `map_airport_coords.sql`, the same three
 production queries the site uses, so there is no second definition of fact-presence — and asserts
 both that each projects inside its own panel's rect and that its subject disc and label stay on the
 canvas. It mirrors `renderMapCore`'s own fit merge, baked fit with a subject-derived fallback, so
-Midway is scored the way its page actually renders it rather than through the `us` fallback. Two
-exemptions are listed rather than omitted, the way the land test lists `car`: **EYW and MTH** sit
-4.7px and 0.5px below the `us` rect's bottom edge of 424, because 1:110m's Florida tip stops north
-of the Keys — both on-canvas, but both inside the drawn CARIBBEAN frame. That is **#119**, and
-fixing it means moving the `us` rect, which rewrites every path byte in the artifact.
+Midway is scored the way its page actually renders it rather than through the `us` fallback. **It
+now carries no exemptions**: the two it shipped with, EYW and MTH, were closed by the `us` declared
+extent above, and the assertion is an exact sorted set precisely so that fixing them is red too.
+
+**What #119 did *not* close, because the issue's own second clause was false.** It read "EYW and
+MTH … land inside the Caribbean inset's frame", citing `/airport/EYW` drawing its subject disc on a
+labelled CARIBBEAN box. Re-derived clause by clause against the warehouse: EYW and MTH have **never**
+shared a route pair with any `car`-panel airport in any year, and an inset frame is only drawn for a
+panel a network actually reaches — so `/airport/EYW` never draws that box at all. What is true is
+the *other* clause, and it is far wider than two airports. Counting fact-present airports whose
+`regionOf` panel is `us` and whose projected point falls inside the drawn `car` frame — the rect
+`[424, 392, 720, 468]` grown by the 6px the renderer draws its border at, so `[418, 386]`–`[726,
+474]`, inclusive on all four edges — gives **18 before #119 and 17 after it**. Only SRQ falls out,
+because everything shifted ~5px up; the defect is untouched. MIA is inside on both sides, at
+(711.6, 406.3) before and **(708.4, 401.0)** now, about 22px above EYW either way. That is `car`'s
+rect overlapping the bottom-right of `us`'s — the pre-existing overlap the land test below records
+as `["FL", "TX"]` — not an extent defect, and no `us` fit can reach it. It is **#122**, it moves
+rects, and moving rects lights up the frame-overlap, canvas-bounds and tray-baseline gates that
+#119 leaves untouched by construction.
 
 None of 9,796, 344, 69, 27 or the per-island pixel widths is generated; like 757/79/7 above they
 are measurements dated by the commit that took them, and must be re-measured when quoted. The two
@@ -669,7 +751,12 @@ figures that *are* pinned mechanically are `ak`'s path sha256 and its fit, both 
 
 *What the containment gate cannot see, measured:* `fitPanels` derives `ox`/`oy` from the rect, so
 **translating** a rect translates everything projected into it and the property is invariant —
-`PANEL_RECTS.ak` moved 24px right, same size, leaves it green. Rect position belongs to
+`PANEL_RECTS.ak` moved 24px right, same size, leaves it green. It is also blind to an anchor pulled
+*almost* far enough, because it asks a boolean of each airport and `p.y <= y1` passes at equality:
+set `US_EXTENT_ANCHORS` to EYW's own coordinates and its clearance goes to 0.00px while that test
+stays green. Catching that needs a **position**, not a set, which is why a second test asserts EYW
+is the tightest `us` airport and that its clearance (0.86px today, against MTH's 4.99px) is off
+zero. Rect position belongs to
 `albers.test.ts`'s frame-overlap check, the `ak` fit pin, and `networkMap.test.ts`'s golden and its
 `PANEL_RECTS`/`INSET_RECTS` sync check, all four of which do go red on it.
 
@@ -705,19 +792,25 @@ therefore **h ≥ 206.4px**. Hence **44×216 at k=2211**: Tinian–Saipan 6.232p
 Guam–Saipan 72.232px, islands filling 44.0 × 214.4px of the frame.
 
 **And a correct size in the wrong place is still a defect.** Grown upward from the tray, that
-rect's frame lands *inside* the conterminous panel, whose drawn coastline occupies x[153.3,
-806.7] y[18.0, 424.0] — and `globals.css`'s `.map svg path[data-panel]` fills every basemap path
+rect's frame lands *inside* the conterminous panel, whose drawn coastline occupies x[157.7,
+802.3] y[18.0, 418.5] — and `globals.css`'s `.map svg path[data-panel]` fills every basemap path
 with **opaque** `--panel-2` while `renderMapCore` draws frames *before* the basemap. Measured
-on a 0.1px grid: **3,163 px² of drawn landmass inside that rect — 33.3% of it** — with all eight
+on a 0.1px grid: **2,972 px² of drawn landmass inside that rect — 31.3% of it** — with all eight
 glyph positions of the "MARIANAS" label inside drawn Arizona or New Mexico, two of the panel's
 own islands painted over, ABQ and ELP swallowed on `/airport/SFO`, and 27 of its 147 arcs
 crossing the box, across 25 served views. `fitPanels`'s `k` depends only on a rect's **width and
 height, never its position**, so relocating to the top-left margin — frame (34,24)–(90,252),
-which no lower-48 coastline reaches, since `us` land spans x[153.3, 806.7] — preserved every
+which no lower-48 coastline reaches, since `us` land spans x[157.7, 802.3] — preserved every
 figure above verbatim. There it measures **0 px² of land**, every label glyph clear, and exactly
 one arc crossing on `/airport/SFO`: SFO–GUM, which terminates inside the panel and must enter it.
 `pac` is therefore the one inset outside the bottom tray; the other five keep the shared 468
 baseline. **`sam` is 181×76** and **`nwhi` is 40×76**.
+
+*Every pixel figure in the two paragraphs above depends on the `us` fit, and nothing regenerates
+them* — the rect they describe was never shipped, so no gate reads them: they are re-measured by
+hand or they rot. Last measured at **k=892.2437** (#119). The conclusions have never rested on the
+exact values, only on their order of magnitude, so re-measure on any fit change rather than
+carrying these forward.
 
 **A panel's aspect is measured under that panel's own parameters, and on the points `fitPanels`
 actually reads.** Both halves bite. American Samoa's extent under `PANEL_PARAMS.pac` — the
@@ -739,8 +832,8 @@ fitted to 180.9 × 76.0. It is sized for the tray anyway because the frame has t
 node and its 9px label; a fidelity-matched box would be about 30×13px, narrower than the word
 printed on top of it.
 
-**`car` has the same defect, at ~1,392 px² over drawn Florida and Texas — 6.2% of its rect,
-against `pac`'s 33.3%.** It shipped in M7 Task 7b and is not fixed here. It is recorded
+**`car` has the same defect, at ~1,024 px² over drawn Florida and Texas — 4.6% of its rect,
+against `pac`'s 31.3%.** It shipped in M7 Task 7b and is not fixed here. It is recorded
 because `basemap.test.ts` asserts every other inset frame is clear of drawn land, and a test that
 simply omitted `car` would read as though the property held everywhere.
 
