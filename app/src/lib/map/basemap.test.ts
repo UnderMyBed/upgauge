@@ -117,8 +117,8 @@ describe("geometry survives simplification and projection intact", () => {
   // bounding box, never the combined box across all of a feature's rings. This is load-
   // bearing, not a style choice: the closed-ring RDP bug collapses each ring to its OWN
   // single repeated point independently, and VA's two rings collapse to two DIFFERENT
-  // points (measured: (645.5, 242.2) and (739.1, 203.9)). A bbox computed over the
-  // COMBINED coordinate set of both degenerate points is ~93.6 x 38.3px -- nonzero, and
+  // points (measured: (643.3, 239.1) and (735.6, 201.4)). A bbox computed over the
+  // COMBINED coordinate set of both degenerate points is ~92.3 x 37.7px -- nonzero, and
   // this test passed under that exact mutant on the first attempt. Only a per-subpath box
   // is zero for a collapsed ring regardless of how many other rings in the same feature
   // are intact.
@@ -132,8 +132,11 @@ describe("geometry survives simplification and projection intact", () => {
   it("VA's committed geometry", () => {
     // Ground truth, measured directly against the current generated artifact: VA emits
     // TWO closed subpaths (its mainland ring plus its island geometry, e.g. Chincoteague).
-    // The mainland ring spans a ~97.7 x 54.6px bounding box (area ~5,334 px^2); the
-    // smaller island ring spans ~5.3 x 13.9px (area ~74 px^2). A ring collapsed by the
+    // The mainland ring spans a ~95.4 x 53.8px bounding box (area ~5,133 px^2); the
+    // smaller island ring spans ~5.3 x 13.7px (area ~73 px^2). (#119 shrank the `us` fit by
+    // 1.36%, so these moved -- but the figures they replaced, ~97.7 x 54.6 and ~5,334, were
+    // ALREADY stale before it: the artifact measured 96.7 x 54.6 / 5,280 on the parent commit.
+    // Re-measured here rather than scaled.) A ring collapsed by the
     // closed-ring RDP bug emits exactly one distinct coordinate pair repeated, so ITS OWN
     // bounding box area is exactly 0 -- regardless of what the other ring in the same
     // feature does, which is why this checks every subpath independently rather than the
@@ -144,8 +147,8 @@ describe("geometry survives simplification and projection intact", () => {
     expect(subpaths).toHaveLength(2);
 
     // Threshold (20 px^2) sits comfortably between 0 (what any collapsed ring, full or
-    // partial, produces) and the smaller of VA's two measured ring areas (~74 px^2) --
-    // roughly a 3.7x margin under the tightest real case, leaving headroom for a future RDP
+    // partial, produces) and the smaller of VA's two measured ring areas (~73 px^2) --
+    // roughly a 3.6x margin under the tightest real case, leaving headroom for a future RDP
     // epsilon retune without this test needing to move. Nobody should raise this number
     // without re-measuring VA's own smaller ring first.
     for (const subpath of subpaths) {
@@ -213,10 +216,11 @@ describe("BASEMAP_FIT_POINTS", () => {
     // unioning anything into it -- a union-based caller would silently draw its arcs at a
     // different scale than the coastline beneath them. (20, -80) regionOf's to `us` (it is
     // south of Alaska's/Hawai'i's/the Pacific panel's own tests and not in the Caribbean
-    // panel's lon>-70 band either) but sits south of Key West (~24.5N), the conterminous
-    // landmass's own southernmost point -- outside every committed `us` reference point's
-    // extent, exactly the "coastal airport seaward of the simplified line" shape this test
-    // exists to demonstrate.
+    // panel's lon>-70 band either) but sits south of the Florida Keys (~24.55N), which since
+    // #119 are the `us` panel's DECLARED southern extent (`US_EXTENT_ANCHORS`) and no longer
+    // merely the landmass's southernmost point -- so (20, -80) is outside every `us` reference
+    // point's extent by declaration as well as by geometry, exactly the "coastal airport
+    // seaward of the simplified line" shape this test exists to demonstrate.
     const fitsAlone = fitPanels(BASEMAP_FIT_POINTS);
     const fitsWithOutOfBoundsSubject = fitPanels([...BASEMAP_FIT_POINTS, { lat: 20, lon: -80 }]);
     expect(fitsWithOutOfBoundsSubject.get("us")).not.toEqual(fitsAlone.get("us"));
@@ -482,8 +486,8 @@ describe("the three rects derived from their own geometry still fit it", () => {
   });
 });
 
-describe("the panels that must not have moved (#111, re-scoped by #115)", () => {
-  it("holds us/hi/car to the exact path bytes they had before #111, and ak to #115's", () => {
+describe("the panels that must not have moved (#111, re-scoped by #115 and #119)", () => {
+  it("holds hi/car to the exact path bytes they had before #111, ak to #115's, us to #119's", () => {
     // #111's acceptance criterion, stated at the only altitude that actually says it: the
     // PATH STRINGS, byte for byte. The fit assertion below names WHICH panel moved and by how
     // much, which is the useful thing when one does -- but a fit is only sensitive to a
@@ -506,6 +510,14 @@ describe("the panels that must not have moved (#111, re-scoped by #115)", () => 
     // partitions its input by `regionOf` before fitting and both anchors classify as `ak`, so
     // us/hi/car CANNOT have moved -- and the three unchanged hashes below are that argument's
     // check, which is why they are worth more here than they were in #111.
+    //
+    // #119 IS THE SAME MOVE ON THE OTHER PANEL: one declared-extent anchor for `us`
+    // (`US_EXTENT_ANCHORS`, the Marquesas Keys), so every `us` path byte is rewritten and
+    // ak/hi/car are byte-identical -- the partition argument again, checked the same way and now
+    // in both directions. Worth stating plainly because the issue predicted the opposite: #119
+    // said fixing it would rewrite EVERY panel's geometry. It rewrites ONE: exactly two DATA
+    // lines, the `us` path literal and one appended fit point. Say DATA lines -- the file's own
+    // diff is larger, because the generator rewrites its header comment alongside them.
     const hashes = Object.fromEntries(
       (["us", "ak", "hi", "car"] as const).map((panel) => [
         panel,
@@ -513,7 +525,8 @@ describe("the panels that must not have moved (#111, re-scoped by #115)", () => 
       ]),
     );
     expect(hashes).toEqual({
-      us: "a1355b846c078a0d58e39957b3a95df9e2b6bc8babc1119130c860e309f0f3c6",
+      // #119: was a1355b846c078a0d58e39957b3a95df9e2b6bc8babc1119130c860e309f0f3c6.
+      us: "f5c28bd9b3fb0140e5c42f90b5eb0c11e52d0eb0fc7da0a7fce7238ac215272d",
       // #115: was c424a4acc83b813379e6cf2cc4839aa14d7d003f2d0b26b629dac2e316303f5f.
       ak: "c1f4b68dedacd7d4afcb932c2ec28250c11575bfaaf31558486c299279773b0b",
       hi: "bdaf4ac90b2a8dffd4d5e5cc29f1e8eea5ea434e764d5d2825eec998ce9d6743",
@@ -521,7 +534,7 @@ describe("the panels that must not have moved (#111, re-scoped by #115)", () => 
     });
   });
 
-  it("holds us/hi/car to the fit they were baked at before #111, and ak to #115's", () => {
+  it("holds hi/car to the fit they were baked at before #111, ak to #115's, us to #119's", () => {
     // `fitPanels` partitions points per panel, so adding `ne_50m_pac.json`'s features CANNOT
     // move `us`, `ak`, `hi` or `car` -- and `regionOf`'s three-way split of the old `pac`
     // branch has a union identical to that branch, so it cannot either. Both are arguments;
@@ -537,7 +550,12 @@ describe("the panels that must not have moved (#111, re-scoped by #115)", () => 
       hi: fits.get("hi"),
       car: fits.get("car"),
     }).toEqual({
-      us: { k: 904.5131300948573, ox: 487.1120339377376, oy: 239.57188375255203 },
+      // #119: was { k: 904.5131300948573, ox: 487.1120339377376, oy: 239.57188375255203 } --
+      // the fit that put EYW at (693.6, 428.7) and MTH at (703.4, 424.5), below the rect. This
+      // is also the gate that kills the tempting WRONG anchor: re-deriving it as Florida's
+      // minimum-LATITUDE vertex (24.543, -81.815) rather than the vertex that projects furthest
+      // south gives k=893.4354291484278, which is red here and green everywhere else.
+      us: { k: 892.2437067538316, ox: 487.0155615347458, oy: 236.5663339691636 },
       // #115: was { k: 377.8396853372171, ox: 87.7779935792461, oy: 481.4201810606285 } --
       // the fit that put ADK at (-3.1, 453.4) and SYA at (-35.2, 433.5), off the canvas.
       ak: { k: 244.54496902469134, ox: 118.90105390013588, oy: 449.3790559215478 },
@@ -554,7 +572,7 @@ describe("no inset frame is drawn over the conterminous landmass", () => {
   // `.map svg path[data-panel]` fills every basemap path with OPAQUE `--panel-2`, and
   // `renderNetworkMap` draws frames BEFORE the basemap -- so the lower 48 painted over the
   // frame border, the "MARIANAS" label, and two of the panel's own islands. Measured on a 0.1px
-  // grid: 3,163 px^2 of drawn landmass inside that rect (33.3% of it), and all eight glyph
+  // grid: 2,972 px^2 of drawn landmass inside that rect (31.3% of it), and all eight glyph
   // positions of the label inside drawn Arizona or New Mexico. 25 served views affected.
   //
   // Nothing caught it because both the acceptance criterion and the frame-overlap test that
@@ -562,7 +580,7 @@ describe("no inset frame is drawn over the conterminous landmass", () => {
   // paints the land, so it was in neither list. This test is the one that looks at it.
   //
   // Against the DRAWN SUBPATHS, not the coastline's bounding box: `hi`'s frame sits inside that
-  // bbox (x[153.3, 806.7] y[18.0, 424.0]) while containing no land at all, so a bbox test would
+  // bbox (x[157.7, 802.3] y[18.0, 418.5]) while containing no land at all, so a bbox test would
   // fail a panel that is genuinely clear. And an exact rect-vs-polygon test, not a
   // vertex-in-rect one: a frame could sit wholly inside one state's interior with no vertex
   // near it and still be entirely behind paint.
@@ -649,11 +667,11 @@ describe("no inset frame is drawn over the conterminous landmass", () => {
 
   it("records `car` as the one pre-existing violation, rather than omitting it", () => {
     // `car` (M7 Task 7b) is the same class of defect and shipped a milestone earlier: its rect
-    // (424,392)-(720,468) overlaps drawn Florida and Texas, measured at 1,396 px^2 on a 0.1px
-    // sample grid -- 6.2% of its rect, against `pac`'s 33.3%. (The grid over-counts slightly;
-    // an exact polygon clip puts it at 1,392. Both are quoted somewhere, so the method is named
-    // here rather than leaving a future reader to read 4 px^2 as drift.) Out of scope for #111
-    // and deliberately not fixed, but a
+    // (424,392)-(720,468) overlaps drawn Florida and Texas, measured at 1,024 px^2 on a 0.1px
+    // sample grid -- 4.6% of its rect, against `pac`'s 31.3%. BOTH FIGURES MOVE WITH THE `us`
+    // FIT, which neither rect is involved in, and nothing regenerates them: re-measure on any
+    // fit change rather than carrying them forward. Out of scope for #111, still not fixed --
+    // it is #122 -- but a
     // test that simply left `car` out of the list above would read as though the property held
     // everywhere. This asserts the exemption is EXACTLY those two states: if `car` ever grows
     // past them, or is fixed, this goes red and someone re-reads the rule.

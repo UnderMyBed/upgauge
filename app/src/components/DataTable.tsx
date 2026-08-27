@@ -194,7 +194,20 @@ export function DataTable({
                   </td>
                 ))}
                 <td>
-                  <GaugeRail gauge={num(row.avg_gauge)} muted={belowFloor} />
+                  {/* `in`, not `num()`: the pivot templates emit only the measures a query
+                      selected, and `num()` maps an ABSENT key and a queried NULL to the same
+                      `null`. Here they are different findings; for `isBelowFloor` above they
+                      are the SAME one, which is why that function collapses them on purpose and
+                      this does not. `departures_performed` is itself a FILTERed SUM, so it
+                      comes back NULL for a wholly-quarantined group -- and a row whose
+                      departure count is absent and one whose count is unknowable both make no
+                      claim about the floor, the single answer `num(...) !== null` gives. A
+                      gauge has two answers to give: draw nothing, or draw the axis to say the
+                      value cannot be stated. Same collapse, opposite correctness. */}
+                  <GaugeRail
+                    gauge={"avg_gauge" in row ? num(row.avg_gauge) : undefined}
+                    muted={belowFloor}
+                  />
                 </td>
               </tr>
             );

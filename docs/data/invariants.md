@@ -554,10 +554,68 @@ without a disclosure leaves nothing on the page saying anything was ever filed. 
 are two of the four airports (with `DJN` and `POB`) that resolve at all **only** because
 quarantined rows are counted, which `app/src/lib/sitemap.ts` relies on and `sitemap.test.ts` pins.
 
-**One surface still coerces.** `app/src/app/airport/[code]/endpoints.ts` applies `?? 0` to the
-same FILTERed sums at *segment* grain, where **21** wholly-quarantined (carrier × origin × dest)
-groups over the trailing 12 — 0 partially NULL, touching **29** airport pages — are restated as
-zero in the endpoints table. That is a live gap, not a resolved one; it is tracked as issue #118.
+**At segment grain, and stated at the grain the page RENDERS.** `/airport/<code>`'s endpoints
+table queries (carrier × origin × dest) and folds it to one row per operating carrier, so the
+group count and the rendered-row count are different figures and only the second describes what a
+visitor sees. Measured 2026-08-27, trailing 12 (`2025-06 … 2026-05`):
+
+| | |
+|---|---:|
+| wholly-quarantined (carrier × origin × dest) **groups** | **21** |
+| of those, **partially** NULL | **0** |
+| airport pages carrying at least one such **group** | 29 |
+| **rendered carrier rows** whose every group is quarantined | **5** |
+| **pages showing one** — `A18` `JZM` `OQZ` `STT` `STX` | **5** |
+| **pages whose entire stat strip is unknowable** — `A18` `JZM` `OQZ` | **3** |
+
+**Quote the grain with the number.** On 24 of the 29 pages the quarantined group folds into a
+carrier that also flew real traffic, where a NULL contributes nothing and the figure shown is
+honest. The group count and the rendered-row count are different measurements of this defect, and
+only the second describes what a visitor sees.
+
+**Those 3 are not the whole footprint; 293 pages is.** The table above scopes to pages holding a
+quarantined group, but `airportTotals` folds from a `null` seed, so an airport with *no rows at
+all* in the window reports its sums as unknowable rather than as zero. **290** of the 1,047
+fact-present airports are in that state (`/airport/05A` is one). They render the same `—` for a
+different reason — nothing was filed, rather than nothing filed can be trusted — and both are the
+`—` this section requires, since a month with no row is neither "nobody flew" nor "0 seats flew".
+`AirportEmptyState` names which of the two a given page is in, and the page's foot claims an
+exclusion only where there was one. **The two absences must stay separable in code, not only in
+copy:** a consumer keying on "the sum is null" alone answers the wrong one of them, and answers it
+on the 290 rather than the 3. Every surface that renders an absence therefore tests both — the
+foot, the card's sixth stat, the stat strip. `page.test.tsx` pins the rendering of both; the 290 is
+a measurement stated here, not a gated figure.
+
+**The fold is where the coercion hides, and `?? 0` is only half of it.** JS `+` coerces null to
+zero on its own: `null + 5` is `5` and `[null].reduce((a, b) => a + b, 0)` is `0`. Deleting the
+`??` from the mapper while leaving the fold on `+` reinstates the defect exactly, and a test over
+the mapper's output stays green while the page still reads *0 seats*. The fold takes **SUM()
+semantics** — a NULL contributes nothing; the sum of no known values is NULL — mirroring the
+aggregate the values came from. NULL-poisoning (one bad group blanks the carrier) is the opposite
+error and would erase the 24 honest pages above.
+
+**`departures_performed` on the population behind these 21 groups** — the 26 quarantined rows
+they contain, not all quarantined rows in the window — runs **1 to 7**, 19 of the 26 at 1, every
+one `zero_seats` with a filed seat count of exactly 0. **They flew.** Across *every* quarantined
+segment row in the same window the distinct set is wider (`1,2,3,4,5,6,7,10,11,18,313,314`), so a
+figure quoted here must name which population it measured.
+
+**Where this is enforced on this surface.** `app/src/app/airport/[code]/endpoints.ts` — `addSum`,
+`bySeatsDesc` (NULLS LAST, matching DuckDB's own `DESC`) and a `ratio` that returns null rather
+than `NaN`. The cell renders `—` through `lib/format.ts`, and the reason-code gutter carries the
+`Q` glyph **with the reason string**, which this page has to pass through deliberately because it
+rebuilds its rows in TypeScript rather than handing `DataTable` a raw pivot row. Issue #118.
+
+**Still open: `sumTotals`.** `app/src/lib/entityFacts.ts` applies the same `?? 0` *inside* a `+`
+fold for `/route`, `/carrier` and `/aircraft` and their cards. **11** route pairs have no
+un-quarantined filing at all in the trailing 12, of which **10 are reachable pages** that render
+three fabricated zeros in the stat strip and on the card: `A18–LMA` · `AET–AIN` · `AET–OTZ` ·
+`ARC–CXF` · `BTI–VEE` · `BTT–UMT` · `CIK–SCC` · `GAL–OQZ` · `HSL–JZM` · `HUS–RLU`. The eleventh is
+`VEE–VEE`, which never renders: `app/src/lib/routePair.ts` 404s a same-airport slug before any
+lookup, consistent with the § Route identity rule that a same-airport filing is not a route. It is
+named here rather than dropped so the next re-derivation gets 11 and does not read this as stale.
+`EntityTotals` is already typed `number | null` for `/airport`'s sake, so the type is **not**
+evidence this is handled. Issue #121.
 
 ---
 

@@ -47,9 +47,13 @@ export function trailing12From(asOf: string): string {
 }
 
 export interface EntityTotals {
-  seats: number;
-  passengers: number;
-  departures: number;
+  /** `number | null`, because a total over rows whose every filing was quarantined is
+   * unknowable rather than zero (docs/data/invariants.md, "A wholly-quarantined group sums to
+   * NULL"). `/airport`'s totals (app/airport/[code]/endpoints.ts) already produce that null and
+   * reach `cardStats` through this type; `sumTotals` below does NOT yet -- see its own note. */
+  seats: number | null;
+  passengers: number | null;
+  departures: number | null;
   loadFactor: number | null;
   avgGauge: number | null;
 }
@@ -68,6 +72,14 @@ export interface EntityTotals {
  *
  * `null`, never 0.0, when the denominator is zero: absence is not a measurement (lib/format.ts). */
 export function sumTotals(rows: Record<string, unknown>[]): EntityTotals {
+  // ISSUE #121, OPEN: `?? 0` here restates an unknowable sum as zero, and the `+` would do it
+  // again even with the `??` removed. Measured over the trailing 12: 11 route pairs have no
+  // un-quarantined filing at all, of which 10 are REACHABLE pages that render three fabricated
+  // zeros in the stat strip and on the card. The eleventh is VEE-VEE, which `lib/routePair.ts`
+  // 404s as a same-airport slug before any lookup -- so 11 is the pair count and 10 is the page
+  // count, and they are not interchangeable. The type above is already `number | null` for
+  // `/airport`'s sake; this function simply never returns one yet, so the widened type is NOT
+  // evidence this is handled.
   const sum = (k: string) => rows.reduce((a, r) => a + Number(r[k] ?? 0), 0);
   const seats = sum("seats");
   const passengers = sum("passengers");

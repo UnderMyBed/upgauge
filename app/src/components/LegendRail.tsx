@@ -74,6 +74,23 @@ export function LegendRail({
           <b>Q</b>
           <em>quarantined — failed an invariant</em>
         </div>
+        {/* WHAT THE GLYPH ENCODES, NOT WHY IT IS THERE. `lib/format.ts`: null is absence, zero
+            is a measurement. Absence has several causes -- nothing filed, every filing
+            quarantined, a zero denominator -- and this rail is rendered unconditionally on every
+            table view, so naming any one of them states a finding the page may contradict two
+            lines down. The per-row cause is the gutter's job; this declares only that the mark
+            is never a zero, which is the thing a reader cannot otherwise tell. */}
+        <div className="lrow">
+          {/* `.k`, like `n` two rows up and for the same reason: globals.css splits this glyph's
+              colour into --limit for an OUT-OF-LIMIT code (`⌀`, `Q`) and --ink for a
+              DATA-AVAILABILITY one. A dash is the second kind, and without `.k` it inherits
+              --limit -- declaring, in red, a mark the tables draw in ordinary ink, which
+              reinstates through colour the same cause-claim this row's words refuse. No
+              `font-mono`: `.lrow b` is unlayered and already sets the mono family, so the
+              utility class loses to it and does nothing. */}
+          <b className="k">—</b>
+          <em>no measure to state — never a zero</em>
+        </div>
         <div className="lrow">
           <span className="g deriv font-mono">abc</span>
           <em>computed measure</em>

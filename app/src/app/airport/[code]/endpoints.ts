@@ -63,16 +63,77 @@ import type { Resolved } from "@/lib/resolve";
 export interface EndpointRow {
   carrierId: unknown;
   endpointId: unknown;
-  seats: number;
-  passengers: number;
-  departures: number;
+  /** NULL, never 0, when every filing behind this group was quarantined. Each measure is
+   * `SUM(x) FILTER (WHERE NOT is_quarantined)` (sql/02_marts/301_meta_pivot_measures.sql:21-32)
+   * and a SUM over zero passing rows returns NULL -- "nothing filed here can be trusted", which
+   * is a different finding from "nothing flew" and must stay distinguishable from it.
+   * Measured: the 26 rows behind the 21 such groups in the trailing 12 all filed
+   * `departures_performed` between 1 and 7 against a seat count of zero, so a row rendered as
+   * "0 departures" is not merely unknowable, it is the opposite of what BTS filed. */
+  seats: number | null;
+  passengers: number | null;
+  departures: number | null;
+  /** A COUNT, not a measure: `count(*) FILTER (WHERE is_quarantined)`
+   * (sql/03_queries/pivot_segment.sql:20) cannot return NULL, and 0 here is the real
+   * measurement "none of this group's filings were quarantined". */
   quarantinedRows: number;
+  /** Why they were quarantined, verbatim from the pivot's own
+   * `string_agg(DISTINCT quarantine_reason, ',')` (pivot_segment.sql:21-22), or null where
+   * nothing was. The em dash says the sums cannot be stated; this is what says why. */
+  quarantineReasons: string | null;
 }
 
-/** A ratio of sums, or null when the denominator is zero. Never an average of the rows above,
- * and never 0.0 for "nothing flew" -- absence is not a measurement (lib/format.ts). */
-function ratio(numerator: number, denominator: number): number | null {
-  return denominator === 0 ? null : numerator / denominator;
+/** A ratio of sums, or null when either input is unknowable or the denominator is zero. Never
+ * an average of the rows above, and never 0.0 for "nothing flew" -- absence is not a
+ * measurement (lib/format.ts).
+ *
+ * The null guard is not defensive padding. Typed to `number`, this function reads
+ * `null === 0` as false and goes on to evaluate `null / null` -- NaN, which `formatGauge`
+ * renders as the literal string "NaN" on a page carrying a DATA AS OF badge. */
+function ratio(numerator: number | null, denominator: number | null): number | null {
+  if (numerator === null || denominator === null || denominator === 0) return null;
+  return numerator / denominator;
+}
+
+/** SUM() semantics, mirroring the aggregate these values came from: a NULL contributes
+ * nothing, and the sum of NO known values is NULL rather than 0.
+ *
+ * THIS FUNCTION IS THE FIX, not the `?? 0` deleted from `toEndpointRows` below. JS `+`
+ * coerces null to 0 all by itself -- `null + 5` is `5`, and `[null].reduce((a, b) => a + b, 0)`
+ * is `0` -- so a fold left on `+` reinstates the very coercion the mapper stopped doing, and a
+ * test on the mapper alone stays green while the page still reads "0 seats". Issue #118.
+ *
+ * Poisoning a whole carrier row because ONE of its groups was quarantined would be the
+ * opposite error: 24 of the 29 pages carrying such a group have it folded in beside real
+ * traffic, whose figures are honest and whose excluded filings the gutter and the foot's
+ * quarantined count already disclose. */
+function addSum(a: number | null, b: number | null): number | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return a + b;
+}
+
+/** Seats descending, NULLS LAST -- the ordering `pivot_segment.sql` already returns, since
+ * DuckDB places NULLs last under DESC.
+ *
+ * Written out rather than `(b.seats ?? 0) - (a.seats ?? 0)` because a carrier that measurably
+ * flew nothing and a carrier whose figures are unknowable are different findings, and `?? 0`
+ * ties them -- leaving the winner to insertion order, which is the "right answer by accident
+ * of row order" failure this project has already paid for once. */
+function bySeatsDesc(a: EndpointRow, b: EndpointRow): number {
+  if (a.seats === b.seats) return 0;
+  if (a.seats === null) return 1;
+  if (b.seats === null) return -1;
+  return b.seats - a.seats;
+}
+
+/** The union of two rows' quarantine reasons, de-duplicated and comma-joined -- the same shape
+ * `string_agg(DISTINCT quarantine_reason, ',')` produces, since folding several groups into one
+ * carrier row means folding their reasons too. */
+function mergeReasons(a: string | null, b: string | null): string | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  return [...new Set([...a.split(","), ...b.split(",")])].join(",");
 }
 
 /** The carriers table's rows: one per operating carrier, endpoints folded away.
@@ -90,13 +151,14 @@ export function carrierRows(rows: EndpointRow[]): Record<string, unknown>[] {
       byCarrier.set(key, { ...row });
       continue;
     }
-    existing.seats += row.seats;
-    existing.passengers += row.passengers;
-    existing.departures += row.departures;
+    existing.seats = addSum(existing.seats, row.seats);
+    existing.passengers = addSum(existing.passengers, row.passengers);
+    existing.departures = addSum(existing.departures, row.departures);
     existing.quarantinedRows += row.quarantinedRows;
+    existing.quarantineReasons = mergeReasons(existing.quarantineReasons, row.quarantineReasons);
   }
   return [...byCarrier.values()]
-    .sort((a, b) => b.seats - a.seats)
+    .sort(bySeatsDesc)
     .map((r) => ({
       op_airline_id: r.carrierId,
       seats: r.seats,
@@ -105,13 +167,16 @@ export function carrierRows(rows: EndpointRow[]): Record<string, unknown>[] {
       load_factor: ratio(r.passengers, r.seats),
       avg_gauge: ratio(r.seats, r.departures),
       quarantined_rows: r.quarantinedRows,
+      quarantine_reasons: r.quarantineReasons,
     }));
 }
 
 export interface AirportTotals {
-  seats: number;
-  passengers: number;
-  departures: number;
+  /** NULL, never 0, when every row the airport has is unknowable -- measured for A18, JZM and
+   * OQZ, whose entire trailing-12 window is a single quarantined filing. See EndpointRow. */
+  seats: number | null;
+  passengers: number | null;
+  departures: number | null;
   loadFactor: number | null;
   avgGauge: number | null;
   carriers: number;
@@ -126,9 +191,12 @@ export interface AirportTotals {
  * and stay in every measure, but SEA is not one of SEA's destinations. Measured over the
  * trailing 12 months at SEA: 144 distinct other-endpoint ids including itself, 143 without. */
 export function airportTotals(rows: EndpointRow[], airportId: number): AirportTotals {
-  const seats = rows.reduce((a, r) => a + r.seats, 0);
-  const passengers = rows.reduce((a, r) => a + r.passengers, 0);
-  const departures = rows.reduce((a, r) => a + r.departures, 0);
+  // Seeded `null`, not 0, and folded with addSum: seeding 0 would make the stat strip of an
+  // airport whose every filing was quarantined read "0 seats" -- the page-level form of the
+  // same defect (issue #118). The counts below are unaffected; they count what was FILED.
+  const seats = rows.reduce<number | null>((a, r) => addSum(a, r.seats), null);
+  const passengers = rows.reduce<number | null>((a, r) => addSum(a, r.passengers), null);
+  const departures = rows.reduce<number | null>((a, r) => addSum(a, r.departures), null);
   const endpoints = new Set(rows.map((r) => String(r.endpointId)));
   endpoints.delete(String(airportId));
   return {
@@ -197,14 +265,25 @@ function otherEndpoint(row: Record<string, unknown>, airportId: string): unknown
   return String(row.origin_airport_id) === airportId ? row.dest_airport_id : row.origin_airport_id;
 }
 
+/** `null`/`undefined` stay absent; everything else becomes a number. `Number(null)` is 0, so
+ * the absence has to be tested before the conversion, not after it. */
+function numOrNull(v: unknown): number | null {
+  return v === null || v === undefined ? null : Number(v);
+}
+
 export function toEndpointRows(rows: Record<string, unknown>[], airportId: string): EndpointRow[] {
   return rows.map((r) => ({
     carrierId: r.op_airline_id,
     endpointId: otherEndpoint(r, airportId),
-    seats: Number(r.seats ?? 0),
-    passengers: Number(r.passengers ?? 0),
-    departures: Number(r.departures_performed ?? 0),
+    // NOT `?? 0`. See EndpointRow, `addSum`, and issue #118: these three are FILTERed sums
+    // that return NULL for a wholly-quarantined group, and restating that as 0 turns "we
+    // cannot say" into "nothing flew". `quarantined_rows` keeps its `?? 0` because it is a
+    // count, not a measure, and cannot be NULL.
+    seats: numOrNull(r.seats),
+    passengers: numOrNull(r.passengers),
+    departures: numOrNull(r.departures_performed),
     quarantinedRows: Number(r.quarantined_rows ?? 0),
+    quarantineReasons: typeof r.quarantine_reasons === "string" ? r.quarantine_reasons : null,
   }));
 }
 

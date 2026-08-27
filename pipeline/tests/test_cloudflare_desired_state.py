@@ -17,7 +17,8 @@ import json
 import re
 from pathlib import Path
 
-CLOUDFLARE = Path(__file__).parents[2] / "deploy" / "cloudflare"
+ROOT = Path(__file__).parents[2]
+CLOUDFLARE = ROOT / "deploy" / "cloudflare"
 
 
 def _load(name: str) -> dict:
@@ -78,10 +79,12 @@ def _covered(expression: str, path: str) -> bool:
     )
 
 
-# Every surface the rule must match, with the cost that puts it there. The first six reach the
-# origin on EVERY request. The last three do not -- a filter value that resolves is a cacheable
-# 200 -- and are matched anyway because `http.request.uri.path` carries no query string, so the
-# refused-value family underneath them cannot be addressed on its own (#113).
+# Every surface the rule must match, with the cost that puts it there. Three shapes, matched for
+# three different reasons: `/api/pivot`, `/explore` and the four cards reach the origin on EVERY
+# request; `/route/ZZZZ-QQQ` is an unbounded 404 family that no cache absorbs (#117); the rest are
+# cacheable 200s matched as collateral, because `http.request.uri.path` carries no query string,
+# so neither the refused-value family (#113) nor the 404 family (#117) can be addressed apart from
+# its cached siblings.
 COVERED = (
     ("/api/pivot", "a DuckDB aggregation, and the residual `f` axis rides the 30-day cache"),
     ("/explore", "the same `f` axis on the HTML page, which no key or value bound closes"),
@@ -92,18 +95,34 @@ COVERED = (
     ("/carrier/DL", "a refused `?type=` is no-store and renders in full: 82-104 ms, unbounded"),
     ("/aircraft/B737-8", "`?carrier=` has the identical shape (#106)"),
     ("/airport/SEA", "`?y=<junk>` has had it since M7 Task 9, at a smaller radius"),
+    # #117, and BOTH entries are load-bearing. A literal `starts_with(path, "/route/JFK-LAX")`
+    # satisfies every assertion the KNOWN pair makes while bounding ZERO of the 404 family the
+    # prefix was added for. The unknown pair is what distinguishes a prefix from a fixture;
+    # delete it and that mutant lives.
+    #
+    # FIXTURES FOR A PREFIX MUST DIFFER IN THE SUFFIX TOO. Two /route/ fixtures sharing a suffix
+    # are both matched by `ends_with(<shared suffix>)` substituted for the prefix, and nothing in
+    # UNCOVERED ends that way either -- so that substitution passes every test in this file while
+    # bounding none of the space. An outcome the buggy expression also produces is not evidence.
+    #
+    # /route/ has no single-literal narrowing escape left; the other five prefixes do (#129).
+    (
+        "/route/ZZZZ-QQQ",
+        "an unknown pair is a no-store 404 that runs the reverse lookup THREE times (proxy, "
+        "page, then not-found.tsx's reason -- proxy.ts:750) with no CDN absorption, over an "
+        "unbounded URL space",
+    ),
+    (
+        "/route/JFK-LAX",
+        "the cacheable 200 beside it: a path predicate cannot separate the two, and a real "
+        "page view spends exactly ONE slot here (measured from the served bytes)",
+    ),
 )
 
 # Deliberately outside the rule. Each of these is either cheap, cached at the edge for long
 # enough that a walk does not reach the origin, or would break something legitimate if limited.
 UNCOVERED = (
     ("/", "static, and the entry point every real visitor lands on"),
-    # NOT "it is cached, so a walk does not reach us" -- that is equally true of `/carrier/DL`,
-    # which IS covered above. What actually distinguishes `/route/:pair` is that it is the one
-    # entity path with `keys: NO_KEYS` (app/src/lib/canonicalQuery.ts), so it has no
-    # refused-value family. Its own residual -- an unbounded 404 space, each miss running the
-    # site's largest query twice with no CDN absorption -- is uncovered and tracked as #117.
-    ("/route/JFK-LAX", "no query key at all, so no refused-value family reaches the origin"),
     ("/watch/gauge", "four closed slugs, so the whole surface is four cacheable documents"),
     ("/sitemap.xml", "PROJECT_CACHE for 30 days, and crawlers are supposed to fetch it"),
     ("/robots.txt", "same, and limiting it teaches a crawler nothing"),
@@ -123,13 +142,34 @@ def test_rate_limit_covers_every_surface_that_can_reach_the_origin_uncached():
     renders in full under `no-store` at 82-104 ms, against 0.9-1.6 ms for the 307 strip, and
     the value space is unbounded because failing the value rule does not make the key unknown.
 
-    `can reach`, not `reaches`: those three prefixes' resolving values are cacheable 200s and a
+    #117 added `/route/`, and for a DIFFERENT reason: it is the one entity path with
+    `keys: NO_KEYS` (`lib/canonicalQuery.ts`), so it has no refused-value family at all. Its
+    residual is a 404 space instead -- an unknown pair is a `no-store` 404 running the site's
+    largest query THREE times (proxy, page, then not-found.tsx's reason -- proxy.ts:750),
+    uncached, over an unbounded URL space.
+
+    It is CHEAPER per miss than the family #113 closed and BROADER in surface, which are two
+    claims and not one: a refused `?type=` renders a whole page at 82-104 ms while a /route/ miss
+    is three runs of the 8 ms lookup plus three dimension-only probes. What earns it a place here
+    is the SHAPE of the space, not the cost -- `/carrier/:code` is unbounded in the VALUE under
+    one path, `/route/` has no value gate at all and every miss is a DISTINCT PATH, so its family
+    is unbounded and uncacheable per-URL. Do not compress this to "strictly worse"; on the only
+    axis either sentence names, it is not.
+
+    `can reach`, not `reaches`: all four prefixes' resolving values are cacheable 200s and a
     real visitor's page view is one of them. They are matched anyway because Cloudflare's
-    `http.request.uri.path` excludes the query string, so the refused-value family cannot be
-    addressed without its cached siblings. That collateral is affordable only because an entity
-    page view is exactly ONE request against this bucket -- `DataTable` emits a plain `<a href>`
+    `http.request.uri.path` excludes the query string, so neither residual can be addressed
+    without its cached siblings. That collateral is affordable only because an entity page view
+    is exactly ONE request against this bucket -- `DataTable` emits a plain `<a href>`
     (components/DataTable.tsx:78,93), `TopBar` pins `prefetch={false}`, and every asset the page
-    pulls is under the excluded `/_next/`. A `<Link>` with prefetch on an entity page would
+    pulls is under the excluded `/_next/`. MEASURED 2026-08-27 against the served route page:
+    every serialized `<Link>` ref carries `"prefetch":false` (5 refs, 5 props, 1:1 -- 2 rendered
+    by `TopBar` on a 200, the other 3 inside the not-found boundary subtree), and the 13
+    subresources a browser fetches are all under the excluded `/_next/`. 13 counts DISTINCT URLs
+    across the body AND the `Link:` response header -- the counting rule matters, because the 4
+    `.woff2` sit in both (header `rel=preload`, body RSC flight payload as `:HL[...,"font",...]`
+    hint records) and counting `src=`/`href=` attributes instead both misses them and
+    double-counts a chunk. One slot per view. A `<Link>` with prefetch on an entity page would
     break that arithmetic, which is why this note names the mechanism rather than the number.
 
     Asserting coverage path by path is what distinguishes this from the check it replaces --
@@ -145,13 +185,65 @@ def test_rate_limit_does_not_reach_the_cached_pages_or_the_static_assets():
     every path in COVERED and would pass the test above while rate-limiting the entire site at
     1 req/s -- a single real page load asks for more static chunks than that.
 
-    #113 made this the load-bearing half. The rule now matches three whole entity prefixes, so
-    `/_next/` is what stands between it and every static asset on the site, and this list is the
-    only thing asserting that. It shrank by one entry (`/carrier/DL` moved to COVERED); it must
-    never shrink to nothing, and `/_next/static/chunks/main.js` must never leave it."""
+    This is the load-bearing half. The rule matches all FOUR entity prefixes whole, so `/_next/`
+    is the only thing standing between it and every static asset on the site, and this list is
+    the only thing asserting that. Entries leave this list as the rule widens, which is normal;
+    it must never shrink to nothing, and `/_next/static/chunks/main.js` must never leave it."""
     expression = _load("rate-limit.json")["rules"][0]["expression"]
     for path, why in UNCOVERED:
         assert not _covered(expression, path), f"{path} must not be rate limited: {why}"
+
+
+def test_the_og_cards_stay_covered_by_their_own_clause_when_the_entity_prefixes_are_struck_out():
+    """`ends_with(path, "/opengraph-image")` is a BACKSTOP since #117, and this is the only thing
+    keeping it honest.
+
+    Every card route in the app lives under one of the four entity prefixes -- there are exactly
+    four `opengraph-image.tsx` files and they sit at `app/src/app/{route,airport,carrier,aircraft}
+    /[...]/`. Since #117 all four of those prefixes are in the expression, so the clause now
+    matches nothing they do not already match, and **deleting it leaves every other test in this
+    file green**. That is the whole reason this test exists.
+
+    The clause is kept rather than deleted because it is redundant only WHILE all four prefixes
+    stay covered. It costs one clause, it survives a future narrowing of any one of them, and the
+    cards are the most expensive request on the site: a DuckDB query plus a rasterize with no warm
+    path at the origin. A working defense removed because it is currently redundant is the
+    "simplified by someone who doesn't know why it exists" failure, and a redundant clause with no
+    test naming it is one the next widening retires by accident.
+
+    Asserting that the cards are covered would NOT catch this -- the entity prefixes cover them
+    too, so that assertion passes either way. Striking the prefixes out and re-asking is what
+    makes the clause's own coverage the property under test."""
+    expression = _load("rate-limit.json")["rules"][0]["expression"]
+    cards_only = " or ".join(
+        f'ends_with(http.request.uri.path, "{literal}")'
+        for op, literal in _PATH_CLAUSE.findall(expression)
+        if op == "ends_with"
+    )
+    assert cards_only, (
+        "no `ends_with` clause is left in the expression -- the four `*/opengraph-image` paths "
+        "are now covered only incidentally, by whichever entity prefixes happen to remain"
+    )
+    # The premise, asserted against the DISK rather than against this file's own COVERED tuple.
+    # Counting COVERED entries would let a FIFTH card route be added -- `/watch/[preset]/` is the
+    # plausible one -- with no test noticing: the clause would silently become load-bearing again,
+    # the "BACKSTOP, not load-bearing" paragraph in hosting.md would become false, and every
+    # assertion here would stay green. Same shape as `canonicalQuery.test.ts` agreeing with
+    # `config.matcher` rather than restating it.
+    card_dirs = sorted(
+        f.relative_to(ROOT / "app" / "src" / "app").parts[0]
+        for f in (ROOT / "app" / "src" / "app").rglob("opengraph-image.tsx")
+    )
+    assert card_dirs == ["aircraft", "airport", "carrier", "route"], (
+        f"the card routes on disk are {card_dirs}, not the four entity prefixes this clause is "
+        "redundant with -- a card outside those prefixes makes `ends_with` load-bearing again"
+    )
+    cards = [(path, why) for path, why in COVERED if path.endswith("/opengraph-image")]
+    assert len(cards) == 4, "all four card paths must be listed in COVERED"
+    for path, why in cards:
+        assert _covered(cards_only, path), (
+            f"{path} is covered only by an entity prefix, not by the card clause: {why}"
+        )
 
 
 def test_rate_limit_keeps_the_name_the_zone_actually_holds():

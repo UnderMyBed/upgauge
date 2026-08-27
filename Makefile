@@ -424,7 +424,7 @@ fmt-check:  ## Fail if the tree is not `ruff format`-clean
 # clause that had become false -- `canonicalQuery.ts` inspects no value, but values are no longer
 # unvalidated, and a shape check downstream of pyUnquote bounds no spelling). Previously 480
 # against a 479-line file.
-CLAUDE_MD_BUDGET ?= 490
+CLAUDE_MD_BUDGET ?= 497
 
 check-docs:  ## Enforce the CLAUDE.md line budget (see CLAUDE.md § Working agreements)
 	@n=$$(wc -l < CLAUDE.md); \

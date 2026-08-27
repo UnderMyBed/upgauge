@@ -63,6 +63,13 @@
  *   `AK_EXTENT_ANCHORS` below carries the chain's two extremes as reference points with no
  *   drawn geometry instead; see that constant for the full measurement.
  *
+ *   THE FLORIDA KEYS are the third gap and take the same treatment (#119). 1:110m's Florida
+ *   stops at lat 25.08, north of the Keys entirely, so the conterminous fit had no extent
+ *   below them and EYW and MTH projected past the bottom of `PANEL_RECTS.us`. At 14.18 px per
+ *   degree of longitude at THEIR latitude the whole chain is 24.9px wide and one key 0.72px.
+ *   `US_EXTENT_ANCHORS` carries one declared point; see that constant for why the rect could
+ *   not have been moved instead, and why the Keys are not committed as geometry.
+ *
  * WHY COMMITTED, NOT FETCHED AT BUILD TIME: `make verify` builds twice and diffs every
  * artifact byte-for-byte; a build step that reaches the network is not reproducible (no
  * guarantee the remote file is unchanged, reachable, or even the same bytes twice in one
@@ -331,6 +338,92 @@ export const AK_EXTENT_ANCHORS = [
   { lat: 51.215, lon: -179.119 },
 ];
 
+/**
+ * ONE REFERENCE POINT WITH NO DRAWN GEOMETRY: the `us` panel's DECLARED SOUTHERN EXTENT (#119).
+ *
+ * `ne_110m_us.json`'s Florida is 40 points and stops at lat 25.08 (lon -80.68), north of the
+ * Keys entirely -- so a fit taken over that coastline alone has no extent below them. Measured
+ * against the built warehouse over the whole fact-present population: EYW (Key West) projected
+ * to (693.6, 428.7) and MTH (Marathon) to (703.4, 424.5), 4.7px and 0.5px below
+ * `PANEL_RECTS.us`'s bottom edge of 424. Both stay on the 960x500 canvas, so unlike ADK/AKB/SYA
+ * nothing was clipped; what they landed in was the drawn CARIBBEAN inset frame.
+ *
+ * THE FIX IS THE FIT, NOT THE RECT -- the same conclusion #115 reached for `ak`, by the same
+ * arithmetic transposed to the other axis, and here it is not merely cheaper but the only thing
+ * that reaches. `fitPanels`'s `k` is `min(w/dx, h/dy)` and `us` binds on HEIGHT (w/dx =
+ * 1256.99, h/dy = 904.51), so the fitted extent fills 100.0% of the rect's height and the
+ * vertical slack a point could sit in is EXACTLY ZERO. EYW's raw-Albers y exceeds the reference
+ * extent's by 0.005210, so its overshoot is 0.005210k below the rect's bottom edge for every k,
+ * and enlarging the rect only raises k. Slack appears only once WIDTH binds instead, which
+ * needs w <= 638.6px -- narrowing the lower 48 from 908px to 638px and leaving ~300px of dead
+ * margin on a 960px canvas. There is no rect that fixes this and keeps the map.
+ *
+ * THE KEYS ARE NOT COMMITTED AS GEOMETRY, and the reason is scale, exactly as for the western
+ * Aleutians. QUOTE THE SCALE AT THE LATITUDE IT IS USED AT, because it varies 4% across Florida:
+ * this panel draws 14.18 px per degree of longitude at lat 24.55, where the Keys are, against
+ * 13.63 at lat 28 mid-peninsula. Measured on the source rather than on hand-picked
+ * endpoints, NE 1:10m Florida's own 426 vertices south of 25.35 N span 24.9 x 16.2px under the
+ * shipped fit, and an individual key is 0.72px. At any RDP epsilon coarse enough not to bloat
+ * the artifact those collapse to zero-area hairlines, the Rota defect again. It would also mean
+ * committing a second, finer source for `us` alone.
+ *
+ * THE COUNTER-CANDIDATE A READER WILL ASK ABOUT IS THE DRY TORTUGAS, 70km west of Key West and
+ * genuinely further south in projection -- Loggerhead Key's southwestern tip would sit 0.41px
+ * below this anchor. It is not used because NATURAL EARTH 1:10m'S FLORIDA POLYGON DOES NOT
+ * CONTAIN THEM: zero vertices west of 82.5 W. Anchoring there would be inventing an extent
+ * rather than declaring one, which is the opposite of what these constants are for. Checked, so
+ * that the stated maximum is the maximum OF THE SOURCE and not merely of a casual scan.
+ *
+ * THE VALUE IS THE VERTEX THAT PROJECTS FURTHEST SOUTH, NOT THE ONE FURTHEST SOUTH. Albers is
+ * conic, so those are different points and picking the wrong one is a real, tempting error --
+ * the same class as the `sam` rect's 163 -> 181 correction (`albers.ts`: measure the extent
+ * under the PANEL'S OWN PARAMETERS). Over all 33,462 vertices of Natural Earth 1:10m's US
+ * features that `regionOf` files as `us`, the maximum raw-Albers y under `PANEL_PARAMS.us` is
+ * (24.550849, -82.128774) in the Marquesas Keys, at 0.210072077. The minimum-LATITUDE vertex is
+ * (24.542548, -81.814565), Key West itself, at 0.209469736 -- 0.54px short. Anchoring on that
+ * one would halve EYW's clearance from 0.86px to 0.32px while looking like the more obvious
+ * choice. Same file and same mirror as `AK_EXTENT_ANCHORS`
+ * (`ne_10m_admin_1_states_provinces.geojson`, `iso_a2 == 'US'`), at `round3`, re-derivable
+ * rather than invented, and deliberately not committed for the reason directly above.
+ *
+ * EXACTLY ONE ANCHOR, because exactly one axis is short. All four were measured against 1:10m
+ * rather than assumed, as raw-Albers extents against the committed 1:110m ones: west -0.369042
+ * vs -0.368874 and east 0.353317 vs 0.353142 (1:110m already reaches 0.15px FURTHER on both),
+ * north -0.244963 vs -0.245652 (0.62px), south 0.203898 vs 0.210072 -- 5.58px, the only
+ * material gap. A second anchor would be gratuitous, and on the west/east axes it would shrink
+ * the extent rather than grow it.
+ *
+ * IT MUST CLASSIFY AS `us`, and `panelContainment.test.ts` asserts that it does. The FIRST
+ * reason is coverage, not danger: that assertion needs no database, so it fires in an
+ * environment where the live containment sweep skips -- and the second is that it names the
+ * CAUSE ("-> car") rather than reporting a moved `k`. Run as a mutant (`regionOf`'s Caribbean
+ * test widened to `lon > -90`): the `us` and `car` path hashes and fits in `basemap.test.ts` go
+ * red too, because both panels' partitions changed. So this is not the only guard.
+ *
+ * STRUCTURALLY it is the same shape as Amatignak's cliff -- `regionOf`'s Caribbean test is
+ * `lat < 25 && lon > -70` and this anchor is at lat 24.551, BELOW 25, so only the longitude
+ * clause keeps it out of `car`. QUANTITATIVELY it is nothing like as close: Amatignak clears its
+ * own `lat > 51` clause by 0.215 degrees, this anchor clears `lon > -70` by 12.129. A retune
+ * that reaches it is a deliberate redesign of the Caribbean boundary, not a nudge -- so do not
+ * describe the two as mirror images.
+ *
+ * THE GUARD IS ASYMMETRIC, and a fourth panel's author should know which way is unwatched.
+ * An anchor placed too far NORTH is caught twice -- the live containment sweep, and the
+ * clearance assertion one step before it. An anchor placed too far SOUTH -- a transcription
+ * typo, or an extent that is not in the source at all -- silently SHRINKS the lower 48 and
+ * every airport stays comfortably inside its rect; the only thing that moves is the hand-pinned
+ * `us` fit constant in `basemap.test.ts`, which the same commit is already updating. That is
+ * review catching it, not a gate. Both this constant and `AK_EXTENT_ANCHORS` are hand
+ * transcriptions of extrema from a file the repo does not commit and no `make` target fetches,
+ * so the transcription itself is unverifiable in CI. Tracked as #128; do not assume it is
+ * closed because this comment describes it.
+ */
+export const US_EXTENT_ANCHORS = [
+  // The Marquesas Keys -- the westernmost of the Florida Keys, and the point of the
+  // conterminous United States that projects furthest south under `PANEL_PARAMS.us`.
+  { lat: 24.551, lon: -82.129 },
+];
+
 /** Reads both committed geo files, merges and sorts their features exactly the way `main()`
  * does, and returns `{ features, referencePoints, fits }` -- the same three values `main()`
  * uses to build both `BASEMAP_PATHS` and `BASEMAP_FIT_POINTS`. Exported (rather than kept
@@ -392,6 +485,9 @@ export function loadReferencePointsAndFits() {
   // through `round3` for the same round-trip reason every other point gets it, so
   // `fitPanels(BASEMAP_FIT_POINTS)` at runtime is bit-for-bit the fit baked below.
   for (const anchor of AK_EXTENT_ANCHORS) {
+    referencePoints.push({ lat: round3(anchor.lat), lon: round3(anchor.lon) });
+  }
+  for (const anchor of US_EXTENT_ANCHORS) {
     referencePoints.push({ lat: round3(anchor.lat), lon: round3(anchor.lon) });
   }
 
@@ -468,11 +564,14 @@ ${pathsLiteral}
 
 /**
  * The fixed reference points every panel's coastline was fit to (raw lat/lon, 3 decimals,
- * matching app/geo/ne_110m_us.json's own precision), plus the two \`ak\` DECLARED-EXTENT
- * anchors (#115) appended last -- Attu Island's western tip and Amatignak Island, which have
- * no drawn geometry because at 2.436 px per degree of longitude the western Aleutians are
- * smaller than a pixel. See build-basemap.mjs's \`AK_EXTENT_ANCHORS\`. A per-page map
- * (app/src/lib/map/segmentMap.ts's \`renderMapCore\`) must reuse
+ * matching app/geo/ne_110m_us.json's own precision), plus the DECLARED-EXTENT anchors appended
+ * last -- two \`ak\` (#115: Attu Island's western tip and Amatignak Island) then one \`us\`
+ * (#119: the Marquesas Keys). None has drawn geometry, because at 2.436 px per degree of
+ * longitude the western Aleutians and at 14.18 px per degree at lat 24.55 the Florida Keys are
+ * both smaller than the pen -- 0.25px for Shemya, 0.72px for one key. Each figure is quoted at
+ * the latitude it is used at. See build-basemap.mjs's \`AK_EXTENT_ANCHORS\` and
+ * \`US_EXTENT_ANCHORS\`.
+ * A per-page map (app/src/lib/map/segmentMap.ts's \`renderMapCore\`) must reuse
  * \`fitPanels(BASEMAP_FIT_POINTS)\` VERBATIM for any panel it has an entry for
  * (us/ak/hi/pac/car/sam as of #111, since ne_50m_car.json's and ne_50m_pac.json's points feed
  * this same array) rather than re-deriving one from its own subject points -- and must NOT

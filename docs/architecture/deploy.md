@@ -271,7 +271,24 @@ renaming it in the committed file would assert something no `make cloudflare-app
 true. `pipeline/tests/test_cloudflare_desired_state.py` pins the name for that reason.
 
 **The thresholds are `deploy/cloudflare/rate-limit.json`, not a sentence here.** That file is the
-record and is applied verbatim. Note the plan constrains both numbers: the window must be 10s and
+record and is applied verbatim.
+
+> ⚠️ **Its `description` is long and nothing in this repo bounds it.** The ruleset description
+> carries the reasoning for every path in the expression, and it has grown to several times the
+> largest value ever DEMONSTRATED to survive a PUT: **1,606 characters**, the #83 widening of
+> 2026-08-24, which `test_cloudflare_desired_state.py`'s name test pins as `version` 1 → 2. **A
+> length that shipped in this repo is not evidence the zone accepted it; only a recorded PUT
+> is**, which is why the baseline is that measurement and not whatever the file most recently
+> grew to. **Measure the current length before you apply** —
+> `python3 -c "import json;print(len(json.load(open('deploy/cloudflare/rate-limit.json'))['description']))"`
+> — rather than reading it here: a figure written into this file is stale the next time anyone
+> edits the field, and apply time is the moment it matters. Whatever limit the Rulesets API
+> enforces is discoverable only by PUTting to the zone, so `make cloudflare-apply` is where a
+> too-long description would first surface. It fails loud
+> rather than shipping a truncated rule, so the blast radius is a failed apply — but know it
+> before you run the target, not after.
+
+Note the plan constrains both numbers: the window must be 10s and
 the mitigation timeout must be 10s, so the sustained rate is 1 req/s per IP on every path the
 expression matches, and a blocked client resumes after 10s. It caps throughput; it is not a wall.
 

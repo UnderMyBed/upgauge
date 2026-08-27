@@ -1076,6 +1076,89 @@ check     "airport ORD: says nothing about quarantined ROUTES on a clean network
 check_not "airport ORD: ...and states no quarantined-route disclosure"            "$BODY" \
   'quarantined route'
 
+# 10d. #118 -- the same NULL, one surface over: the endpoints TABLE and the stat strip.
+#
+# 10c above proves the MAP excludes a wholly-quarantined pair. The table below it was still
+# applying `?? 0` to the identical FILTERed sums, so on A18 the map correctly said "1 quarantined
+# route not drawn" while the table underneath it reported the same filing as 0 seats and 0
+# departures. Both halves of one page, disagreeing.
+#
+# A18 (Kantishna) is the whole-page case: ONE row in the entire dataset -- 2025-06, op_airline
+# 20333, seats 0.0, departures_performed 1.0, quarantined `zero_seats`, with A18 as the
+# DESTINATION -- so its only table row and its stat strip are both unknowable.
+#
+# THE SEQUENCE IS THE NEEDLE, NOT THE DASH. `<td class="num">—</td>` is ALREADY served by the
+# buggy page: load factor and average gauge have zero denominators and render `—` either way, so
+# a bare em-dash needle here would print ok forever against a page reading "0 / 0 / 0 / — / —".
+# Only the position of each dash separates the two. Verified by mutation on a served build
+# (restore `?? 0`, rebuild): this needle reddens, the two below it redden, the gutter one does not.
+# The dash is U+2014 written LITERALLY -- lib/format.ts's DASH is a JS string, so React emits the
+# raw code point, and a needle copied off an `&mdash;` could never fire.
+#
+# DATASET-PINNED as a block, for 10c's reason: a BTS revision that un-quarantines A18 must redden
+# this rather than silently stop testing anything. docs/data/invariants.md
+# § A wholly-quarantined group sums to NULL carries the query and the current measurement.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/A18")
+check_dataset check "airport A18: every measure cell is absence, in order" "$BODY" \
+  '<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>'
+check_dataset check_not "airport A18: no measure cell is a fabricated zero" "$BODY" \
+  '<td class="num">0</td>'
+# The stat strip, fed by the same fold one level up. Its COUNTS are real facts about what was
+# filed and must survive -- a page that blanked those too would pass the check_not vacuously.
+check_dataset check_not "airport A18: nor is the stat strip a fabricated zero" "$BODY" \
+  '<div class="v">0</div>'
+check_dataset check "airport A18: the strip still counts the carrier that filed" "$BODY" \
+  '<div class="k">Carriers</div><div class="v">1</div>'
+# The dash says nothing can be stated; the gutter says why. /airport rebuilds its rows in
+# TypeScript rather than handing DataTable a raw pivot row, so unlike the other four table
+# surfaces it carries `quarantine_reasons` through deliberately -- drop that and the title
+# silently degrades to the generic label while every other needle here stays green.
+check_dataset check "airport A18: the gutter carries the quarantine reason, not just the glyph" \
+  "$BODY" 'title="Quarantined — failed an invariant: zero_seats"'
+
+# THE PROSE THAT EXPLAINS THE DASHES, in the served bytes. Design review found the foot claiming
+# the quarantined row was "excluded from these totals" on a page whose totals are entirely em
+# dashes -- and whose Carriers and Destinations counts are counts OF that row, not figures net of
+# it. Built as ONE template literal in page.tsx so a raw-bytes grep can reach it: React's SSR puts
+# `<!-- -->` between adjacent expression children, which `textContent` skips and this does not.
+check_dataset check "airport A18: the foot explains the dashes instead of miscounting them" \
+  "$BODY" 'Every filing at A18 in this window is quarantined'
+check_dataset check_not "airport A18: ...and does not claim the counts are net of an exclusion" \
+  "$BODY" 'excluded from these totals'
+# `1 destination`, singular, on the only prose left explaining five em dashes. The other half of
+# this same sentence has always agreed with its count.
+check_dataset check_not "airport A18: the foot agrees with its own count on the plural" \
+  "$BODY" '1 destinations'
+
+# THE OTHER ABSENCE, and the branch this round's regression actually came from. 05A is
+# fact-present but filed NOTHING in the trailing 12, so its sums are unknowable for a reason
+# quarantine had no part in -- 290 airports are in that state against A18's 3. Every defect this
+# page's fixes chased was a consumer keying on "the sum is null" and answering the wrong one of
+# the two: the card said `Quarantined 0`, the foot claimed rows were "excluded from these totals"
+# that never existed, and the legend named quarantine as the cause. Unit and page tests covered
+# it; nothing served did, on a page whose whole class of bug this file exists to catch.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/05A")
+check_dataset check "airport 05A: an unfiled window is unknowable, not zero traffic" "$BODY" \
+  '<div class="k">Seats</div><div class="v">—</div>'
+# The counts are not measures: zero carriers filed is a fact. Blanking them alongside the sums
+# would be the mirror image of the defect this whole change refuses.
+check_dataset check "airport 05A: the counts are still stated" "$BODY" \
+  '<div class="k">Quarantined</div><div class="v">0</div>'
+check_dataset check "airport 05A: names which absence it is" "$BODY" 'No filings at'
+# The foot must claim NO exclusion here -- there is nothing to have been excluded from, and
+# nothing was quarantined. Both needles are served by A18 and by SEA, so neither is vacuous.
+check_dataset check_not "airport 05A: claims no exclusion that never happened" "$BODY" \
+  'excluded from these totals'
+check_dataset check_not "airport 05A: and does not blame quarantine" "$BODY" 'quarantined row'
+
+# The negative, on a page with real traffic: SEA must NOT have acquired em-dash measure cells.
+# Paired with SEA's own 53,372,100 check above so it cannot pass against an empty body.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA")
+check     "airport SEA: a healthy page states figures, not absence" "$BODY" \
+  '<td class="num">'
+check_not "airport SEA: no measure row is wholly unknowable" "$BODY" \
+  '<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>'
+
 # 11. /carrier/<code> -- the page has to say what it is counting.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL")
 check     "carrier: renders the code"        "$BODY" '>DL<'

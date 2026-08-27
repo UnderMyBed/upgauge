@@ -76,6 +76,7 @@ export default async function Image({ params }: { params: Promise<{ code: string
       value: formatCount(result.rows.length),
     }),
     chartSvg: chart.svg,
+    chartNote: chart.note,
     gaps: chart.gaps,
     asOf,
   });

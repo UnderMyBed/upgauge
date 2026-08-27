@@ -12,6 +12,7 @@ const BASE: CardInput = {
     { label: "Departures", value: "73,914" },
   ],
   chartSvg: '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="#21514A"/></svg>',
+  chartNote: null,
   gaps: 0,
   asOf: "2026-05",
 };
@@ -59,5 +60,37 @@ describe("CardFrame", () => {
     const html = renderToStaticMarkup(CardFrame(BASE));
     expect(html).toContain("data:image/svg+xml;base64,");
     expect(html).not.toMatch(/src="https?:/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// The last hop of the "say WHY there is no chart" fix, which nothing else reaches.
+//
+// `entityCard.test.ts` pins what `cardChart` RETURNS. Nothing pinned that `CardFrame` renders
+// it, and `app-smoke` structurally cannot: the card is a PNG stream, so a served build sees
+// bytes no grep can read. `<Chart chartSvg={chartSvg} note={null} />` therefore left the whole
+// suite green while producing a state WORSE than the bug it replaced -- an empty grey panel
+// instead of a wrong sentence.
+describe("CardFrame's no-chart panel", () => {
+  it("renders the note it was given", () => {
+    // MUTANT: `note={null}` at the <Chart> call site in card.tsx -> red.
+    const html = renderToStaticMarkup(
+      CardFrame({
+        ...BASE,
+        chartSvg: null,
+        chartNote: "Only one month of filings in this window (2025-06) — a stacked area needs at least two.",
+      }),
+    );
+    expect(html).toContain("Only one month of filings in this window (2025-06)");
+  });
+
+  it("renders the OTHER note when that is the finding", () => {
+    // Two findings, one panel: a component that hardcoded either sentence would pass the test
+    // above. This is the pair that makes the assertion about wiring rather than about a string.
+    const html = renderToStaticMarkup(
+      CardFrame({ ...BASE, chartSvg: null, chartNote: "No aircraft-type filings in this window." }),
+    );
+    expect(html).toContain("No aircraft-type filings in this window.");
+    expect(html).not.toContain("Only one month");
   });
 });

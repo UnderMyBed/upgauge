@@ -25,6 +25,7 @@ export interface CardInput {
   subtitle: string; // "Domestic segment · 2015-01 to 2026-05"
   stats: CardStat[]; // six, from the page's own stat row
   chartSvg: string | null; // already token-resolved; null when there is nothing to draw
+  chartNote: string | null; // why there is no chart, in the page's words; null when there is one
   gaps: number; // unfiled months inside the window
   asOf: string; // "2026-05"
 }
@@ -136,7 +137,13 @@ function Stat({ stat }: { stat: CardStat }): React.ReactElement {
   );
 }
 
-function Chart({ chartSvg }: { chartSvg: string | null }): React.ReactElement {
+function Chart({
+  chartSvg,
+  note,
+}: {
+  chartSvg: string | null;
+  note: string | null;
+}): React.ReactElement {
   if (chartSvg === null) {
     return (
       <div
@@ -151,7 +158,11 @@ function Chart({ chartSvg }: { chartSvg: string | null }): React.ReactElement {
           color: OG_PALETTE["ink-2"],
         }}
       >
-        No filings in this window.
+        {/* The PAGE's sentence (`mixAbsenceNote`), not a card-local wording of it. A literal
+            here read "No filings in this window." for BOTH of that function's findings, so a
+            card previewing a page that says "Only one month of filings in this window
+            (2025-06)" asserted the opposite of it. */}
+        {note}
       </div>
     );
   }
@@ -177,7 +188,7 @@ function Chart({ chartSvg }: { chartSvg: string | null }): React.ReactElement {
 }
 
 export function CardFrame(input: CardInput): React.ReactElement {
-  const { title, subtitle, stats, chartSvg, gaps, asOf } = input;
+  const { title, subtitle, stats, chartSvg, chartNote, gaps, asOf } = input;
 
   return (
     <div
@@ -238,7 +249,7 @@ export function CardFrame(input: CardInput): React.ReactElement {
           justifyContent: "center",
         }}
       >
-        <Chart chartSvg={chartSvg} />
+        <Chart chartSvg={chartSvg} note={chartNote} />
       </div>
 
       {/* Rendered only when gaps > 0. The page states its unfiled-month count in the chart AND

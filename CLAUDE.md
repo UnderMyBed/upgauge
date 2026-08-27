@@ -87,9 +87,9 @@ Current gates (`app-check`/`app-smoke` measured 2026-08-27, `verify`/`goldens` 2
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 49 skip without `data/` |
-| `make app-check` | 1,426 app tests · without a built `upgauge.duckdb`, 507 of them fail |
-| `make app-smoke` | 613 served-build checks |
-| `make image-smoke` | the host set less the 10 host-only gap checks, which print as skipped — **338 when last measured (2026-08-10); NOT re-measured since — the host set has grown by 75 checks since, so 338 is a floor and not the current figure — and it needs Docker plus the pinned release asset** — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
+| `make app-check` | 1,470 app tests · without a built `upgauge.duckdb`, 519 of them fail |
+| `make app-smoke` | 628 served-build checks |
+| `make image-smoke` | the host set less the 10 host-only gap checks, which print as skipped — **338 when last measured (2026-08-10); NOT re-measured since — the host set has grown by 90 checks since, so 338 is a floor and not the current figure — and it needs Docker plus the pinned release asset** — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
 | `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
 | `make goldens` | byte-identical |
@@ -398,7 +398,14 @@ signature element; it does not own these.
   passes and only a *geometry* assertion catches it — when the property is an ordering, a
   position, or a window, assert the ordering, the position, or the window, never the set of
   things that happen to be present. Record the mutants run; "tests pass" is not the claim,
-  "these mutants died" is.
+  "these mutants died" is. **A pinned function is not a pinned call site**, and extracting one to
+  make it testable MOVES the untested hop rather than closing it — the close happens only when
+  something invokes the real caller and reads its output back, which at a boundary returning a
+  stream (an `ImageResponse`) means a spy at the last seam that still hands you a value. Three
+  instances in one #118 cycle, each with a full green suite: `<Chart note={null} />`, a literal
+  replacing the extracted `cardSixthStat`, then the extraction meant to close THAT. Enumerate the
+  matrix per CALL SITE, not per rule — the same cycle put a two-operand gate on the page foot and
+  its ungated form one file over, inside one commit.
 - **`make app-smoke` exists because unit tests structurally cannot see a whole class of bug.**
   Green suite, broken production: `__dirname` under Turbopack, `decodeURIComponent` throwing,
   `process.chdir`, the DuckDB platform-switch `require`, and query normalization — every one

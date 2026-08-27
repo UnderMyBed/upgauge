@@ -199,21 +199,27 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
 //
 // AND THEN IT HAD TO MOVE, which is the part worth reading. A 44x216 rect grown upward from
 // the tray (308,252)-(352,468) is a correct SIZE in the wrong PLACE: its frame lands inside
-// the conterminous panel, whose drawn coastline occupies x[153.3, 806.7] y[18.0, 424.0], and
+// the conterminous panel, whose drawn coastline occupies x[157.7, 802.3] y[18.0, 418.5], and
 // `globals.css`'s `.map svg path[data-panel]` fills every basemap path with OPAQUE
 // `--panel-2`. Draw order in `renderNetworkMap` is frames, then basemap, then arcs -- so the
 // lower 48 paints straight over the frame border and the label. Measured on a 0.1px grid:
-// 3,163 px^2 of drawn landmass inside that rect -- 33.3% of it -- and ALL EIGHT glyph
+// 2,972 px^2 of drawn landmass inside that rect -- 31.3% of it -- and ALL EIGHT glyph
 // positions of "MARIANAS" (drawn at rect x0-4, y0+6) inside drawn Arizona or New Mexico. Two
 // of the panel's OWN islands (MP rings 0 and 3, 3.91 and 1.20 px^2) sat on top of that land in
 // the identical fill. An inset that is not legible is exactly what `networkMap.ts`'s INSETS
 // comment calls a lie. On a served /airport/SFO it also swallowed ABQ and ELP and was crossed
 // by 27 of 147 arcs that had no business in the Pacific.
 //
+// EVERY PIXEL FIGURE IN THE TWO PARAGRAPHS ABOVE IS A COUNTERFACTUAL UNDER THE CURRENT `us`
+// FIT, and moves whenever that fit does. The rect they describe was never shipped, so nothing
+// regenerates them and no gate reads them: they are re-measured by hand or they rot. Last
+// measured at k=892.2437067538316 (#119). Re-measure on any change to the `us` fit -- the
+// conclusions have never depended on the exact values, only on their order of magnitude.
+//
 // `fitPanels`'s `k` depends only on a rect's WIDTH and HEIGHT, never its position, so
 // relocating preserved every measured figure verbatim -- TIQ-SPN still 6.232px, GUM-ROP still
 // 31.447px. It went to the top-left margin, which the tray never uses and no lower-48 coastline
-// reaches (`us` land spans x[153.3, 806.7]): frame (34,24)-(90,252), 0 px^2 of drawn land, all
+// reaches (`us` land spans x[157.7, 802.3]): frame (34,24)-(90,252), 0 px^2 of drawn land, all
 // eight label glyphs clear, and on a served /airport/SFO exactly one arc crosses it -- SFO-GUM,
 // which terminates inside it and must. `basemap.test.ts` asserts the land property against the
 // real drawn subpaths, per panel, because the earlier frame-vs-frame check iterated the six
