@@ -12,14 +12,20 @@ import { describe, expect, it } from "vitest";
  * CDN and always reaches the box (proxy.ts, § "The cost, accepted deliberately"). One unguarded
  * `<Link>` above the fold is therefore one extra DuckDB-backed render per page view.
  *
- * WHY THIS IS A GATE AND NOT A PREFERENCE (#113). The edge rate limit
- * (`deploy/cloudflare/rate-limit.json`) now matches `/airport/`, `/carrier/` and `/aircraft/`
- * whole. `docs/architecture/hosting.md` § "What this does not close" rests the affordability of
- * that widening on a measured property: an entity page view is EXACTLY ONE request against the
- * 10-per-10s bucket, because `DataTable` emits a plain `<a href>` and every asset the page pulls
- * is under the excluded `/_next/`. A `<Link>` added to an entity page without `prefetch={false}`
- * spends a second slot per view and falsifies that argument -- silently, because nothing renders
- * differently and no existing test would go red. That is the regression this file exists to catch.
+ * WHY THIS IS A GATE AND NOT A PREFERENCE (#113, widened by #117). The edge rate limit
+ * (`deploy/cloudflare/rate-limit.json`) matches all FOUR entity prefixes whole -- `/route/`,
+ * `/airport/`, `/carrier/` and `/aircraft/`. `docs/architecture/hosting.md` § "What this does not
+ * close" rests the affordability of that on a measured property: an entity page view is EXACTLY
+ * ONE request against the 10-per-10s bucket, because `DataTable` emits a plain `<a href>` and
+ * every asset the page pulls is under the excluded `/_next/`.
+ *
+ * #117 brought the most-shared page type inside the rule, so that property was RE-MEASURED on a
+ * route page rather than extended by assumption. Served `/route/JFK-LAX`, 2026-08-27: 5
+ * serialized `<Link>` refs against 5 `"prefetch":false` props -- 1:1, so none takes the default --
+ * plus 10 `/_next/` assets and one `/favicon.ico`. One slot per view, the same arithmetic #113
+ * rested on. A `<Link>` added to an entity page without `prefetch={false}` spends a second slot
+ * per view and falsifies that argument -- silently, because nothing renders differently and no
+ * existing test would go red. That is the regression this file exists to catch.
  *
  * Read off the SOURCE, not the DOM. `prefetch` is a `Link` prop and leaves no attribute on the
  * rendered `<a>`, so rendering cannot tell a guarded link from an unguarded one
