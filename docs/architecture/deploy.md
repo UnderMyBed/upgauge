@@ -272,8 +272,8 @@ true. `pipeline/tests/test_cloudflare_desired_state.py` pins the name for that r
 
 **The thresholds are `deploy/cloudflare/rate-limit.json`, not a sentence here.** That file is the
 record and is applied verbatim. Note the plan constrains both numbers: the window must be 10s and
-the mitigation timeout must be 10s, so the sustained rate is 1 req/s per IP on `/api/` and a
-blocked client resumes after 10s. It caps throughput; it is not a wall.
+the mitigation timeout must be 10s, so the sustained rate is 1 req/s per IP on every path the
+expression matches, and a blocked client resumes after 10s. It caps throughput; it is not a wall.
 
 A burst test must send a request the endpoint **accepts** — `/api/pivot` answers a non-canonical
 query with 400, and a burst of 400s measures the rejection path while looking like a broken rate
