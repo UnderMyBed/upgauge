@@ -487,6 +487,78 @@ Reasons, in precedence order:
 > full window. On `missing_carrier`'s 51, see "Rows with no carrier identity" above, which owns
 > that rule.
 
+### A wholly-quarantined group sums to NULL, and NULL is not zero
+
+Every measure in `meta_pivot_measures` is `SUM(x) FILTER (WHERE NOT is_quarantined)`, and a SUM
+over zero passing rows returns **NULL, not 0**. So a group whose every filing was quarantined
+arrives at the consumer with NULL measures, meaning *"nothing filed here can be trusted"* — never
+*"nothing flew"*.
+
+**`COALESCE(…, 0)` in SQL and `?? 0` in TS are the same defect.**
+`sql/02_marts/100_fct_route_month.sql` forbids the first in as many words; the second is the one
+that ships, because it looks like ordinary defensive coding. A real 0 (the pair filed, and
+genuinely carried nothing) and an untrustworthy 0 must stay distinguishable, and a consumer that
+collapses them turns an absence of evidence into a positive claim.
+
+**The claim is not merely unsupported — it is contradicted.** Measured 2026-08-26 against
+`upgauge.duckdb` at `max(year_month) = 2026-05`, over the trailing 12 (`2025-06 … 2026-05`) at
+route grain:
+
+| | |
+|---|---:|
+| distinct undirected route pairs in the window | 10,926 |
+| pairs whose `seats` sum is NULL | **11** |
+| of those, NULL in **all three** of seats / passengers / departures | **11** |
+| of those, **partially** NULL | **0** |
+| of those, same-airport (`VEE–VEE`) | 1 |
+
+`ARC–CXF` · `GAL–OQZ` · `BTI–VEE` · `HUS–RLU` · `AET–OTZ` · `CIK–SCC` · `VEE–VEE` · `BTT–UMT` ·
+`HSL–JZM` · `AET–AIN` · `A18–LMA`
+
+Every one of the 11 was quarantined `zero_seats` — a passenger aircraft that **performed a
+departure and filed a seat count of zero** (`departures_performed = 1` on all 11). **They flew.**
+So a consumer rendering these as "0 departures" is not describing an unknown; it is stating the
+opposite of what the filing says. Over this window all 11 are `8V` (Wright Air Service), but the
+class is not carrier-specific — `zero_seats` quarantines span `EM`, `3M`, `SEB`, `AA`, `5V` and
+others across the full window.
+
+**Zero partially-NULL groups is what lets a consumer assert one-null-means-all-null.** The three
+measures carry the identical FILTER, so they go NULL together or not at all. That is an assertion
+in the consumers, not an assumption: if the FILTER is ever dropped from one measure and not the
+others, the mismatch surfaces as a stack trace instead of a silently wrong figure on a drawn arc.
+
+**A same-airport filing is not a route pair, whatever its quarantine state**, so it belongs to
+neither the drawable set nor the quarantined count. `VEE` is the only airport in the window
+carrying both kinds (`BTI–VEE` and `VEE–VEE`), and therefore the only fixture that can tell the
+two branch orders apart: it must report 1, not 2.
+
+**The count is window-scoped, never a constant.** The same measurement over `2025-05 … 2026-04`
+gives **15**, not 11 — so `/airport/<code>?y=<year>` has its own answer, and any test pinning a
+count must pin its window too.
+
+**Ordering makes these the first casualty of a `LIMIT`.** `pivot_route.sql` sorts `seats DESC`,
+and DuckDB places NULLs **last** under `DESC` — so a wholly-quarantined pair is the first row a
+truncation drops, and a count taken from a truncated result under-reports. Nowhere near it today:
+the worst affected airport is `GAL` at 27 route pairs against `AIRPORT_NETWORK_LIMIT` of 1,000.
+
+**Where this is enforced.** `app/src/lib/map/airportNetwork.ts` (`classifyRouteRows`, the hub map
+behind `/airport`), `app/src/lib/map/carrierTypeNetwork.ts` (`drawableRoutes`, the point-to-point
+maps) and `app/src/lib/map/carrierDiff.ts` all classify rather than coerce, and surface the
+excluded pairs with a count and a reason — the same "excluded from aggregates but surfaced in the
+UI" rule this section opens with. On the maps that count is `quarantinedRoutes`, stated in the
+map's accessible name and in visible text beneath it.
+
+**These pairs reach real pages.** They touch **19** airport pages over the trailing 12, and for
+**A18, JZM and OQZ** the quarantined pair is the airport's *entire* window — so dropping it
+without a disclosure leaves nothing on the page saying anything was ever filed. `A18` and `OQZ`
+are two of the four airports (with `DJN` and `POB`) that resolve at all **only** because
+quarantined rows are counted, which `app/src/lib/sitemap.ts` relies on and `sitemap.test.ts` pins.
+
+**One surface still coerces.** `app/src/app/airport/[code]/endpoints.ts` applies `?? 0` to the
+same FILTERed sums at *segment* grain, where **21** wholly-quarantined (carrier × origin × dest)
+groups over the trailing 12 — 0 partially NULL, touching **29** airport pages — are restated as
+zero in the endpoints table. That is a live gap, not a resolved one; it is tracked as issue #118.
+
 ---
 
 ## Entity resolution

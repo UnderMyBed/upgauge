@@ -27,7 +27,8 @@ import { presetSlugFromPath } from "@/lib/watch";
  * and percent-encoding is its own escape mechanism, so it is exempt from the spelling rule too:
  * `docs/architecture/hosting.md` § "What this does not close" has that residual and the
  * rate-limit thresholds it is left to -- which cover `/explore` as well as `/api/` only since
- * #83; before that, this sentence deferred to an edge rule that did not match this page.
+ * #83, and the three entity prefixes only since #113; before #83, this sentence deferred to an
+ * edge rule that did not match this page.
  *
  * Measured on a served build at 4aa8087, before this file existed: every cacheable path accepted
  * arbitrary unknown query keys and still returned the long cache header -- `/watch?x=1`,
@@ -117,7 +118,10 @@ const SEARCH_KEYS: ReadonlySet<string> = new Set(["q"]);
  * is a distinct CDN cache key on a cacheable path. That is the same residual class as `f`'s
  * value axis (see this file's header) and it is left to the same place -- the edge rate limit,
  * `docs/architecture/hosting.md` § "What this does not close", whose expression matches these
- * four paths by `ends_with(http.request.uri.path, "/opengraph-image")` since #83. Cloudflare's
+ * four paths by `ends_with(http.request.uri.path, "/opengraph-image")` since #83. Since #113
+ * that clause is load-bearing for `/route/:pair/opengraph-image` alone -- the other three card
+ * paths are also matched by their entity prefix -- so it is not redundant and deleting it
+ * uncovers the route card. Cloudflare's
  * `uri.path` excludes the query string, so the 16-hex chunk this row admits does not affect the
  * match. It is still a strict NARROWING:
  * without a row at all every OG path admits every query key there is, and with `keys: NO_KEYS`

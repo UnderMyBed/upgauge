@@ -78,7 +78,10 @@ def _covered(expression: str, path: str) -> bool:
     )
 
 
-# Every surface that reaches the origin on every request, with the cost each one carries.
+# Every surface the rule must match, with the cost that puts it there. The first six reach the
+# origin on EVERY request. The last three do not -- a filter value that resolves is a cacheable
+# 200 -- and are matched anyway because `http.request.uri.path` carries no query string, so the
+# refused-value family underneath them cannot be addressed on its own (#113).
 COVERED = (
     ("/api/pivot", "a DuckDB aggregation, and the residual `f` axis rides the 30-day cache"),
     ("/explore", "the same `f` axis on the HTML page, which no key or value bound closes"),
@@ -86,14 +89,21 @@ COVERED = (
     ("/airport/SEA/opengraph-image", "same"),
     ("/carrier/DL/opengraph-image", "same"),
     ("/aircraft/B737-8/opengraph-image", "same"),
+    ("/carrier/DL", "a refused `?type=` is no-store and renders in full: 82-104 ms, unbounded"),
+    ("/aircraft/B737-8", "`?carrier=` has the identical shape (#106)"),
+    ("/airport/SEA", "`?y=<junk>` has had it since M7 Task 9, at a smaller radius"),
 )
 
 # Deliberately outside the rule. Each of these is either cheap, cached at the edge for long
 # enough that a walk does not reach the origin, or would break something legitimate if limited.
 UNCOVERED = (
     ("/", "static, and the entry point every real visitor lands on"),
-    ("/route/JFK-LAX", "HTML_CACHE: an s-maxage=3600 edge hit, so a walk does not reach us"),
-    ("/carrier/DL", "same"),
+    # NOT "it is cached, so a walk does not reach us" -- that is equally true of `/carrier/DL`,
+    # which IS covered above. What actually distinguishes `/route/:pair` is that it is the one
+    # entity path with `keys: NO_KEYS` (app/src/lib/canonicalQuery.ts), so it has no
+    # refused-value family. Its own residual -- an unbounded 404 space, each miss running the
+    # site's largest query twice with no CDN absorption -- is uncovered and tracked as #117.
+    ("/route/JFK-LAX", "no query key at all, so no refused-value family reaches the origin"),
     ("/watch/gauge", "four closed slugs, so the whole surface is four cacheable documents"),
     ("/sitemap.xml", "PROJECT_CACHE for 30 days, and crawlers are supposed to fetch it"),
     ("/robots.txt", "same, and limiting it teaches a crawler nothing"),
@@ -101,12 +111,26 @@ UNCOVERED = (
 )
 
 
-def test_rate_limit_covers_every_surface_that_reaches_the_origin_uncached():
-    """Issue #83. Before this, the expression was `/api/` alone -- so `/explore` had no edge
-    rate limit at all, though it carries the identical residual `f` axis that
+def test_rate_limit_covers_every_surface_that_can_reach_the_origin_uncached():
+    """Issues #83 and #113. Before #83 the expression was `/api/` alone -- so `/explore` had no
+    edge rate limit at all, though it carries the identical residual `f` axis that
     `lib/canonicalQuery.ts` and `lib/pivot/bounds.ts` deliberately leave open BECAUSE an edge
     limit was said to cover it. The four card paths were uncovered too, and they are the most
     expensive thing on the site per request: a DuckDB query plus a rasterize, no warm path.
+
+    #113 added the three entity prefixes that carry a filter key. `?y=`, `?type=` and
+    `?carrier=` are canonical KEYS, so a value the server refuses is not stripped -- the page
+    renders in full under `no-store` at 82-104 ms, against 0.9-1.6 ms for the 307 strip, and
+    the value space is unbounded because failing the value rule does not make the key unknown.
+
+    `can reach`, not `reaches`: those three prefixes' resolving values are cacheable 200s and a
+    real visitor's page view is one of them. They are matched anyway because Cloudflare's
+    `http.request.uri.path` excludes the query string, so the refused-value family cannot be
+    addressed without its cached siblings. That collateral is affordable only because an entity
+    page view is exactly ONE request against this bucket -- `DataTable` emits a plain `<a href>`
+    (components/DataTable.tsx:78,93), `TopBar` pins `prefetch={false}`, and every asset the page
+    pulls is under the excluded `/_next/`. A `<Link>` with prefetch on an entity page would
+    break that arithmetic, which is why this note names the mechanism rather than the number.
 
     Asserting coverage path by path is what distinguishes this from the check it replaces --
     that one asserted the string `"/api/"` appeared, which an expression matching only `/api/`
@@ -119,7 +143,12 @@ def test_rate_limit_covers_every_surface_that_reaches_the_origin_uncached():
 def test_rate_limit_does_not_reach_the_cached_pages_or_the_static_assets():
     """The other half, and the one a careless widening breaks: `starts_with(path, "/")` covers
     every path in COVERED and would pass the test above while rate-limiting the entire site at
-    1 req/s -- a single real page load asks for more static chunks than that."""
+    1 req/s -- a single real page load asks for more static chunks than that.
+
+    #113 made this the load-bearing half. The rule now matches three whole entity prefixes, so
+    `/_next/` is what stands between it and every static asset on the site, and this list is the
+    only thing asserting that. It shrank by one entry (`/carrier/DL` moved to COVERED); it must
+    never shrink to nothing, and `/_next/static/chunks/main.js` must never leave it."""
     expression = _load("rate-limit.json")["rules"][0]["expression"]
     for path, why in UNCOVERED:
         assert not _covered(expression, path), f"{path} must not be rate limited: {why}"

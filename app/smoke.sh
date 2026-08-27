@@ -1022,6 +1022,60 @@ BODY=$(curl -s --max-time 30 "${BASE}/airport/MDY?y=2021")
 check_dataset check     "airport map MDY 2021: Midway's own origin disc is inside its inset" "$BODY" \
   '<circle cx="388.0" cy="430.0" r="4.5"'
 
+# 10c. #114 -- a route pair whose every filing was quarantined is COUNTED, never drawn as zero.
+#
+# Every measure is `SUM(x) FILTER (WHERE NOT is_quarantined)`, so such a pair sums to NULL, and
+# `?? 0` used to turn that into an ordinary arc reading 0 seats and 0 departures -- drawn dotted
+# and muted below DEPARTURE_FLOOR, which SAYS "barely flown" about a pair the data cannot
+# describe. Worse than unsupported: all 11 such pairs over the trailing 12 are quarantined
+# `zero_seats`, meaning the aircraft PERFORMED a departure and filed no seats, so the drawn
+# "0 departures" contradicted the filing behind it.
+#
+# DATASET-PINNED as a block. These are small Alaskan pairs and a BTS revision can move them --
+# which is a real signal (the quarantine set changed), not noise. If this block reddens, re-derive
+# the wholly-quarantined pairs at route grain before touching a needle; docs/data/invariants.md
+# § A wholly-quarantined group sums to NULL carries the query and the current measurement.
+
+# Bettles: 16 route-grain rows over the trailing 12, one of them the wholly-quarantined BTT-UMT.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/BTT")
+check_dataset check "airport BTT: the network SVG is in the served HTML" "$BODY" \
+  '<svg viewBox="0 0 960 500" width="960" height="500" role="img"'
+# A COUNT, not a presence check, for the reason ORD's 273 gives one section up: presence cannot
+# distinguish "the quarantined pair was excluded" from "it was drawn as zero". 15 arcs reach the
+# renderer and one is same-airport, so 14 polylines are drawn; before #114 it was 15.
+check_dataset check_re "airport BTT: exactly 14 polylines (the quarantined pair is not one)" \
+  "$(count "$BODY" '<polyline')" '^14$'
+# The disclosure a sighted reader actually sees -- rendered as HTML beneath the map, not only in
+# the aria-label. The em dash is U+2014 written LITERALLY: NetworkMap.tsx builds this from a JS
+# string, so React emits the raw code point and a needle copied off an `&mdash;` could never fire.
+check_dataset check "airport BTT: the quarantined pair is disclosed with a count and a reason" \
+  "$BODY" '1 quarantined route not drawn — failed an invariant, never clamped.'
+
+# Kantishna: the case the disclosure exists for. A18's ENTIRE trailing-12 network is one
+# wholly-quarantined pair, so there is nothing to draw and everything to say -- and `sitemap.ts`
+# lists it, because A18 is one of four airports that resolve only via quarantined rows. Before
+# #114 this page's single arc was the fabricated one.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/A18")
+check_dataset check "airport A18: the map still renders with nothing drawable" "$BODY" \
+  '<svg viewBox="0 0 960 500" width="960" height="500" role="img"'
+check_dataset check_re "airport A18: draws no arc at all" "$(count "$BODY" '<polyline')" '^0$'
+check_dataset check "airport A18: and still says why the map is empty" "$BODY" \
+  '1 quarantined route not drawn'
+# The pair's far endpoint must not appear as a destination label -- that is the fabricated arc
+# coming back, and it is the one thing the polyline count alone would not name.
+check_dataset check_not "airport A18: no destination label for the undrawable pair" "$BODY" '>LMA<'
+
+# The negative, on a clean network. `quarantined route` is the needle and the stem matters: this
+# page ALREADY says "N quarantined rows excluded from these totals" in the endpoints table, so a
+# `quarantin` needle would match that and report a silent ok forever -- the exact class of
+# self-defect app/smoke.sh has shipped three times. Paired with the ORD checks above on this same
+# path, so it cannot pass vacuously against an empty body.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/ORD")
+check     "airport ORD: says nothing about quarantined ROUTES on a clean network" "$BODY" \
+  'quarantined row'
+check_not "airport ORD: ...and states no quarantined-route disclosure"            "$BODY" \
+  'quarantined route'
+
 # 11. /carrier/<code> -- the page has to say what it is counting.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL")
 check     "carrier: renders the code"        "$BODY" '>DL<'

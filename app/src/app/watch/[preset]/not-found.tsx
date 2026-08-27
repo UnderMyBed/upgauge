@@ -45,14 +45,14 @@ export async function NotFoundView({ pathname }: { pathname: string }) {
               const p = presetBySlug(s)!;
               return (
                 <li key={s}>
-                  <Link href={`/watch/${s}`}>{p.title}</Link> &mdash; {p.frame}
+                  <Link href={`/watch/${s}`} prefetch={false}>{p.title}</Link> &mdash; {p.frame}
                 </li>
               );
             })}
           </ul>
         ) : (
           <p>
-            Try <Link href="/watch/gauge">Gauge Watch</Link>, or start from{" "}
+            Try <Link href="/watch/gauge" prefetch={false}>Gauge Watch</Link>, or start from{" "}
             <a href="/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op">
               the Explorer
             </a>

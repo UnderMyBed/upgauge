@@ -22,6 +22,7 @@ import {
   crossPanelCount,
   drawableSegments,
   panelsFor,
+  quarantinedNote,
   renderMapCore,
   sameAirportNote,
   segmentOrder,
@@ -42,6 +43,36 @@ export interface NetworkMapInput {
    * either way its seats must still reach the reader, or the map's own stated total falls out
    * of step with the stat strip directly above it on the page. Both halves are required. */
   sameAirportSeats: number;
+  /** Undirected route pairs touching this airport whose every filing in the window was
+   * QUARANTINED, so their measure sums are NULL rather than 0 (#114).
+   *
+   * NULL IS NOT ZERO, and that is the whole reason this field exists. Every measure in
+   * `meta_pivot_measures` is `SUM(x) FILTER (WHERE NOT is_quarantined)`, and a SUM over zero
+   * passing rows returns NULL -- "nothing here can be trusted", never "nothing flew". Before
+   * #114 `airportNetwork.ts` coerced that NULL with `?? 0` and DREW the pair as an ordinary
+   * arc reading 0 seats and 0 departures, below `DEPARTURE_FLOOR`, dotted and muted: a
+   * positive claim of "barely flown" about a pair the data cannot describe. Measured over the
+   * trailing 12 (2025-06..2026-05): 11 such pairs, EVERY one of which performed a departure
+   * before quarantine (`zero_seats` -- a passenger aircraft flew and filed zero seats), so the
+   * drawn "0 departures" was not merely unknowable, it was contradicted by the filing.
+   *
+   * A same-airport pair is NOT counted here -- it is not a route pair, whatever its quarantine
+   * state, and `airportNetwork.ts` takes that branch first for the reason #105 measured on the
+   * point-to-point map. `VEE` is the one airport where the two branch orders disagree.
+   *
+   * OPTIONAL, where `SegmentMapInput.quarantinedRoutes` is REQUIRED, and the asymmetry is a
+   * deliberate trade rather than a disagreement. Required is the stronger contract: a producer
+   * that omits an optional field compiles, renders, and silently drops the disclosure. What
+   * buys it back here is that this interface has exactly ONE producer -- `fetchAirportNetwork`
+   * -- and the binding is enforced by live tests against the warehouse rather than by the
+   * compiler (`airportNetwork.test.ts`: BTT counts 1, A18 keeps its map with zero arcs). The
+   * literal that forced the choice is `networkGolden.fixture.ts`, #104's byte-identity guard:
+   * a required field would edit that fixture, and absent-means-no-disclosure is what keeps
+   * `GOLDEN_NETWORK_SVG` byte-identical.
+   *
+   * Undefined and 0 are the same answer -- nothing to disclose -- and both must render byte
+   * for byte identically, which `renderNetworkMap`'s own tests pin. */
+  quarantinedRoutes?: number;
   /** Projected coastline path/circle markup, already in screen coordinates. An INJECTED
    * INPUT, never an import -- this stays true of the PATH MARKUP even after Task 7 shipped:
    * a caller supplies whichever panels' paths it wants drawn (`basemapPathsFor`), and this
@@ -101,10 +132,44 @@ function describeMap(input: NetworkMapInput, drawn: number, crossPanel: number):
   return [
     `Network map of ${input.origin.code}'s scheduled service, ${input.window}.`,
     arcsSentence(drawn, crossPanel, "destination"),
+    // QUARANTINE BEFORE SAME-AIRPORT, matching `disclosureNotes`'s own order on the
+    // point-to-point map, so the two maps describe the same two facts in the same sequence.
+    // This is an ORDERING property and its test asserts the ordering: an assertion that the
+    // label merely CONTAINS both sentences passes under either arrangement, which is the
+    // failure mode CLAUDE.md records four times over.
+    ...networkDisclosureNotes(input),
     sameAirportNote(input.sameAirportSeats, "included"),
   ]
     .filter((s): s is string => s !== null)
     .join(" ");
+}
+
+/**
+ * The disclosures this map states in prose, in the order they are stated.
+ *
+ * RENDERED TWICE, BY TWO DIFFERENT SURFACES, FROM THIS ONE ARRAY: `describeMap` folds it into
+ * the SVG's `aria-label`, and `NetworkMap.tsx` renders it as HTML beneath the map. That is the
+ * shape `SegmentMap.tsx` and `disclosureNotes` already have, and it exists because the
+ * alternative shipped once: a map more honest to a screen reader than to the person looking at
+ * it. A component that omits these renders a map that lies by omission.
+ *
+ * NOT PAINTED INTO THE SVG, and that is measured rather than stylistic. The hub map's footer is
+ * ONE line against a ~158-character budget (`SegmentMapInput.window`), of which the window and
+ * `sameAirportNote` already take up to 121 at a 7-digit seat count; this sentence is 69 more at
+ * a single route, so joining it there clips at the frame edge with nothing in the markup
+ * recording that it happened. `disclosureNotes`'s docstring carries the same measurement for
+ * the point-to-point map and states the rule this follows: prose that grows with the NUMBER of
+ * disclosures does not go in the SVG. The hub map paints `sameAirportNote` and only that -- one
+ * sentence, bounded -- which is why that one stays where /airport has shipped it since M7.
+ *
+ * `sameAirportNote` is deliberately NOT in this array: it is already painted on the map face,
+ * and returning it here would state it twice on one page.
+ */
+export function networkDisclosureNotes(input: NetworkMapInput): string[] {
+  // `?? 0` on a COUNT, never on a measure: an absent field means "this producer has nothing to
+  // disclose", which is a real zero. The coercion #114 exists to remove is the one applied to a
+  // SUM that came back NULL, where zero is a claim the data does not support.
+  return [quarantinedNote(input.quarantinedRoutes ?? 0)].filter((s): s is string => s !== null);
 }
 
 /**
