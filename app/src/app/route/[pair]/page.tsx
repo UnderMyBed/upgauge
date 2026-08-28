@@ -11,7 +11,7 @@ import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
-import { encode } from "@/lib/pivot/urlstate";
+import { exploreHref } from "@/lib/pivot/builder";
 import {
   EARLIEST_MONTH,
   ROUTE_CARRIER_LIMIT,
@@ -101,14 +101,6 @@ function Stat({ label, value, derived }: { label: string; value: string; derived
   );
 }
 
-/** The permalink for the identical query (same dimension, same measures, same route filter)
- * against the Explorer, widened to `EARLIEST_MONTH` when asked -- shared by the Explorer link
- * and the empty-state's widened-window offer, so both always agree on what "the same query"
- * means. Mirrors explore/page.tsx's own `widerWindowHref`. */
-function exploreHref(query: PivotQuery, timeFrom?: string): string {
-  return `/explore?${encode(timeFrom === undefined ? query : { ...query, timeFrom })}`;
-}
-
 /** "No scheduled service" is data, not an error (CLAUDE.md's BNH-JFK-style gotchas) -- both
  * airport codes resolved, the query is valid, and zero rows is the honest answer. Mirrors
  * explore/page.tsx's EmptyState: state the finding in words, offer the widened-to-2015
@@ -122,7 +114,8 @@ function RouteEmptyState({
   low: AirportRef;
   high: AirportRef;
 }) {
-  const wider = query.timeFrom > EARLIEST_MONTH ? exploreHref(query, EARLIEST_MONTH) : null;
+  const wider =
+    query.timeFrom > EARLIEST_MONTH ? exploreHref({ ...query, timeFrom: EARLIEST_MONTH }) : null;
   return (
     <div className="empty-state">
       <p>
