@@ -81,19 +81,31 @@ describe("DataTable", () => {
       { route: "PDX–ZZZ", seats: 100, load_factor: 0.5, avg_gauge: 100, departures_performed: 50, quarantined_rows: 2 }, // -> "Q"
     ];
     const { container } = render(<DataTable columns={COLUMNS} rows={GUTTER_ROWS} />);
-    const gutCells = container.querySelectorAll("tbody td.gut");
+    // KEYED ON THE ROW'S OWN IDENTIFIER, not on its position. The property under test is the
+    // pairing of a glyph with `data-limit`, which is a fact about a row and not about where it
+    // sits -- and since #127 the two are genuinely independent: `PDX-AUS` is below floor, so the
+    // floor partition renders it last rather than second. Indexing would have made this test
+    // fail for a reason it does not care about, and, worse, would make it pass or fail on a
+    // future ordering change while claiming to be about the palette.
+    const gut = (route: string) => {
+      const cell = [...container.querySelectorAll("tbody tr")]
+        .find((tr) => tr.querySelector("td.id")?.textContent === route)
+        ?.querySelector("td.gut");
+      if (!cell) throw new Error(`no rendered row for ${route}`);
+      return cell;
+    };
 
-    expect(gutCells[0].getAttribute("data-limit")).toBeNull();
-    expect(gutCells[0].querySelector("abbr")).toBeNull();
+    expect(gut("PDX–SEA").getAttribute("data-limit")).toBeNull();
+    expect(gut("PDX–SEA").querySelector("abbr")).toBeNull();
 
-    expect(gutCells[1].querySelector("abbr")?.textContent).toBe("n");
-    expect(gutCells[1].getAttribute("data-limit")).toBeNull();
+    expect(gut("PDX–AUS").querySelector("abbr")?.textContent).toBe("n");
+    expect(gut("PDX–AUS").getAttribute("data-limit")).toBeNull();
 
-    expect(gutCells[2].querySelector("abbr")?.textContent).toBe("⌀");
-    expect(gutCells[2].getAttribute("data-limit")).toBe("true");
+    expect(gut("PDX–PDX").querySelector("abbr")?.textContent).toBe("⌀");
+    expect(gut("PDX–PDX").getAttribute("data-limit")).toBe("true");
 
-    expect(gutCells[3].querySelector("abbr")?.textContent).toBe("Q");
-    expect(gutCells[3].getAttribute("data-limit")).toBe("true");
+    expect(gut("PDX–ZZZ").querySelector("abbr")?.textContent).toBe("Q");
+    expect(gut("PDX–ZZZ").getAttribute("data-limit")).toBe("true");
   });
 
   // Whole-branch review, CRITICAL 2: the pivot templates emit only the measures the query
@@ -373,5 +385,204 @@ describe("the gauge rail with nothing to mark", () => {
       <DataTable columns={COLS} rows={[{ op_airline_id: "DL", seats: 100, avg_gauge: 130 }]} />,
     );
     expect(container.querySelectorAll(".rail .tick").length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// THE FLOOR PARTITION (#127). docs/design/system.md states, in two places, that below-floor
+// rows sort below scored rows and are excluded from ranking. Nothing enforced it: the order
+// came from the pivot's own ORDER BY, which ranks on a measure and knows nothing about the
+// floor, and `/airport` does not even have one (its rows are folded and sorted in TypeScript,
+// endpoints.ts). The rule was in the design system and in no code path.
+//
+// EVERY ASSERTION BELOW IS A SEQUENCE OR A POSITION, never a set or a count. "The below-floor
+// rows are present" passes under the bug; only where they SIT distinguishes the two orderings.
+//
+// FIXTURE.  Modelled on the real defect, served from /airport/STT before this change:
+//
+//     12  3M    1,748 seats     38 dep
+//     13  MQ      380 seats      5 dep   <- below floor
+//     14  VD      115 seats    120 dep      120 departures. NOT below floor.
+//     15  LF       60 seats      2 dep   <- below floor
+//
+// A scored row (VD) sandwiched between two below-floor rows, so the measure order and the
+// partitioned order DISAGREE on where MQ goes. That is the property M4c's two-sort fixture
+// lacked -- a fixture whose row ranks the same under both orderings cannot fail for the reason
+// its name claims, and it passed against the bug it was written to catch.
+const FLOOR_COLUMNS: ColumnSpec[] = [
+  { key: "carrier", label: "Carrier", kind: "identifier" },
+  { key: "seats", label: "Seats", kind: "seats" },
+  { key: "departures_performed", label: "Dep.", kind: "count" },
+];
+// In measure order (seats desc), exactly as a pivot ORDER BY would hand them over.
+const FLOOR_ROWS = [
+  { carrier: "3M", seats: 1748, departures_performed: 38 },
+  { carrier: "MQ", seats: 380, departures_performed: 5 },
+  { carrier: "VD", seats: 115, departures_performed: 120 },
+  { carrier: "LF", seats: 60, departures_performed: 2 },
+];
+
+/** The identifier cell of every rendered row, top to bottom. */
+function renderedOrder(container: HTMLElement): string[] {
+  return [...container.querySelectorAll("tbody td.id")].map((n) => n.textContent ?? "");
+}
+
+/** Each rendered row's identifier paired with whether it got the below-floor treatment, top to
+ * bottom -- the two facts the partition is about, read off the DOM together so a test can assert
+ * the PARTITION and the WITHIN-BLOCK ORDER as separate properties. Asserting the whole sequence
+ * instead conflates them: one literal `toEqual` refuses every mutant, which reads as thorough and
+ * means no single test names the defect it caught. */
+function renderedRows(container: HTMLElement): { id: string; belowFloor: boolean }[] {
+  return [...container.querySelectorAll("tbody tr")].map((tr) => ({
+    id: tr.querySelector("td.id")?.textContent ?? "",
+    belowFloor: tr.getAttribute("data-below-floor") === "true",
+  }));
+}
+
+describe("DataTable: below-floor rows sort last", () => {
+  it("puts every below-floor row after every scored row", () => {
+    // THE PARTITION, asserted as a partition and nothing else: once a below-floor row appears,
+    // no scored row may follow it. Deliberately NOT a literal sequence -- a `toEqual` over all
+    // four ids refuses the two mutants below as well, and then neither test names the defect it
+    // caught (CLAUDE.md: assert WHICH check refuses a fixture).
+    //
+    // MUTANT M1, the shipped bug: `orderRows` returns `rows` unchanged -> MQ lands at index 1
+    // with VD scored behind it -> RED here, and GREEN on "keeps the measure order", because an
+    // unpartitioned list does preserve its own input order. Verified, not assumed.
+    // MUTANT M9, `partition` defaulting to false -> RED here for the same reason.
+    const { container } = render(<DataTable columns={FLOOR_COLUMNS} rows={FLOOR_ROWS} />);
+    const flags = renderedRows(container).map((r) => r.belowFloor);
+    const firstSparse = flags.indexOf(true);
+    expect(firstSparse).toBeGreaterThanOrEqual(0); // the fixture still discriminates
+    expect(flags.slice(firstSparse).includes(false)).toBe(false);
+  });
+
+  it("keeps the measure order inside each block", () => {
+    // STABILITY, asserted independently of the partition: each block read off by its own flag,
+    // so the claim is "the incoming relative order survived", not "the rows are in this order".
+    //
+    // MUTANT M2: sort the sparse bucket by seats ascending -> ["LF","MQ"], RED here, and GREEN
+    // on the partition test above, which still holds. MUTANT M3: reverse the scored bucket ->
+    // ["VD","3M"], RED here, GREEN above. Both verified.
+    const { container } = render(<DataTable columns={FLOOR_COLUMNS} rows={FLOOR_ROWS} />);
+    const rows = renderedRows(container);
+    expect(rows.filter((r) => !r.belowFloor).map((r) => r.id)).toEqual(["3M", "VD"]);
+    expect(rows.filter((r) => r.belowFloor).map((r) => r.id)).toEqual(["MQ", "LF"]);
+  });
+
+  it("does not sort down a row whose departure count was never queried", () => {
+    // MUTANT M4: the partition reads the absence as zero -- `(num(row.departures_performed) ??
+    // 0) < DEPARTURE_FLOOR` -- and Y joins the sparse bucket, leaving the order ["X","Y"].
+    //
+    // This is issue #118's defect re-introduced one layer down, at the ORDERING rather than at
+    // the treatment, and the existing `data-below-floor` tests cannot see it: they count
+    // dashed rows, and a partition with its own predicate leaves that count at 0 either way.
+    // X is below floor and Y makes no claim, so the correct order INVERTS the measure order --
+    // under the mutant it does not move at all.
+    const rows = [
+      { carrier: "X", seats: 500, departures_performed: 5 },
+      { carrier: "Y", seats: 100 },
+    ];
+    const { container } = render(<DataTable columns={FLOOR_COLUMNS} rows={rows} />);
+    expect(renderedOrder(container)).toEqual(["Y", "X"]);
+    // ...and the two signals stay independent: Y is neither dashed nor glyphed.
+    expect(container.querySelectorAll("tr[data-below-floor='true']").length).toBe(1);
+    expect(container.querySelectorAll("tbody td.gut abbr").length).toBe(1);
+  });
+
+  it("sorts down a below-floor row whose gutter glyph is Q, not n", () => {
+    // MUTANT M5: partition on `reasonFor(row) === "belowFloor"` instead of `isBelowFloor(row)`.
+    // Quarantine outranks the floor in the glyph's severity pick, so B's reason is
+    // "quarantined" and it never enters the sparse bucket -- order stays ["A","B","C"], red.
+    //
+    // The re-coupling `reasonFor`'s own comment exists to prevent, one layer down. Measured, it
+    // is the LIKELY mutant rather than a contrived one: 97.7% of zero-pax rows are also below
+    // floor (docs/design/system.md), so gating on the winning glyph misplaces nearly the whole
+    // class. B stays dashed and still shows Q -- the treatment and the glyph are unchanged;
+    // only its position moves.
+    const rows = [
+      { carrier: "A", seats: 900, departures_performed: 6810 },
+      { carrier: "B", seats: 400, departures_performed: 5, quarantined_rows: 2 },
+      { carrier: "C", seats: 100, departures_performed: 120 },
+    ];
+    const { container } = render(<DataTable columns={FLOOR_COLUMNS} rows={rows} />);
+    expect(renderedOrder(container)).toEqual(["A", "C", "B"]);
+    // B sits last AND still shows Q: the glyph is chosen by severity and the position by the
+    // floor, and this test is the one that would notice them being re-collapsed into one.
+    const last = [...container.querySelectorAll("tbody tr")][2];
+    expect(last?.querySelector("td.gut abbr")?.textContent).toBe("Q");
+    expect(last?.getAttribute("data-below-floor")).toBe("true");
+  });
+
+  it("sorts down a below-floor row whose gutter glyph is the zero-pax mark", () => {
+    // MUTANT M5, the other branch that outranks the floor: zero-pax also wins the glyph, so the
+    // same `reasonFor` partition leaves B at position 2. Two branches, two fixtures -- asserting
+    // only the Q case would leave the zero-pax branch of the same mutant green, and that branch
+    // is the one carrying 97.7% overlap with the floor.
+    const rows = [
+      { carrier: "A", seats: 900, departures_performed: 6810 },
+      { carrier: "B", seats: 400, departures_performed: 5, load_factor: 0 },
+      { carrier: "C", seats: 100, departures_performed: 120 },
+    ];
+    const { container } = render(<DataTable columns={FLOOR_COLUMNS} rows={rows} />);
+    expect(renderedOrder(container)).toEqual(["A", "C", "B"]);
+    const last = [...container.querySelectorAll("tbody tr")][2];
+    expect(last?.querySelector("td.gut abbr")?.textContent).toBe("⌀");
+    expect(last?.getAttribute("data-below-floor")).toBe("true");
+  });
+});
+
+describe("DataTable: below-floor rows are excluded from ranking", () => {
+  it("numbers scored rows 1..k and withholds a rank from every below-floor row", () => {
+    // MUTANT M7: rank stays `i + 1` over the partitioned array -> ["1","2","3","4"], red.
+    // MUTANT M8: rank taken BEFORE the partition, so a scored row keeps its measure position ->
+    // ["1","3","—","—"], red. That is the "rank jumps" defect; asserting only "starts at 1"
+    // (which app/smoke.sh does for /watch) passes under BOTH.
+    const { container } = render(<DataTable columns={FLOOR_COLUMNS} rows={FLOOR_ROWS} rank />);
+    const ranks = [...container.querySelectorAll('[data-testid="rank-cell"]')].map(
+      (n) => n.textContent,
+    );
+    expect(ranks).toEqual(["1", "2", "—", "—"]);
+    // The rank column tracks the RENDERED order, not the input order.
+    expect(renderedOrder(container)).toEqual(["3M", "VD", "MQ", "LF"]);
+  });
+
+  it("ranks every row when no row makes a claim about the floor", () => {
+    // The positive control for the pair above: an implementation that withheld every rank, or
+    // one that withheld none, passes exactly one of these two. /watch is this case for real --
+    // mart_route_health carries `t12_departures_performed` and displayRows deliberately does not
+    // alias it to `departures_performed` (watch/[preset]/page.tsx), so no preset row ever
+    // claims the floor and all four leaderboards number straight through.
+    const rows = [{ carrier: "A", seats: 3 }, { carrier: "B", seats: 2 }, { carrier: "C", seats: 1 }];
+    const { container } = render(<DataTable columns={FLOOR_COLUMNS} rows={rows} rank />);
+    const ranks = [...container.querySelectorAll('[data-testid="rank-cell"]')].map(
+      (n) => n.textContent,
+    );
+    expect(ranks).toEqual(["1", "2", "3"]);
+    expect(renderedOrder(container)).toEqual(["A", "B", "C"]);
+  });
+});
+
+describe("DataTable: the partition is the default, and /explore is the exemption", () => {
+  it("partitions without being asked to", () => {
+    // MUTANT M9: flip the default to `partition = false` -> red here, and red on the /explore
+    // exemption test below only in the sense that it goes GREEN for the wrong reason -- which is
+    // exactly why the exemption is asserted separately rather than inferred from this one.
+    // Every surface but /explore relies on this default; none of them passes `partition`.
+    const { container } = render(<DataTable columns={FLOOR_COLUMNS} rows={FLOOR_ROWS} />);
+    expect(renderedOrder(container)).toEqual(["3M", "VD", "MQ", "LF"]);
+  });
+
+  it("renders the caller's own order when the partition is declined", () => {
+    // MUTANT M10: ignore the prop and partition unconditionally -> ["3M","VD","MQ","LF"], red.
+    // Without this the exemption is silently deletable: with only the test above, removing
+    // `partition={false}` from /explore's call site breaks nothing.
+    const { container } = render(
+      <DataTable columns={FLOOR_COLUMNS} rows={FLOOR_ROWS} partition={false} />,
+    );
+    expect(renderedOrder(container)).toEqual(["3M", "MQ", "VD", "LF"]);
+    // The TREATMENT is unaffected by the exemption -- /explore still dashes and mutes its
+    // below-floor rows, it just does not move them. Only the ORDER is the visitor's.
+    expect(container.querySelectorAll("tr[data-below-floor='true']").length).toBe(2);
   });
 });

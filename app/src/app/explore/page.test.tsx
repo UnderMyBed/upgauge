@@ -14,7 +14,9 @@ vi.mock("@/lib/db", async (importOriginal) => {
 });
 
 import { ExploreView } from "@/app/explore/page";
-import { loadAllowlist, runPivot } from "@/lib/db";
+import { dataAsOf, loadAllowlist, runPivot } from "@/lib/db";
+import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
+import { trailing12From } from "@/lib/entityFacts";
 import { PivotError } from "@/lib/pivot/types";
 
 const OK = {
@@ -314,5 +316,63 @@ describe("/explore refuses a value outside what this dataset can answer", () => 
     render(await ExploreView({ rawQuery: qs({ ...BASE, t: "2025-05:2026-04", n: "5" }) }));
     expect(screen.queryByText(/can’t be read|can't be read/i)).toBeNull();
     expect(screen.getAllByRole("row").length).toBeGreaterThan(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// THE ONE SURFACE EXEMPT FROM THE FLOOR PARTITION (#127). Every other table sorts below-floor
+// rows last; this page does not, because here the order is the visitor's own stated request
+// (`s=` carries a key AND a direction, urlstate.ts:120, :223-225) rather than the product's
+// editorial choice, and there is no rank column for "excluded from ranking" to bite on.
+//
+// ASSERTED AT THE CALL SITE, separately from DataTable's own `partition={false}` test. Without
+// this, deleting `partition={false}` from page.tsx breaks nothing: the component test keeps
+// passing because it passes the prop itself. Per CLAUDE.md, when several checks guard one
+// property, assert WHICH check refuses the fixture -- this one refuses the call site.
+describe("/explore renders the visitor's order, below-floor rows in place", () => {
+  /** The rendered rows' below-floor flags, top to bottom. */
+  function floorFlags(container: HTMLElement): boolean[] {
+    const table = container.querySelector("table.data-table");
+    if (table === null) throw new Error("expected a results table");
+    return [...table.querySelectorAll("tbody tr")].map(
+      (tr) => tr.getAttribute("data-below-floor") === "true",
+    );
+  }
+
+  /** The same query /airport/STT offers as its own Explorer permalink (airport/page.tsx's
+   * `endpointQuery`): one either-endpoint filter on STT, grouped by operating carrier, sorted
+   * by seats descending. It reproduces that page's carrier table as an ordinary pivot -- which
+   * is what makes it the fixture that distinguishes the two surfaces' orderings. The window and
+   * the airport id are derived, never spelled: a BTS refresh moves `dataAsOf()` and a hardcoded
+   * `t=` would rot into an empty result that passes vacuously. */
+  async function sttQuery(): Promise<string> {
+    const asOf = await dataAsOf();
+    const r = await resolveAirportCode("STT");
+    if (r.kind !== "ok") throw new Error("expected STT to resolve for this fixture");
+    return qs({
+      v: "1",
+      k: "seg",
+      d: "op_airline_id",
+      m: "seats,departures_performed",
+      t: `${trailing12From(asOf)}:${asOf}`,
+      f: `endpoint_airport_id:${r.airport.id}`,
+      s: "-seats",
+      n: "50",
+      g: "op",
+    });
+  }
+
+  it("leaves a below-floor row where the sort put it, above a scored row", async () => {
+    // MUTANT M10: ignore the prop, or delete `partition={false}` from the call site -> the
+    // below-floor rows become a contiguous suffix and this goes red.
+    //
+    // THE DISCRIMINATOR IS THE INTERLEAVE, not the presence of a dashed row. On this fixture the
+    // measure sort puts MQ (380 seats, 5 departures) above VD (115 seats, 120 departures), so a
+    // scored row follows a below-floor one -- and that is the exact arrangement /airport/STT is
+    // asserted NOT to render. Both tests read the same underlying rows; only the surface differs.
+    const flags = floorFlags(render(await ExploreView({ rawQuery: await sttQuery() })).container);
+    const firstBelow = flags.indexOf(true);
+    expect(firstBelow).toBeGreaterThanOrEqual(0);
+    expect(flags.slice(firstBelow).includes(false)).toBe(true);
   });
 });

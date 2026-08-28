@@ -716,3 +716,62 @@ describe("/airport/<code> with nothing filed in the window", () => {
     expect(feet).not.toContain("quarantined row");
   });
 });
+
+// ---------------------------------------------------------------------------------------
+// THE FLOOR PARTITION AT THIS CALL SITE (#127). DataTable.test.tsx proves the component
+// partitions; it cannot prove this page reaches it with the partition on. A pinned function is
+// not a pinned call site (CLAUDE.md), and the exemption /explore now carries makes the prop a
+// real axis rather than a constant -- so the default has to be asserted where a page uses it.
+//
+// /airport is where the defect was reported and it is the only surface whose rows never pass
+// through a SQL ORDER BY at all: endpoints.ts folds the pivot by carrier in TypeScript and
+// sorts with `bySeatsDesc`. No SQL fix could have reached this page.
+describe("/airport/<code> sorts below-floor rows last", () => {
+  /** One rendered row of the carriers table: its carrier cell, its seats, and whether the page
+   * gave it the below-floor treatment. */
+  function carrierRowsRendered(container: HTMLElement) {
+    const table = container.querySelector("table.data-table");
+    if (table === null) throw new Error("expected a carriers table on this page");
+    return [...table.querySelectorAll("tbody tr")].map((tr) => ({
+      carrier: tr.querySelector("td.id")?.textContent ?? "",
+      seats: Number((tr.querySelectorAll("td.num")[0]?.textContent ?? "").replace(/,/g, "")),
+      belowFloor: tr.getAttribute("data-below-floor") === "true",
+    }));
+  }
+
+  async function stt() {
+    const r = await resolveAirportCode("STT");
+    if (r.kind !== "ok") throw new Error("expected STT to resolve for this fixture");
+    return await AirportView({ airport: r.airport });
+  }
+
+  it("renders the below-floor rows as one contiguous block at the bottom", async () => {
+    // MUTANT M9: flip DataTable's `partition` default to false -> red. MUTANT M1 (delete the
+    // partition entirely) -> red. Neither is visible to any test that counts dashed rows.
+    const rows = carrierRowsRendered(render(await stt()).container);
+    const firstBelow = rows.findIndex((r) => r.belowFloor);
+    expect(firstBelow).toBeGreaterThanOrEqual(0);
+    expect(rows.slice(firstBelow).every((r) => r.belowFloor)).toBe(true);
+  });
+
+  it("still discriminates: a below-floor row here outranks a scored one by seats", async () => {
+    // THE FIXTURE GUARD, and it is the whole reason STT is the airport named here. The test
+    // above is only meaningful while the measure order and the partitioned order DISAGREE on
+    // this page -- if every below-floor row were already last by seats, both orderings would
+    // agree and "contiguous block at the bottom" would pass against the bug it exists to catch.
+    // That is exactly how M4c's two-sort fixture failed.
+    //
+    // Measured at the time of writing (trailing 12 to 2026-05): MQ files 380 seats on 5
+    // departures and sits below floor, while VD files 115 seats on 120 departures and does
+    // not -- so the measure sort puts a below-floor row ABOVE a scored one. If a BTS refresh
+    // ends that, this goes red and the fixture MOVES to another airport (CLAUDE.md, "MOVE the
+    // fixture") rather than the assertion above quietly becoming vacuous.
+    // `Number.isFinite` drops the unknowable row -- STT's F4 renders `—` for every measure
+    // (its whole window is quarantined), and NaN would poison both extrema. It is neither
+    // below floor nor comparable by seats, so it takes no part in this comparison.
+    const rows = carrierRowsRendered(render(await stt()).container);
+    const seatsOf = (below: boolean) =>
+      rows.filter((r) => r.belowFloor === below && Number.isFinite(r.seats)).map((r) => r.seats);
+    expect(Math.max(...seatsOf(true))).toBeGreaterThan(Math.min(...seatsOf(false)));
+  });
+});

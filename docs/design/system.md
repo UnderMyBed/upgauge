@@ -150,9 +150,17 @@ Column order is fixed: **gutter · identifiers · additive measures · derived m
 counts · gauge rail · sparkline.** Identifiers left, everything numeric right.
 
 Rows below the 30-departure floor are **rendered, never hidden**: dashed bottom rule,
-`--ink-2` text, and a separator row labelled *"Below the 30-departure floor — reported,
-never scored or ranked."* They sort to the bottom and are excluded from ranking, not from
-sight.
+`--ink-2` text, a muted gauge tick, and `n` in the reason-code gutter. On a ranked table they
+sort below every scored row, so the sparse rows read as one block at the foot instead of salted
+through the ranking — the treatment's value is that they are separable at a glance, and
+interleaved they are not. Where the table carries a rank column, a below-floor row takes no
+number: that cell reads `—`. Excluded from ranking, not from sight.
+
+**A ranked table is one whose order the product chose** — the four entity pages and the
+`/watch` presets. `/explore` renders the order the visitor asked for: `s=` carries a sort key
+*and* a direction, so `s=departures_performed` ascending is someone asking to see the sparsest
+rows first, and the page answers the question it was given. The floor treatment applies to every
+row there exactly as it does elsewhere; only the ordering belongs to the visitor.
 
 **The floor treatment requires a departure count to have been queried. Absence is not zero.**
 The pivot templates emit only the measures a query selected, so `departures_performed` is
@@ -1137,10 +1145,10 @@ of these are **normal** in T-100.
 |---|---|
 | **Loading** | Skeleton rows at exact 22px height so nothing reflows. Never a spinner. |
 | **Empty (valid query, no rows)** | Keep the header, stat strip and legend rail. State the query in words and offer the nearest broader window. Never a blank panel. |
-| **Sparse** (below the 30-dep floor) | Dashed rule, `n` gutter code, `--ink-2`, sorted below scored rows, excluded from ranking. |
+| **Sparse** (below the 30-dep floor) | Dashed rule, `n` gutter code, `--ink-2`, muted gauge tick. On a ranked table, sorted below every scored row and excluded from ranking — a rank cell reads `—`. On `/explore` the visitor's own sort order stands; the treatment is identical either way. |
 | **Zero passengers** | `⌀` gutter code. Load factor renders `0.00%`, not `—`: it flew and carried nobody, which is a fact, not a gap. |
 | **Quarantined** | `Q` code, excluded from totals, **count always surfaced** with its reason. Never clamped, never silently dropped. |
-| **Unknowable** (a measure was queried and cannot be stated) | The measure cells render `—`, never `0` and never blank — the sum of no trusted values is not a measurement of nothing. The gauge rail keeps its axis and shows no tick. No below-floor treatment: an unknown departure count makes no claim about the floor. **Its cause is named per row and per page, never by the legend rail**, which is rendered on every view and so can only state that the mark is not a zero — and is painted in `--ink`, not `--limit`, because a dash is a data-availability mark and not an out-of-limit code. `Q` in the gutter where the cause is quarantine; the page's own foot where it has one. A zero denominator has neither, and the dash stands alone. On a card — no foot, no empty state, no `aria-label` — the sixth stat slot carries the quarantined count *where there are quarantined rows to count*, and the entity count otherwise. **True today on `/airport` only**: `/route`, `/carrier` and `/aircraft` build their totals through `sumTotals`, which still coerces an unknowable sum to `0`, so their cards rasterize `Seats 0` rather than a dash and never reach this rule. `cardSixthStat` is shared and ready for them; wiring it is part of **#121**. Distinct from *Zero passengers*, which flew and is a measurement, and from *Not queried* below. |
+| **Unknowable** (a measure was queried and cannot be stated) | The measure cells render `—`, never `0` and never blank — the sum of no trusted values is not a measurement of nothing. The gauge rail keeps its axis and shows no tick. No below-floor treatment: an unknown departure count makes no claim about the floor. **Its cause is named per row and per page, never by the legend rail**, which is rendered on every view and so can only state that the mark is not a zero — and is painted in `--ink`, not `--limit`, because a dash is a data-availability mark and not an out-of-limit code. `Q` in the gutter where the cause is quarantine; the page's own foot where it has one. A zero denominator has neither, and the dash stands alone. On a card — no foot, no empty state, no `aria-label` — the sixth stat slot carries the quarantined count *where there are quarantined rows to count*, and the entity count otherwise. **True today on `/airport` only**: `/route`, `/carrier` and `/aircraft` build their totals through `sumTotals`, which still coerces an unknowable sum to `0`, so their cards rasterize `Seats 0` rather than a dash and never reach this rule. `cardSixthStat` is shared and ready for them; wiring it is part of **#121**. Distinct from *Zero passengers*, which flew and is a measurement, and from *Not queried* below. **The glyph has one other holder**: a rank cell on a row excluded from ranking (*Sparse*, above). There it means *not applicable* rather than *not statable* — the same mark for the same reason, that a number would be a claim the row does not support, and the gutter's `n` is what names which of the two a reader is looking at. |
 | **Not queried** (the measure is absent from the row) | Draws **nothing** — no dash treatment, no axis, no glyph. The pivot templates emit only the measures a query selected, so a permalink that did not ask for `departures_performed` or `avg_gauge` has rows that make no claim about the floor or the gauge in either direction. Rendering the *Unknowable* treatment here states a finding the query never made: measured, a default top-25 `/explore` view put all 25 rows in it. |
 | **Carrier stops filing mid-series** | The line breaks. No interpolation across an absence. |
 | **Invalid permalink** | A full-page error naming the offending key and the allowed values, with a link to a valid neighbouring query. Never a silent fallback to defaults — a permalink that quietly renders a different query than it encodes is worse than one that errors, because the screenshot still looks authoritative. |

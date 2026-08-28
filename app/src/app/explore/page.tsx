@@ -308,7 +308,26 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
             {isEmpty ? (
               <EmptyState query={query} allowlist={allowlist} />
             ) : (
-              <DataTable columns={columns} rows={displayRows} resolved={result.resolved} />
+              // THE ONE SURFACE THAT DOES NOT SORT BELOW-FLOOR ROWS LAST, and the reason is
+              // this page's contract rather than a preference. Everywhere else the row order is
+              // the product's editorial choice over a ranked table, so the floor rule is part of
+              // it (docs/design/system.md, "The data table"). Here the order IS the visitor's
+              // stated request: `s=` carries a sort key and a direction (urlstate.ts:120,
+              // :223-225), so `s=departures_performed` ascending is someone explicitly asking to
+              // see the sparsest rows first, and moving them to the bottom would answer a
+              // question they did not ask. CLAUDE.md makes that permalink load-bearing ("URL-
+              // encoded query state on every view. Permalinks are the entire growth mechanic"),
+              // and this table has no rank column for "excluded from ranking" to bite on.
+              //
+              // Spelled at the CALL SITE, never as a default: `partition` defaults to true in
+              // DataTable, so a sixth table surface inherits the rule and someone deleting this
+              // line gets the rule back, not silence.
+              <DataTable
+                columns={columns}
+                rows={displayRows}
+                resolved={result.resolved}
+                partition={false}
+              />
             )}
             <p className="foot">
               {result.quarantinedRowsOnPage} quarantined row
