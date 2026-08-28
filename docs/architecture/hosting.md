@@ -1782,8 +1782,8 @@ data read here — the two costs are not comparable.
 
 **The thresholds `f` is left to, stated plainly rather than assumed.**
 `deploy/cloudflare/rate-limit.json` blocks a source IP past **10 requests per 10 s** per
-`(ip.src, cf.colo.id)`, with a 10 s mitigation timeout — a sustained **1 req/s**. Two things about
-it are easy to get wrong and both matter here:
+`(ip.src, cf.colo.id)`, with a 10 s mitigation timeout — a sustained **1 req/s**. Four things
+about it are easy to get wrong, and all four matter here:
 
 - **The ruleset holds exactly ONE rule, and that is asserted before anything reads it.**
   `cloudflare-apply.sh` PUTs the file with `--data @"$file"`, so its bytes are the request body
@@ -1824,6 +1824,12 @@ it are easy to get wrong and both matter here:
   four prefixes stay covered: it costs one clause, it survives a future narrowing of any one of
   them, and the cards are the most expensive request on the site.
 
+  > ⚠️ **The redundancy is checked against every spelling Next accepts, not just this app's.**
+  > Next generates a card from `opengraph-image` with a `.js`, `.ts` or `.tsx` extension, and the
+  > check globbed `.tsx` alone — so a fifth card at `/watch/[preset]/opengraph-image.ts` left the
+  > suite green, at which point this clause silently becomes load-bearing and the paragraph above,
+  > the test's own docstring and the `description` that ships to the zone are all false together.
+  >
   > ⚠️ **A clause that is redundant today gets retired by accident tomorrow unless a test names
   > it.** Deleting the card clause leaves every path-coverage assertion green, because the
   > prefixes cover those paths too — so coverage is not the property. The subset is:
@@ -1950,8 +1956,15 @@ it are easy to get wrong and both matter here:
   content hashes (`chunks/0cz1d0mv5g_q7.js`), so a pinned hash would rot on the next build with
   nothing forcing a re-measure. The segment and the extension are the load-bearing part.
 
-  **Each asset family is bound to an authority outside the fixture table, so a NEW family cannot
-  go unnoticed.** `app/smoke.sh` greps the served HTML for the stylesheet's href and pins
+  **Each asset family is bound to an authority outside the fixture table — the ones that EXIST.**
+  Neither authority enumerates what a build emits, so a genuinely new family is not forced into
+  the table by them, and saying otherwise would claim more than the gate delivers. What does
+  hold: adding any clause to the expression without a `COVERED` fixture under it reds the
+  substitution sweep, which requires every clause to have one (verified with `ends_with(".svg")`,
+  `ends_with(".ttf")`, `starts_with("/_vercel/")` and `starts_with("/_next/static/webpack/")` —
+  each dies there). So a new family cannot be brought *inside* the rule unnoticed; it can be
+  emitted by a build and go unlisted here, and that residual is real. `app/smoke.sh` greps the
+  served HTML for the stylesheet's href and pins
   `^/_next/static/chunks/.+\.css$` — an independent, served-vantage confirmation that css and js
   share `chunks/`. The fonts have **no** smoke equivalent, which is why the same test asserts the
   other direction instead: something under `app/src` imports `next/font`, therefore the
@@ -2110,6 +2123,27 @@ it are easy to get wrong and both matter here:
   *unconditionally*, so every request reaches the origin, over an attacker-chosen unbounded `q`.
   It is cheap per request — one resolver query, no render — which is why it was not folded in
   here, but it is the one remaining path with no cache in front of it and no limit on it.
+- **The gate is on the SCRIPT, not on one file, and it reaches what the zone kept.**
+  `cloudflare-apply.sh` PUTs three files with `--data @"$file"`, so all three are request bodies
+  and the "every key ships" argument is the same for each. Each is now pinned by KEY SET, and two
+  membership checks that could not see an insertion are gone. The tunnel's was the worst:
+  `{"hostname": …, "service": "http://app:3000"} in ingress` passed with a shadowing entry
+  *prepended* at index 0 — cloudflared is first-match-wins, so every production request went to a
+  different service with the whole suite green. It is pinned by POSITION now. On the cache rule,
+  `enabled: false` (edge HTML caching off site-wide), a foreign `http.host`, and an added
+  `action_parameters.cache_key` all shipped ungated; the cache key matters here specifically,
+  because leaving the residual `f` axis to the edge is an argument about what the CDN stores
+  *under*.
+
+  **And `success: true` is not agreement.** The API applies what it recognises and drops the
+  rest without an error — measured on this very endpoint, where a PUT updated the description and
+  rules and ignored `name`. Every other gate here constrains what we SEND; the script now diffs
+  every scalar it sent against the ruleset the response echoes back, which costs no extra request
+  and names any dropped or altered field by path. The tunnel PUT is deliberately excluded: its
+  response envelope differs from a ruleset's and this repo has not established it, so asserting
+  against a guess would pass vacuously or fail an apply for the wrong reason. The DNS read-back
+  below covers what matters most about the tunnel.
+
 - **Every path group shares ONE counter, not one each.** A rate-limiting rule counts per
   (rule, characteristics), and this is a single rule keyed on `(ip.src, cf.colo.id)` — so
   `/api/pivot`, `/explore`, a card and an entity page all draw on the same 10-per-10 s bucket.

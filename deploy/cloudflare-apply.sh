@@ -16,8 +16,8 @@ set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 API=https://api.cloudflare.com/client/v4
 
-put() { # put <url> <file>
-  local url="$1" file="$2" out
+put() { # put <url> <file> [readback]
+  local url="$1" file="$2" readback="${3:-}" out
   out=$(curl -sS -X PUT "$url" \
         -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
         -H "Content-Type: application/json" \
@@ -30,13 +30,51 @@ put() { # put <url> <file>
     printf '%s\n' "$out" | jq .errors
     exit 1
   fi
+
+  # SUCCESS IS NOT AGREEMENT. Cloudflare returns `success: true` while silently ignoring fields
+  # it does not apply -- measured on this very endpoint: a PUT updated the ruleset's description
+  # and rules and dropped `name` without a word about it (test_cloudflare_desired_state.py's
+  # test_rate_limit_keeps_the_name_the_zone_actually_holds records that measurement). Every gate
+  # in this repo constrains what we SEND; without this, nothing compares that to what the zone
+  # KEPT, and the committed file could stop describing production with every test green.
+  #
+  # The response echoes the applied ruleset, so this costs no extra request. It compares every
+  # SCALAR LEAF we sent against the same path in `.result`: fields Cloudflare adds (`id`,
+  # `version`, `last_updated`, per-rule `ref`, defaulted members of `ratelimit`) are extra keys
+  # and are correctly ignored, while anything we sent that came back missing or different is
+  # named by its path. Re-applying is idempotent by construction (see the header), so a mismatch
+  # is a stop-and-look, not a half-applied state to unpick.
+  if [ -n "$readback" ]; then
+    local drift
+    drift=$(jq -n \
+      --argjson sent "$(jq -S . "$file")" \
+      --argjson got "$(printf '%s' "$out" | jq -S '.result // {}')" \
+      '[ $sent | paths(scalars) as $p
+         | select(($got | getpath($p)) != ($sent | getpath($p)))
+         | ($p | map(tostring) | join(".")) ]')
+    if [ "$(printf '%s' "$drift" | jq -r 'length')" != "0" ]; then
+      echo "  FAIL $(basename "$file"): the API reported success and did not keep what it was sent." >&2
+      printf '%s' "$drift" | jq -r '.[] | "       dropped or changed: \(.)"' >&2
+      echo "       'name' is the field known to be ignored on a ruleset entrypoint PUT; anything" >&2
+      echo "       else here means the committed file no longer describes the zone. Re-applying" >&2
+      echo "       is idempotent, so fix the file and run this again." >&2
+      exit 1
+    fi
+  fi
   echo "  ok   $(basename "$file")"
 }
 
 put "${API}/zones/${CLOUDFLARE_ZONE_ID}/rulesets/phases/http_request_cache_settings/entrypoint" \
-    "${HERE}/cloudflare/cache-rules.json"
+    "${HERE}/cloudflare/cache-rules.json" readback
 put "${API}/zones/${CLOUDFLARE_ZONE_ID}/rulesets/phases/http_ratelimit/entrypoint" \
-    "${HERE}/cloudflare/rate-limit.json"
+    "${HERE}/cloudflare/rate-limit.json" readback
+# The tunnel PUT is deliberately NOT read back. Both calls above are ruleset entrypoints, whose
+# response shape (`.result` echoing the applied ruleset) is what the comparison above is written
+# against; the tunnel configuration endpoint returns a different envelope and this repo has not
+# established its shape, so asserting against a guess would either pass vacuously or fail an
+# apply for the wrong reason. What matters most about the tunnel -- that the hostname resolves,
+# reaches THIS tunnel, and is proxied -- is read back from the API below, and its ingress order
+# is gated in `test_tunnel_ingress_routes_the_production_host_to_the_app_service`.
 put "${API}/accounts/${CLOUDFLARE_ACCOUNT_ID}/cfd_tunnel/${CLOUDFLARE_TUNNEL_ID}/configurations" \
     "${HERE}/cloudflare/tunnel-config.json"
 
