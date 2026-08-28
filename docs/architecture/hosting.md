@@ -1785,6 +1785,18 @@ data read here — the two costs are not comparable.
 `(ip.src, cf.colo.id)`, with a 10 s mitigation timeout — a sustained **1 req/s**. Two things about
 it are easy to get wrong and both matter here:
 
+- **The ruleset holds exactly ONE rule, and that is asserted before anything reads it.**
+  `cloudflare-apply.sh` PUTs the file with `--data @"$file"`, so its bytes are the request body
+  and every entry in `rules` ships. Each check reads one rule; appending a second — a second
+  expression, a second threshold, a second action — once left all fifteen of them green, because
+  they indexed `rules[0]` and nothing counted. Since #126 the first rule's expression is
+  genuinely hard to weaken, which makes *appending* one strictly easier than weakening it. The
+  constraint is "exactly one" rather than "every rule satisfies the same checks" because the
+  checks do not divide per rule — coverage is a property of the union of them, exclusion of all
+  of them — and **nobody has established how two rules in the `http_ratelimit` entrypoint
+  compose** against this zone. Measure that, record it here, and only then split the checks;
+  until someone does, the gate states what it knows.
+
 - **Its expression covers `/api/`, `/explore`, all four entity prefixes and the four
   `*/opengraph-image` paths — and nothing else** (#83, widened to three entity prefixes by #113
   and to `/route/` by #117).
@@ -1904,6 +1916,61 @@ it are easy to get wrong and both matter here:
   expression to `starts_with(path, "/")` leaves the coverage test **green** and is caught only by
   the exclusion test, while adding `starts_with(path, "/_next/")` turns the exclusion test red on
   `/_next/static/chunks/main.js`. Both mutants were run.
+
+  **One fixture per SUBRESOURCE FAMILY, because a path predicate reads a segment and an
+  extension and has no third axis.** A single `/_next/` path stands for a whole tree and bounds
+  only itself. The families, read off the production build rather than assumed:
+
+  | family | the narrowing a lone `.js` fixture misses |
+  |---|---|
+  | `/_next/static/chunks/*.js` | — |
+  | `/_next/static/chunks/*.css` | `ends_with(".css")` |
+  | `/_next/static/media/*.woff2` | `ends_with(".woff2")`, `starts_with("/_next/static/media/")` |
+
+  These are the three families the 13 subresources counted above fall into.
+
+  **The `.css` shares its directory with the `.js`** — there is no `/_next/static/css/` — so
+  segment and extension are two *independent* axes, not one, and a fixture set varying only the
+  filename covers neither. The `.woff2` faces come from `next/font/google`
+  (`app/src/app/layout.tsx:2`). With only the `.js` fixture present, each narrowing in the
+  right-hand column passed **every** test in that file while pulling a real visitor's asset
+  fetches into the 10-per-10 s bucket; `ends_with(".woff2")` alone makes a page view **five**
+  slots, which falsifies the one-slot arithmetic this section's affordability argument rests on.
+  Mutants run per fixture: each turns the exclusion test red and the failure names the fixture
+  that caught it; drop that fixture and the same mutant goes green.
+
+  Filenames in the fixtures are **structural, not measurements** — the real ones are per-build
+  content hashes (`chunks/0cz1d0mv5g_q7.js`), so a pinned hash would rot on the next build with
+  nothing forcing a re-measure. The segment and the extension are the load-bearing part.
+
+  **A fixture for a PREFIX must differ in the SUFFIX too, and every prefix needs two.** The same
+  rule on the coverage side. One fixture under a prefix does not bound the prefix, it bounds that
+  fixture: `starts_with(path, "/route/JFK-LAX")` satisfies every assertion the known pair makes
+  while bounding none of the 404 family the clause exists for, and `ends_with(<any suffix the
+  fixtures share>)` fails the same way from the other side. #117 established this on `/route/`;
+  the other five clauses carried one fixture each until #129, and across those five, **71
+  single-literal substitutions matched strictly less than the clause they replaced and passed
+  every test in the file** — `ends_with("/pivot")` for `/api/`, `ends_with("A")` for `/airport/`,
+  `ends_with("L")` for `/carrier/`, `ends_with("8")` for `/aircraft/`. Each leaves the origin
+  exposed on everything the real prefix covers and the literal does not.
+
+  So each prefix now carries two rows that diverge immediately after it **and** end in different
+  characters — `/api/health` beside `/api/pivot`, `/airport/ZZZZ` beside `/airport/SEA`,
+  `/carrier/PA`, `/aircraft/CE-180`, `/explore/ZZZZ`. That pair kills both operator families at
+  once: no `starts_with` longer than the prefix covers both, and no `ends_with` covers both,
+  which leaves the empty literal — and that matches every path, so `UNCOVERED` refuses it.
+
+  > ⚠️ **The property is gated, not measured once.**
+  > `test_no_single_literal_substitution_can_narrow_a_clause_of_the_expression` substitutes every
+  > prefix and every suffix of every fixture, under both operators, into every clause, and
+  > requires each substitution matching strictly less than the clause it replaced to be refused.
+  > A seventh clause added without its suffix-disjoint pair fails there, on the substitution that
+  > proves it, rather than in whatever milestone next runs the search by hand. It also asserts
+  > **which** check refuses, per clause: the fixture tables refuse every narrowing of the six
+  > prefixes and the card strike-out refuses none of them, while for `ends_with("/opengraph-image")`
+  > it is the reverse — **all four cards sit under an entity prefix, so a narrowed card clause
+  > leaves the coverage table green and the strike-out test is the only thing that can see it.**
+  > Without that split, every guard but one is deletable with the suite green.
 
   **A narrowing may read only a signal the EDGE decides.** Narrowing the rule by anything the
   client chooses is a bypass, not an exemption. `and not any(http.request.headers["rsc"][*] == "1")` —

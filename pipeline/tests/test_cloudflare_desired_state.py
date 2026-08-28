@@ -17,6 +17,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).parents[2]
 CLOUDFLARE = ROOT / "deploy" / "cloudflare"
 
@@ -25,12 +27,78 @@ def _load(name: str) -> dict:
     return json.loads((CLOUDFLARE / name).read_text())
 
 
+def _the_only_rule(ruleset: dict, name: str) -> dict:
+    """The ONE rule in `name`, asserted rather than indexed into. Every reader funnels through
+    here, so the count is checked on every path that reads a rule instead of in one test that
+    could be deleted on its own.
+
+    `deploy/cloudflare-apply.sh` sends the file with `--data @"$file"`, so the file's BYTES are
+    the PUT body and EVERY entry in `rules` ships. Each check in this file reads one rule; before
+    #132 they all read `rules[0]` and nothing asserted there was only one. MEASURED against the
+    file as it then stood: appending a second rule -- `starts_with(path, "/")`, narrowed on the
+    client-asserted `RSC` header, `"action": "log"`, 10,000 requests per period -- left ALL
+    FIFTEEN tests green. Since #126 the first rule's expression is genuinely hard to weaken,
+    which makes APPENDING one strictly easier than weakening it: the wrong gradient for a file
+    that reaches production by a hand-run PUT.
+
+    EXACTLY ONE, rather than "every rule satisfies the same checks", and the reason is what this
+    file does NOT know. These checks do not divide per rule: COVERED is a property of the UNION
+    of the rules (a path is limited if ANY rule matches it), UNCOVERED of ALL of them (one rule
+    reaching `/_next/` throttles it however the others read), and the card strike-out is about
+    one CLAUSE of one expression. Writing the per-rule form means choosing a composition model
+    for two rules in the `http_ratelimit` entrypoint -- independent counters, first-match-wins,
+    or both counting -- and nobody has established which against this zone. Encoding an
+    unverified claim about the edge's evaluation semantics is the same move this file refuses
+    when it declines to read `cf.` as a provenance guarantee, and a gate that overstates what it
+    knows is worse than a narrow one that says so. So the constraint is the thing that IS known,
+    and the failure message names the price of relaxing it."""
+    rules = ruleset["rules"]
+    assert len(rules) == 1, (
+        f"{name} holds {len(rules)} rules, and every check in this file reads ONE. The file's "
+        "bytes are the PUT body, so the others ship with it -- their expressions, thresholds "
+        "and actions gated by nothing. Before a second rule is legitimate: measure how this "
+        "ruleset entrypoint composes two rules against this zone, record it in "
+        "docs/architecture/hosting.md beside the expression it constrains, and only then split "
+        "these checks into their union half (COVERED) and their for-all half (UNCOVERED)."
+    )
+    return rules[0]
+
+
+def _rate_limit_rule() -> dict:
+    return _the_only_rule(_load("rate-limit.json"), "rate-limit.json")
+
+
+def _rate_limit_expression() -> str:
+    return _rate_limit_rule()["expression"]
+
+
 def test_all_three_desired_state_files_are_valid_json():
     """`--data @file` sends the file's bytes as-is (deploy/cloudflare-apply.sh). Invalid JSON
     here is a `curl` 4xx that only surfaces when Task 6 runs it against the real API, not
     something any earlier gate would catch."""
     for name in ("cache-rules.json", "rate-limit.json", "tunnel-config.json"):
         _load(name)  # raises json.JSONDecodeError on malformed content
+
+
+def test_the_rate_limit_ruleset_holds_exactly_one_rule():
+    """FIRST, because everything after it reads one rule and would otherwise not know.
+
+    The count is enforced in `_the_only_rule`, which every reader funnels through -- see that
+    helper for why the shape is "exactly one" and not "every rule satisfies the same checks",
+    and for what has to be measured before that changes. This test exists so the property has a
+    NAME and a mutant of its own: appending a permissive second rule to the file turns it red,
+    and the helper is killed here against a synthetic payload rather than by editing the bytes
+    that reach production.
+
+    Both halves are needed. The disk assertion alone would pass if `_the_only_rule` stopped
+    asserting anything, since the shipped file holds one rule either way; the synthetic payload
+    alone would pass if every caller stopped using the helper. Neither is the property."""
+    assert len(_load("rate-limit.json")["rules"]) == 1
+    assert len(_load("cache-rules.json")["rules"]) == 1
+    # The check itself, killed without touching a file that reaches production by hand-run PUT.
+    two_rules = {"rules": [{"description": "the shipped one"}, {"description": "appended"}]}
+    with pytest.raises(AssertionError, match="ship with it"):
+        _the_only_rule(two_rules, "rate-limit.json")
 
 
 def test_rate_limit_holds_one_request_per_second_per_ip_in_a_period_the_plan_allows():
@@ -47,7 +115,7 @@ def test_rate_limit_holds_one_request_per_second_per_ip_in_a_period_the_plan_all
 
     Note the tightened burst tolerance: 10-in-10s trips on a burst that 60-in-60s would have
     absorbed. That is a real behaviour change, accepted because the plan allows nothing else."""
-    rule = _load("rate-limit.json")["rules"][0]
+    rule = _rate_limit_rule()
     assert rule["action"] == "block"
     ratelimit = rule["ratelimit"]
     assert ratelimit["period"] == 10, "the plan permits no other period; measured from the API"
@@ -193,14 +261,49 @@ def _covered(expression: str, path: str) -> bool:
 
 
 # Every surface the rule must match, with the cost that puts it there. Three shapes, matched for
-# three different reasons: `/api/pivot`, `/explore` and the four cards reach the origin on EVERY
-# request; `/route/ZZZZ-QQQ` is an unbounded 404 family that no cache absorbs (#117); the rest are
-# cacheable 200s matched as collateral, because `http.request.uri.path` carries no query string,
-# so neither the refused-value family (#113) nor the 404 family (#117) can be addressed apart from
-# its cached siblings.
+# three different reasons: `/api/pivot`, `/api/health`, `/explore` and the four cards reach the
+# origin on EVERY request; the unknown-slug rows are unbounded 404 families no cache absorbs
+# (#117); the rest are cacheable 200s matched as collateral, because `http.request.uri.path`
+# carries no query string, so neither the refused-value family (#113) nor the 404 family (#117)
+# can be addressed apart from its cached siblings.
+#
+# FIXTURES FOR A PREFIX MUST DIFFER IN THE SUFFIX TOO, AND EVERY PREFIX NEEDS TWO OF THEM. One
+# fixture does not bound a prefix; it bounds that fixture. `starts_with(path, "/route/JFK-LAX")`
+# satisfies every assertion the KNOWN pair makes while bounding ZERO of the 404 family the clause
+# was added for -- and `ends_with(<any suffix the fixtures share>)` does the same from the other
+# side, since nothing in UNCOVERED ends that way either. An outcome the buggy expression also
+# produces is not evidence.
+#
+# So each prefix carries TWO rows that diverge immediately after it AND end in different
+# characters, and that pair is what kills both operator families at once: no `starts_with`
+# longer than the prefix covers both (they diverge at the prefix), and no `ends_with` covers
+# both (they share no suffix), which leaves only the empty literal -- and that matches every
+# path, so UNCOVERED refuses it.
+#
+# #117 established the rule on `/route/`; #129 applied it to the other five, which had one
+# fixture each. Measured across those five clauses before the second rows existed: 71
+# single-literal substitutions matched strictly less than the clause they replaced and passed
+# every test in this file. `test_no_single_literal_substitution_can_narrow_a_clause_of_the_
+# expression` now holds the property for every clause, rather than leaving it to whoever adds
+# the next one.
 COVERED = (
     ("/api/pivot", "a DuckDB aggregation, and the residual `f` axis rides the 30-day cache"),
+    (
+        "/api/health",
+        "the second `/api/` row, and not a decoration: `no-store` with "
+        '`dynamic = "force-dynamic"` (app/src/app/api/health/route.ts), deliberately absent '
+        "from proxy.ts's matcher because uncached is its REQUIREMENT rather than an omission -- "
+        "so every request runs `catalogGaps` + `dataAsOf` at the origin with nothing in front",
+    ),
     ("/explore", "the same `f` axis on the HTML page, which no key or value bound closes"),
+    (
+        "/explore/ZZZZ",
+        "the clause is `/explore` with NO trailing slash, so the whole `/explore...` family is "
+        "inside it. MEASURED 2026-08-27 against a served build: 404 under `private, no-cache, "
+        "no-store, max-age=0, must-revalidate`. It is outside proxy.ts's matcher, which lists "
+        "the literal `/explore`, so no cache header is set for it and each distinct spelling is "
+        "another origin 404",
+    ),
     ("/route/JFK-LAX/opengraph-image", "a DuckDB query plus a rasterize, with no warm path"),
     ("/airport/SEA/opengraph-image", "same"),
     ("/carrier/DL/opengraph-image", "same"),
@@ -208,17 +311,27 @@ COVERED = (
     ("/carrier/DL", "a refused `?type=` is no-store and renders in full: 82-104 ms, unbounded"),
     ("/aircraft/B737-8", "`?carrier=` has the identical shape (#106)"),
     ("/airport/SEA", "`?y=<junk>` has had it since M7 Task 9, at a smaller radius"),
-    # #117, and BOTH entries are load-bearing. A literal `starts_with(path, "/route/JFK-LAX")`
-    # satisfies every assertion the KNOWN pair makes while bounding ZERO of the 404 family the
-    # prefix was added for. The unknown pair is what distinguishes a prefix from a fixture;
-    # delete it and that mutant lives.
-    #
-    # FIXTURES FOR A PREFIX MUST DIFFER IN THE SUFFIX TOO. Two /route/ fixtures sharing a suffix
-    # are both matched by `ends_with(<shared suffix>)` substituted for the prefix, and nothing in
-    # UNCOVERED ends that way either -- so that substitution passes every test in this file while
-    # bounding none of the space. An outcome the buggy expression also produces is not evidence.
-    #
-    # /route/ has no single-literal narrowing escape left; the other five prefixes do (#129).
+    # The 404 half of the three entity prefixes (#129). Each is a refusal this repo already pins
+    # somewhere else, never a slug invented to make the arithmetic work: an unknown code, a code
+    # BTS knows that filed no segment row, and the ambiguous slug the cacheability allow-list
+    # exists to keep out of a shared cache. A fixture that is real is one a future reader can
+    # check; an invented one only ever agrees with itself.
+    (
+        "/airport/ZZZZ",
+        "the unknown-code 404 -- `no-store`, and it names which way it failed "
+        "(docs/architecture/hosting.md's served-build table)",
+    ),
+    (
+        "/carrier/PA",
+        "recognized by BTS, no segment row filed, and it holds THREE airline_ids: the "
+        "silent-pick this 404 exists to refuse (proxy.test.ts:183, page.test.tsx:334)",
+    ),
+    (
+        "/aircraft/CE-180",
+        "`resolveAircraftSlug` returns `ambiguous`, so this renders a `no-store` 404 -- the one "
+        "a `!= notFound` cacheability predicate would pin in a shared CDN cache for its full "
+        "TTL (proxy.ts:394, proxy.test.ts:197)",
+    ),
     (
         "/route/ZZZZ-QQQ",
         "an unknown pair is a no-store 404 that runs the reverse lookup THREE times (proxy, "
@@ -234,6 +347,24 @@ COVERED = (
 
 # Deliberately outside the rule. Each of these is either cheap, cached at the edge for long
 # enough that a walk does not reach the origin, or would break something legitimate if limited.
+#
+# THE SUFFIX RULE APPLIES HERE TOO, ON THE OTHER AXIS (#131). One `/_next/` fixture stands for a
+# whole tree, and a path predicate reads exactly two things about an asset URL: its PATH SEGMENT
+# and its EXTENSION. So the table carries one fixture per FAMILY, and the families are measured
+# rather than assumed -- read off the production build at this commit: `static/chunks/` holds the
+# 8 `.js` AND the single `.css` (there is no `/_next/static/css/` directory, so segment and
+# extension are two independent axes rather than one), and `static/media/` holds the `.woff2`
+# faces `app/src/app/layout.tsx:2` pulls through `next/font/google`. A page view fetches 13 of
+# these. With a `.js` fixture alone, `ends_with(".css")`, `ends_with(".woff2")` and
+# `starts_with("/_next/static/media/")` each passed every test in this file while dragging a
+# real visitor's asset fetches into the 10-per-10s bucket -- and the `.woff2` one alone makes a
+# page view FIVE slots, which falsifies the one-slot arithmetic #117's whole affordability
+# argument rests on.
+#
+# The filenames here are STRUCTURAL, not measurements. The real ones are per-build content
+# hashes (`chunks/0cz1d0mv5g_q7.js`), so pinning one would rot on the next build with nothing
+# forcing a re-measure. What is load-bearing is the segment and the extension, which is all a
+# path predicate can read.
 UNCOVERED = (
     ("/", "static, and the entry point every real visitor lands on"),
     ("/watch/gauge", "four closed slugs, so the whole surface is four cacheable documents"),
@@ -242,7 +373,22 @@ UNCOVERED = (
     # and a walk of it reaches the origin once per TTL however many URLs it lists.
     ("/sitemap.xml", "one document behind PROJECT_CACHE for 30 days: a walk hits the origin once"),
     ("/robots.txt", "same, and limiting it teaches a crawler nothing"),
-    ("/_next/static/chunks/main.js", "immutable assets: a real page load asks for a dozen"),
+    ("/_next/static/chunks/main.js", "immutable assets: one page view asks for eight of these"),
+    (
+        "/_next/static/chunks/main.css",
+        "the stylesheet -- the SAME segment as the chunks above, a different extension. It is "
+        'the axis `ends_with(".css")` walks straight through when only a `.js` fixture is here',
+    ),
+    (
+        "/_next/static/media/ibm-plex-sans-latin.woff2",
+        "the font faces: a different segment AND a different extension. Four per page view, so "
+        '`ends_with(".woff2")` on its own would make one view five slots against this bucket',
+    ),
+    (
+        "/favicon.ico",
+        "matched by no clause, and hosting.md's page-view table claims it costs zero slots -- "
+        "this row asserts that, instead of leaving it read off the expression by eye",
+    ),
 )
 
 
@@ -291,7 +437,7 @@ def test_rate_limit_covers_every_surface_that_can_reach_the_origin_uncached():
     Asserting coverage path by path is what distinguishes this from the check it replaces --
     that one asserted the string `"/api/"` appeared, which an expression matching only `/api/`
     satisfies just as well as one matching everything."""
-    expression = _load("rate-limit.json")["rules"][0]["expression"]
+    expression = _rate_limit_expression()
     for path, why in COVERED:
         assert _covered(expression, path), f"{path} is not rate limited, and it costs: {why}"
 
@@ -304,8 +450,11 @@ def test_rate_limit_does_not_reach_the_cached_pages_or_the_static_assets():
     This is the load-bearing half. The rule matches all FOUR entity prefixes whole, so `/_next/`
     is the only thing standing between it and every static asset on the site, and this list is
     the only thing asserting that. Entries leave this list as the rule widens, which is normal;
-    it must never shrink to nothing, and `/_next/static/chunks/main.js` must never leave it."""
-    expression = _load("rate-limit.json")["rules"][0]["expression"]
+    it must never shrink to nothing, and the three `/_next/` rows must never leave it -- they are
+    one per SUBRESOURCE FAMILY, `chunks/*.js`, `chunks/*.css` and `media/*.woff2`, because a path
+    predicate reads a segment and an extension and those are the only two axes it has. One
+    fixture per tree is what let three separate narrowings through (#131); see the table."""
+    expression = _rate_limit_expression()
     for path, why in UNCOVERED:
         assert not _covered(expression, path), f"{path} must not be rate limited: {why}"
 
@@ -330,7 +479,7 @@ def test_the_og_cards_stay_covered_by_their_own_clause_when_the_entity_prefixes_
     Asserting that the cards are covered would NOT catch this -- the entity prefixes cover them
     too, so that assertion passes either way. Striking the prefixes out and re-asking is what
     makes the clause's own coverage the property under test."""
-    expression = _load("rate-limit.json")["rules"][0]["expression"]
+    expression = _rate_limit_expression()
     cards_only = " or ".join(
         f'ends_with(http.request.uri.path, "{literal}")'
         for op, literal in _PATH_CLAUSE.findall(expression)
@@ -360,6 +509,171 @@ def test_the_og_cards_stay_covered_by_their_own_clause_when_the_entity_prefixes_
         assert _covered(cards_only, path), (
             f"{path} is covered only by an entity prefix, not by the card clause: {why}"
         )
+
+
+# THE SUBSTITUTION SWEEP (#129). The two tables above are fixtures, and a fixture proves a
+# clause only if no NARROWER clause satisfies it. That is a property of the TABLES, it is
+# decidable, and checking it by hand is what nobody did for five milestones.
+
+
+def _affixes(path: str) -> set[str]:
+    """Every prefix and every suffix of `path`, the empty string included."""
+    return {path[:i] for i in range(len(path) + 1)} | {path[i:] for i in range(len(path) + 1)}
+
+
+def _candidate_literals() -> list[str]:
+    """The literal space an author actually reaches for: every escape #129 measured was an affix
+    of a fixture -- a prefix truncated a segment short, or a suffix copied off the very path that
+    was supposed to prove the clause. Drawing candidates from the tables is what makes this a
+    check on the TABLES rather than one more assertion about today's expression."""
+    return sorted({literal for path, _ in COVERED + UNCOVERED for literal in _affixes(path)})
+
+
+def _rebuild(clauses: list[tuple[str, str]]) -> str:
+    return "(" + " or ".join(f'{op}(http.request.uri.path, "{lit}")' for op, lit in clauses) + ")"
+
+
+def _matches_everything(new: tuple[str, str], old: tuple[str, str]) -> bool:
+    """Does clause `new` match every path `old` matches? Decidable, and the cases are NOT
+    symmetric. A suffix family never contains a prefix family -- the path `"zz" + literal` ends
+    the right way and starts however it likes -- and the reverse fails the same way, so an
+    OPERATOR SWAP is always a narrowing unless the new literal is empty, which matches
+    everything. Getting this backwards would reclassify every escape as a widening and leave the
+    sweep green on a table that bounds nothing, so the two special cases are explicit rather
+    than folded into the string test."""
+    (new_op, new_literal), (old_op, old_literal) = new, old
+    if new_literal == "":
+        return True
+    if new_op != old_op:
+        return False
+    if new_op == "starts_with":
+        return old_literal.startswith(new_literal)
+    return old_literal.endswith(new_literal)
+
+
+def _fixture_tables_refuse(expression: str) -> bool:
+    """COVERED and UNCOVERED alone -- no provenance, no shape, no strike-out."""
+    return any(not _covered(expression, path) for path, _ in COVERED) or any(
+        _covered(expression, path) for path, _ in UNCOVERED
+    )
+
+
+def _card_strike_out_refuses(expression: str) -> bool:
+    """What `test_the_og_cards_stay_covered_...` asks, as a predicate: strike the entity
+    prefixes out of the expression and re-ask whether the four cards are still covered."""
+    cards_only = " or ".join(
+        f'ends_with(http.request.uri.path, "{literal}")'
+        for op, literal in _PATH_CLAUSE.findall(expression)
+        if op == "ends_with"
+    )
+    if not cards_only:
+        return True
+    cards = [path for path, _ in COVERED if path.endswith("/opengraph-image")]
+    return any(not _covered(cards_only, path) for path in cards)
+
+
+def test_no_single_literal_substitution_can_narrow_a_clause_of_the_expression():
+    """No clause can be swapped for one matching strictly less while this file stays green.
+
+    This is #129 stated as a property instead of as five more fixtures. The fixtures are what do
+    the refusing, but nothing FORCED a clause to bring a suffix-disjoint pair with it, so five of
+    the six prefixes never got the rule #117 wrote down: measured across those five, 71
+    single-literal substitutions matched strictly less than the clause they replaced and passed
+    every test in this file -- `ends_with("/pivot")` for `/api/`, `ends_with("A")` for
+    `/airport/`, `ends_with("L")` for `/carrier/`, `ends_with("8")` for `/aircraft/`. Each would
+    leave the origin exposed on everything the real prefix covers and the literal does not,
+    green. A seventh clause added without its pair now fails here, on the substitution that
+    proves it, rather than in whatever milestone next runs the search by hand.
+
+    WIDENINGS ARE NOT ESCAPES and are not asserted against. A literal matching MORE than the
+    clause it replaces cannot leave the origin exposed; if it reaches an excluded asset, the
+    UNCOVERED half catches it, which is a different property and already has a test. What is
+    swept here is the direction where the expression quietly stops covering something.
+
+    WHICH CHECK REFUSES IS ASSERTED PER CLAUSE, not "something refused it" -- otherwise every
+    guard but one is deletable with the suite green, which is the failure #126 hit three times in
+    this same file. The split is not cosmetic, and it is not the same on both sides:
+
+      * For each of the six `starts_with` clauses the FIXTURE TABLES refuse every narrowing, and
+        the card strike-out refuses NONE of them. Substituting a prefix clause can only ADD an
+        `ends_with` clause to the struck-out expression, which widens it, so the strike-out can
+        never fire there. The tables stand alone, and deleting a fixture is immediately red.
+
+      * For `ends_with("/opengraph-image")` it is the other way round: the STRIKE-OUT refuses
+        every narrowing and the tables refuse only a minority of them. All four card paths sit
+        under an entity prefix, so a narrowed card clause still leaves them covered and the
+        tables see nothing wrong. That clause is held by one check and one check only, on a
+        clause the coverage table structurally cannot speak about.
+
+    The expression is rebuilt from its parsed clauses and asserted BYTE-IDENTICAL to the shipped
+    string first. Without that, the sweep would be a statement about a model of the rule rather
+    than about the rule, and a clause this file cannot parse would be swept as though absent."""
+    expression = _rate_limit_expression()
+    clauses = _PATH_CLAUSE.findall(expression)
+    assert _rebuild(clauses) == expression, (
+        "the sweep rebuilds the expression from the clauses it parsed, and the result is not the "
+        f"shipped string -- so something in it is not a path clause:\n  {expression!r}\n  "
+        f"{_rebuild(clauses)!r}"
+    )
+
+    literals = _candidate_literals()
+    for index, old in enumerate(clauses):
+        narrowings, by_tables, by_strike_out, escapes = 0, 0, 0, []
+        for op in ("starts_with", "ends_with"):
+            for literal in literals:
+                new = (op, literal)
+                if _matches_everything(new, old):
+                    continue
+                narrowings += 1
+                mutated = list(clauses)
+                mutated[index] = new
+                candidate = _rebuild(mutated)
+                tables = _fixture_tables_refuse(candidate)
+                strike_out = _card_strike_out_refuses(candidate)
+                by_tables += tables
+                by_strike_out += strike_out
+                if not (tables or strike_out):
+                    escapes.append(new)
+
+        shown = ", ".join(f'{o}("{lit}")' for o, lit in escapes[:6])
+        assert not escapes, (
+            f'{len(escapes)} literals matching strictly less than {old[0]}("{old[1]}") pass '
+            f"every fixture in this file: {shown}. Each one leaves the origin exposed on "
+            "everything the real clause covers and the literal does not. The fix is a second "
+            "fixture under that clause which diverges immediately after it AND ends in a "
+            "different character -- see COVERED's header."
+        )
+        assert narrowings, (
+            f'no substitution for {old[0]}("{old[1]}") was classified as a narrowing, so this '
+            "clause was not swept at all -- `_matches_everything` is inverted, or the candidate "
+            "space collapsed"
+        )
+        if old[0] == "starts_with":
+            assert by_tables == narrowings, (
+                f'{narrowings - by_tables} narrowings of {old[0]}("{old[1]}") are refused by '
+                "something other than COVERED/UNCOVERED. The fixture tables are supposed to be "
+                "load-bearing alone for a prefix clause; if they are not, deleting a fixture "
+                "leaves this suite green"
+            )
+            assert by_strike_out == 0, (
+                f"the card strike-out refused {by_strike_out} narrowings of {old[0]}"
+                f'("{old[1]}"). It cannot fire on a prefix substitution -- that only ever adds '
+                "an `ends_with` clause to the struck-out expression, which widens it -- so this "
+                "means the strike-out predicate no longer asks what its test asks"
+            )
+        else:
+            assert by_strike_out == narrowings, (
+                f'{narrowings - by_strike_out} narrowings of {old[0]}("{old[1]}") are not '
+                "refused by the card strike-out, which is the only check that can see them: the "
+                "four cards sit under the entity prefixes, so the coverage table stays green "
+                "however this clause is narrowed"
+            )
+            assert by_tables < narrowings, (
+                "the fixture tables refuse every narrowing of the card clause, which would make "
+                "`test_the_og_cards_stay_covered_when_the_entity_prefixes_are_struck_out` "
+                "redundant -- and a redundant guard is the one the next widening retires by "
+                "accident. Check that all four card paths still sit under an entity prefix"
+            )
 
 
 def test_rate_limit_keeps_the_name_the_zone_actually_holds():
@@ -616,7 +930,7 @@ def test_rate_limit_expression_reads_only_fields_whose_value_the_edge_decides():
     Deny-by-default is what makes this survive the next field someone wants: an identifier
     nobody has classified fails here until it is added to EDGE_EVALUATED with its reason. A
     `cf.` prefix rule would not have -- see the `cert_presented`/`cert_verified` pair above."""
-    failures = _provenance_failures(_load("rate-limit.json")["rules"][0]["expression"])
+    failures = _provenance_failures(_rate_limit_expression())
     assert failures == [], "; ".join(failures)
 
 
@@ -634,7 +948,7 @@ def test_rate_limit_expression_is_a_path_disjunction_narrowed_only_by_negated_ed
     pulled in -- which is exactly what a stray top-level `or` would do, and why one is refused.
     COVERED reads "covered for every client that does not satisfy the narrowing", and because a
     narrowing may read only an edge-evaluated field, that is a set no client can put itself in."""
-    failures = _structure_failures(_load("rate-limit.json")["rules"][0]["expression"])
+    failures = _structure_failures(_rate_limit_expression())
     assert failures == [], "; ".join(failures)
 
 
@@ -690,7 +1004,7 @@ def test_the_gate_tells_edge_evaluated_from_client_asserted_in_both_notations():
     COVERED/UNCOVERED through `_covered` here would not be: `_covered` reads the disjunction,
     and for every narrowing this test can construct the disjunction is unchanged by
     construction, so those loops could never disagree with the un-narrowed run."""
-    shipped = _load("rate-limit.json")["rules"][0]["expression"]
+    shipped = _rate_limit_expression()
     baseline = _path_disjunction(shipped)
 
     for narrowing in ADMITTED_NARROWINGS:
@@ -750,7 +1064,7 @@ def test_the_evaluator_reads_the_path_disjunction_not_the_whole_expression():
     literal smuggled into a narrowing must not grant `/_next/` coverage, or the exclusion table
     -- the one thing standing between this rule and every static asset on the site -- would be
     read off a clause that removes traffic rather than one that matches it."""
-    shipped = _load("rate-limit.json")["rules"][0]["expression"]
+    shipped = _rate_limit_expression()
     smuggled = f'{shipped} and not starts_with(http.request.uri.path, "/_next/")'
     assert not _covered(smuggled, "/_next/static/chunks/main.js"), (
         "a path literal inside a NARROWING granted coverage: `_covered` is reading the whole "
@@ -764,7 +1078,7 @@ def test_cache_rule_makes_html_cacheable_and_respects_origin_ttl():
     cached without this rule -- and if it doesn't respect_origin, it silently overrides the
     app's own HTML_CACHE / no-store distinctions (CLAUDE.md's per-route Cache-Control rules)
     with one flat edge TTL instead of deferring to them."""
-    rule = _load("cache-rules.json")["rules"][0]
+    rule = _the_only_rule(_load("cache-rules.json"), "cache-rules.json")
     assert rule["action"] == "set_cache_settings"
     params = rule["action_parameters"]
     assert params["cache"] is True
