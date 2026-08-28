@@ -183,3 +183,39 @@ describe("findCrossover", () => {
     expect(findCrossover(jfkLax)).toBeNull();
   });
 });
+
+describe("a rival whose size cannot be stated blocks the claim", () => {
+  // "B overtakes A in 2018" is a claim about which type was BIGGEST that year. A type whose every
+  // filing that year was quarantined has an UNKNOWN total, so no other type can be shown to have
+  // beaten it -- and ranking it last, or as 0, would emit an annotation resting on a number
+  // nobody has. Same silent-pick the `/carrier/PA` split refuses, printed on a chart.
+  //
+  // MUTANT: `if (type.seats === null) continue;` (skip the unknowable rival instead of refusing)
+  // -> 2019 gets a leader and the annotation appears -> red.
+  // MUTANT: fold the year totals with `+=` instead of `addSum` -> the unknowable type totals 0,
+  // is ruled out by the `<= 0` test, and the annotation appears for a fabricated reason -> red.
+  it("names no crossover in a year holding an unstateable type", () => {
+    const rows = [
+      { month: "2018-01", code: "A", label: "A", seats: 100 },
+      { month: "2018-02", code: "B", label: "B", seats: 50 },
+      { month: "2019-01", code: "A", label: "A", seats: 50 },
+      { month: "2019-02", code: "B", label: "B", seats: 100 },
+      // The unstateable rival, in the year the crossover would otherwise be reported against.
+      { month: "2019-03", code: "C", label: "C", seats: null },
+    ];
+    expect(findCrossover(rows)).toBeNull();
+  });
+
+  // The control: the identical data with C stateable and small still reports the crossover, so
+  // the test above fails for the NULL and not for C's presence.
+  it("still names the crossover when the same rival can be stated", () => {
+    const rows = [
+      { month: "2018-01", code: "A", label: "A", seats: 100 },
+      { month: "2018-02", code: "B", label: "B", seats: 50 },
+      { month: "2019-01", code: "A", label: "A", seats: 50 },
+      { month: "2019-02", code: "B", label: "B", seats: 100 },
+      { month: "2019-03", code: "C", label: "C", seats: 1 },
+    ];
+    expect(findCrossover(rows)).toEqual({ year: "2019", from: "A", to: "B" });
+  });
+});

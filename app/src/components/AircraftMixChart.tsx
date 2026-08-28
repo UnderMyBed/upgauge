@@ -1,6 +1,6 @@
 import { renderPlotToSvg } from "@/lib/chart/svg";
 import { BY_AIRCRAFT_TYPE, type MixDimension, type MixRow } from "@/lib/chart/aircraftMix";
-import { buildMixPlotConfig, gapNote, mixAbsenceNote, prepareMixPlot } from "@/lib/chart/mixPlotConfig";
+import { buildMixPlotConfig, gapNote, understatedNote, unknowableNote, mixAbsenceNote, prepareMixPlot } from "@/lib/chart/mixPlotConfig";
 
 /** The project's first chart (docs/design/system.md § Charts, and CLAUDE.md's workflow rule
  * that this one is built before the load-factor chart): a stacked area of monthly seats,
@@ -66,7 +66,7 @@ export function AircraftMixChart({
     );
   }
 
-  const { args, stack, gaps } = plot;
+  const { args, stack, gaps, unknowable, understated } = plot;
   const svg = withImgRole(renderPlotToSvg(buildMixPlotConfig(args)));
 
   return (
@@ -95,6 +95,14 @@ export function AircraftMixChart({
             to read as "flat and small" rather than "not filed", and the count is per-subject
             so the static legend rail cannot carry it. */}
         {gaps > 0 ? <span className="gnum">{gapNote(gaps)}</span> : null}
+        {/* THE OTHER TWO CAUSES, each in its own sentence (#121). A month that was filed and
+            wholly quarantined is a hole for a different reason than an unfiled one, and a month
+            drawn from only its stateable bands is not a hole at all -- it is a stack that
+            understates itself. One merged "N months not drawn" would be true of none of the
+            three. The visible key carries them because it is the only channel a sighted reader
+            has: the aria-label below repeats them for everyone else. */}
+        {unknowable > 0 ? <span className="gnum">{unknowableNote(unknowable)}</span> : null}
+        {understated > 0 ? <span className="gnum">{understatedNote(understated)}</span> : null}
       </div>
     </Frame>
   );

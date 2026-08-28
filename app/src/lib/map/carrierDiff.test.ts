@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { DIFF_CATEGORIES, fetchCarrierDiff, type CarrierDiff } from "./carrierDiff";
+import {
+  DIFF_CATEGORIES,
+  fetchCarrierDiff,
+  toPanels,
+  type CarrierDiff,
+  type DiffRow,
+} from "./carrierDiff";
 import { DEPARTURE_FLOOR } from "./arcs";
 
 // Live-database tests, not fixtures, for the reason lib/resolve.ts's header gives: this codebase
@@ -411,5 +417,56 @@ describe("fetchCarrierDiff, against the warehouse", () => {
       // happens to have none, so `> 0` passed here while being false of the population.
       expect(s.loadFactor === null || (s.loadFactor >= 0 && s.loadFactor < 2)).toBe(true);
     }
+  });
+});
+
+describe("toPanels tells an absent same-airport pair from an unstateable one", () => {
+  /** One panel's worth of rows in the shape `map_carrier_diff.sql` returns. Only the three
+   * fields this describe block is about are varied; the rest are the minimum a panel needs. */
+  function headRow(over: Partial<DiffRow>): DiffRow[] {
+    return [
+      {
+        category: "added",
+        category_total: 1,
+        window_start_month: "2025-06",
+        window_end_month: "2026-05",
+        undrawable_routes: 0,
+        same_airport_pairs: null,
+        same_airport_seats: null,
+        from_code: "SEA",
+        from_lat: 47.45,
+        from_lon: -122.31,
+        to_code: "PDX",
+        to_lat: 45.58,
+        to_lon: -122.59,
+        seats: 100,
+        departures: 2,
+        load_factor: 0.5,
+        gauge_fall: null,
+        dataset_end_month: "2026-05",
+        ...over,
+      } as DiffRow,
+    ];
+  }
+
+  // The LEFT JOIN missing: this category has no same-airport pair, so nothing is being withheld
+  // and 0 is the honest answer. Unchanged behaviour, asserted so the fix below cannot regress it
+  // into a false alarm on every panel that has none -- which is most of them.
+  it("reports 0 when the category has no same-airport pair at all", () => {
+    const [panel] = toPanels(headRow({ same_airport_pairs: null, same_airport_seats: null }));
+    expect(panel.map.sameAirportSeats).toBe(0);
+  });
+
+  // THE MUTANT THIS EXISTS FOR: `head.same_airport_seats ?? 0`, which reads the two NULLs as one
+  // and tells the reader nothing is withheld while a pair is. No carrier on this warehouse
+  // produces this row (measured across all 115), which is exactly why it needs a constructed one.
+  it("reports null when a pair exists whose seats cannot be summed", () => {
+    const [panel] = toPanels(headRow({ same_airport_pairs: 1, same_airport_seats: null }));
+    expect(panel.map.sameAirportSeats).toBeNull();
+  });
+
+  it("reports the figure when it can be stated", () => {
+    const [panel] = toPanels(headRow({ same_airport_pairs: 2, same_airport_seats: 4321 }));
+    expect(panel.map.sameAirportSeats).toBe(4321);
   });
 });

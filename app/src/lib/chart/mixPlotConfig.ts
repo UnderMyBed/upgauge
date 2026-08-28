@@ -53,6 +53,39 @@ export function gapNote(gaps: number): string {
   return `${plural(gaps, "month")} with no filings, drawn as gaps rather than interpolated.`;
 }
 
+/** THE SECOND CAUSE, AND IT IS NOT THE FIRST ONE (#121). A month that WAS filed and whose every
+ * filing failed an invariant is a hole in the chart for a different reason, and folding it into
+ * `gapNote`'s count puts a false sentence -- "with no filings" -- on the one line a sighted
+ * reader gets. That is the compound-claim-with-one-false-clause shape this project has shipped
+ * before: `/watch/new-routes` told every visitor its rows were service nobody flew last year
+ * while 521 of 688 had another carrier on the pair.
+ *
+ * Same geometry as a gap, different sentence. Both are stated, separately, on the key AND in the
+ * aria-label -- `/airport`'s foot already sets the precedent that the CAUSE of an absence is
+ * named per page, and a rasterized card has no other channel at all. */
+export function unknowableNote(months: number): string {
+  return (
+    `${plural(months, "month")} filed but wholly quarantined — every filing failed an ` +
+    `invariant, so the stack cannot be drawn there and the month is left as a gap.`
+  );
+}
+
+/** THE THIRD SENTENCE, for months that ARE drawn but understate themselves. Unlike the two
+ * above this is not a hole: at least one band is stateable, so the month is drawn from what can
+ * be stated. The shortfall is real and unbounded -- 26 of the 606 rows behind these cells are
+ * `load_factor_gt_1` carrying 19,870 filed seats, not the `zero_seats` the rest are -- so
+ * leaving it unsaid would let a reader take the stack height as the month's total.
+ *
+ * Erasing the month instead was measured and rejected: 407 such months hold 11,687,092 stateable
+ * seats, the worst (LAS-LAX 2024-11) 297,295 across 12 cells with ONE unknowable. Showing the
+ * dirt is a trust feature; erasing a filing is the same dishonesty as inventing one. */
+export function understatedNote(months: number): string {
+  return (
+    `${plural(months, "month")} understated — a quarantined filing could not be summed into ` +
+    `the stack, so the real total is higher by an amount that cannot be stated.`
+  );
+}
+
 function midpoint(a: Date, b: Date): Date {
   return new Date((a.getTime() + b.getTime()) / 2);
 }
@@ -123,6 +156,8 @@ function describe({
   stack,
   crossover,
   gaps,
+  unknowable,
+  understated,
 }: {
   title: string;
   dimension: MixDimension;
@@ -131,6 +166,8 @@ function describe({
   stack: { key: string; label: string }[];
   crossover: { year: string; from: string; to: string } | null;
   gaps: number;
+  unknowable: number;
+  understated: number;
 }): string {
   const types = stack.filter((s) => s.key !== OTHER_KEY).map((s) => s.label);
   const other = stack.find((s) => s.key === OTHER_KEY);
@@ -141,6 +178,11 @@ function describe({
     // A reader who cannot see the holes has to be told they are there, or the label describes
     // a continuous series the chart deliberately does not draw.
     gaps === 0 ? null : `${gapNote(gaps)}`,
+    // SEPARATE SENTENCES, never one merged count (#121). A reader who cannot see the holes is
+    // told how many there are AND which cause each set has; merging them would name the wrong
+    // cause for whichever set is not "no filings".
+    unknowable === 0 ? null : unknowableNote(unknowable),
+    understated === 0 ? null : understatedNote(understated),
     crossover === null
       ? null
       : `${crossover.to} overtakes ${crossover.from} in ${crossover.year}.`,
@@ -194,6 +236,8 @@ export function buildMixPlotConfig(args: MixPlotArgs): Plot.PlotOptions {
       stack,
       crossover,
       gaps: axis.gaps.length,
+      unknowable: axis.unknowable.length,
+      understated: axis.understated.length,
     }),
     x: { type: "utc", label: null, ticks: "1 year", tickFormat: "%Y" },
     y: { label: "Seats", grid: true, ticks: 4, tickFormat: "~s" },
@@ -267,6 +311,13 @@ export interface PreparedMix {
     stack: StackEntry[];
     /** Unfiled months inside the drawn window. Stated on the chart AND in its aria-label. */
     gaps: number;
+    /** Filed-but-wholly-quarantined months inside the drawn window. A HOLE like a gap, and a
+     * DIFFERENT sentence -- see `unknowableNote`. Counted apart from `gaps` so neither
+     * sentence names the other's cause. */
+    unknowable: number;
+    /** Drawn months that a quarantined filing understates -- see `understatedNote`. Not a
+     * hole: these months are drawn from the bands that can be stated. */
+    understated: number;
   } | null;
 }
 
@@ -382,6 +433,8 @@ export function prepareMixPlot(
     plot: {
       stack,
       gaps: axis.gaps.length,
+      unknowable: axis.unknowable.length,
+      understated: axis.understated.length,
       args: {
         title,
         dimension,

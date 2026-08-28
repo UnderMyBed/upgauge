@@ -89,6 +89,11 @@ export default async function Image({ params }: { params: Promise<{ code: string
     chartSvg: chart.svg,
     chartNote: chart.note,
     gaps: chart.gaps,
+    // The other two absence causes, each carried as its own count and rendered as its own
+    // phrase (#121). A card has no aria-label and no foot, so a merged count here would be the
+    // wrong word with nothing to correct it.
+    unknowable: chart.unknowable,
+    understated: chart.understated,
     asOf,
   });
 }

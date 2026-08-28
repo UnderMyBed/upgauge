@@ -539,3 +539,71 @@ describe("AircraftMixChart stacked by operating carrier", () => {
     expect(chart([]).textContent).toContain("No aircraft-type filings");
   });
 });
+
+// ---------------------------------------------------------------------------------------
+/** THE TWO OTHER ABSENCE CAUSES, EACH IN ITS OWN SENTENCE (#121).
+ *
+ * A month whose every filing was quarantined is a hole for a DIFFERENT reason than an unfiled
+ * one, and a month drawn from only its stateable bands is not a hole at all -- it is a stack
+ * that understates itself. One merged "N months not drawn" would be true of none of the three,
+ * and the visible key is the only channel a sighted reader has.
+ *
+ * The bug the merged form would be: a chart saying "3 months with no filings" about a month that
+ * WAS filed and whose filings all failed an invariant. That is the compound-claim-with-one-false-
+ * clause shape `/watch/new-routes` already shipped once. */
+describe("the chart names WHICH absence each month is", () => {
+  const QUARANTINED_MONTH = "2020-06";
+
+  /** The JFK-LAX fleet with one month emptied of stateable cells (every band NULL there), which
+   * is the wholly-quarantined shape: filed, and nothing about it can be stated. */
+  function wholly(): MixRow[] {
+    return FLEET.map((r) =>
+      r.month === QUARANTINED_MONTH ? { ...r, seats: null, departures: null } : r,
+    );
+  }
+
+  /** ...and the mixed shape: ONE band unstateable in that month, the rest real. */
+  function partial(): MixRow[] {
+    const target = FLEET.find((r) => r.month === QUARANTINED_MONTH)!.code;
+    return FLEET.map((r) =>
+      r.month === QUARANTINED_MONTH && r.code === target
+        ? { ...r, seats: null, departures: null }
+        : r,
+    );
+  }
+
+  // MUTANT: fold `unknowable` into `gaps` -> the key reads "1 month with no filings" about a
+  // month that filed -> red. MUTANT: drop the `unknowableNote` line from the key -> red.
+  it("says a wholly-quarantined month was FILED, not unfiled, on the key and to a screen reader", () => {
+    const container = chart(wholly());
+    expect(container.textContent).toContain("1 month filed but wholly quarantined");
+    expect(container.textContent).toContain("every filing failed an invariant");
+    expect(svgOf(container).getAttribute("aria-label")).toContain("filed but wholly quarantined");
+    // The false sentence must NOT appear: this month is not one with no filings.
+    expect(container.textContent).not.toContain("1 month with no filings");
+  });
+
+  // MUTANT: drop `understated` from the key or from `describe()` -> a stack short by an
+  // unstateable amount is drawn with nothing said about it -> red.
+  it("says a partially-quarantined month is understated, and does NOT call it a gap", () => {
+    const container = chart(partial());
+    expect(container.textContent).toContain("1 month understated");
+    expect(container.textContent).toContain("the real total is higher");
+    expect(svgOf(container).getAttribute("aria-label")).toContain("1 month understated");
+    // It is drawn, so it is neither a gap nor a wholly-quarantined month.
+    expect(container.textContent).not.toContain("wholly quarantined");
+    expect(container.textContent).not.toContain("with no filings");
+  });
+
+  // THE ISOLATION, and the reason both fixtures exist. Neither sentence may appear on a clean
+  // chart -- without this, a component that printed both unconditionally would satisfy the two
+  // tests above.
+  it("says neither on a chart with nothing quarantined", () => {
+    const container = chart(FLEET);
+    expect(container.textContent).not.toContain("wholly quarantined");
+    expect(container.textContent).not.toContain("understated");
+    const label = svgOf(container).getAttribute("aria-label")!;
+    expect(label).not.toContain("wholly quarantined");
+    expect(label).not.toContain("understated");
+  });
+});

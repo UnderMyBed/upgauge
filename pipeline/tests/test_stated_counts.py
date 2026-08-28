@@ -139,6 +139,8 @@ STATED: dict[str, tuple[str, ...]] = {
     "route_pairs_with_same_airport": (
         "app/smoke.sh",
         "app/src/app/route/[pair]/page.tsx",
+        # #121: the denominator for how narrow the crossover annotation's new refusal is.
+        "app/src/lib/chart/crossover.ts",
         "app/src/components/AircraftMixChart.test.tsx",
         "app/src/lib/chart/aircraftMix.test.ts",
         "app/src/lib/chart/aircraftMix.ts",

@@ -1,3 +1,5 @@
+import { addSum } from "@/lib/nullSum";
+
 /** The subset of `MixRow` (app/src/lib/chart/aircraftMix.ts) this module reads. Declared
  * structurally rather than imported so the annotation has no dependency on how the chart
  * series are built; a `MixRow[]` satisfies it. */
@@ -5,7 +7,8 @@ type CrossoverRow = {
   month: string;
   code: string;
   label: string;
-  seats: number;
+  /** NULL when every filing behind this cell was quarantined -- see `MixRow.seats`. */
+  seats: number | null;
 };
 
 /** A change of the #1 aircraft type, named for the chart annotation:
@@ -16,7 +19,7 @@ export type Crossover = {
   to: string;
 };
 
-type Leader = { code: string; label: string; seats: number };
+type Leader = { code: string; label: string; seats: number | null };
 
 /** The most recent year in which the #1 aircraft type by seats differs from the previous
  * year's, or `null` when there is no such year.
@@ -67,7 +70,11 @@ function leadersByYear(rows: readonly CrossoverRow[]): [string, Leader][] {
     let types = totals.get(year);
     if (!types) totals.set(year, (types = new Map()));
     const running = types.get(code);
-    if (running) running.seats += seats;
+    // `addSum`, not `+=` (#121): `null + 5` is `5`, so a running total on `+` would report a
+    // type whose every cell was quarantined as having flown 0 seats -- and then rule it out as
+    // a leader by the `<= 0` test below, which is the right answer reached from a fabricated
+    // fact. The two must stay distinguishable, because an UNKNOWN size cannot be ruled out.
+    if (running) running.seats = addSum(running.seats, seats);
     else types.set(code, { code, label, seats });
   }
 
@@ -82,19 +89,32 @@ function leadersByYear(rows: readonly CrossoverRow[]): [string, Leader][] {
   return led;
 }
 
-/** The single largest type by seats, or `null` if the year is tied at the top or flew
- * nothing at all. */
+/** The single largest type by seats, or `null` if the year is tied at the top, flew nothing at
+ * all, or contains a type whose size cannot be stated.
+ *
+ * THE THIRD REFUSAL IS #121's, and it is the same refusal as the other two. A type whose every
+ * filing that year was quarantined has an UNKNOWN total, not a small one, so no other type can
+ * be shown to have beaten it -- and "B overtakes A in 2018" is a claim about which type was
+ * biggest. Ranking the unknowable one last (or, worse, as 0) would emit an annotation whose
+ * direction rests on a number nobody has. This is the same silent-pick the `/carrier/PA` split
+ * exists to refuse, in a sentence printed on the chart.
+ *
+ * A year with no leader is SKIPPED, not treated as a wall (see findCrossover), so this degrades
+ * to naming the crossover from the years that CAN be ranked rather than to no annotation at all.
+ * Measured: 302 route pairs carry such a cell, across 503 pair-years, out of 23,041 pairs --
+ * and ATL-MCO, whose annotation `app/smoke.sh` pins, carries none. */
 function unambiguousLeader(types: Leader[]): Leader | null {
   let best: Leader | null = null;
   let tied = false;
   for (const type of types) {
-    if (!best || type.seats > best.seats) {
+    if (type.seats === null) return null;
+    if (best === null || best.seats === null || type.seats > best.seats) {
       best = type;
       tied = false;
     } else if (type.seats === best.seats) {
       tied = true;
     }
   }
-  if (!best || tied || best.seats <= 0) return null;
+  if (!best || best.seats === null || tied || best.seats <= 0) return null;
   return best;
 }

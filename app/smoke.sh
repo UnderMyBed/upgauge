@@ -1269,6 +1269,65 @@ check_not "route JFK-LAX: its seats are not an em dash" "$BODY" \
 check     "route JFK-LAX: and its foot claims the ordinary exclusion" "$BODY" \
   'excluded from these totals'
 
+# 10f. #121, second half -- the CHART. The stat strip and the card were the first half; the
+# stacked area above them was still coercing the identical NULL.
+#
+# `fetchAircraftMix` applied `?? 0` to `SUM(x) FILTER (WHERE NOT is_quarantined)`, so a
+# (month, band) cell whose every filing failed an invariant was drawn as a zero-height band --
+# "this type flew nothing that month", invented from a value nobody has, on the one surface whose
+# entire gap treatment exists to refuse exactly that. Same defect #114 fixed on the map and #118
+# on the table.
+#
+# TWO SHAPES, TWO SENTENCES, and the two fixtures below are chosen so each carries exactly ONE of
+# them and therefore disproves the other two needles:
+#   DFW-SJU  1 wholly-quarantined month (2020-05, a single B787-9 cell), 0 gaps, 0 understated
+#   HNL-OGG  11 understated months (the ATR-72 quarantined beside real traffic), 0 of the others
+# A single fixture carrying both counts could not tell a merged sentence from two separate ones,
+# which is the whole property under test.
+#
+# THE WORDING IS THE NEEDLE. "with no filings" is FALSE of a month that was filed and wholly
+# quarantined, and both are false of a month that is drawn but understated -- so a merged
+# "N months not drawn" would be true of none of the three. These strings are written in the bytes
+# React EMITS: they carry no entity, apostrophe or angle bracket, and the em dash in the
+# unknowable sentence is U+2014 written literally, since `mixPlotConfig.ts` builds it as a JS
+# string and React emits the raw code point.
+#
+# DATASET-PINNED as a block, for 10c's reason: a BTS revision that un-quarantines these cells must
+# redden this rather than silently stop testing anything.
+BODY=$(curl -s --max-time 30 "${BASE}/route/DFW-SJU")
+check_dataset check "route DFW-SJU: names a filed-but-quarantined month as filed" "$BODY" \
+  '1 month filed but wholly quarantined'
+check_dataset check "route DFW-SJU: ...and says why the stack cannot be drawn there" "$BODY" \
+  'every filing failed an invariant, so the stack cannot be drawn there'
+# The false sentence, which the pre-#121 code would have printed for this month.
+check_dataset check_not "route DFW-SJU: does not call a filed month unfiled" "$BODY" \
+  'month with no filings'
+check_dataset check_not "route DFW-SJU: and does not call it understated -- nothing is drawn" \
+  "$BODY" 'month understated'
+# In the aria-label too, not only on the key: `role="img"` means the label is the ONLY thing a
+# screen reader is given, so a sentence missing there is a hole for every non-sighted reader.
+check_dataset check "route DFW-SJU: the screen reader is told the same thing" "$BODY" \
+  'aria-label="Stacked area'
+check_dataset check_re "route DFW-SJU: ...including the quarantine sentence" \
+  "$(printf '%s' "$BODY" | grep -o 'aria-label="Stacked area[^"]*"')" 'filed but wholly quarantined'
+
+BODY=$(curl -s --max-time 30 "${BASE}/route/HNL-OGG")
+check_dataset check "route HNL-OGG: discloses the months its stack understates" "$BODY" \
+  '11 months understated'
+check_dataset check "route HNL-OGG: ...and says the real total is higher" "$BODY" \
+  'the real total is higher by an amount that cannot be stated'
+check_dataset check_not "route HNL-OGG: an understated month is not a gap" "$BODY" \
+  'month with no filings'
+check_dataset check_not "route HNL-OGG: nor is it wholly quarantined" "$BODY" \
+  'wholly quarantined'
+
+# The negative, on a route with nothing quarantined anywhere in its window. Without it every
+# check_not above could pass against a chart that had stopped printing its key.
+BODY=$(curl -s --max-time 30 "${BASE}/route/JFK-LAX")
+check     "route JFK-LAX: the chart key is still rendered" "$BODY" 'seats per departure'
+check_not "route JFK-LAX: a clean chart claims no quarantined months" "$BODY" 'wholly quarantined'
+check_not "route JFK-LAX: ...and none understated"                    "$BODY" 'months understated'
+
 # 11. /carrier/<code> -- the page has to say what it is counting.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL")
 check     "carrier: renders the code"        "$BODY" '>DL<'

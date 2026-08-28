@@ -41,6 +41,10 @@ export interface CardChart {
    * chart's `aria-label`; a rasterized card has neither, so the card's visible line is the only
    * thing left to carry it. */
   gaps: number;
+  /** Filed-but-wholly-quarantined months, and drawn months a quarantined filing understates.
+   * Separate counts, separate words on the card -- see `CardInput` (#121). */
+  unknowable: number;
+  understated: number;
 }
 
 /** The card's chart: the SAME stacked area the page mounts, from the same rows through the same
@@ -58,11 +62,21 @@ export function cardChart(
   dimension: MixDimension = BY_AIRCRAFT_TYPE,
 ): CardChart {
   const { months, plot } = prepareMixPlot(rows, title, dimension);
-  if (plot === null) return { svg: null, note: mixAbsenceNote(months, dimension), gaps: 0 };
+  if (plot === null) {
+    return {
+      svg: null,
+      note: mixAbsenceNote(months, dimension),
+      gaps: 0,
+      unknowable: 0,
+      understated: 0,
+    };
+  }
   return {
     svg: asStandaloneSvg(resolveSvgTokens(renderPlotToSvg(buildMixPlotConfig(plot.args)))),
     note: null,
     gaps: plot.gaps,
+    unknowable: plot.unknowable,
+    understated: plot.understated,
   };
 }
 

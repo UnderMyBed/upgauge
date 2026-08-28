@@ -14,6 +14,8 @@ const BASE: CardInput = {
   chartSvg: '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="#21514A"/></svg>',
   chartNote: null,
   gaps: 0,
+  unknowable: 0,
+  understated: 0,
   asOf: "2026-05",
 };
 

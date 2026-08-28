@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { addSum, ratio } from "@/lib/nullSum";
 import {
   fetchAircraftMix,
   aircraftMixQuery,
@@ -55,15 +56,16 @@ describe("fetchAircraftMix", () => {
   it("carries departures, which shade assignment depends on", async () => {
     const rows = await fetchAircraftMix(JFK_LAX, FULL_FROM, FULL_TO);
     const a321 = rows.filter((r) => r.code === "699");
-    const seats = a321.reduce((a, r) => a + r.seats, 0);
-    const departures = a321.reduce((a, r) => a + r.departures, 0);
+    // SUM semantics (#121): `MixRow.seats` is nullable, and `+` would coerce a NULL back to 0.
+    const seats = a321.reduce<number | null>((a, r) => addSum(a, r.seats), null);
+    const departures = a321.reduce<number | null>((a, r) => addSum(a, r.departures), null);
     // Measured totals for the A321nXLR on JFK-LAX over the full window, which the spec's
     // gauge of 128.1 is computed from. Falsifiable: dropping `departures_performed` from the
     // measures makes `departures` NaN (Number(undefined)); reading the wrong column, or
     // failing to exclude quarantined rows, moves either figure off its measured value.
     expect(seats).toBe(17_485_274);
     expect(departures).toBe(136_462);
-    expect(seats / departures).toBeCloseTo(128.1, 1);
+    expect(ratio(seats, departures)).toBeCloseTo(128.1, 1);
   });
 
   it("asks the catalog for exactly the pivot the chart needs", () => {
@@ -445,5 +447,231 @@ describe("toBands over the real B737-8 carrier mix", () => {
       bands.reduce((a, b) => a + b.series.reduce((s, p) => s + p.seats, 0), 0) +
       other.series.reduce((s, p) => s + p.seats, 0);
     expect(stacked).toBe(1_651_436_565);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+/** GAPS ARE GAPS, AND AN UNKNOWABLE CELL IS NOT A ZERO (#121).
+ *
+ * `fetchAircraftMix` coerced `SUM(x) FILTER (WHERE NOT is_quarantined)`'s NULL with `?? 0`, so a
+ * (month, band) cell whose every filing failed an invariant was drawn as a zero-height band --
+ * "this type flew nothing that month", invented from a value nobody has. It is the same defect
+ * #114 fixed on the map and #118 on the table, on the one surface that had kept it.
+ *
+ * TWO SHAPES, TWO TREATMENTS, and the split is measured rather than stipulated:
+ *
+ *   - a month with NO stateable cell has no height anywhere, so it breaks the runs exactly as an
+ *     unfiled month does. 339 such months over the pairs this chart draws; they carry zero
+ *     stateable seats, so breaking them erases nothing.
+ *   - a month with SOME stateable cells is still drawn, because dropping it would erase what
+ *     CAN be stated: 407 such months hold 11,687,092 stateable seats, the worst 297,295 in one
+ *     month. It is disclosed as understated instead.
+ *
+ * ASSERT THE GEOMETRY, NEVER THE FILLS. Every assertion below is on a run BOUNDARY -- the run id
+ * either side of the month in question. CLAUDE.md's M4c Task 5 finding is that a wrong stack
+ * still emits the right number of paths with the right fills, so counting paths or listing
+ * series passes under this bug. */
+function cell(month: string, code: string, seats: number | null): MixRow {
+  // `departures` tracks `seats`: both measures carry the identical FILTER, so they go NULL
+  // together (docs/data/invariants.md, "zero partially-NULL groups").
+  return { month, code, label: code, seats, departures: seats === null ? null : 2 };
+}
+
+describe("a month with nothing stateable breaks the area, like an unfiled month", () => {
+  // 2020-05 is filed and wholly quarantined; 2020-04 and 2020-06 are ordinary. The run MUST
+  // split, and it must split for the stated reason.
+  const rows = [
+    cell("2020-04", "614", 800),
+    cell("2020-05", "887", null),
+    cell("2020-06", "614", 900),
+  ];
+
+  // MUTANT: restore `?? 0` in `fetchAircraftMix` -- or, equivalently here, let a null cell into
+  // `stateable` -- and 2020-05 becomes a drawn month, so all three share ONE run -> red.
+  it("splits the run at the unknowable month", () => {
+    const { axis } = toBands(rows);
+    expect(axis.run.get("2020-04")).toBeDefined();
+    expect(axis.run.get("2020-06")).toBeDefined();
+    // THE BOUNDARY. Not "there are two runs" and not a path count: the months either side must
+    // belong to DIFFERENT runs, and the unknowable month to none.
+    expect(axis.run.get("2020-04")).not.toBe(axis.run.get("2020-06"));
+    expect(axis.run.has("2020-05")).toBe(false);
+  });
+
+  // MUTANT: fold the two causes into one count (`gaps: span.filter((m) => !filedSet.has(m))`,
+  // the pre-#121 line) -> 2020-05 lands in `gaps` and the chart says "1 month with no filings"
+  // about a month that WAS filed -> red.
+  it("counts it as quarantined, never as unfiled", () => {
+    const { axis } = toBands(rows);
+    expect(axis.unknowable).toEqual(["2020-05"]);
+    expect(axis.gaps).toEqual([]);
+    // It is not understated either: nothing about it is drawn, so there is no stack to
+    // understate. All three counts are separate findings.
+    expect(axis.understated).toEqual([]);
+  });
+});
+
+describe("a month with some stateable cells stays drawn and says it is understated", () => {
+  // 2020-06 carries one wholly-quarantined type beside two that filed real seats -- HNL-OGG's
+  // actual shape. Dropping the month would erase the 5,000 seats that CAN be stated.
+  const rows = [
+    cell("2020-05", "608", 1000),
+    cell("2020-06", "442", null),
+    cell("2020-06", "608", 3000),
+    cell("2020-06", "614", 2000),
+    cell("2020-07", "608", 1200),
+  ];
+
+  // MUTANT: treat ANY unknowable cell as making its month undrawable (drop `2020-06` from
+  // `stateable`) -> the run splits and 5,000 stateable seats vanish -> red. This is the mutant
+  // that isolates this shape from the one above: it leaves the whole-month tests green.
+  it("keeps the month inside one unbroken run", () => {
+    const { axis } = toBands(rows);
+    expect(axis.run.get("2020-06")).toBeDefined();
+    expect(axis.run.get("2020-05")).toBe(axis.run.get("2020-06"));
+    expect(axis.run.get("2020-06")).toBe(axis.run.get("2020-07"));
+    expect(axis.unknowable).toEqual([]);
+    expect(axis.gaps).toEqual([]);
+  });
+
+  // MUTANT: drop `understated` from the axis, or never populate it -> the chart draws a month
+  // whose stack is short by an unstateable amount and says nothing -> red.
+  it("discloses the month as understated", () => {
+    const { axis } = toBands(rows);
+    expect(axis.understated).toEqual(["2020-06"]);
+  });
+
+  // The stateable bands are still summed correctly, and the unknowable one contributes nothing
+  // rather than poisoning its neighbours.
+  // MUTANT: NULL-poisoning in the `byMonth` fold -> 608's 2020-06 point goes to 0 -> red.
+  it("draws the stateable bands at their real heights", () => {
+    const { bands } = toBands(rows);
+    const b608 = bands.find((b) => b.code === "608")!;
+    expect(b608.series.find((p) => p.month === "2020-06")!.seats).toBe(3000);
+  });
+});
+
+describe("a band whose every cell is unknowable is not the lightest band on the chart", () => {
+  // A type that filed only quarantined rows has an UNKNOWN total and an UNKNOWN gauge. Summed
+  // with `+` it reports 0 seats and 0 departures, which makes it look like a band that flew
+  // nothing -- and `gauge()` used to return null only for a zero DEPARTURE count, so the two
+  // were already conflated one level down.
+  const rows = [
+    cell("2020-01", "614", 5000),
+    cell("2020-01", "489", null),
+    cell("2020-02", "614", 6000),
+    cell("2020-02", "489", null),
+  ];
+
+  // MUTANT: fold the totals with `+=` instead of `addSum` -> 489 totals 0 seats / 0 departures
+  // and is ranked as a real, tiny band rather than an unknowable one -> red.
+  it("ranks the unknowable band last for membership, never first", () => {
+    const { bands } = toBands(rows);
+    expect(bands.map((b) => b.code)).toContain("614");
+    // Membership is by seats descending, NULLS LAST: the stateable band must outrank it.
+    const codes = bands.map((b) => b.code);
+    expect(codes.indexOf("614")).toBeLessThan(codes.indexOf("489") === -1 ? 99 : codes.indexOf("489"));
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+/** THE SAME TWO SHAPES, THROUGH THE REAL QUERY, against the built warehouse. The unit tests
+ * above pin `toBands`; these pin that `fetchAircraftMix` actually hands it a NULL rather than a
+ * coerced zero -- the hop where `?? 0` lived, and one a synthetic fixture cannot reach. */
+const DFW_SJU: [string, string[]][] = [["route", ["11298-14843"]]];
+const HNL_OGG: [string, string[]][] = [["route", ["12173-13830"]]];
+
+describe("the real query carries an unknowable cell through as NULL", () => {
+  // DFW-SJU 2020-05: ONE filed cell that month (BTS 887, the B787-9), quarantined, with
+  // ordinary filed months either side. Its entire month is therefore unstateable.
+  // MUTANT: restore `?? 0` in `fetchAircraftMix` -> `seats` is 0, the month is drawable, and
+  // the run never splits -> red on both assertions below.
+  it("splits the run at a month the warehouse cannot state", async () => {
+    const rows = await fetchAircraftMix(DFW_SJU, "2020-01", "2020-12");
+    expect(rows.some((r) => r.month === "2020-05" && r.seats === null)).toBe(true);
+
+    const { axis } = toBands(rows);
+    expect(axis.unknowable).toContain("2020-05");
+    expect(axis.gaps).not.toContain("2020-05");
+    // THE BOUNDARY, not a path count: the filed months either side are in different runs.
+    expect(axis.run.get("2020-04")).toBeDefined();
+    expect(axis.run.get("2020-06")).toBeDefined();
+    expect(axis.run.get("2020-04")).not.toBe(axis.run.get("2020-06"));
+  });
+
+  // HNL-OGG 2020-07: BTS 442 (ATR-72) wholly quarantined beside three types filing real seats.
+  // The month must stay drawn -- it holds six figures of stateable seats.
+  // MUTANT: treat any unknowable cell as making its month undrawable -> the run splits here and
+  // the stateable seats vanish -> red. That mutant leaves the DFW-SJU test above green, which is
+  // what proves the two shapes are guarded independently rather than by one accident.
+  it("keeps a partially-quarantined month drawn, and discloses it", async () => {
+    const rows = await fetchAircraftMix(HNL_OGG, "2020-01", "2020-12");
+    expect(rows.some((r) => r.month === "2020-07" && r.seats === null)).toBe(true);
+
+    const { axis, bands } = toBands(rows);
+    expect(axis.understated).toContain("2020-07");
+    expect(axis.unknowable).not.toContain("2020-07");
+    expect(axis.gaps).not.toContain("2020-07");
+    // Same run either side -- the month is not a hole.
+    expect(axis.run.get("2020-06")).toBe(axis.run.get("2020-07"));
+    expect(axis.run.get("2020-07")).toBe(axis.run.get("2020-08"));
+    // And what CAN be stated is still drawn at its real height: 608 (B717-2) filed 55,936 seats
+    // that month. Dropping the month would have erased it.
+    const b608 = bands.find((b) => b.code === "608")!;
+    expect(b608.series.find((p) => p.month === "2020-07")!.seats).toBe(55936);
+  });
+});
+
+describe("toBands folds a repeated cell with SUM semantics", () => {
+  // `toBands` is EXPORTED, and its contract is a list of (month, band) cells -- not "one row per
+  // group, because that is what the pivot happens to emit today". A caller that hands it two
+  // rows for one cell, one of them unstateable, must get the stateable one back.
+  // MUTANT: `m.set(r.code, r.seats === null ? null : (m.get(r.code) ?? 0) + r.seats)` -- a fold
+  // that lets a later NULL erase an earlier real value -> the point goes to 0 -> red. This
+  // mutant is invisible to every other test in this file, because the pivot emits one row per
+  // group and no other fixture repeats one.
+  it("keeps the stateable half of a repeated cell", () => {
+    const rows = [
+      cell("2020-01", "614", 500),
+      cell("2020-01", "614", null),
+      cell("2020-02", "614", 700),
+    ];
+    const { bands } = toBands(rows);
+    const b = bands.find((x) => x.code === "614")!;
+    expect(b.series.find((p) => p.month === "2020-01")!.seats).toBe(500);
+  });
+});
+
+describe("an unknowable band total is not a zero total", () => {
+  // Band MEMBERSHIP is by total seats. A band whose every cell is quarantined has an UNKNOWN
+  // total; folded with `+` it reports a real 0 -- and a real 0 is a band that FILED and flew
+  // nothing, which is a different finding that this project refuses to conflate.
+  //
+  // The distinction is only observable where the two COMPETE, which is why this fixture is built
+  // the way it is: six bands for five slots, four of them large, and the fifth slot contested by
+  // a band that measurably flew 0 and a band whose size is unknown. Under `addSum` the measured
+  // zero wins (NULLS LAST). Under `+` both read 0, the tie falls to `code.localeCompare`, and
+  // `111` takes the slot from `999` -- the winner decided by an id rather than by the data, the
+  // "right answer by accident of row order" shape CLAUDE.md names.
+  //
+  // Reachable, not hypothetical: BTS types 201 and 489 filed only quarantined rows on this
+  // warehouse, so `/carrier/F4`'s mix chart carries such a band.
+  //
+  // MUTANT: `t.seats = ((t.seats ?? 0) + (r.seats ?? 0))` -> `111` displaces `999` -> red.
+  it("loses a contested band slot to one that measurably flew nothing", () => {
+    const big = ["614", "608", "721", "442"];
+    const rows = [
+      ...big.map((c, i) => cell("2020-01", c, 900 - i * 100)),
+      ...big.map((c, i) => cell("2020-02", c, 900 - i * 100)),
+      // Contesting the fifth slot. `111` sorts first by code, so a `+` fold hands it the slot.
+      cell("2020-01", "111", null),
+      cell("2020-02", "111", null),
+      cell("2020-01", "999", 0),
+      cell("2020-02", "999", 0),
+    ];
+    const { bands, other } = toBands(rows);
+    expect(bands.map((b) => b.code)).toContain("999");
+    expect(bands.map((b) => b.code)).not.toContain("111");
+    expect(other.typeCount).toBe(1);
   });
 });

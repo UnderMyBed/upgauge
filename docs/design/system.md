@@ -497,6 +497,34 @@ below — it binds every time-series mark, not only lines.
     interpolated."* One sentence, written once — the number is per-subject, so the static
     legend rail cannot hold it, and two copies of one measurement drift.
 
+  **A hole has more than one cause, and the sentence must name the right one.** A month whose
+  every filing was **quarantined** is not a month with *no* filings — it was filed, and nothing
+  about it can be trusted. Both break the runs, because the geometry of an absence is the same
+  whichever cause it has, but they are counted and worded **separately** on the key and in the
+  `aria-label`: *"N months filed but wholly quarantined — every filing failed an invariant."*
+  Folding them into the gap count puts a false clause in the one sentence a sighted reader gets,
+  which is the compound-claim shape `/watch/new-routes` already shipped once. Measured over the
+  pairs the chart draws: **339** such months, and they carry zero stateable seats, so breaking
+  them erases nothing.
+
+  **A third state is not a hole at all.** Where *some* of a month's bands can be stated and
+  others cannot, the month is **still drawn**, from what can be stated, and disclosed as
+  understated: *"N months understated — a quarantined filing could not be summed into the stack,
+  so the real total is higher by an amount that cannot be stated."* Dropping the month instead
+  was measured and rejected: **407** such months hold **11,687,092** stateable seats, the worst
+  (`LAS–LAX` 2024-11) **297,295** across 12 cells with one unknowable. Erasing a filing is the
+  same dishonesty as inventing one, and the shortfall is not bounded near zero — 26 of the 606
+  rows behind these cells are `load_factor_gt_1` carrying 19,870 filed seats, not `zero_seats`.
+  A stacked area's y is cumulative, so there is no honest way to omit one component at one x and
+  keep the rest aligned; the choice is draw-and-disclose or erase, and this project surfaces dirt
+  rather than hiding it.
+
+  **The crossover annotation refuses rather than ranks.** *"B overtakes A in 2018"* is a claim
+  about which type was biggest, so a year holding a type whose seats cannot be stated yields **no
+  leader** — the unknown rival cannot be shown to have lost. A year with no leader is skipped
+  rather than treated as a wall, so the annotation is derived from the years that can be ranked.
+  Measured: 302 pairs carry such a cell across 503 pair-years, out of 23,041.
+
   The x domain still runs first-filing → last-filing, not the requested window: a subject that
   stopped filing in 2019 draws nothing to the right of 2019 rather than a flat zero line to
   2026. The page's own window line and the `aria-label` name the range actually drawn.

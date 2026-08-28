@@ -634,6 +634,43 @@ the 12 is a `zero_seats` quarantine — a filed seat count of 0 against departur
 the treatment is the em dash and not a zero, on every one of the six surfaces: stat strip, table
 cell, chart, map, card and foot.
 
+**The chart coerced the same NULL, one surface over, and needed a different answer.** `sumTotals`
+and the stat strip were the first half of #121; `fetchAircraftMix` applied the identical `?? 0`,
+so a `(month, band)` cell whose every filing was quarantined was drawn as a zero-height band —
+"this type flew nothing that month". Measured over the pairs the chart actually draws (≥ 2 filed
+months): **768** such cells across **302** route pairs, **55** cells / 8 carriers, **62** cells /
+11 aircraft types.
+
+**A stacked area's y is cumulative, so the two shapes of that defect take different treatments,
+and the split is measured rather than assumed.** A month with **no** stateable cell has no height
+anywhere and breaks the runs exactly as an unfiled month does — **339** such months, carrying zero
+stateable seats, so breaking them erases nothing. A month with **some** stateable cells is still
+drawn, because dropping it would erase what can be stated: **407** such months hold **11,687,092**
+stateable seats, the worst (`LAS–LAX` 2024-11) **297,295** across 12 cells with one unknowable. It
+is disclosed as *understated* instead. The shortfall is not bounded near zero — 26 of the 606 rows
+behind those cells are `load_factor_gt_1` carrying 19,870 filed seats, not `zero_seats`.
+`docs/design/system.md` § Charts carries the exact wording each cause gets; the rule is that the
+gap count never absorbs the quarantine count, because "N months with no filings" is false of a
+month that was filed.
+
+**Downstream of the same rows: the crossover annotation refuses rather than ranks.** A year holding
+a type whose seats cannot be stated has no leader — "B overtakes A" is a claim about which type was
+biggest, and an unknown rival cannot be shown to have lost. 302 pairs, 503 pair-years.
+
+**One state is admitted because the producer can return it, not because a page shows it.**
+`SegmentMapInput.sameAirportSeats` takes `number | null`, where null means a same-airport pair is
+being withheld from the arcs by an amount that cannot be summed. `carrierDiff.ts` reached it with
+`?? 0`, conflating that with the `LEFT JOIN` missing (the category has no same-airport pair, where
+0 is honest); `map_carrier_diff.sql` now emits a pair COUNT so the two are separable.
+**This is latent, not live, and the distinction was got wrong once before being measured:** the
+wholly-quarantined same-airport *pair* is real (`8V`'s VEE–VEE in the trailing 12, airline 21745's
+STT–STT in the prior 12), but a panel folds every same-airport pair in its category together and
+every such fold contains at least one stateable pair — measured across all **115** carriers with
+route-month rows, **zero** panels return NULL. No page renders the wrong sentence today. The
+coercion was removed anyway: `sql/02_marts/100_fct_route_month.sql:62` states the rule in its own
+comment — *"do NOT wrap these in COALESCE(..., 0)"* — and a latent conflation is one refresh from
+being a live one.
+
 **The wider branch is the empty one, and the two absences must stay separable.** `sumColumn`'s
 `null` seed means an entity that is fact-present but filed **nothing** inside the window reports its
 sums as unknowable rather than as zero — **12,115** route pairs, **45** carriers and **37** aircraft

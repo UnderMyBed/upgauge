@@ -27,6 +27,12 @@ export interface CardInput {
   chartSvg: string | null; // already token-resolved; null when there is nothing to draw
   chartNote: string | null; // why there is no chart, in the page's words; null when there is one
   gaps: number; // unfiled months inside the window
+  /** Filed-but-wholly-quarantined months inside the window -- a hole for a DIFFERENT reason
+   * than `gaps`, so it gets its own words rather than being added to that count (#121). */
+  unknowable: number;
+  /** Drawn months a quarantined filing understates. Not a hole; the stack is lower than the
+   * month's real total by an amount that cannot be stated. */
+  understated: number;
   asOf: string; // "2026-05"
 }
 
@@ -188,7 +194,8 @@ function Chart({
 }
 
 export function CardFrame(input: CardInput): React.ReactElement {
-  const { title, subtitle, stats, chartSvg, chartNote, gaps, asOf } = input;
+  const { title, subtitle, stats, chartSvg, chartNote, gaps, unknowable, understated, asOf } =
+    input;
 
   return (
     <div
@@ -255,9 +262,20 @@ export function CardFrame(input: CardInput): React.ReactElement {
       {/* Rendered only when gaps > 0. The page states its unfiled-month count in the chart AND
           in the chart's aria-label (system.md § Charts); a rasterized card has no aria-label, so
           this visible line is the only thing left to carry that statement. */}
-      {gaps > 0 ? (
+      {/* THREE CAUSES, THREE PHRASES, joined only for layout (#121). "Unfiled" is false of a
+          month that WAS filed and wholly quarantined, and both are false of a month that is
+          drawn but understated -- and a card is the surface where a wrong word is unrecoverable,
+          since it has no foot, no empty state and no aria-label to correct it. Built as ONE
+          string so the row cannot wrap into a second line the card has no height for. */}
+      {gaps + unknowable + understated > 0 ? (
         <div style={{ display: "flex", fontFamily: MONO, fontSize: 13, color: OG_PALETTE["ink-3"] }}>
-          {`${gaps} unfiled months`}
+          {[
+            gaps > 0 ? `${gaps} unfiled months` : null,
+            unknowable > 0 ? `${unknowable} wholly quarantined` : null,
+            understated > 0 ? `${understated} understated` : null,
+          ]
+            .filter((x) => x !== null)
+            .join(" · ")}
         </div>
       ) : null}
     </div>

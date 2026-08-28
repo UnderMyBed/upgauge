@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { connect, demoteBigInts } from "@/lib/db";
+import { numOrNull } from "@/lib/nullSum";
 import { NETWORK_ARC_CAP, type GeoNode, type SegmentDatum, type SegmentMapInput } from "./segmentMap";
 
 // Same anchor, same reason, as db.ts's ROOT / airportNetwork.ts's QUERIES_DIR: process.cwd() is
@@ -83,7 +84,7 @@ export interface CarrierDiff {
 
 /** One row of `map_carrier_diff.sql`. `from_*`/`to_*` are LEFT-JOINed, so any of them can be null
  * -- see `toSegment`, which refuses rather than rendering a dash. */
-interface DiffRow {
+export interface DiffRow {
   /** NULL on the anchor row a carrier with no drawable arc returns. Never NULL on an arc row --
    *  `panel` filtered `category IS NOT NULL` before the join, so this cannot collide with data. */
   category: string | null;
@@ -107,6 +108,10 @@ interface DiffRow {
   gauge_fall: number | null;
   category_total: number;
   /** Per category. Null when this carrier filed no same-airport pair in that category. */
+  /** How many same-airport pairs this category has. NULL only when the LEFT JOIN missed, i.e.
+   *  it has none -- which is what tells `same_airport_seats`'s NULL apart from a wholly
+   *  quarantined one (sql/03_queries/map_carrier_diff.sql, `same_airport` CTE). */
+  same_airport_pairs: number | null;
   same_airport_seats: number | null;
 }
 
@@ -227,6 +232,18 @@ export async function fetchCarrierDiff(
     );
   }
 
+  return { panels: toPanels(rows, cap), quarantinedRoutes: rows[0].undrawable_routes };
+}
+
+/** The rows -> panels fold, split out of `fetchCarrierDiff` so the `sameAirportSeats` mapping
+ * below can be driven with a row shape the warehouse does not currently produce (#121).
+ *
+ * THE EXTRACTION DOES NOT PIN THE WIRING -- `fetchCarrierDiff`'s own live tests do, since they
+ * assert panel order and panel contents that only exist if this function is called. What the
+ * extraction buys is the ability to hand this a head row whose same-airport pairs are ALL
+ * quarantined, which no carrier on this warehouse has (measured: all 115 scanned, zero such
+ * panels) and which a live fixture therefore cannot reach. */
+export function toPanels(rows: DiffRow[], cap: number = NETWORK_ARC_CAP): CarrierDiff[] {
   // Grouped in arrival order, which the query has already sorted by each category's OWN ranking
   // key with a total-order tiebreak -- seats for added and dropped, GAUGE FALL for downgauged.
   // So `segments[0]` is the largest of whatever that panel ranks on, which on a downgauged panel
@@ -296,10 +313,16 @@ export async function fetchCarrierDiff(
         // `totalRoutes`, but disclosed rather than lost. REQUIRED, and an explicit 0 when the
         // carrier filed none in this category -- the field's own contract says to pass 0 rather
         // than omit, because an omitted optional disclosure is the failure it exists to prevent.
-        // The SQL returns NULL for "no same-airport pair here"; 0 is the honest rendering of
-        // that at this boundary, since the question the field answers is "how many seats are
-        // being withheld from the arcs", and the answer is none.
-        sameAirportSeats: head.same_airport_seats ?? 0,
+        //
+        // TWO CAUSES OF NULL, AND `?? 0` ANSWERED THE WRONG ONE (#121). A missing pair COUNT is
+        // the LEFT JOIN missing -- no same-airport pair in this category -- and 0 is the honest
+        // rendering: nothing is being withheld. A present count with NULL seats is a pair that
+        // IS being withheld whose seats cannot be summed, because `fct_route_month.seats` is
+        // itself `SUM(...) FILTER (WHERE NOT is_quarantined)` and every filing behind it was
+        // quarantined. Rendering that as 0 told the reader nothing was withheld.
+        //
+        // LATENT, NOT LIVE, and the distinction is stated because an earlier revision of this comment got it wrong: the wholly-quarantined same-airport PAIR is real (8V's VEE-VEE in the trailing 12, airline 21745's STT-STT in the prior 12), but a panel folds every same-airport pair in its category together, and on this warehouse every such fold includes at least one stateable pair -- measured across all 115 carriers with route-month rows, zero panels come back NULL. So no page renders the wrong sentence today. The coercion is still wrong and still removed: it is one refresh away from being live, and the SQL it reads from states the rule itself.
+        sameAirportSeats: head.same_airport_pairs === null ? 0 : numOrNull(head.same_airport_seats),
         // SET HERE, not left to the consumer, because `title` is the ONLY channel into the map's
         // accessible name and without it two of these three panels announce themselves
         // IDENTICALLY: `renderSegmentMap` falls back to `Route map, ${window}.`, and added and
@@ -316,5 +339,5 @@ export async function fetchCarrierDiff(
       },
     });
   }
-  return { panels, quarantinedRoutes: rows[0].undrawable_routes };
+  return panels;
 }

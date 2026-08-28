@@ -175,7 +175,17 @@ export interface SegmentMapInput {
    *  Measured for the point-to-point maps (#105): 598,829 same-airport seats across 759
    *  carrier x aircraft-type groups over the trailing 12. Dropping them silently in the
    *  generalization would have lost an honesty property the hub map already had. */
-  sameAirportSeats: number;
+  /** `null` means "such a pair exists and its seat count CANNOT be stated" -- every filing
+   *  behind it was quarantined, so `sum(seats) FILTER (WHERE NOT is_quarantined)` returned NULL.
+   *  That is a THIRD state, distinct from `0` ("no seats withheld") and from a positive count,
+   *  and #121 exists because a `?? 0` collapsed it into the first: the map would say nothing was
+   *  being withheld while a pair was being withheld by an unstateable amount.
+   *
+   *  LATENT on today's warehouse -- the quarantined same-airport pair is real (`8V`'s VEE-VEE),
+   *  but every producer folds it in with stateable pairs, so no panel actually returns NULL
+   *  (measured across all 115 carriers). The state is admitted because the producer's own SQL
+   *  can return it, not because a page shows it. Still REQUIRED: pass `0` to say "none". */
+  sameAirportSeats: number | null;
   basemapPaths?: string;
 }
 
@@ -332,9 +342,21 @@ export type SameAirportTotal = "included" | "excluded";
  * they are not drawn -- so it stays one sentence with one owner. Only the clause naming what
  * does carry them differs, because on a hub something does and here nothing does, and a shared
  * tail would make one of the two maps state something false. */
-export function sameAirportNote(seats: number, total: SameAirportTotal): string | null {
-  if (seats <= 0) return null;
+export function sameAirportNote(seats: number | null, total: SameAirportTotal): string | null {
   const tail = total === "included" ? "included in this total." : "and from the route counts.";
+  // THE UNSTATEABLE CASE IS NOT THE EMPTY ONE (#121). A pair exists, it is being withheld from
+  // the arcs, and its seats cannot be summed because every filing behind it failed an invariant.
+  // Saying nothing here -- which `seats <= 0` would do once the type admits null -- withholds
+  // the one disclosure this field exists to make; saying "0 same-airport seats" would assert a
+  // measurement nobody has. So it gets its own sentence, in the form CLAUDE.md requires for
+  // quarantine everywhere else: the fact, then the reason, never a clamp.
+  if (seats === null) {
+    return (
+      `Same-airport seats excluded from the arcs above, ${tail} The amount cannot be stated: ` +
+      `every filing behind them failed an invariant, never clamped.`
+    );
+  }
+  if (seats <= 0) return null;
   return `${seats.toLocaleString("en-US")} same-airport seats excluded from the arcs above, ${tail}`;
 }
 
