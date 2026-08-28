@@ -172,10 +172,16 @@ function describeQuery(query: PivotQuery, allowlist: Allowlist): string {
 }
 
 /** The permalink for the same query widened to the full 2015-2026 window, or null when the
- * query already starts at EARLIEST_MONTH -- there is no broader window left to offer. */
+ * query already starts at EARLIEST_MONTH -- there is no broader window left to offer.
+ *
+ * Routed through `exploreHref`, the same function the four entity pages' identical widened-window
+ * link already centralised onto -- not a second hand-spelled `` `/explore?${encode(...)}` ``,
+ * which is byte-identical today but pure drift risk: a future change to `exploreHref` (or to what
+ * a valid `/explore` permalink requires) would update those four call sites and silently miss the
+ * one still spelled out here. */
 function widerWindowHref(query: PivotQuery): string | null {
   if (query.timeFrom <= EARLIEST_MONTH) return null;
-  return `/explore?${encode({ ...query, timeFrom: EARLIEST_MONTH })}`;
+  return exploreHref({ ...query, timeFrom: EARLIEST_MONTH });
 }
 
 function Stat({ label, value, derived }: { label: string; value: string; derived?: boolean }) {

@@ -5,6 +5,7 @@ import {
   FilterListView,
   FILTER_VALUE_LIMIT,
   readValue,
+  renderSource,
   valueSources,
 } from "@/app/explore/filter/[dim]/page";
 import { loadAllowlist, runPivot } from "@/lib/db";
@@ -196,6 +197,44 @@ describe("/explore/filter/[dim]", () => {
     const few = await renderList("op_airline_id");
     expect(rows(few.container).length).toBeLessThan(FILTER_VALUE_LIMIT);
     expect(few.container.querySelector(".mp-note")).toBeNull();
+  });
+
+  // THE EXACTLY-AT-LIMIT CASE. `result.rows.length === limit` cannot distinguish "the largest
+  // `limit` by seats, not every value" from "every value, and there are exactly `limit` of them"
+  // -- a dimension with exactly `limit` distinct values would still claim to be a partial list,
+  // which is false. No real dimension in this warehouse happens to carry exactly
+  // FILTER_VALUE_LIMIT (100) values, so this drives the boundary by lowering the effective limit
+  // to a count the live data actually reaches, via `renderSource`'s own `limit` parameter --
+  // self-measuring against `op_airline_id`'s TRUE distinct count for this window, so the test does
+  // not rot the next time the warehouse's carrier count changes.
+  it("pins the exactly-at-limit boundary: truncated is false at the true count, true one below it", async () => {
+    const allowlist = await loadAllowlist();
+    const query = decodeRequest(SEGMENT, allowlist);
+    const entry = filterableDimensions(allowlist, query.grain).find(
+      (e) => e.key === "op_airline_id",
+    )!;
+    const { sources } = valueSources(entry, allowlist);
+
+    // A limit far above any real count establishes the TRUE total -- and pins that op_airline_id
+    // is not itself truncated at 1000, which the boundary checks below assume.
+    const full = await renderSource(query, entry, sources[0], null, 1000);
+    expect(full.truncated).toBe(false);
+    const total = full.values.length;
+    expect(total).toBeGreaterThan(1);
+
+    // Every value fits exactly -- there is no row beyond what's shown, so this must NOT claim to
+    // be a partial list. This is the exact case the review finding names: the buggy
+    // `rows.length === limit` form reports `true` here, since the query itself was limited to
+    // `limit` rows and got back exactly that many.
+    const atLimit = await renderSource(query, entry, sources[0], null, total);
+    expect(atLimit.values.length).toBe(total);
+    expect(atLimit.truncated).toBe(false);
+
+    // One under the true count -- a real row exists beyond the shown page, so this MUST claim to
+    // be a partial list.
+    const belowLimit = await renderSource(query, entry, sources[0], null, total - 1);
+    expect(belowLimit.values.length).toBe(total - 1);
+    expect(belowLimit.truncated).toBe(true);
   });
 
   // `endpoint_airport_id` is `filter_only`: `renderPivot` refuses it as a grouping key, so a

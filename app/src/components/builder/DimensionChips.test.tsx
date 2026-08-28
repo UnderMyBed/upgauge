@@ -53,15 +53,25 @@ describe("DimensionChips", () => {
     // different rules at once.
     const { container } = render(<DimensionChips query={q({ grain: "route", dimensions: ["route", "year"] })} allowlist={FIXTURE} />);
     const off = [...container.querySelectorAll(".chip-off")];
+    // Fix round 2, Finding 3: the inert reason is now ALSO stated in visually-hidden text
+    // (Chips.tsx), so textContent carries the label plus that reason -- not the bare label. The
+    // reason string is identical for every grain-refused dimension, so appending it to each
+    // expected label preserves the same sort order this test already relied on.
     expect(off.map((n) => n.textContent).sort()).toEqual(
-      ["Aircraft group", "Aircraft type", "Dest state", "Distance group", "Origin state"],
+      ["Aircraft group", "Aircraft type", "Dest state", "Distance group", "Origin state"].map(
+        (label) => `${label} (not filed at route grain)`,
+      ),
     );
     expect(off[0].getAttribute("title")).toContain("route grain");
   });
 
   it("renders the last remaining dimension inert, because removing it is a server rejection", () => {
     const { container } = render(<DimensionChips query={q({ dimensions: ["op_airline_id"] })} allowlist={FIXTURE} />);
-    const carrier = [...container.querySelectorAll(".chip")].find((n) => n.textContent === "Carrier")!;
+    // Fix round 2, Finding 3: an inert chip's textContent now also carries its visually-hidden
+    // reason (Chips.tsx), so this matches on the label prefix rather than exact equality.
+    const carrier = [...container.querySelectorAll(".chip")].find((n) =>
+      n.textContent?.startsWith("Carrier"),
+    )!;
     expect(carrier.tagName).toBe("SPAN");
     expect(carrier.getAttribute("title")).toContain("at least one");
   });

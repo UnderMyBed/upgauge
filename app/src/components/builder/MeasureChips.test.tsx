@@ -36,14 +36,21 @@ describe("MeasureChips", () => {
 
   it("marks a derived measure as derived and an additive one as not", () => {
     const { container } = render(<MeasureChips query={q()} allowlist={FIXTURE} />);
-    const chip = (label: string) => [...container.querySelectorAll(".chip")].find((n) => n.textContent === label)!;
+    // Fix round 2, Finding 3: "Seats" is the sole selected measure in this fixture, so it is the
+    // last-remaining-measure INERT chip -- its textContent now also carries the visually-hidden
+    // reason (Chips.tsx), so this matches on the label prefix rather than exact equality. "Load
+    // factor" stays a plain toggle-on link, exact-matched as before.
+    const chip = (label: string) =>
+      [...container.querySelectorAll(".chip")].find((n) => n.textContent?.startsWith(label))!;
     expect(chip("Load factor").className).toContain("chip-derived");
     expect(chip("Seats").className).not.toContain("chip-derived");
   });
 
   it("renders the last remaining measure inert", () => {
     const { container } = render(<MeasureChips query={q({ measures: ["seats"] })} allowlist={FIXTURE} />);
-    const seats = [...container.querySelectorAll(".chip")].find((n) => n.textContent === "Seats")!;
+    const seats = [...container.querySelectorAll(".chip")].find((n) =>
+      n.textContent?.startsWith("Seats"),
+    )!;
     expect(seats.tagName).toBe("SPAN");
     expect(seats.getAttribute("title")).toContain("at least one");
   });

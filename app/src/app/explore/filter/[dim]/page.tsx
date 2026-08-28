@@ -133,11 +133,18 @@ interface RenderedSource {
   truncated: boolean;
 }
 
-async function renderSource(
+/**
+ * `limit` is a parameter, not a bare reference to `FILTER_VALUE_LIMIT`, so a test can pin the
+ * exactly-at-limit boundary against a limit the live warehouse actually reaches for some
+ * dimension -- rather than asserting a count (100) no dimension may ever hit in this dataset.
+ * Every real call site uses the default.
+ */
+export async function renderSource(
   query: PivotQuery,
   entry: DimensionEntry,
   source: DimensionEntry,
   label: string | null,
+  limit: number = FILTER_VALUE_LIMIT,
 ): Promise<RenderedSource> {
   // NO NEW SQL: the value list IS a one-dimension pivot over the same window and the OTHER active
   // filters, so grain handling and quarantine exclusion come along without being restated. The
@@ -160,6 +167,11 @@ async function renderSource(
   // lists AS, HA and QX separately, which
   // is right: each is a value the filter can actually select. The `g=ml` note in the render below
   // says so on the page rather than leaving the reader to notice.
+  // Fetch ONE ROW PAST the limit: `result.rows.length === limit` cannot tell "the largest `limit`
+  // by seats, not every value" apart from "every value, and there happen to be exactly `limit` of
+  // them" -- a dimension with exactly `limit` distinct values would state the former and it would
+  // be false. Asking for `limit + 1` and slicing the extra row off before rendering makes
+  // `truncated` answer the question it claims to: did a row exist beyond what's shown.
   const listQuery = normalizeQuery({
     ...query,
     grouping: "operating",
@@ -167,16 +179,18 @@ async function renderSource(
     measures: ["seats"],
     sort: "seats",
     sortDesc: true,
-    limit: FILTER_VALUE_LIMIT,
+    limit: limit + 1,
     filters: query.filters.filter(([k]) => k !== entry.key),
   });
   const result = await runPivot(listQuery);
+  const truncated = result.rows.length > limit;
+  const rows = truncated ? result.rows.slice(0, limit) : result.rows;
   return {
     key: source.key,
     label,
-    values: result.rows.map((row) => readValue(source, row, result.resolved)),
-    seats: result.rows.map((row) => row.seats as number | null),
-    truncated: result.rows.length === FILTER_VALUE_LIMIT,
+    values: rows.map((row) => readValue(source, row, result.resolved)),
+    seats: rows.map((row) => row.seats as number | null),
+    truncated,
   };
 }
 

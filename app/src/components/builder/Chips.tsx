@@ -29,8 +29,15 @@ export function Chip({
   const className = derived ? "chip chip-derived" : "chip";
   if (href === null) {
     return (
+      // `title` reaches a mouse only -- a keyboard user tabs past a non-focusable span (correctly:
+      // it stays inert, never a fake control) and a screen reader announces just the label, never
+      // the reason. The visually-hidden text is the reason stated to BOTH: it renders in the
+      // accessibility tree and in the DOM text a screen reader reads, without adding a second
+      // visible channel `title`'s own hover-only tooltip doesn't have. Kept alongside `title`
+      // rather than replacing it -- a sighted mouse user still gets the instant hover answer.
       <span className={`${className} chip-off`} title={reason}>
         {label}
+        {reason ? <span className="sr-only">{` (${reason})`}</span> : null}
       </span>
     );
   }

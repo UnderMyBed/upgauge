@@ -34,7 +34,14 @@ export function WindowControl({ query, asOf }: { query: PivotQuery; asOf: string
   // year track only refines them, so "Trailing 12" is the more informative statement of what the
   // query is. Not reachable with today's `asOf` (2026-04), which is exactly why this needs its
   // own December-fixture test rather than trusting the trailing-12/current-year test above.
-  const anyPresetCurrent = presets.some(([, from, to]) => isPreset(from, to));
+  //
+  // The SAME rule applies a second time WITHIN this row: Trailing 12 and Trailing 24 (or Full
+  // window) can themselves coincide -- an `asOf` of "2016-12" makes Trailing 24 equal Full
+  // window, since EARLIEST_MONTH is 2015-01. First match wins here too, computed ONCE so both
+  // this row's own current-marking and the year track's `anyPresetCurrent` gate agree on which
+  // single preset (if any) is current, rather than each re-deriving it and risking two winners.
+  const currentPreset = presets.find(([, from, to]) => isPreset(from, to));
+  const anyPresetCurrent = currentPreset !== undefined;
 
   return (
     <>
@@ -43,7 +50,7 @@ export function WindowControl({ query, asOf }: { query: PivotQuery; asOf: string
           <Chip
             key={label}
             label={label}
-            current={isPreset(from, to)}
+            current={label === currentPreset?.[0]}
             href={exploreHref(setWindow(query, from, to, asOf))}
           />
         ))}

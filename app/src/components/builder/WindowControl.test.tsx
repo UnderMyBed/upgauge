@@ -62,4 +62,21 @@ describe("WindowControl", () => {
     expect(current).toHaveLength(1);
     expect(current[0].textContent).toBe("Trailing 12");
   });
+
+  it("marks only one preset current when two PRESETS coincide with each other, not with the year track", () => {
+    // The identical defect one row over: EARLIEST_MONTH is 2015-01, so an asOf of 2016-12 makes
+    // Trailing 24 (2015-01..2016-12) equal Full window (2015-01..2016-12) -- both predicates fire
+    // on their own chip unless the row is made mutually exclusive with ITSELF, not just with the
+    // year track below it. Unreachable with today's 2015-01..2026-04 data window (asOf would have
+    // to be within 24 months of EARLIEST_MONTH), which is exactly why this needs its own fixture
+    // rather than trusting the December/year-track test above -- that one only pins the
+    // preset-vs-year-track boundary, never the preset row against itself.
+    const ASOF_2016_12 = "2016-12";
+    const query = q({ timeFrom: "2015-01", timeTo: "2016-12" });
+    const { container } = render(<WindowControl query={query} asOf={ASOF_2016_12} />);
+    const current = [...container.querySelectorAll('[aria-current="page"]')];
+    expect(current).toHaveLength(1);
+    // First match wins: Trailing 24 is declared before Full window in the presets array.
+    expect(current[0].textContent).toBe("Trailing 24");
+  });
 });
