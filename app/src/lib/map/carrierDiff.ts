@@ -107,11 +107,16 @@ export interface DiffRow {
   /** The downgauged panel's ranking key, in seats per departure. NULL on added and dropped. */
   gauge_fall: number | null;
   category_total: number;
-  /** Per category. Null when this carrier filed no same-airport pair in that category. */
   /** How many same-airport pairs this category has. NULL only when the LEFT JOIN missed, i.e.
-   *  it has none -- which is what tells `same_airport_seats`'s NULL apart from a wholly
-   *  quarantined one (sql/03_queries/map_carrier_diff.sql, `same_airport` CTE). */
+   *  the category has none -- which is what tells `same_airport_seats`'s NULL apart from a
+   *  wholly quarantined one (sql/03_queries/map_carrier_diff.sql, `same_airport` CTE). */
   same_airport_pairs: number | null;
+  /** Seats on those pairs, and it has TWO NULL causes that this row separates rather than
+   *  conflates. With `same_airport_pairs` NULL the category simply has no such pair and nothing
+   *  is being withheld. With a pair COUNT present and this NULL, a pair IS being withheld and
+   *  its seats cannot be summed: `fct_route_month.seats` is itself
+   *  `SUM(...) FILTER (WHERE NOT is_quarantined)`, whose own comment says "do NOT wrap these in
+   *  COALESCE(..., 0)". `toPanels` maps the first to 0 and the second to null. */
   same_airport_seats: number | null;
 }
 

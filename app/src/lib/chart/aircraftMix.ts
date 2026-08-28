@@ -243,7 +243,12 @@ export interface SeriesPoint {
  * month. Erasing a filing is the same class of dishonesty as inventing one, so the renderer
  * draws those runs stroked instead of filled. */
 export interface MonthAxis {
-  /** Every month from the first drawable filing to the last, contiguous, filed or not. */
+  /** Every month from the first FILED month to the last, contiguous, drawable or not -- which
+   * is the window every sentence around the chart names, and since the x domain is pinned to it
+   * (`buildMixPlotConfig`) the window the axis draws too. It is deliberately NOT first->last
+   * DRAWABLE month: a wholly-quarantined month outside that narrower range is still inside the
+   * stated window, and taking the span from the drawable months alone dropped 71 of them across
+   * 58 pairs out of their own counts. */
   span: string[];
   /** Months in `span` with no filing at all, in order. NOT filed and NOT quarantined -- nobody
    * filed anything. */

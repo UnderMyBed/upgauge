@@ -80,14 +80,31 @@ export function unknowableNote(months: number): string {
  * seats, the worst (LAS-LAX 2024-11) 297,295 across 12 cells with ONE unknowable. Showing the
  * dirt is a trust feature; erasing a filing is the same dishonesty as inventing one.
  *
- * IT SAYS "DRAWN AT ZERO HEIGHT" BECAUSE THAT IS WHAT HAPPENS, and saying less was this change's
- * own defect one round earlier. A stacked area's y is cumulative, so a component omitted at one x
- * leaves every band above it with no computable y -- there is no way to hole ONE band inside a
- * drawn month. The unstateable cell is therefore painted at zero, exactly like a band that filed
- * nothing, and 420 of the 768 null cells are in that state; 249 of them belong to a top-five
- * MEMBER band across 87 route pairs, so a named band visibly drops to the floor for one month.
- * A reader watching the ATR-72 flatten on HNL-OGG 2020-07 can only recover that from this
- * sentence, so this sentence has to describe the mark rather than gesture at a total. */
+ * IT SAYS "DRAWN AT ZERO HEIGHT" BECAUSE THAT IS WHAT HAPPENS. 420 of the 768 null cells sit
+ * inside a month the chart can still draw, and 249 of those belong to a top-five MEMBER band
+ * across 87 route pairs -- a NAMED band visibly dropping to the floor for one month. A reader
+ * watching the ATR-72 flatten on HNL-OGG 2020-07 can only recover that from this sentence, so it
+ * describes the mark rather than gesturing at a total.
+ *
+ * WHY NOT HOLE THE ONE BAND, and the honest answer is not the one an earlier revision of this
+ * comment gave. It claimed a stacked area's cumulative y leaves every band ABOVE an omitted datum
+ * with no computable y. That is FALSE, and measured false: three bands over three months, the
+ * middle band's middle datum zero-filled against omitted, through this file's own `area()` mark
+ * and `renderPlotToSvg` -- 19 paths emitted, 18 byte-IDENTICAL, and the only one that moves is
+ * the holed band's own. d3's stack treats a missing row at an x exactly as a zero for every other
+ * series, so neighbours are untouched.
+ *
+ * What omission actually costs is the holed band's OWN path: `M40,90L350,160L640,90...` (six
+ * points, dipping to the floor) collapses to `M40,90L640,90...` (four points, a straight edge
+ * across the gap). That is interpolation -- drawing seats for a month whose seats cannot be
+ * stated -- which is the same dishonesty the whole-month treatment refuses, so it is not an
+ * improvement on zero-filling but a different way of inventing.
+ *
+ * Holing it HONESTLY would mean breaking that band's area into runs of its own, and this
+ * codebase tracks exactly one run map per AXIS (`MonthAxis.run`, keyed by month and shared by
+ * every band) rather than one per band. That is an engineering cost deliberately not spent here,
+ * not an impossibility -- stated as the constraint it is, so the next reader weighing it has the
+ * real trade in front of them. */
 export function understatedNote(months: number): string {
   return (
     `${plural(months, "month")} understated — a quarantined filing is drawn at zero height ` +
@@ -249,7 +266,28 @@ export function buildMixPlotConfig(args: MixPlotArgs): Plot.PlotOptions {
       unknowable: axis.unknowable.length,
       understated: axis.understated.length,
     }),
-    x: { type: "utc", label: null, ticks: "1 year", tickFormat: "%Y" },
+    // THE DOMAIN IS THE STATED WINDOW, PINNED -- not whatever the marks happen to span.
+    //
+    // Plot infers a domain from the data, and the marks carry only the months that can be DRAWN.
+    // Every sentence around the chart names first->last FILED month instead: the page's own
+    // `chart: A → B` line, `describe()`'s aria-label, and both absence counts. Those were the
+    // same range until #121 stopped plotting a wholly-quarantined month -- after which
+    // /route/LIT-MOB said `chart: 2017-05 → 2024-08` over an axis whose last tick was 2021, with
+    // 38 of its 85 claimed gap months and its one wholly-quarantined month falling outside the
+    // frame entirely. 43 of 16,694 drawn route pairs and 7 of 917 airports diverged that way.
+    //
+    // Pinning it is what makes a gap appear WHERE THE SENTENCE SAYS IT IS, and it restores two
+    // things that silently depended on the two ranges agreeing: the COVID rect's clamp (six pairs
+    // drew the band past their last drawn month, the exact failure `covid`'s own comment says the
+    // clamp prevents -- and the rect was itself stretching the axis) and `annotationLate`, whose
+    // midpoint is computed from the same `first`/`last`.
+    x: {
+      type: "utc",
+      label: null,
+      ticks: "1 year",
+      tickFormat: "%Y",
+      domain: [monthStart(first), monthStart(last)],
+    },
     y: { label: "Seats", grid: true, ticks: 4, tickFormat: "~s" },
     // The tokens go through as-is: Plot passes an ordinal scale's range straight to the
     // `fill` attribute, so `globals.css` stays the single source for the ramp (verified on

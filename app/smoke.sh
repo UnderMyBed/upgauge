@@ -1368,6 +1368,29 @@ check_dataset check_not "route BGR-DAB: nor that only one month was filed" "$BOD
 check_dataset check_not "route BGR-DAB: announces no band it never drew" "$BODY" \
   'Bands lightest to darkest'
 
+# THE AXIS MUST COVER THE WINDOW EVERY SENTENCE AROUND IT NAMES. Plot infers its x domain from
+# the marks, and since the quarantine fix the marks carry only DRAWABLE months -- while the
+# window line, the aria-label and both absence counts all name first->last FILED month. Those
+# were the same range until a wholly-quarantined month stopped being plotted.
+#
+# LIT-MOB is filed 2017-05 -> 2024-08 but drawable only to 2019-06, its 2024-08 being wholly
+# quarantined. Before the domain was pinned this page said `chart: 2017-05 → 2024-08` over an
+# axis whose last tick was 2021 -- and the 2021 came from the COVID rect stretching the frame,
+# the very thing that rect's clamp exists to prevent. 38 of its 85 claimed gap months, and the
+# quarantined month itself, were three years off the right edge. 43 of 16,694 drawn route pairs
+# diverged this way. docs/design/system.md states the invariant verbatim.
+BODY=$(curl -s --max-time 30 "${BASE}/route/LIT-MOB")
+check_dataset check "route LIT-MOB: the window line names the filed range" "$BODY" \
+  'chart: 2017-05 → 2024-08'
+# The tick that only exists once the domain is pinned: under the inferred domain the axis stopped
+# at 2021, so no 2024 tick was emitted at all. `>2024<` is a tick label specifically -- the window
+# line and the aria-label both spell the month as `2024-08`, so neither can satisfy this.
+check_dataset check "route LIT-MOB: ...and the axis actually reaches it" "$BODY" '>2024<'
+check_dataset check "route LIT-MOB: ...with the years between it drawn too" "$BODY" '>2022<'
+# The month the legend claims, now inside the frame it is claimed for.
+check_dataset check "route LIT-MOB: the quarantined month it names is on the axis" "$BODY" \
+  '1 month filed but wholly quarantined'
+
 # The negative, on a route with nothing quarantined anywhere in its window. Without it every
 # check_not above could pass against a chart that had stopped printing its key.
 BODY=$(curl -s --max-time 30 "${BASE}/route/JFK-LAX")

@@ -509,8 +509,11 @@ below — it binds every time-series mark, not only lines.
 
   **A third state is not a hole at all.** Where *some* of a month's bands can be stated and
   others cannot, the month is **still drawn**, from what can be stated, and disclosed as
-  understated: *"N months understated — a quarantined filing could not be summed into the stack,
-  so the real total is higher by an amount that cannot be stated."* Dropping the month instead
+  understated: *"N months understated — a quarantined filing is drawn at zero height there, so
+  its band flattens and the stack is lower than the real total by an amount that cannot be
+  stated."* The sentence names the **mark**, not just a total: the cell is painted at zero, and
+  249 of the 420 such cells belong to a top-five *member* band, so a named band visibly drops to
+  the floor for one month and nothing else on the chart says why. Dropping the month instead
   was measured and rejected: **407** such months hold **11,687,092** stateable seats, the worst
   (`LAS–LAX` 2024-11) **297,295** across 12 cells with one unknowable. Erasing a filing is the
   same dishonesty as inventing one, and the shortfall is not bounded near zero — 26 of the 606

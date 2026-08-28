@@ -133,3 +133,20 @@ describe("CardFrame's no-chart panel", () => {
     expect(html).not.toContain("Only one month");
   });
 });
+
+describe("the card's counts agree with their own numbers on the plural", () => {
+  // 463 route cards carry exactly one unfiled month, and this line said "1 unfiled months" on
+  // every one of them -- under a DATA AS OF badge, which is where a small wrongness costs most.
+  // The two siblings added beside it were written plural-safe; this one, older and rewritten
+  // from a template into a joined list, was not.
+  // MUTANT: restore `${gaps} unfiled months` -> red.
+  it("says one unfiled month, not one unfiled months", () => {
+    const html = renderToStaticMarkup(CardFrame({ ...BASE, gaps: 1 }));
+    expect(html).toMatch(/1 unfiled month[^s]/);
+    expect(html).not.toMatch(/1 unfiled months/);
+  });
+
+  it("still pluralises when there is more than one", () => {
+    expect(renderToStaticMarkup(CardFrame({ ...BASE, gaps: 6 }))).toMatch(/6 unfiled months/);
+  });
+});

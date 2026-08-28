@@ -636,9 +636,13 @@ zero, on any of the six surfaces — but the treatment is not one treatment.** S
 cell and card render the em dash through `lib/format.ts`; the map omits the arc and counts it; the
 chart **breaks the area** where a whole month is unstateable, because a gap is what an
 unstateable month is on a time axis and a dash has no place to go there — and **draws the cell at
-zero inside a month it can still draw**, because a stacked area's y is cumulative and one component
-cannot be holed without taking every band above it down with it; that case is disclosed in words
-instead, and the note says so. The foot states the cause. **Name the treatment per surface** — "the
+zero inside a month it can still draw**, disclosed in words instead. **Not because holing one band
+is impossible** — measured through the real `Plot.areaY` pipeline, omitting one band's datum leaves
+19 emitted paths with 18 byte-identical and moves only the holed band's own, so neighbours are
+untouched. It is because omission collapses that band's own path from six points to four, a
+straight edge interpolating across the gap, which is the same invention the whole-month treatment
+refuses; and because holing it honestly needs a per-**band** run map where this codebase tracks one
+per **axis**. An engineering cost not spent, with its consequence named. The foot states the cause. **Name the treatment per surface** — "the
 em dash everywhere" is how a sweep declares a surface fixed that never was.
 
 **The chart coerced the same NULL, one surface over, and needed a different answer.** `sumTotals`

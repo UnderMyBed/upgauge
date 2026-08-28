@@ -1,4 +1,5 @@
 import { ImageResponse } from "next/og";
+import { plural } from "@/lib/chart/mixPlotConfig";
 import { OG_FONT_FAMILY, OG_PALETTE } from "./palette";
 import { loadCardFonts } from "./fonts";
 import { BASE_URL } from "@/lib/siteUrl";
@@ -270,7 +271,11 @@ export function CardFrame(input: CardInput): React.ReactElement {
       {gaps + unknowable + understated > 0 ? (
         <div style={{ display: "flex", fontFamily: MONO, fontSize: 13, color: OG_PALETTE["ink-3"] }}>
           {[
-            gaps > 0 ? `${gaps} unfiled months` : null,
+            // `plural`, not a bare "months": 463 route cards carry exactly one unfiled month,
+            // and "1 unfiled months" under a DATA AS OF badge is the small wrongness that makes
+            // a reader doubt the large numbers. The two siblings below were written plural-safe
+            // and this one, older, was not.
+            gaps > 0 ? `${plural(gaps, "unfiled month")}` : null,
             unknowable > 0 ? `${unknowable} wholly quarantined` : null,
             understated > 0 ? `${understated} understated` : null,
           ]

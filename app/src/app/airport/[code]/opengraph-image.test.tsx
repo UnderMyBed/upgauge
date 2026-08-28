@@ -152,3 +152,53 @@ describe("the default export's card input", () => {
     );
   });
 });
+
+// ---------------------------------------------------------------------------------------
+/** THE CARD'S DISCLOSURE CHANNEL. Round 2 closed this on `/route` and ONLY `/route`: setting
+ * `unknowable: 0` on `/airport`, `understated: 0` on `/carrier` and `unknowable: 0` on
+ * `/aircraft` simultaneously left all 1,561 tests green -- the fix applied per RULE where the
+ * defect is per CALL SITE, which is the failure CLAUDE.md names and the commit that made it
+ * quoted. `smoke.sh` cannot reach any of it: a card is a rasterized PNG with no aria-label, no
+ * foot and no empty state, which is why `CardInput`'s docstring calls a wrong word here
+ * unrecoverable. The spy is the only seam that sees these values. */
+describe("the card's absence counts and note reach renderEntityCard", () => {
+  async function cardInput(SLUG: string) {
+    renderSpy.mockClear();
+    await Image({ params: Promise.resolve({ code: SLUG }) });
+    expect(renderSpy).toHaveBeenCalledTimes(1);
+    return renderSpy.mock.calls[0][0] as {
+      gaps: number;
+      unknowable: number;
+      understated: number;
+      chartNote: string | null;
+      chartSvg: string | null;
+    };
+  }
+
+  // RLU carries BOTH: 3 wholly-quarantined months and 1 understated one over the full window.
+  // 110 airports carry at least one, so this channel is live on real cards, not hypothetical.
+  // MUTANT: `unknowable: 0` at the render call -> red. MUTANT: `understated: 0` -> red.
+  it("carries both absence counts for an airport that has both", async () => {
+    const input = await cardInput("RLU");
+    expect(input.unknowable).toBe(3);
+    expect(input.understated).toBe(1);
+  });
+
+  // A second airport, so neither count can pass by borrowing the other's value.
+  it("carries the wholly-quarantined count on an airport with only that", async () => {
+    const input = await cardInput("JBR");
+    expect(input.unknowable).toBe(6);
+    expect(input.understated).toBe(0);
+  });
+
+  // THE NOTE, and this catches the mutant a hard-coded literal makes: replacing
+  // `chartNote: chart.note` with `"No filings in this window."` -- the exact wording
+  // `mixAbsenceNote`'s docstring records as having shipped once and calls unrecoverable on a
+  // card -- left all 1,561 green. A page that HAS a chart must carry no note at all, so any
+  // literal reddens here whatever it says.
+  it("carries no note on a card that has a chart to draw", async () => {
+    const input = await cardInput("SEA");
+    expect(input.chartSvg).not.toBeNull();
+    expect(input.chartNote).toBeNull();
+  });
+});
