@@ -588,7 +588,12 @@ describe("the chart names WHICH absence each month is", () => {
   it("says a partially-quarantined month is understated, and does NOT call it a gap", () => {
     const container = chart(partial());
     expect(container.textContent).toContain("1 month understated");
-    expect(container.textContent).toContain("the real total is higher");
+    // The note names the MARK, not just a total: the unstateable cell is painted at zero height
+    // inside a drawn month (a stacked area's y is cumulative, so one band cannot be holed), and
+    // 249 of the 420 such cells belong to a top-five MEMBER band across 87 pairs. A reader
+    // watching a named band flatten can only recover that from this sentence.
+    expect(container.textContent).toContain("drawn at zero height");
+    expect(container.textContent).toContain("the stack is lower than the real total");
     expect(svgOf(container).getAttribute("aria-label")).toContain("1 month understated");
     // It is drawn, so it is neither a gap nor a wholly-quarantined month.
     expect(container.textContent).not.toContain("wholly quarantined");

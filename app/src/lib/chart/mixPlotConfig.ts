@@ -78,11 +78,21 @@ export function unknowableNote(months: number): string {
  *
  * Erasing the month instead was measured and rejected: 407 such months hold 11,687,092 stateable
  * seats, the worst (LAS-LAX 2024-11) 297,295 across 12 cells with ONE unknowable. Showing the
- * dirt is a trust feature; erasing a filing is the same dishonesty as inventing one. */
+ * dirt is a trust feature; erasing a filing is the same dishonesty as inventing one.
+ *
+ * IT SAYS "DRAWN AT ZERO HEIGHT" BECAUSE THAT IS WHAT HAPPENS, and saying less was this change's
+ * own defect one round earlier. A stacked area's y is cumulative, so a component omitted at one x
+ * leaves every band above it with no computable y -- there is no way to hole ONE band inside a
+ * drawn month. The unstateable cell is therefore painted at zero, exactly like a band that filed
+ * nothing, and 420 of the 768 null cells are in that state; 249 of them belong to a top-five
+ * MEMBER band across 87 route pairs, so a named band visibly drops to the floor for one month.
+ * A reader watching the ATR-72 flatten on HNL-OGG 2020-07 can only recover that from this
+ * sentence, so this sentence has to describe the mark rather than gesture at a total. */
 export function understatedNote(months: number): string {
   return (
-    `${plural(months, "month")} understated — a quarantined filing could not be summed into ` +
-    `the stack, so the real total is higher by an amount that cannot be stated.`
+    `${plural(months, "month")} understated — a quarantined filing is drawn at zero height ` +
+    `there, so its band flattens and the stack is lower than the real total by an amount that ` +
+    `cannot be stated.`
   );
 }
 
@@ -305,6 +315,10 @@ export interface PreparedMix {
   /** Every distinct filed month, ascending. Zero-padded YYYY-MM, so lexical order IS
    * chronological. */
   months: string[];
+  /** The subset of `months` carrying at least one summable cell -- what the chart can actually
+   * draw, and what the `< 2` gate is taken on. Returned beside `months` so a caller stating the
+   * absence in words can tell "nothing was filed" from "everything filed was quarantined". */
+  stateable: string[];
   plot: {
     args: MixPlotArgs;
     /** Bottom-of-stack first, which is shade order -- the caller's legend reverses it. */
@@ -328,8 +342,13 @@ function monthStart(month: string): Date {
   return new Date(`${month}-01T00:00:00Z`);
 }
 
-function pct(share: number): string {
-  return `${(share * 100).toFixed(1)}%`;
+/** The em dash, never `0.0%`, when the share cannot be stated: `lib/format.ts`'s opening rule
+ * reaches the legend too. Where every type in the Other bucket was wholly quarantined its seats
+ * are unknowable, and a rail reading `Other · 1 type · 0.0% of seats` states a measurement
+ * nobody has -- live on /route/SEA-YAK before this. `lib/format.ts` is not reused here because
+ * this is a percentage to one decimal, which none of its four formatters produce. */
+function pct(share: number | null): string {
+  return share === null ? "\u2014" : `${(share * 100).toFixed(1)}%`;
 }
 
 function maxDate(a: Date, b: Date): Date {
@@ -342,20 +361,48 @@ function minDate(a: Date, b: Date): Date {
 
 /** WHY THERE IS NO CHART, in the one wording every surface that lacks one must use.
  *
- * `prepareMixPlot` returns `plot: null` for two DIFFERENT findings -- nothing filed in the
- * window, and exactly one filed month (a stacked area over one month has a degenerate x domain
- * and serializes to zero width). The page distinguished them and the OG card did not: the card
- * printed a flat "No filings in this window." over data the page described as one filed month,
- * which on `/airport/A18` was a card claiming nothing was ever filed about an airport whose
- * entire window is a single quarantined filing. A social card is the surface that fires first
- * on a shared link, so it was the wrong copy in the most-read place.
+ * `prepareMixPlot` returns `plot: null` for findings that are NOT the same, and the card is the
+ * surface where getting that wrong is unrecoverable: it printed a flat "No filings in this
+ * window." over data the page described as one filed month, which on `/airport/A18` claimed
+ * nothing was ever filed about an airport whose entire window is a single quarantined filing.
+ *
+ * A THIRD FINDING, and it is the one this chart's whole absence vocabulary exists for: months
+ * were filed and NOT ONE of them can be stated. `Only one month of filings` is false of it (there
+ * may be several) and `No filings` is false of it too (there were filings; every one failed an
+ * invariant). Three route pairs are in that state with two or more filed months -- BGR-DAB,
+ * BHB-MCO and HSV-SUX -- and 28 more with exactly one. Before this branch existed they rendered
+ * a frame carrying a COVID band, zero paths, and an `aria-label` naming a band drawn nowhere.
  *
  * One function rather than two that agree today -- the same rule `lib/og/entityCard.ts` opens
- * with for the stats and the chart itself. */
-export function mixAbsenceNote(months: string[], dimension: MixDimension): string {
-  return months.length === 0
-    ? `No ${dimension.absent} filings in this window.`
-    : `Only one month of filings in this window (${months[0]}) \u2014 a stacked area needs at least two.`;
+ * with for the stats and the chart itself.
+ *
+ * `stateable` is the subset of `months` carrying at least one summable cell. Passing both, rather
+ * than deriving one, is what keeps this function's answer tied to the same set `prepareMixPlot`
+ * gates on -- the two disagreeing about which months they meant is exactly the defect above. */
+export function mixAbsenceNote(
+  months: string[],
+  dimension: MixDimension,
+  stateable: string[] = months,
+): string {
+  if (months.length === 0) return `No ${dimension.absent} filings in this window.`;
+  if (stateable.length === 0) {
+    const every = months.length === 1 ? "" : "every one ";
+    return (
+      `${plural(months.length, "month")} of filings in this window, ${every}wholly quarantined ` +
+      `\u2014 every filing failed an invariant, so no ${dimension.absent} seats can be stated ` +
+      `and there is nothing to draw.`
+    );
+  }
+  // Unchanged bytes for the ordinary one-month case, which is most of them and which several
+  // fixtures pin verbatim.
+  if (stateable.length === months.length) {
+    return `Only one month of filings in this window (${months[0]}) \u2014 a stacked area needs at least two.`;
+  }
+  return (
+    `Only one month of filings in this window can be stated (${stateable[0]}) \u2014 a stacked ` +
+    `area needs at least two, and the other ${plural(months.length - stateable.length, "month")} ` +
+    `filed but wholly quarantined.`
+  );
 }
 
 export function prepareMixPlot(
@@ -364,7 +411,15 @@ export function prepareMixPlot(
   dimension: MixDimension,
 ): PreparedMix {
   const months = [...new Set(rows.map((r) => r.month))].sort();
-  if (months.length < 2) return { months, plot: null };
+  // THE GATE AND THE AXIS MUST MEAN THE SAME SET OF MONTHS. This counted every FILED month while
+  // `toBands` builds its axis from the STATEABLE ones, so a subject whose every month is wholly
+  // quarantined passed a `>= 2` gate and then produced an axis with no runs, no span and all
+  // three absence counts at zero -- a frame with a COVID band, zero paths, and an `aria-label`
+  // naming a band drawn nowhere, on the one page where the sentence this module exists to print
+  // is the entire finding. Reachable on BGR-DAB, BHB-MCO and HSV-SUX. `mixAbsenceNote` above
+  // takes both sets for the same reason.
+  const stateable = [...new Set(rows.filter((r) => r.seats !== null).map((r) => r.month))].sort();
+  if (stateable.length < 2) return { months, stateable, plot: null };
 
   const { bands, other, axis } = toBands(rows);
   const crossover = findCrossover(rows);
@@ -430,6 +485,7 @@ export function prepareMixPlot(
 
   return {
     months,
+    stateable,
     plot: {
       stack,
       gaps: axis.gaps.length,

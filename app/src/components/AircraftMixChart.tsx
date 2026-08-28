@@ -48,7 +48,7 @@ export function AircraftMixChart({
   // (lib/chart/mixPlotConfig.ts). Nothing about gaps, band membership or band shade is decided
   // here any more -- a second copy of that reasoning is what would let a social card and the
   // page it previews draw two different charts from the same rows.
-  const { months, plot } = prepareMixPlot(rows, title, dimension);
+  const { months, stateable, plot } = prepareMixPlot(rows, title, dimension);
 
   // A blank frame under a DATA AS OF badge is the failure /explore and /route already refuse
   // (their empty states state the finding in words). Two cases reach it: nothing filed at
@@ -61,7 +61,7 @@ export function AircraftMixChart({
         {/* `mixAbsenceNote`, not a literal: the OG card renders the same finding and the two
             drifted apart once already (the card said "No filings" about a window this page
             described as one filed month). Shared so a fix reaches both. */}
-        <p className="foot">{mixAbsenceNote(months, dimension)}</p>
+        <p className="foot">{mixAbsenceNote(months, dimension, stateable)}</p>
       </Frame>
     );
   }

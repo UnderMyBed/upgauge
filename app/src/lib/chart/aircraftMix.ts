@@ -311,7 +311,15 @@ function monthAxis(filed: string[], unknowable: string[], understated: string[])
       solo: new Set(),
     };
   }
-  const span = monthSpan(filed[0], filed[filed.length - 1]);
+  // THE SPAN IS THE WINDOW THE READER IS TOLD ABOUT, which is first->last FILED month, not
+  // first->last STATEABLE one. Taken over `filed` alone this excluded any wholly-quarantined
+  // month lying outside the drawable range but inside the stated one -- 71 months across 58
+  // pairs, e.g. /route/ATK-FAI, whose chart said `2015-08 → 2026-05` and `13 months filed but
+  // wholly quarantined` while 2026-05 was a fourteenth, undrawn and unmentioned. The filter
+  // below is what keeps a month outside the stated window out of its count; it cannot also be
+  // what defines the window.
+  const bounds = [...filed, ...unknowable].sort();
+  const span = monthSpan(bounds[0], bounds[bounds.length - 1]);
   const inSpan = new Set(span);
   const filedSet = new Set(filed);
   const run = new Map<string, number>();
@@ -360,7 +368,7 @@ export interface OtherSummary {
    * loud because Other is often not a rounding error: top-5 + Other covers a median 94.7% of
    * seats on multi-type routes, but 1,571 of 4,618 fall below 90% and the worst is 48.2%
    * (measured -- the spec's § "The Other band is not a rounding error"). */
-  seatShare: number;
+  seatShare: number | null;
   series: SeriesPoint[];
 }
 
@@ -524,7 +532,16 @@ export function toBands(rows: MixRow[]): {
     typeCount: otherTypes.length,
     // Guarded, not because a route with zero seats is expected, but because the alternative
     // is rendering NaN% in the legend rail under a DATA AS OF badge.
-    seatShare: ratio(otherSeats, totalSeats) ?? 0,
+    // `null`, never 0, when the share cannot be stated -- and there are TWO ways it cannot.
+    // The comment this replaces justified `?? 0` against a zero DENOMINATOR only ("the
+    // alternative is rendering NaN%"), and quietly did the same to an unknowable NUMERATOR:
+    // where every type in Other is wholly quarantined `otherSeats` is null, `ratio` correctly
+    // refuses, and `?? 0` restated the refusal as the measurement `0.0% of seats`. Live on
+    // /route/SEA-YAK, ANI-TLT, GAL-HSL and KYU-NUL, in the visible rail AND the aria-label.
+    // NO types in Other is a measured 0%: nothing is in the bucket, which is a fact. An
+    // unknowable share is the different case -- types ARE in the bucket and their seats cannot
+    // be summed -- and only that one gets the em dash.
+    seatShare: otherTypes.length === 0 ? 0 : ratio(otherSeats, totalSeats),
     // Empty, not zero-filled, when there is nothing to aggregate: the renderer gates on
     // `typeCount > 0`, and an all-zero series would otherwise put an invisible band and a
     // "0 other types" legend entry on every chart of a five-type route.

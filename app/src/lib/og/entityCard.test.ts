@@ -163,6 +163,51 @@ describe("cardChart's absence note", () => {
     );
     expect(cardChart([], "A18").note).toBe(mixAbsenceNote([], BY_AIRCRAFT_TYPE));
   });
+
+  /** The same fixture with a cell the warehouse cannot state. */
+  const nullMonth = (m: string): MixRow => ({
+    month: m,
+    code: "442",
+    label: "442",
+    seats: null,
+    departures: null,
+  });
+
+  // THE COUNTS THE CARD RENDERS, which had no coverage at any level: review hard-coded this
+  // function to return `unknowable: 0, understated: 0` and all 82 og tests passed. `smoke.sh`
+  // cannot see inside a PNG, so the chain cardChart -> CardInput -> CardFrame is only assertable
+  // here and in card.test.tsx, and BOTH ends need a test or the middle can drop the value.
+  // MUTANT: return a literal 0 for either count -> red.
+  it("carries the wholly-quarantined month count through to the card", () => {
+    const c = cardChart(
+      [month("2025-06"), nullMonth("2025-07"), month("2025-08")],
+      "DFW–SJU",
+    );
+    expect(c.svg).not.toBeNull();
+    expect(c.unknowable).toBe(1);
+    expect(c.understated).toBe(0);
+  });
+
+  // MUTANT: return a literal 0 for `understated` -> red. Separate fixture from the one above,
+  // so neither count can pass by borrowing the other's value.
+  it("carries the understated month count through to the card", () => {
+    const c = cardChart(
+      [month("2025-06"), month("2025-07"), nullMonth("2025-07"), month("2025-08")],
+      "HNL–OGG",
+    );
+    expect(c.svg).not.toBeNull();
+    expect(c.understated).toBe(1);
+    expect(c.unknowable).toBe(0);
+  });
+
+  // A chart with nothing to disclose must carry zeroes, or the two tests above pass against a
+  // function that returns a constant.
+  it("carries zeroes when there is nothing to disclose", () => {
+    const c = cardChart([month("2025-06"), month("2025-07")], "SEA");
+    expect(c.unknowable).toBe(0);
+    expect(c.understated).toBe(0);
+    expect(c.gaps).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------------------

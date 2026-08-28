@@ -108,7 +108,12 @@ describe("the default export's card input", () => {
     renderSpy.mockClear();
     await Image({ params: Promise.resolve({ pair }) });
     expect(renderSpy).toHaveBeenCalledTimes(1);
-    return renderSpy.mock.calls[0][0] as { stats: { label: string; value: string }[] };
+    return renderSpy.mock.calls[0][0] as {
+      stats: { label: string; value: string }[];
+      gaps: number;
+      unknowable: number;
+      understated: number;
+    };
   }
 
   // A18-LMA (Kantishna-Lake Minchumina): its entire trailing 12 is ONE filing, 2025-06, seats 0
@@ -152,5 +157,39 @@ describe("the default export's card input", () => {
     const input = await cardInputFor("ATL-CAK");
     expect(input.stats[5]).toEqual({ label: "Carriers", value: "0" });
     expect(input.stats.slice(0, 5).map((s) => s.value)).toEqual(["—", "—", "—", "—", "—"]);
+  });
+});
+
+describe("the card's absence counts reach renderEntityCard", () => {
+  async function cardInputFor(pair: string) {
+    renderSpy.mockClear();
+    await Image({ params: Promise.resolve({ pair }) });
+    expect(renderSpy).toHaveBeenCalledTimes(1);
+    return renderSpy.mock.calls[0][0] as {
+      gaps: number;
+      unknowable: number;
+      understated: number;
+    };
+  }
+
+  // THE LAST HOP, on real data. `entityCard.test.ts` pins that `cardChart` computes these and
+  // `card.test.tsx` pins that `CardFrame` renders them; neither can see whether THIS route still
+  // passes them across. Review's mutant -- hard-coding both to 0 -- left all 82 og tests green,
+  // and `smoke.sh` cannot reach a rasterized PNG.
+  //
+  // DFW-SJU 2020-05 is one filed cell, quarantined, with ordinary months either side.
+  // MUTANT: `unknowable: 0` at the render call -> red.
+  it("carries the wholly-quarantined count for a route that has one", async () => {
+    const input = await cardInputFor("DFW-SJU");
+    expect(input.unknowable).toBe(1);
+  });
+
+  // HNL-OGG's ATR-72 is quarantined beside three types filing real seats, across 11 months.
+  // MUTANT: `understated: 0` at the render call -> red. A separate route from the one above, so
+  // neither count can pass by borrowing the other's.
+  it("carries the understated count for a route that has one", async () => {
+    const input = await cardInputFor("HNL-OGG");
+    expect(input.understated).toBe(11);
+    expect(input.unknowable).toBe(0);
   });
 });

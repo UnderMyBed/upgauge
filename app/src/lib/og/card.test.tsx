@@ -54,6 +54,43 @@ describe("CardFrame", () => {
     expect(renderToStaticMarkup(CardFrame(BASE))).not.toMatch(/unfiled/);
   });
 
+  // THE OTHER TWO CAUSES, which had NO coverage at all: review hard-coded `cardChart` to return
+  // `unknowable: 0, understated: 0` regardless of the real plot and all 82 og tests passed.
+  // `smoke.sh` cannot reach these either -- the card is a rasterized PNG with no aria-label, no
+  // foot and no empty state, which is precisely why `CardInput`'s own docstring calls a wrong
+  // word here unrecoverable. This file is the only place the words can be asserted at all.
+  // THE BUG THIS CATCHES: either count silently dropped on the way into the frame.
+  it("states the wholly-quarantined count, in words that do not say 'unfiled'", () => {
+    const html = renderToStaticMarkup(CardFrame({ ...BASE, unknowable: 3 }));
+    expect(html).toMatch(/3 wholly quarantined/);
+    // "Unfiled" is FALSE of a month that was filed and quarantined -- the whole reason these are
+    // separate counts rather than one.
+    expect(html).not.toMatch(/unfiled/);
+  });
+
+  it("states the understated count", () => {
+    expect(renderToStaticMarkup(CardFrame({ ...BASE, understated: 11 }))).toMatch(
+      /11 understated/,
+    );
+  });
+
+  // All three at once, joined for layout and NOT merged into one number: the card row is one
+  // line, and a merged "N months not drawn" would be true of none of the three findings.
+  it("keeps the three causes distinct when a card carries more than one", () => {
+    const html = renderToStaticMarkup(
+      CardFrame({ ...BASE, gaps: 6, unknowable: 3, understated: 11 }),
+    );
+    expect(html).toMatch(/6 unfiled months/);
+    expect(html).toMatch(/3 wholly quarantined/);
+    expect(html).toMatch(/11 understated/);
+  });
+
+  it("says nothing about either when there is nothing to say", () => {
+    const html = renderToStaticMarkup(CardFrame(BASE));
+    expect(html).not.toMatch(/quarantined/);
+    expect(html).not.toMatch(/understated/);
+  });
+
   it("renders without a chart rather than throwing", () => {
     expect(() => renderToStaticMarkup(CardFrame({ ...BASE, chartSvg: null }))).not.toThrow();
   });

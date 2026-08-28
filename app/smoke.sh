@@ -1334,12 +1334,39 @@ check_dataset check_re "route DFW-SJU: ...including the quarantine sentence" \
 BODY=$(curl -s --max-time 30 "${BASE}/route/HNL-OGG")
 check_dataset check "route HNL-OGG: discloses the months its stack understates" "$BODY" \
   '11 months understated'
-check_dataset check "route HNL-OGG: ...and says the real total is higher" "$BODY" \
-  'the real total is higher by an amount that cannot be stated'
+# The note names the MARK, not just a total. A stacked area's y is cumulative, so an unstateable
+# cell inside a DRAWN month cannot be holed -- it is painted at zero height, and 249 of the 420
+# such cells belong to a top-five MEMBER band across 87 pairs. A reader watching the ATR-72 band
+# flatten on 2020-07 can only recover that from this sentence, so it has to describe the mark.
+check_dataset check "route HNL-OGG: ...and says what the mark actually is" "$BODY" \
+  'a quarantined filing is drawn at zero height there, so its band flattens'
+check_dataset check "route HNL-OGG: ...and that the stack understates the month" "$BODY" \
+  'the stack is lower than the real total by an amount that cannot be stated'
 check_dataset check_not "route HNL-OGG: an understated month is not a gap" "$BODY" \
   'month with no filings'
 check_dataset check_not "route HNL-OGG: nor is it wholly quarantined" "$BODY" \
   'wholly quarantined'
+
+# THE 100% CASE, and the one the disclosure could not reach at all. BGR-DAB filed two months,
+# 2020-08 and 2020-09, and BOTH are wholly quarantined. `prepareMixPlot` gated on every FILED
+# month while the axis was built from the STATEABLE ones, so this passed a `>= 2` gate and
+# rendered a frame carrying the COVID band, ZERO `<path>` elements, and an aria-label naming a
+# band ("SF-340/B") drawn nowhere -- under a DATA AS OF badge, with no sentence explaining any of
+# it. The maximum case for the sentence, and the one case it printed nothing.
+BODY=$(curl -s --max-time 30 "${BASE}/route/BGR-DAB")
+check_dataset check "route BGR-DAB: states the finding in words instead of drawing a blank frame" \
+  "$BODY" '2 months of filings in this window, every one wholly quarantined'
+check_dataset check "route BGR-DAB: ...and says why nothing can be drawn" "$BODY" \
+  'every filing failed an invariant, so no aircraft-type seats can be stated'
+# The two sentences that would be FALSE here: filings exist, so "no filings" is wrong, and there
+# are two of them, so "only one month" is wrong. Both are strings this same function can return.
+check_dataset check_not "route BGR-DAB: does not claim nothing was ever filed" "$BODY" \
+  'No aircraft-type filings in this window'
+check_dataset check_not "route BGR-DAB: nor that only one month was filed" "$BODY" \
+  'Only one month of filings'
+# No frame, so no band may be announced to a screen reader.
+check_dataset check_not "route BGR-DAB: announces no band it never drew" "$BODY" \
+  'Bands lightest to darkest'
 
 # The negative, on a route with nothing quarantined anywhere in its window. Without it every
 # check_not above could pass against a chart that had stopped printing its key.

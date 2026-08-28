@@ -47,6 +47,15 @@ export function quarantineClause({
     // Telling the second one that "every filing is quarantined — 0 rows" would invent a finding
     // on 11,939 route pages, 44 carriers and 36 aircraft types to fix it on 12.
     if (quarantinedRows === 0) return "";
+    // "EVERY filing is quarantined" is INFERRED, not counted: it follows from the sums being
+    // null only because `fct_segment_month` carries no NULL `seats`/`passengers`/
+    // `departures_performed` on a non-quarantined row (measured: 0, 0, 0). One such row would
+    // make this sentence false while leaving the branch reachable. It is a warehouse invariant
+    // this code relies on and NO GATE ENFORCES -- no pipeline test or SQL constraint forbids it,
+    // and the one runtime check lives in `lib/map/airportNetwork.ts`, at route grain on the map
+    // path, which no page foot goes through. `lib/og/entityCard.ts`'s `cardSixthStat` records
+    // the same debt for the same reason; the hoist that created this module moved the inference
+    // here, so the note belongs here too.
     return (
       `Every filing ${subject} in this window is quarantined — ${rows}, each having failed ` +
       `an invariant — so no measure above can be summed. ${counts} counted from those rows, ` +

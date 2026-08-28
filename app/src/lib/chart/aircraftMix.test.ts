@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { addSum, ratio } from "@/lib/nullSum";
+import { mixAbsenceNote, prepareMixPlot } from "@/lib/chart/mixPlotConfig";
 import {
   fetchAircraftMix,
   aircraftMixQuery,
@@ -471,6 +472,10 @@ describe("toBands over the real B737-8 carrier mix", () => {
  * either side of the month in question. CLAUDE.md's M4c Task 5 finding is that a wrong stack
  * still emits the right number of paths with the right fills, so counting paths or listing
  * series passes under this bug. */
+function nullCell(month: string, code: string): MixRow {
+  return { month, code, label: code, seats: null, departures: null };
+}
+
 function cell(month: string, code: string, seats: number | null): MixRow {
   // `departures` tracks `seats`: both measures carry the identical FILTER, so they go NULL
   // together (docs/data/invariants.md, "zero partially-NULL groups").
@@ -673,5 +678,125 @@ describe("an unknowable band total is not a zero total", () => {
     expect(bands.map((b) => b.code)).toContain("999");
     expect(bands.map((b) => b.code)).not.toContain("111");
     expect(other.typeCount).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+/** THE 100% CASE, which is the one the disclosure could not reach.
+ *
+ * `prepareMixPlot` gated `plot !== null` on every FILED month while `toBands` derives its axis
+ * from the STATEABLE ones. A subject whose every month is wholly quarantined therefore passed a
+ * `>= 2` gate and produced an axis with no span, no runs and all three absence counts at zero --
+ * a frame carrying a COVID band, ZERO paths, and an `aria-label` naming a band drawn nowhere,
+ * under a DATA AS OF badge, with nothing saying why. The maximum case for the sentence this
+ * module exists to print, and the one case it printed nothing.
+ *
+ * Three route pairs are in that state with two or more filed months: BGR-DAB, BHB-MCO, HSV-SUX.
+ * `mixAbsenceNote`'s own docstring calls a blank frame "the failure /explore and /route already
+ * refuse." */
+describe("a subject whose every month is unstateable draws nothing and says why", () => {
+  const rows = [nullCell("2020-08", "456"), nullCell("2020-09", "456")];
+
+  // MUTANT: gate on `months.length < 2` (every FILED month, the pre-fix line) -> a plot is
+  // returned, the chart renders with no paths, and no sentence is printed -> red.
+  it("returns no plot at all rather than an empty frame", () => {
+    const { plot } = prepareMixPlot(rows, "BGR–DAB", BY_AIRCRAFT_TYPE);
+    expect(plot).toBeNull();
+  });
+
+  // MUTANT: `mixAbsenceNote(months, dimension)` without the third argument -> falls back to
+  // "Only one month of filings in this window (2020-08)" over TWO filed months -> red.
+  // MUTANT: return the `No … filings` string here -> also false; filings exist -> red.
+  it("names the cause: filed, and every filing quarantined", () => {
+    const { months, stateable } = prepareMixPlot(rows, "BGR–DAB", BY_AIRCRAFT_TYPE);
+    const note = mixAbsenceNote(months, BY_AIRCRAFT_TYPE, stateable);
+    expect(note).toContain("2 months of filings in this window, every one wholly quarantined");
+    expect(note).toContain("every filing failed an invariant");
+    expect(note).not.toContain("No aircraft-type filings");
+    expect(note).not.toContain("Only one month");
+  });
+
+  // The ordinary one-month case must keep its exact bytes -- several fixtures pin it verbatim,
+  // and a subject that filed once and can be stated is not a quarantine story.
+  it("leaves the ordinary one-month sentence unchanged", () => {
+    expect(mixAbsenceNote(["2025-06"], BY_AIRCRAFT_TYPE, ["2025-06"])).toBe(
+      "Only one month of filings in this window (2025-06) — a stacked area needs at least two.",
+    );
+  });
+
+  // ...and the mixed one-month case says which month can be stated AND how many cannot, rather
+  // than silently describing itself as an ordinary single filing.
+  // MUTANT: fall through to the ordinary wording -> red.
+  it("distinguishes one stateable month from one filed month", () => {
+    const note = mixAbsenceNote(["2020-01", "2020-02"], BY_AIRCRAFT_TYPE, ["2020-02"]);
+    expect(note).toContain("Only one month of filings in this window can be stated (2020-02)");
+    expect(note).toContain("1 month filed but wholly quarantined");
+  });
+});
+
+describe("an Other bucket whose seats cannot be summed states no share", () => {
+  // `Other · 1 type · 0.0% of seats` is a measurement nobody has when the only type in Other was
+  // wholly quarantined -- live on /route/SEA-YAK, ANI-TLT, GAL-HSL and KYU-NUL, in the visible
+  // rail AND the aria-label. The `?? 0` that produced it was justified in comment against a zero
+  // DENOMINATOR only, and quietly did the same to an unknowable NUMERATOR.
+  // MUTANT: restore `ratio(otherSeats, totalSeats) ?? 0` -> seatShare is 0, not null -> red.
+  it("is null, not 0, when every type in Other is unstateable", () => {
+    const rows = [
+      ...["614", "608", "721", "442", "416"].flatMap((c, i) => [
+        cell("2020-01", c, 900 - i * 100),
+        cell("2020-02", c, 900 - i * 100),
+      ]),
+      nullCell("2020-01", "489"),
+      nullCell("2020-02", "489"),
+    ];
+    const { other } = toBands(rows);
+    expect(other.typeCount).toBe(1);
+    expect(other.seatShare).toBeNull();
+  });
+
+  // The negative that keeps the above from passing against a function that always returns null,
+  // and the case the pre-existing empty-bucket assertion covers from the other side.
+  it("states a real share when Other can be summed", () => {
+    const rows = [
+      ...["614", "608", "721", "442", "416"].flatMap((c) => [
+        cell("2020-01", c, 1000),
+        cell("2020-02", c, 1000),
+      ]),
+      cell("2020-01", "489", 500),
+      cell("2020-02", "489", 500),
+    ];
+    const { other } = toBands(rows);
+    expect(other.seatShare).toBeCloseTo(1000 / 11000, 5);
+  });
+});
+
+describe("the span covers the window the reader is told about", () => {
+  // `span` ran first->last STATEABLE month while the visible window line and the aria-label name
+  // first->last FILED month, so a wholly-quarantined month lying past the last drawable one fell
+  // outside its own count: 71 months across 58 pairs. /route/ATK-FAI said `2015-08 → 2026-05`
+  // and `13 months filed but wholly quarantined` while 2026-05 was a fourteenth, undrawn and
+  // unmentioned -- the rationale in the code ("a month outside the stated window is not counted
+  // against a window it is not in") defeated by its own caller.
+  // MUTANT: `monthSpan(filed[0], filed[filed.length - 1])` -> the trailing month is outside the
+  // span, `unknowable` is empty, and the chart discloses nothing -> red.
+  it("counts a wholly-quarantined month that trails the last drawable one", () => {
+    const { axis } = toBands([
+      cell("2020-01", "614", 500),
+      cell("2020-02", "614", 600),
+      nullCell("2020-03", "442"),
+    ]);
+    expect(axis.unknowable).toEqual(["2020-03"]);
+    expect(axis.span[axis.span.length - 1]).toBe("2020-03");
+  });
+
+  // ...and the same at the leading edge, which a trailing-only fixture cannot catch.
+  it("counts one that precedes the first drawable month", () => {
+    const { axis } = toBands([
+      nullCell("2019-12", "442"),
+      cell("2020-01", "614", 500),
+      cell("2020-02", "614", 600),
+    ]);
+    expect(axis.unknowable).toEqual(["2019-12"]);
+    expect(axis.span[0]).toBe("2019-12");
   });
 });

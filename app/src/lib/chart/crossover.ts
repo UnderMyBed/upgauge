@@ -101,8 +101,16 @@ function leadersByYear(rows: readonly CrossoverRow[]): [string, Leader][] {
  *
  * A year with no leader is SKIPPED, not treated as a wall (see findCrossover), so this degrades
  * to naming the crossover from the years that CAN be ranked rather than to no annotation at all.
- * Measured: 302 route pairs carry such a cell, across 503 pair-years, out of 23,041 pairs --
- * and ATL-MCO, whose annotation `app/smoke.sh` pins, carries none. */
+ * MEASURED AT YEAR x TYPE GRAIN, which is the grain this function refuses at: a type's WHOLE-YEAR
+ * total must be null, i.e. every cell it filed that year was quarantined. That is a strictly
+ * smaller set than "pairs carrying an unstateable cell" (768 cells / 302 pairs), and quoting the
+ * cell figure here would be measuring a different question -- the refusal fires on **214 pairs
+ * across 273 pair-years** of 23,041.
+ *
+ * WHAT A READER ACTUALLY SEES CHANGE is smaller again, because most refused years were never the
+ * year the annotation named: the rendered annotation differs on **18 pairs** -- 6 lose it, 12
+ * move year or direction. `ATL-MCO`, whose `B757-2 overtakes A321nXLR · 2018` `app/smoke.sh`
+ * pins, carries no such year and is unmoved. */
 function unambiguousLeader(types: Leader[]): Leader | null {
   let best: Leader | null = null;
   let tied = false;

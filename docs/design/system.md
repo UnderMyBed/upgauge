@@ -523,7 +523,11 @@ below — it binds every time-series mark, not only lines.
   about which type was biggest, so a year holding a type whose seats cannot be stated yields **no
   leader** — the unknown rival cannot be shown to have lost. A year with no leader is skipped
   rather than treated as a wall, so the annotation is derived from the years that can be ranked.
-  Measured: 302 pairs carry such a cell across 503 pair-years, out of 23,041.
+  Measured **at year × type grain**, which is the grain the refusal fires at — a type's
+  whole-year total must be unstateable, a strictly smaller set than "pairs carrying an
+  unstateable cell": **214 pairs across 273 pair-years** of 23,041. What a reader sees change is
+  smaller again, because most refused years were never the year the annotation named — the
+  rendered annotation differs on **18 pairs**, 6 losing it and 12 moving year or direction.
 
   The x domain still runs first-filing → last-filing, not the requested window: a subject that
   stopped filing in 2019 draws nothing to the right of 2019 rather than a flat zero line to

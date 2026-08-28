@@ -321,7 +321,13 @@ export function toPanels(rows: DiffRow[], cap: number = NETWORK_ARC_CAP): Carrie
         // itself `SUM(...) FILTER (WHERE NOT is_quarantined)` and every filing behind it was
         // quarantined. Rendering that as 0 told the reader nothing was withheld.
         //
-        // LATENT, NOT LIVE, and the distinction is stated because an earlier revision of this comment got it wrong: the wholly-quarantined same-airport PAIR is real (8V's VEE-VEE in the trailing 12, airline 21745's STT-STT in the prior 12), but a panel folds every same-airport pair in its category together, and on this warehouse every such fold includes at least one stateable pair -- measured across all 115 carriers with route-month rows, zero panels come back NULL. So no page renders the wrong sentence today. The coercion is still wrong and still removed: it is one refresh away from being live, and the SQL it reads from states the rule itself.
+        // LATENT, NOT LIVE, and the two are one measurement apart. The wholly-quarantined
+        // same-airport PAIR is real (8V's VEE-VEE in the trailing 12, airline 21745's STT-STT in
+        // the prior 12), but a panel folds every same-airport pair in its category together and
+        // every such fold on this warehouse includes at least one stateable pair -- measured
+        // across all 115 carriers with route-month rows, zero panels come back NULL. So no page
+        // renders the wrong sentence today. The coercion is removed regardless: it is one refresh
+        // from being live, and the SQL it reads from states the rule itself.
         sameAirportSeats: head.same_airport_pairs === null ? 0 : numOrNull(head.same_airport_seats),
         // SET HERE, not left to the consumer, because `title` is the ONLY channel into the map's
         // accessible name and without it two of these three panels announce themselves

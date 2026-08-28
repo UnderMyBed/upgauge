@@ -141,8 +141,14 @@ describe("the default export's card input", () => {
     // route SUPPLIES one.
     // MUTANT: `chartNote: null` at the render call -> red.
     const input = await cardInputFor("A18");
+    // A18's ONE filed month is itself wholly quarantined, so "only one month of filings" was
+    // true and useless -- it described the count and not the finding, on a card with no foot and
+    // no aria-label to add one. `mixAbsenceNote`'s third branch names the cause instead.
+    // MUTANT: call `mixAbsenceNote(months, dimension)` without the stateable set -> the old
+    // sentence returns -> red.
     expect(input.chartNote).toBe(
-      "Only one month of filings in this window (2025-06) — a stacked area needs at least two.",
+      "1 month of filings in this window, wholly quarantined — every filing failed an " +
+        "invariant, so no aircraft-type seats can be stated and there is nothing to draw.",
     );
   });
 });

@@ -61,11 +61,14 @@ export function cardChart(
   title: string,
   dimension: MixDimension = BY_AIRCRAFT_TYPE,
 ): CardChart {
-  const { months, plot } = prepareMixPlot(rows, title, dimension);
+  const { months, stateable, plot } = prepareMixPlot(rows, title, dimension);
   if (plot === null) {
     return {
       svg: null,
-      note: mixAbsenceNote(months, dimension),
+      // BOTH sets, so the card can say "every filing was quarantined" rather than the false
+      // "no filings" or the equally false "only one month of filings" -- a card has no foot and
+      // no aria-label, so this sentence is the whole finding there.
+      note: mixAbsenceNote(months, dimension, stateable),
       gaps: 0,
       unknowable: 0,
       understated: 0,
@@ -128,16 +131,16 @@ export function cardStats(totals: EntityTotals, last: CardStat): CardStat[] {
  * keep their entity count. `totals.seats === null` alone is wrong on the pages that filed
  * NOTHING, whose measures are absent for a reason quarantine had no part in: answering five
  * dashes with "Quarantined 0" names the one cause it is not, and withholds the count that does
- * explain them. `airport/[code]/page.tsx`'s `quarantineClause` splits the same two absences the
- * same way, and docs/data/invariants.md states the rule they share.
+ * explain them. `lib/quarantineClause.ts` splits the same two absences the same way for all four
+ * pages' feet, and docs/data/invariants.md states the rule they share.
  *
  * `seats` stands for all five: the measures carry an identical FILTER, so they go NULL together
  * or not at all (invariants.md, "zero partially-NULL groups"). NOTHING ON THIS PATH ASSERTS THAT.
  * The one runtime check lives in `lib/map/airportNetwork.ts`, at route grain on the map path,
  * which a card never fetches -- and no pipeline test or SQL constraint forbids a NULL measure on
  * a non-quarantined `fct_segment_month` row. It is a warehouse invariant this code relies on and
- * no gate enforces; `airport/[code]/page.tsx` records the same debt where it infers "every filing
- * is quarantined" from the same property.
+ * no gate enforces; `lib/quarantineClause.ts` carries the same debt, since its
+ * wholly-quarantined branch infers "every filing is quarantined" from the same property.
  *
  * HERE RATHER THAN IN A ROUTE, and now called from all four. `/airport` was the only caller
  * while it was the only page whose totals could be null; #121 fixed `sumTotals`, so `/route`,

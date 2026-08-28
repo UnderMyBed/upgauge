@@ -626,17 +626,20 @@ against a seat count of exactly 0. At carrier grain there are **none** in this w
 `/carrier`'s card and foot reach the quarantined branch on no page that exists: the branch is the
 same shared one the other three carry, and its wiring on that route is pinned by a spy on the call
 rather than by a fixture, because a fallback-only surface makes the call site deletable-green.
-Issue #121 stated the route figure alone and was read as the whole footprint; it was 10 of 12.
+**Re-derive at every grain the fold serves.** A footprint measured at one grain is not the
+footprint.
 
 **Every wholly-quarantined page is contradicted by its own filing, not merely unstated.** Each of
 the 12 is a `zero_seats` quarantine — a filed seat count of 0 against departures that were
 *performed* — so a strip reading "0 departures" asserts the opposite of what BTS filed. **Never a
 zero, on any of the six surfaces — but the treatment is not one treatment.** Stat strip, table
 cell and card render the em dash through `lib/format.ts`; the map omits the arc and counts it; the
-chart **breaks the area**, because a gap is what an unstateable month is on a time axis and a dash
-has no place to go there; and the foot states the cause in words. Naming them as one treatment is
-how a sweep declares a surface fixed that never was — this sentence read "the em dash … on every
-one of the six surfaces" while `aircraftMix.ts` was still zero-filling.
+chart **breaks the area** where a whole month is unstateable, because a gap is what an
+unstateable month is on a time axis and a dash has no place to go there — and **draws the cell at
+zero inside a month it can still draw**, because a stacked area's y is cumulative and one component
+cannot be holed without taking every band above it down with it; that case is disclosed in words
+instead, and the note says so. The foot states the cause. **Name the treatment per surface** — "the
+em dash everywhere" is how a sweep declares a surface fixed that never was.
 
 **The chart coerced the same NULL, one surface over, and needed a different answer.** `sumTotals`
 and the stat strip were the first half of #121; `fetchAircraftMix` applied the identical `?? 0`,
@@ -659,15 +662,19 @@ month that was filed.
 
 **Downstream of the same rows: the crossover annotation refuses rather than ranks.** A year holding
 a type whose seats cannot be stated has no leader — "B overtakes A" is a claim about which type was
-biggest, and an unknown rival cannot be shown to have lost. 302 pairs, 503 pair-years.
+biggest, and an unknown rival cannot be shown to have lost. **State the grain**: the refusal is at
+year × type — a type's WHOLE-YEAR total must be unstateable — which fires on **214 pairs across
+273 pair-years** of 23,041, and changes the rendered annotation on **18** of them (6 lose it, 12
+move year or direction). The cell-grain figure two paragraphs up (768 cells / 302 pairs) answers a
+different question and is not this one.
 
 **One state is admitted because the producer can return it, not because a page shows it.**
 `SegmentMapInput.sameAirportSeats` takes `number | null`, where null means a same-airport pair is
 being withheld from the arcs by an amount that cannot be summed. `carrierDiff.ts` reached it with
 `?? 0`, conflating that with the `LEFT JOIN` missing (the category has no same-airport pair, where
 0 is honest); `map_carrier_diff.sql` now emits a pair COUNT so the two are separable.
-**This is latent, not live, and the distinction was got wrong once before being measured:** the
-wholly-quarantined same-airport *pair* is real (`8V`'s VEE–VEE in the trailing 12, airline 21745's
+**This is latent, not live, and the two are one measurement apart.** The wholly-quarantined
+same-airport *pair* is real (`8V`'s VEE–VEE in the trailing 12, airline 21745's
 STT–STT in the prior 12), but a panel folds every same-airport pair in its category together and
 every such fold contains at least one stateable pair — measured across all **115** carriers with
 route-month rows, **zero** panels return NULL. No page renders the wrong sentence today. The
@@ -683,7 +690,7 @@ counted at two of them.** At warehouse grain: **12,115** route pairs, **45** `ai
 **11,939**, **44** and **36**: 176 of the stale pairs are same-airport and 404 before any lookup,
 one dormant `airline_id` carries no `dim_carrier` row, and `CE-180` resolves to two fact-present
 airframes and 404s as ambiguous. This is the 11-versus-10 distinction of the wholly-quarantined
-set, one level up, and it was written here at the wrong grain first. Against the 290 airports
+set, one level up. Against the 290 airports
 `airportTotals` has answered that way since #118. (Those three, like
 the 290, are measurements stated here, not gated figures; only the route count is generated.) They
 render the same `—` for a different reason — nothing was filed, rather than nothing filed can be
