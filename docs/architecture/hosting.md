@@ -1959,18 +1959,22 @@ it are easy to get wrong and both matter here:
   asserted, so if the app stops importing `next/font` the test says to remove the row with it
   rather than leaving a fixture excluding a family nothing emits.
 
-  > ⚠️ **Half this table is enforced and half is held by review — which half, measured by
-  > deleting each row and running the file.** The three `/_next/` rows are individually
-  > necessary. `/`, `/watch/gauge`, `/sitemap.xml`, `/robots.txt` and `/favicon.ico` are
-  > **deletable with the file green**: each is one cached document rather than a family, and the
-  > obvious binding — "every route the app serves that the expression does not match belongs
-  > here" — is wrong, because `/search` is deliberately outside both the expression and the
+  > ⚠️ **Which rows are enforced, measured by deleting each and running the file.** Eight of the
+  > nine are individually necessary, bound to two different things. The three `/_next/` rows are
+  > bound to what the app **emits** (above). `/`, `/watch`, `/watch/gauge`, `/sitemap.xml` and
+  > `/robots.txt` are bound to what it **serves**: every path in `proxy.ts`'s matcher that the
+  > expression does not match must be listed here, so a new page route joins the rate limit or
+  > joins this table and cannot quietly do neither. `/search` is the single exemption, carrying
+  > its reason beside the name — it is deliberately outside both, and listing it would assert the
+  > opposite. **`/favicon.ico` alone is deletable with the file green**: not a matcher path, not
+  > an asset family, held by review. One row, named.
+  >
   > The three asset rows carry one requirement more: each must be separated from its neighbours
-  > by a path **segment** or an **extension**, the only two things a path predicate reads, so a
-  > fourth row cannot be another `chunks/*.js` that looks like coverage and adds none. That
-  > restriction is the whole test — allowing arbitrary affixes makes it satisfiable by any two
-  > distinct strings, which is measured and recorded. The table says which rows are enforced
-  > rather than giving all eight the same justification.
+  > by a path **segment** or an **extension**, so a fourth row cannot be another `chunks/*.js`
+  > that looks like coverage and adds none. That narrow candidate space **is** the test —
+  > allowing arbitrary affixes makes it satisfiable by any two distinct strings, which is a
+  > recorded mutant. It over-rejects a `/_next/` route that is not `dir/file.ext` (`/_next/image`
+  > is the live example) and fails closed.
 
   **A fixture for a PREFIX must differ in the SUFFIX too, and every prefix needs two.** The same
   rule on the coverage side. One fixture under a prefix does not bound the prefix, it bounds that
@@ -1997,16 +2001,22 @@ it are easy to get wrong and both matter here:
   which leaves the empty literal — and that matches every path, so `UNCOVERED` refuses it.
 
   > ⚠️ **The property is gated, not measured once.**
-  > `test_no_single_literal_substitution_can_narrow_a_clause_of_the_expression` substitutes every
-  > prefix and every suffix of every fixture, under both operators, into every clause, and
-  > requires each substitution matching strictly less than the clause it replaced to be refused.
-  > A seventh clause added without its suffix-disjoint pair fails there, on the substitution that
-  > proves it, rather than in whatever milestone next runs the search by hand. It also asserts
-  > **which** check refuses, per clause: the fixture tables refuse every narrowing of the six
-  > prefixes and the card strike-out refuses none of them, while for `ends_with("/opengraph-image")`
-  > it is the reverse — **all four cards sit under an entity prefix, so a narrowed card clause
-  > leaves the coverage table green and the strike-out test is the only thing that can see it.**
-  > Without that split, every guard but one is deletable with the suite green.
+  > `test_no_single_literal_substitution_can_make_a_clause_lossy` substitutes every prefix and
+  > every suffix of every fixture, under both operators, into every clause, and requires every
+  > **lossy** substitution — one that drops part of what the clause it replaced matched — to be
+  > refused. A seventh clause added without its suffix-disjoint pair fails there, on the
+  > substitution that proves it, rather than in whatever milestone next runs the search by hand.
+  >
+  > It also asserts **which** check refuses, per clause, and **which check that is comes off the
+  > fixtures, never off the operator**. A clause whose `COVERED` paths no other clause matches is
+  > held by the coverage table alone — dropping one of its paths breaks that table outright, and
+  > all six prefixes are here. A clause whose every `COVERED` path is *also* matched by another
+  > clause is invisible to the table, and is held instead by the rule that a clause must keep
+  > covering the paths it matches. `ends_with("/opengraph-image")` is the one: **all four cards
+  > sit under an entity prefix, so a narrowed card clause leaves the coverage table green.**
+  > Keying that on the operator instead would encode today's expression as a law and refuse a
+  > second suffix clause (`/twitter-image`, with its own fixtures) that is perfectly boundable.
+  > Without the split, every guard but one is deletable with the suite green.
 
   **A narrowing may read only a signal the EDGE decides.** Narrowing the rule by anything the
   client chooses is a bypass, not an exemption. `and not any(http.request.headers["rsc"][*] == "1")` —

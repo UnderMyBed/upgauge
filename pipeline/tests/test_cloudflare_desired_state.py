@@ -101,6 +101,64 @@ def test_the_rate_limit_ruleset_holds_exactly_one_rule():
         _the_only_rule(two_rules, "rate-limit.json")
 
 
+def test_the_rate_limit_rule_carries_these_fields_and_no_others():
+    """#132's argument does not stop at the rule COUNT, and for a milestone it did.
+
+    `cloudflare-apply.sh` PUTs the file with `--data @"$file"`, so the file's bytes are the
+    request body. That is why a second entry in `rules` ships unexamined -- and the same
+    reasoning runs INSIDE the one rule, where every check here reads four named fields and
+    nothing said the others were absent. MEASURED against the file as it stood: adding
+    `"enabled": false` to `rules[0]` left all nineteen tests green. That switches the limit off
+    on every path, it is cheaper than the `and not true` -> `and false` flip #126 was built to
+    catch, and no provenance, polarity, coverage or exclusion check can see it, because none of
+    them looks at anything but `expression`, `action` and `ratelimit`.
+
+    Three more passed the same way: a `ratelimit.counting_expression` naming a path nothing hits
+    (the rule matches, never counts, never trips); `characteristics` GAINING
+    `http.request.uri.path`, which buckets per URL, so the unbounded 404 space #117 added
+    `/route/` to bound would get its own 10-per-10 s allowance per distinct URL; and
+    `requests_to_origin`. The `characteristics` one was invisible for a second reason worth
+    naming: the threshold test asserts `"ip.src" in characteristics`, and MEMBERSHIP cannot see
+    an addition. It is pinned by equality here, and the pair is the same split
+    `lib/canonicalQuery.ts` makes -- byte-equality against the canonical form, never "no unknown
+    key present".
+
+    DENY BY DEFAULT ON THE KEY SET, WITHOUT A CLAIM ABOUT EFFECTS. What each of those fields
+    would DO at the edge is Cloudflare's documented behaviour and is NOT verified against this
+    zone by anything in this repo. That is precisely the argument for gating the key set rather
+    than enumerating banned fields: an unrecognised field fails here until someone establishes
+    what it does and writes the reason beside the name, which is the same rule EDGE_EVALUATED
+    applies to identifiers in the expression."""
+    ruleset = _load("rate-limit.json")
+    assert set(ruleset) == {"name", "description", "rules"}, (
+        f"the ruleset carries {sorted(ruleset)}. Every key in this file is PUT; one nobody has "
+        "justified does not get to ship because it looked harmless in a diff"
+    )
+    rule = _rate_limit_rule()
+    assert set(rule) == {"description", "expression", "action", "ratelimit"}, (
+        f"the rule carries {sorted(rule)}. `enabled: false` is the one that matters most -- it "
+        "switches the limit off on every path and every other check in this file still passes"
+    )
+    ratelimit = rule["ratelimit"]
+    assert set(ratelimit) == {
+        "characteristics",
+        "period",
+        "requests_per_period",
+        "mitigation_timeout",
+    }, (
+        f"the ratelimit block carries {sorted(ratelimit)}. `counting_expression` is the one that "
+        "matters most -- the rule keeps matching and stops counting, so it never trips"
+    )
+    # Equality, not membership: the threshold test's `"ip.src" in characteristics` is satisfied
+    # by a list that has GAINED a key, and adding the path here would give every distinct URL its
+    # own bucket -- the opposite of what #117 covered `/route/` for.
+    assert ratelimit["characteristics"] == ["ip.src", "cf.colo.id"], (
+        f"characteristics are {ratelimit['characteristics']}. Adding a per-request dimension "
+        "(the URI path above all) turns one budget per IP into one budget per URL, which is no "
+        "bound at all on an unbounded 404 space"
+    )
+
+
 def test_rate_limit_holds_one_request_per_second_per_ip_in_a_period_the_plan_allows():
     """THE number, and the constraint it has to fit inside. MEASURED 2026-08-19: this zone's
     plan rejects any other window --
@@ -282,10 +340,9 @@ def _covered(expression: str, path: str) -> bool:
 #
 # #117 established the rule on `/route/`; #129 applied it to the other five, which had one
 # fixture each. `test_no_single_literal_substitution_can_make_a_clause_lossy` now holds the
-# property for every clause rather than leaving it to whoever adds the next one, and it states
-# the measurement -- how many substitutions walked through, and why "lossy" is the right word
-# for them and "strictly less" is not -- in ONE place, its own header. Do not restate the figure
-# here: an unbound number written twice is two numbers that must stay true.
+# property for every clause rather than leaving it to whoever adds the next one. The measurement
+# -- how many substitutions walked through, and how they split -- is in
+# docs/architecture/hosting.md, beside the rule it justifies and in ONE place.
 COVERED = (
     ("/api/pivot", "a DuckDB aggregation, and the residual `f` axis rides the 30-day cache"),
     (
@@ -379,17 +436,17 @@ COVERED = (
 # a uniform justification would be false for half of them. MEASURED by deleting each row and
 # running the file:
 #
-#   * The three `/_next/` rows are individually NECESSARY --
-#     `test_the_excluded_asset_families_agree_with_the_app_that_emits_them` binds each family to
-#     an authority outside this file (`app/smoke.sh`'s served needle, `next/font` in app/src),
-#     so deleting any one of them is red.
-#   * `/`, `/watch/gauge`, `/sitemap.xml`, `/robots.txt` and `/favicon.ico` are DELETABLE with
-#     this file green. Each is one cached document rather than a family, and no in-repo
-#     authority binds it the way the asset families are bound -- the obvious candidate, "every
-#     route the app serves that the expression does not match belongs here", is wrong, because
-#     `/search` is deliberately outside BOTH the expression and this table (hosting.md names it
-#     rather than implying it). They are held by review, and this comment is the honest form of
-#     that rather than a necessity claim they do not satisfy.
+#   * The three `/_next/` rows are bound to what the app EMITS --
+#     `test_the_excluded_asset_families_agree_with_the_app_that_emits_them` (`app/smoke.sh`'s
+#     served needle for the stylesheet, the pinned `next/font` module for the faces).
+#   * `/`, `/watch`, `/watch/gauge`, `/sitemap.xml` and `/robots.txt` are bound to what it
+#     SERVES -- `test_every_matcher_path_the_rule_misses_is_listed_as_deliberately_excluded`
+#     agrees with `proxy.ts`'s matcher. "No authority binds these" was written here once and was
+#     an overstatement: one counterexample (`/search`) refutes a UNIVERSAL, not a binding, and it
+#     lives in `UNCOVERED_EXEMPT` with its reason beside the name.
+#   * `/favicon.ico` alone is DELETABLE with this file green. It is not a matcher path and not an
+#     asset family, so neither authority reaches it; it is held by review. That is one row, named,
+#     rather than a necessity claim the whole table does not satisfy.
 #
 # The `/_next/` rows carry a second requirement on top of necessity:
 # `test_each_excluded_asset_row_is_isolated_by_its_own_segment_or_extension` requires each to be
@@ -400,6 +457,7 @@ COVERED = (
 # the property vacuous for everything (a measured mutant -- see that test).
 UNCOVERED = (
     ("/", "static, and the entry point every real visitor lands on"),
+    ("/watch", "the index: a matcher path outside the expression, and one cacheable document"),
     ("/watch/gauge", "four closed slugs, so the whole surface is four cacheable documents"),
     # The reason is the CACHE alone. Nearly every URL this document enumerates is itself inside
     # the rule since #117, so "crawlers fetch it" exempts nothing -- it is one cached document,
@@ -554,13 +612,13 @@ def test_the_og_cards_stay_covered_by_their_own_clause_when_the_entity_prefixes_
 # decidable, and checking it by hand is what nobody did for five milestones.
 #
 # LOSSY is the word, not "strictly less". `_covers_at_least` decides whether the new clause
-# covers everything the old one did; what fails that test is not always a subset. Of the 71
-# substitutions that passed this file before #129, 16 were strict subsets and 55 were
-# INCOMPARABLE -- they dropped part of the clause's family AND picked up paths it never matched
-# (`ends_with("/pivot")` also matches `/anything/pivot`). Every named exemplar is in the
-# incomparable 55. The sweep's conclusion is the same for both, because the axis it is about is
-# what a substitution DROPS; only the description differs, and calling all 71 subsets would be a
-# claim about the other 55 that is simply false.
+# covers everything the old one did, and what fails that test is not always a SUBSET: most of the
+# substitutions that walked through before #129 were incomparable -- they dropped part of the
+# clause's family AND picked up paths it never matched (`ends_with("/pivot")` also answers for
+# `/anything/pivot`). The conclusion is the same for both, because the axis is what a
+# substitution DROPS; the word matters because calling them all subsets is a false claim about
+# most of them. The counts are in docs/architecture/hosting.md beside the rule they justify, and
+# deliberately not repeated here -- an unbound number written twice is two numbers to keep true.
 
 
 def _affixes(path: str) -> set[str]:
@@ -574,12 +632,6 @@ def _candidate_literals() -> list[str]:
     was supposed to prove the clause. Drawing candidates from the tables is what makes this a
     check on the TABLES rather than one more assertion about today's expression."""
     return sorted({literal for path, _ in COVERED + UNCOVERED for literal in _affixes(path)})
-
-
-def _rebuild(clauses: list[tuple[str, str]]) -> str:
-    """Unparenthesised, because the only thing it is compared against is `_path_disjunction`'s
-    return value, and that has already had `_unwrap` strip the expression's outer pair."""
-    return " or ".join(f'{op}(http.request.uri.path, "{lit}")' for op, lit in clauses)
 
 
 def _matches(clause: tuple[str, str], path: str) -> bool:
@@ -614,19 +666,43 @@ def _covers_at_least(new: tuple[str, str], old: tuple[str, str]) -> bool:
 
 
 def _swept_clauses(expression: str) -> list[tuple[str, str]]:
-    """The clause list the sweep reads, and the round-trip that makes it the RULE rather than a
-    model of it. One helper, called by the sweep AND by its admitted-narrowing fixtures, so a
-    future edit that reverts it to the raw string is caught by those fixtures instead of only by
-    whoever next ships the narrowing. Two separate correct calls would not do that: the fixture
-    would keep its own `_path_disjunction` and pass while the sweep read the wrong bytes."""
+    """The clause list the sweep reads, and the check that makes it the RULE rather than a model
+    of it: every top-level `or`-term of the path disjunction is a whole path clause, and the
+    clauses parsed out of it are exactly those terms, in order.
+
+    NORMALISED, NEVER A BYTE IDENTITY. The first version rebuilt `" or "`-joined text and
+    compared it to the disjunction, which made `||` -- the spelling `ADMITTED_DISJUNCTIONS`
+    exists to keep exercised -- a hard red blaming the expression, and an extra space around one
+    `or` did the same. That is this file's own header at the top: a gate that reasons about one
+    spelling has moved the hole rather than closed it. `_split_top_level` already reads both
+    notations, so the comparison is over PARSED `(operator, literal)` pairs and whitespace and
+    notation cannot reach it.
+
+    What this adds over `_structure_failures`, which already `fullmatch`es every top-level term,
+    is only the 1:1 correspondence with `findall` -- so a clause nested inside a term cannot be
+    swept as though it were top-level. That is a narrow job, and it is stated narrowly; the
+    structure test is what refuses a bare `true` disjunct.
+
+    One helper, called by the sweep AND by its fixtures, so a future edit that reverts it to the
+    raw string is caught by those fixtures rather than only by whoever next ships a narrowing.
+    Two separate correct calls would not do that: the fixture would keep its own
+    `_path_disjunction` and pass while the sweep read the wrong bytes."""
     disjunction = _path_disjunction(expression)
-    clauses = _PATH_CLAUSE.findall(disjunction)
-    assert _rebuild(clauses) == disjunction, (
-        "the sweep rebuilds the path disjunction from the clauses it parsed, and the result is "
-        f"not what it was handed -- so something in it is not a path clause:\n  {disjunction!r}"
-        f"\n  {_rebuild(clauses)!r}"
+    terms = _split_top_level(disjunction, _OR)
+    parsed = [_PATH_CLAUSE.fullmatch(term) for term in terms]
+    unparsed = [term for term, match in zip(terms, parsed, strict=True) if match is None]
+    assert not unparsed, (
+        f"{unparsed} is not a whole path clause, so the sweep would read this disjunction as "
+        "fewer clauses than it has and judge substitutions against the wrong set. "
+        "`test_rate_limit_expression_is_a_path_disjunction_narrowed_only_by_negated_edge_signals`"
+        " owns this failure and names the term"
     )
-    return clauses
+    # Derived from the TERMS, never from a `findall` over the whole disjunction. Each term is
+    # now known to be exactly one clause, so the terms ARE the clause list; a second assertion
+    # comparing this to `findall` was carried here briefly and could not fire -- text between
+    # top-level terms is only the operator, so the two can never disagree once the guard above
+    # holds. A guard that cannot fire is one more thing to keep true for nothing.
+    return [match.groups() for match in parsed]
 
 
 def _tables_refuse(clauses: list[tuple[str, str]]) -> bool:
@@ -688,6 +764,26 @@ def test_no_single_literal_substitution_can_make_a_clause_lossy():
             f"`_matches` and `_covered` disagree about {path!r}, so the sweep is not evaluating "
             "the expression this file's other tests evaluate"
         )
+    # SPELLING, both axes. `_swept_clauses` is the one place this sweep decides what the
+    # expression says, and its predecessor decided it by byte identity against a single
+    # spelling -- so `||`, which ADMITTED_DISJUNCTIONS exists to keep exercised, was a hard red
+    # blaming the expression, and so was an extra space. Both directions are fixtures here, and
+    # the refused table is what stops the check being deleted outright: with no fixture, the
+    # whole helper can go and every test in this file stays green.
+    for admitted, _paths in ADMITTED_DISJUNCTIONS:
+        assert _swept_clauses(admitted), (
+            f"{admitted!r} is admissible by design and the sweep cannot read it -- a spelling "
+            "this file declares valid must not be a red that blames the expression"
+        )
+    spaced = _path_disjunction(expression).replace(" or ", "  or  ")
+    assert _swept_clauses(spaced) == clauses, (
+        "an extra space around `or` changed what the sweep reads; the comparison must be over "
+        "parsed clauses, never over bytes"
+    )
+    for refused, _why in REFUSED_DISJUNCTIONS:
+        with pytest.raises(AssertionError):
+            _swept_clauses(refused)  # noqa: PT012 -- one call, and the raise IS the assertion
+
     # Shipping the one narrowing #126 keeps available must not perturb any of the above.
     for narrowing in ADMITTED_NARROWINGS:
         narrowed = f"{expression} {narrowing}"
@@ -777,6 +873,63 @@ def test_no_single_literal_substitution_can_make_a_clause_lossy():
             )
 
 
+# `proxy.ts`'s matcher is the app's own list of the page routes it serves, and it is closed and
+# actively maintained -- CLAUDE.md makes adding a route to it a rule. So it can bind the half of
+# UNCOVERED the asset authorities cannot reach, in the shape this file already uses for
+# `card_dirs` and `prefetchPolicy.test.ts` uses for `<Link>`: agree with the real list rather
+# than restating it.
+_MATCHER = re.compile(r"matcher:\s*\[(.*?)\]", re.DOTALL)
+
+# The ONE matcher path deliberately outside both the expression and UNCOVERED. `/search` is
+# `no-store` unconditionally, so every request reaches the origin over an attacker-chosen
+# unbounded `q` -- it is named as still-uncovered in docs/architecture/hosting.md rather than
+# implied, and listing it here would assert the opposite: that it MUST NOT be rate limited.
+# The list can shrink; it grows only with a reason written beside the name.
+UNCOVERED_EXEMPT = {"/search": "cheap per request, and a real candidate for future coverage"}
+
+
+def test_every_matcher_path_the_rule_misses_is_listed_as_deliberately_excluded():
+    """The exclusion table agrees with `proxy.ts`'s matcher instead of being trusted on its own.
+
+    The asset rows are bound to what the app emits; these are bound to what it SERVES. Without
+    this, five of the eight rows were deletable with the whole file green -- and "no in-repo
+    authority binds them" was an overstatement: one counterexample (`/search`) refutes a
+    universal, not a binding, and an exemption list carrying that counterexample is the shape
+    `prefetchPolicy.test.ts` and this file's own `card_dirs` check already use.
+
+    The direction is one-way on purpose. Every matcher path the expression does NOT match must
+    appear here, so a new page route joins the rate limit or joins this table -- it cannot
+    quietly do neither. The converse is not asserted: `/_next/` and `/favicon.ico` are legitimate
+    rows and are not matcher paths at all, so requiring equality would forbid exactly the fixtures
+    #131 added."""
+    matcher = _MATCHER.search((ROOT / "app" / "src" / "proxy.ts").read_text())
+    assert matcher, "proxy.ts has no `matcher:` array -- this test is reading the wrong file"
+    patterns = re.findall(r'"([^"]+)"', matcher.group(1))
+    assert len(patterns) >= 16, (
+        f"only {len(patterns)} matcher entries parsed; the array's shape changed and this test "
+        "would silently bind against a fragment of it"
+    )
+    clauses = _swept_clauses(_rate_limit_expression())
+    excluded = [path for path, _ in UNCOVERED]
+    for pattern in patterns:
+        # A concrete path for the pattern, to ask the expression about; and a regex, to ask the
+        # table. `:param` is one segment.
+        probe = re.sub(r":[a-z]+", "X", pattern)
+        if _covers(clauses, probe):
+            continue
+        if pattern in UNCOVERED_EXEMPT:
+            continue
+        # `re.escape` leaves `:` and letters alone, so the `:param` substitution still lands.
+        shape = re.compile(re.sub(r":[a-z]+", "[^/]+", re.escape(pattern)))
+        assert any(shape.fullmatch(path) for path in excluded), (
+            f"`{pattern}` is a page route this app serves, the rate limit's expression does not "
+            f"match it, and UNCOVERED has no row for it. It must either come inside the rule or "
+            "be listed as deliberately excluded -- silently neither is how a surface ends up "
+            f"with no gate at all. If it belongs outside on purpose, add it to UNCOVERED_EXEMPT "
+            "with the reason beside the name"
+        )
+
+
 def test_each_excluded_asset_row_is_isolated_by_its_own_segment_or_extension():
     """The `/_next/` rows must differ on the two axes a path predicate can READ, not merely be
     different strings.
@@ -799,8 +952,14 @@ def test_each_excluded_asset_row_is_isolated_by_its_own_segment_or_extension():
     Scope is the asset rows only, and deliberately. `/` has no extension and no segment prefix
     but `/`, which every row shares -- the axes do not apply to a single document, and stretching
     the rule to cover it would mean loosening the candidate space back to the vacuous form. The
-    non-asset rows are held by review, and UNCOVERED's header says so rather than implying this
-    test covers them."""
+    non-asset rows are bound to `proxy.ts`'s matcher instead, one test down.
+
+    (It OVER-REJECTS, and fails closed. `starts_with`/`ends_with` read any prefix and any suffix,
+    not only the ones ending at a `/` or starting at a `.`, so a real `/_next/` route that is not
+    `dir/file.ext` -- `/_next/image` is the live example -- is trivially isolable by
+    `starts_with("/_next/image")` and would still be refused here. The narrow space is the whole
+    value of the test, so widening it to admit that case is not a fix; adding such a row means
+    admitting its own affix deliberately, and saying why.)"""
     rows = [path for path, _ in UNCOVERED if path.startswith("/_next/")]
     assert len(rows) >= 3, (
         f"only {len(rows)} `/_next/` rows: the families this test exists to keep distinct are "
@@ -826,46 +985,79 @@ def test_each_excluded_asset_row_is_isolated_by_its_own_segment_or_extension():
         )
 
 
+# Comments are not code. A raw substring over a `.tsx` file certifies PROSE -- this file already
+# states the rule for `cloudflare-apply.sh` ("Executable lines only. A needle that also matches
+# the script's own explanatory comments certifies prose, which is how two other checks in this
+# repo passed while broken") and the font authority below was written breaking it. Measured: with
+# `layout.tsx`'s real import replaced by a plain `<link>` and the words `next/font` left in ONE
+# comment elsewhere, the whole file stayed green. Three `.ts` files carry `next/font` in prose
+# today. Stripping can only REMOVE text, so a `//` inside a string literal costs an import rather
+# than inventing one, and the assertion that at least one import survives fails loudly.
+_TS_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+_TS_LINE_COMMENT = re.compile(r"//.*$", re.MULTILINE)
+_FONT_IMPORT = re.compile(r"""from\s*["'](next/font/[a-z]+)["']""")
+
+
+def _executable(source: str) -> str:
+    return _TS_LINE_COMMENT.sub("", _TS_BLOCK_COMMENT.sub("", source))
+
+
 def test_the_excluded_asset_families_agree_with_the_app_that_emits_them():
     r"""The `/_next/` rows are a claim about what the app EMITS, so they are bound to it.
 
-    One fixture per subresource family only holds while the families are what they were measured
-    to be, and nothing forced a NEW family into the table -- the gap this closes. Both authorities
-    are in-repo and neither is this file:
+    One fixture per subresource family holds only while the families are what they were measured
+    to be, and nothing forced a NEW family into the table. Two authorities, and they are NOT of
+    equal strength -- say so rather than presenting them as a matched pair:
 
-      * `app/smoke.sh` greps the SERVED html for the stylesheet's href and pins
-        `^/_next/static/chunks/.+\.css$`. That is a second, independent vantage point on the
-        finding that css and js share `chunks/` -- there is no `/_next/static/css/` -- which is
-        what makes segment and extension two axes rather than one.
+      * The stylesheet is bound to a SERVED vantage. `app/smoke.sh` pulls the stylesheet's href
+        out of the delivered html and `check_re`s it against `^/_next/static/chunks/.+\.css$`, so
+        the finding that css and js share `chunks/` -- there is no `/_next/static/css/`, which is
+        what makes segment and extension two axes rather than one -- is confirmed against real
+        bytes by a gate outside this file.
 
-      * `next/font/google` is what puts `.woff2` under `/_next/static/media/`. The font family is
-        the load-bearing one (four per page view, so `ends_with(".woff2")` alone would make a
-        page view five slots) and it is the one with NO smoke-check equivalent, which is exactly
-        why it is asserted here.
+      * The fonts have NO served equivalent, and this is the weaker half. It is an inference from
+        source: something imports `next/font`, therefore faces are self-hosted under
+        `/_next/static/media/`. The family is the load-bearing one -- four per page view, so
+        `ends_with(".woff2")` alone would make a page view five slots -- which is exactly why the
+        weakness is named instead of papered over.
 
-    Both halves are asserted in both directions, so neither can go dormant: if the app stops
-    importing `next/font` the first assertion fails and tells you to remove the fixture with it,
-    rather than leaving a row asserting an exclusion for a family that no longer exists."""
+    THE MODULE IS PINNED BECAUSE THE EXTENSION FOLLOWS IT, and "imports `next/font`" does not
+    imply `.woff2`. `next/font/google` downloads and self-hosts woff2. `next/font/local` serves
+    the file it is GIVEN, as-is -- Next's own docs show `localFont({ src:
+    './GreatVibes-Regular.ttf' })` and describe "built-in automatic self-hosting for any font
+    file" (`node_modules/next/dist/docs/01-app/03-api-reference/02-components/font.md:963`, and
+    :11). Switch one face to a local `.ttf` and a `.woff2`-only table excludes a family that no
+    longer exists while the new one goes unrepresented -- at which point `ends_with(".ttf")`
+    passes every test in this file and pulls four font fetches per page view into the
+    10-per-10 s bucket, which is #131's defect reached through a font-format change. So the
+    module set is asserted by EQUALITY and a new one is a red that says what to add.
+
+    What each family's emitted PATH is remains measured, not derived: `media/*.woff2` is read off
+    a production build. That `next/font/local` would emit its `.ttf` under the same prefix is
+    Next's documented self-hosting behaviour and is NOT verified here -- which is an argument for
+    the assertion below, not a claim to have tested it."""
     smoke = (ROOT / "app" / "smoke.sh").read_text()
     assert r"^/_next/static/chunks/.+\.css$" in smoke, (
-        "app/smoke.sh no longer pins the served stylesheet's path shape, so the `.css` row below "
-        "is this repo's only claim about where a stylesheet lives -- re-measure against a served "
+        "app/smoke.sh no longer pins the served stylesheet's path shape, so the `.css` row is "
+        "this repo's only claim about where a stylesheet lives -- re-measure against a served "
         "build before trusting it"
     )
-    font_importers = sorted(
-        str(source.relative_to(ROOT))
-        for source in (ROOT / "app" / "src").rglob("*.tsx")
-        if "next/font" in source.read_text()
-    )
-    assert font_importers, (
-        "nothing under app/src imports `next/font`, so the `/_next/static/media/*.woff2` family "
-        "no longer exists -- remove its UNCOVERED row and this assertion together, rather than "
-        "leaving a fixture that excludes a family the app does not emit"
+    modules: dict[str, str] = {}
+    for source in sorted((ROOT / "app" / "src").rglob("*.ts*")):
+        for module in _FONT_IMPORT.findall(_executable(source.read_text())):
+            modules.setdefault(module, str(source.relative_to(ROOT)))
+    assert set(modules) == {"next/font/google"}, (
+        f"the `next/font` modules imported are {sorted(modules) or '[]'}, not "
+        "['next/font/google']. The EXTENSION under /_next/static/media/ follows the module: "
+        "google self-hosts woff2, local serves the .ttf/.otf/.woff it is given. If this is now "
+        "empty, delete the woff2 row -- it excludes a family nothing emits. If it gained a "
+        "module, add an UNCOVERED row for the extension that module serves, or a single "
+        "`ends_with` on it walks through every test here"
     )
     families = {
         r"/_next/static/chunks/.+\.js": "the script chunks",
         r"/_next/static/chunks/.+\.css": "the stylesheet, per app/smoke.sh's served needle",
-        r"/_next/static/media/.+\.woff2": f"the faces {font_importers[0]} pulls via next/font",
+        r"/_next/static/media/.+\.woff2": f"the faces {modules['next/font/google']} self-hosts",
     }
     excluded = [path for path, _ in UNCOVERED]
     for pattern, what in families.items():
