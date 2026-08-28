@@ -621,6 +621,14 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
     expect(feet).toContain("Every filing at A18 in this window is quarantined");
     expect(feet).toContain("no measure above can be summed");
     expect(feet).not.toContain("excluded from these totals");
+    // BOTH counts, which is the one thing about this sentence that is genuinely this page's:
+    // /airport is the only entity page carrying a destinations count beside its carrier count,
+    // and the shared clause takes that noun phrase from the caller.
+    // MUTANT: pass "The carrier count is" here -> red. The 1:1 shape of A18 (1 row, 1 carrier,
+    // 1 destination) is exactly why a looser assertion would not notice.
+    expect(feet).toContain(
+      "The carrier and destination counts are counted from those rows, not net of them.",
+    );
   });
 
   it("agrees with its own count on the plural, on both halves of the sentence", async () => {

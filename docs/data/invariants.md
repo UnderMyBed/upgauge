@@ -630,9 +630,13 @@ Issue #121 stated the route figure alone and was read as the whole footprint; it
 
 **Every wholly-quarantined page is contradicted by its own filing, not merely unstated.** Each of
 the 12 is a `zero_seats` quarantine — a filed seat count of 0 against departures that were
-*performed* — so a strip reading "0 departures" asserts the opposite of what BTS filed. That is why
-the treatment is the em dash and not a zero, on every one of the six surfaces: stat strip, table
-cell, chart, map, card and foot.
+*performed* — so a strip reading "0 departures" asserts the opposite of what BTS filed. **Never a
+zero, on any of the six surfaces — but the treatment is not one treatment.** Stat strip, table
+cell and card render the em dash through `lib/format.ts`; the map omits the arc and counts it; the
+chart **breaks the area**, because a gap is what an unstateable month is on a time axis and a dash
+has no place to go there; and the foot states the cause in words. Naming them as one treatment is
+how a sweep declares a surface fixed that never was — this sentence read "the em dash … on every
+one of the six surfaces" while `aircraftMix.ts` was still zero-filling.
 
 **The chart coerced the same NULL, one surface over, and needed a different answer.** `sumTotals`
 and the stat strip were the first half of #121; `fetchAircraftMix` applied the identical `?? 0`,
@@ -673,8 +677,14 @@ being a live one.
 
 **The wider branch is the empty one, and the two absences must stay separable.** `sumColumn`'s
 `null` seed means an entity that is fact-present but filed **nothing** inside the window reports its
-sums as unknowable rather than as zero — **12,115** route pairs, **45** carriers and **37** aircraft
-types, against the 290 airports `airportTotals` has answered that way since #118. (Those three, like
+sums as unknowable rather than as zero. **State the grain with the figure, because these three are
+counted at two of them.** At warehouse grain: **12,115** route pairs, **45** `airline_id`s and
+**37** BTS aircraft codes. At PAGE grain — which is what "renders an absence" means — they are
+**11,939**, **44** and **36**: 176 of the stale pairs are same-airport and 404 before any lookup,
+one dormant `airline_id` carries no `dim_carrier` row, and `CE-180` resolves to two fact-present
+airframes and 404s as ambiguous. This is the 11-versus-10 distinction of the wholly-quarantined
+set, one level up, and it was written here at the wrong grain first. Against the 290 airports
+`airportTotals` has answered that way since #118. (Those three, like
 the 290, are measurements stated here, not gated figures; only the route count is generated.) They
 render the same `—` for a different reason — nothing was filed, rather than nothing filed can be
 trusted — and both are the `—` this section requires. **A consumer keying on "the sum is null" alone

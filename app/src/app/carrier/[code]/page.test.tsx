@@ -9,6 +9,23 @@
 // import binding referenced inside `vi.mock` would break on hoisting, since `vi.mock` calls are
 // hoisted above every import statement in the file.
 import { vi } from "vitest";
+
+// THE CALL SITE, WHICH NO FIXTURE CAN REACH. `/carrier`'s wholly-quarantined foot is unreachable
+// on this warehouse -- no carrier's every trailing-12 filing is quarantined (measured) -- so
+// before the clause was hoisted to lib/, its copy of that sentence could be replaced with garbage
+// and all 1,516 tests plus all 663 served checks stayed green. Review found exactly that, on the
+// call site one file over from the card whose identical hole #121 had already closed with a spy.
+//
+// The clause itself is asserted at its four cells in lib/quarantineClause.test.ts. What is left
+// to pin is that THIS page reaches it with ITS OWN subject and count line, and that hop is
+// reachable on any carrier -- the arguments are supplied before the branch is chosen. The spy
+// CALLS THROUGH, so the rendered page is the real one.
+const clauseSpy = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/quarantineClause", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/quarantineClause")>();
+  clauseSpy.mockImplementation(actual.quarantineClause);
+  return { ...actual, quarantineClause: clauseSpy };
+});
 vi.mock("next/headers", async () => {
   const { RAW_QUERY_HEADER } = await import("@/lib/rawQuery");
   // Default: an empty raw query, matching a bare request with no `?` at all -- which is what
@@ -786,5 +803,25 @@ describe("a carrier that filed nothing in the window states absence, not zero", 
     const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
     expect(feet).toContain("118 quarantined rows excluded from these totals");
     expect(feet).not.toContain("is quarantined");
+  });
+});
+
+describe("the foot's quarantine clause comes from the shared rule, with this page's words", () => {
+  // MUTANT: inline a route-local string in place of the `quarantineClause(...)` call -> the spy
+  // records nothing -> red. That is the mutant that survived the whole suite before this test.
+  // MUTANT: pass `carrier.name` as the subject, or "The carrier count is" as the counts -> the
+  // argument assertions redden. A call-count-only test would admit both.
+  it("passes its own subject and its own count line", async () => {
+    clauseSpy.mockClear();
+    render(await CarrierPage({ params: Promise.resolve({ code: "8V" }) }));
+    expect(clauseSpy).toHaveBeenCalled();
+    const arg = clauseSpy.mock.calls[0][0];
+    // "by" and not "at"/"on": a carrier FILES, an airport is filed AT. Each grain's preposition
+    // is the page's to supply, and getting it from the wrong page is the drift this pins.
+    expect(arg.subject).toBe("by 8V");
+    // /carrier's entity count is aircraft types, not carriers -- the one page where it differs.
+    expect(arg.counts).toBe("The aircraft-type count is");
+    expect(arg.quarantinedRows).toBe(118);
+    expect(arg.seatsAreNull).toBe(false);
   });
 });

@@ -1123,6 +1123,10 @@ check_dataset check "airport A18: the gutter carries the quarantine reason, not 
 # `<!-- -->` between adjacent expression children, which `textContent` skips and this does not.
 check_dataset check "airport A18: the foot explains the dashes instead of miscounting them" \
   "$BODY" 'Every filing at A18 in this window is quarantined'
+# /airport states TWO counts, so its tail is the plural one -- the single place the shared clause
+# genuinely varies between pages, and therefore the one worth pinning in the served bytes.
+check_dataset check "airport A18: ...and its tail names both counts" "$BODY" \
+  'The carrier and destination counts are counted from those rows, not net of them.'
 check_dataset check_not "airport A18: ...and does not claim the counts are net of an exclusion" \
   "$BODY" 'excluded from these totals'
 # `1 destination`, singular, on the only prose left explaining five em dashes. The other half of
@@ -1197,10 +1201,18 @@ check_dataset check_not "route A18-LMA: no measure in the strip is a fabricated 
 # THE PROSE THAT EXPLAINS THE DASHES. "1 quarantined row excluded from these totals" is a
 # compound claim whose second clause is false here: there are no totals to have been excluded
 # from, and Carriers is a count OF the excluded row. Built as ONE template literal in page.tsx so
-# this raw-bytes grep can reach it -- the adjacent-JSX form it replaced could not be grepped at
-# all, which is why no needle here existed before.
+# this raw-bytes grep can reach its PREFIX. Narrowly: React's SSR emits `<!-- -->` between
+# ADJACENT expression children, so `{n} quarantined row{s}` was unreachable; the tail
+# " excluded from these totals, never clamped." was a single static JSX child and always was
+# greppable. The rewrite is still right -- half a sentence is not a needle.
 check_dataset check "route A18-LMA: the foot explains the dashes instead of miscounting them" \
   "$BODY" 'Every filing on A18–LMA in this window is quarantined'
+# THE TAIL, which is the half that says what the numbers that SURVIVE actually mean -- and the
+# half nothing checked until review pointed out that garbling it left every gate green. The
+# opening clause alone does not make the sentence honest: "Carriers 1" above five em dashes is
+# derived FROM the quarantined rows, not a count OF them.
+check_dataset check "route A18-LMA: ...and says what the surviving counts mean" "$BODY" \
+  'so no measure above can be summed. The carrier count is counted from those rows, not net of them.'
 check_dataset check_not "route A18-LMA: ...and claims no exclusion that could not have happened" \
   "$BODY" 'excluded from these totals'
 check_dataset check_not "route A18-LMA: the foot agrees with its own count on the plural" \
@@ -1236,6 +1248,14 @@ check_dataset check_not "aircraft TRISLNDR: no measure in the strip is a fabrica
   '<div class="v">0</div>'
 check_dataset check "aircraft TRISLNDR: the foot explains the dashes" "$BODY" \
   'Every filing on the TRISLNDR in this window is quarantined'
+# The same tail, on the grain that DISPROVED the original wording: this page renders
+# "Carriers 1 · Quarantined 2", so "the carrier count is a count of those rows" was 1 = 2.
+# /airport never surfaced it -- A18, JZM and OQZ are each 1 row, 1 carrier, 1 destination, and so
+# are all ten route pages, which makes the false sentence numerically indistinguishable there.
+check_dataset check "aircraft TRISLNDR: ...and its counts are derived, not equal" "$BODY" \
+  'The carrier count is counted from those rows, not net of them.'
+check_dataset check_not "aircraft TRISLNDR: the foot does not equate the two counts" "$BODY" \
+  'is a count of those rows'
 check_dataset check_not "aircraft TRISLNDR: ...and claims no exclusion" "$BODY" \
   'excluded from these totals'
 
