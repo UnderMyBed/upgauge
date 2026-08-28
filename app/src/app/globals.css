@@ -788,6 +788,67 @@ svg.plot {
   text-decoration: none;
 }
 
+/* ---------- the Explorer builder (epic #6) ---------- */
+/* Follows `.year-track` exactly: a wrapping flex row of anchors with an explicit `gap`,
+   because the chips are emitted with no whitespace between them and would otherwise butt
+   together. Density over whitespace -- hairline separation, no boxes, no card soup. */
+.builder {
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
+  padding: 10px 0;
+  margin: 0 0 22px;
+}
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 3px 0;
+}
+.chip-label {
+  font-size: 11px;
+  color: var(--ink-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  min-width: 96px;
+}
+.chip-key {
+  font-family: var(--font-mono);
+  color: var(--signal);
+}
+.chip-set {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+.chip {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+.chip:hover {
+  color: var(--signal);
+}
+.chip[aria-current="page"] {
+  color: var(--signal);
+  font-weight: 600;
+  text-decoration: none;
+}
+/* Derived measures are dashed, per system.md § The Explorer -- the same dotted-underline
+   vocabulary `.deriv` already uses for a computed column header. */
+.chip-derived {
+  text-decoration-style: dashed;
+}
+/* An option that exists but is not reachable from this query. Not hidden: see Chips.tsx. */
+.chip-off {
+  color: var(--ink-3);
+  text-decoration: line-through;
+  cursor: not-allowed;
+}
+
 /* ---------- point-to-point map: disclosure notes and the filter picker (epic #5) ---------- */
 /* `.foot` has only ever been a SINGLE paragraph -- NetworkMap's Midway caption, the entity
    pages' "Open in the Explorer" link -- so it has never needed a rule for child paragraphs.

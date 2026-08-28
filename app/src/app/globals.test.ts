@@ -170,6 +170,22 @@ describe("globals.css covers every bespoke class a component renders", () => {
     expect(rule![1]).toMatch(/gap\s*:/);
   });
 
+  it("gives the builder chip rows a gap, since the chips are emitted with no whitespace", () => {
+    const css = readFileSync(path.join(SRC, "app", "globals.css"), "utf8");
+    for (const selector of [/\.chip-row\s*\{([^}]*)\}/, /\.chip-set\s*\{([^}]*)\}/]) {
+      const rule = selector.exec(css);
+      expect(rule).not.toBeNull();
+      expect(rule![1]).toMatch(/gap\s*:/);
+    }
+  });
+
+  it("distinguishes an unreachable chip by more than colour", () => {
+    const css = readFileSync(path.join(SRC, "app", "globals.css"), "utf8");
+    const rule = /\.chip-off\s*\{([^}]*)\}/.exec(css);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).toMatch(/text-decoration\s*:/);
+  });
+
   it("bounds every grid track, so a wide table can never widen the page body", () => {
     const css = withoutComments(readFileSync(path.join(SRC, "app", "globals.css"), "utf8"));
 
