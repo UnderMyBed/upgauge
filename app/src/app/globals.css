@@ -848,6 +848,17 @@ svg.plot {
   text-decoration: line-through;
   cursor: not-allowed;
 }
+/* The "add filter" half of FilterChips. Every other chip row TOGGLES this page's own state; this
+   one hands off to `/explore/filter/:dim`, because choosing a VALUE needs the warehouse and a chip
+   row cannot reach it. Set back one shade so the two halves of `f` read as answer-then-offer --
+   weight and colour only, no box and no second border: `.builder` already owns the only two rules
+   in this block, and this product has no cards. */
+.filter-list .chip {
+  color: var(--ink-3);
+}
+.filter-list .chip:hover {
+  color: var(--signal);
+}
 
 /* ---------- point-to-point map: disclosure notes and the filter picker (epic #5) ---------- */
 /* `.foot` has only ever been a SINGLE paragraph -- NetworkMap's Midway caption, the entity
