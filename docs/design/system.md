@@ -152,15 +152,17 @@ counts · gauge rail · sparkline.** Identifiers left, everything numeric right.
 Rows below the 30-departure floor are **rendered, never hidden**: dashed bottom rule,
 `--ink-2` text, and a muted gauge tick. **The gutter glyph is not part of that treatment** —
 it is chosen independently, by severity (`Q` > `⌀` > `n`), so a below-floor row that is also
-quarantined or zero-pax shows `Q` or `⌀` and never `n` while carrying every mark above. At
-route×carrier grain over the trailing 12 that is **3,184 of 13,570 below-floor rows — 23.5%**,
-every one of them zero-pax. Read the floor from
-the departure count, never from the gutter; the *reason-code gutter* section below has the
-mechanism and names gating on the glyph as the bug it exists to prevent. On a ranked table they
-sort below every scored row, so the sparse rows read as one block at the foot instead of salted
-through the ranking — the treatment's value is that they are separable at a glance, and
-interleaved they are not. Where the table carries a rank column, a below-floor row takes no
-number: that cell reads `—`. Excluded from ranking, not from sight.
+quarantined or zero-pax shows `Q` or `⌀` and never `n` while carrying every mark above —
+roughly one in four of them, at route×carrier grain. No exact share is stated: independent
+derivations of it disagree, and a hand-written measurement belongs in generated output either
+way. **Read the floor from the departure count, never from the gutter**; the *reason-code
+gutter* section below has the mechanism, and names gating on the glyph as the bug it exists to
+prevent.
+
+On a ranked table they sort below every scored row, so the sparse rows read as one block at the
+foot instead of salted through the ranking — the treatment's value is that they are separable
+at a glance, and interleaved they are not. Where the table carries a rank column, a below-floor
+row takes no number: that cell reads `—`. Excluded from ranking, not from sight.
 
 **A ranked table is one whose order the product chose** — the four entity pages and the
 `/watch` presets. `/explore` renders the order its own query specifies, and re-ordering the rows
@@ -1156,7 +1158,7 @@ of these are **normal** in T-100.
 |---|---|
 | **Loading** | Skeleton rows at exact 22px height so nothing reflows. Never a spinner. |
 | **Empty (valid query, no rows)** | Keep the header, stat strip and legend rail. State the query in words and offer the nearest broader window. Never a blank panel. |
-| **Sparse** (below the 30-dep floor) | Dashed rule, `--ink-2`, muted gauge tick — and the gutter shows `n` only where nothing outranks it, since the glyph is picked by severity and 23.5% of these rows show `⌀` or `Q` instead. On a ranked table, sorted below every scored row and excluded from ranking — a rank cell reads `—`. On `/explore` the visitor's own sort order stands; the treatment is identical either way. |
+| **Sparse** (below the 30-dep floor) | Dashed rule, `--ink-2`, muted gauge tick — and the gutter shows `n` only where nothing outranks it, since the glyph is picked by severity and roughly one in four of these rows shows `⌀` or `Q` instead. On a ranked table, sorted below every scored row and excluded from ranking — a rank cell reads `—`. On `/explore` the visitor's own sort order stands; the treatment is identical either way. |
 | **Zero passengers** | `⌀` gutter code. Load factor renders `0.00%`, not `—`: it flew and carried nobody, which is a fact, not a gap. |
 | **Quarantined** | `Q` code, excluded from totals, **count always surfaced** with its reason. Never clamped, never silently dropped. |
 | **Unknowable** (a measure was queried and cannot be stated) | The measure cells render `—`, never `0` and never blank — the sum of no trusted values is not a measurement of nothing. The gauge rail keeps its axis and shows no tick. No below-floor treatment: an unknown departure count makes no claim about the floor. **Its cause is named per row and per page, never by the legend rail**, which is rendered on every view and so can only state that the mark is not a zero — and is painted in `--ink`, not `--limit`, because a dash is a data-availability mark and not an out-of-limit code. `Q` in the gutter where the cause is quarantine; the page's own foot where it has one. A zero denominator has neither, and the dash stands alone. On a card — no foot, no empty state, no `aria-label` — the sixth stat slot carries the quarantined count *where there are quarantined rows to count*, and the entity count otherwise. **True today on `/airport` only**: `/route`, `/carrier` and `/aircraft` build their totals through `sumTotals`, which still coerces an unknowable sum to `0`, so their cards rasterize `Seats 0` rather than a dash and never reach this rule. `cardSixthStat` is shared and ready for them; wiring it is part of **#121**. Distinct from *Zero passengers*, which flew and is a measurement, and from *Not queried* below. **The glyph has one other holder**: a rank cell on a row excluded from ranking (*Sparse*, above). There it means *not applicable* rather than *not statable* — the same mark for the same reason, that a number would be a claim the row does not support. **Which of the two a reader is looking at is told by the COLUMN**, never by the gutter: a dash under a measure is an unstatable measure, a dash in the rank column is a withheld rank, and the row's dashed rule and `--ink-2` text say why the second one is there. Not the glyph — `reasonFor` picks one code by severity (`Q` > `⌀` > `n`), so a below-floor row that is *also* quarantined or zero-pax shows `Q` or `⌀` and never `n` while still taking the withheld rank. Measured inside `/carrier`'s Top-routes top-25 sets: 38 of 141 below-floor rows are in that state — 37 `⌀`, 1 `Q`. Reading the floor off the gutter is the collapse the *reason-code gutter* section forbids, one layer up. |

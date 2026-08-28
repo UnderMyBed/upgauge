@@ -807,10 +807,24 @@ describe("/carrier/<code> sorts below-floor rows last", () => {
     // 28 departures) out-seats three scored ones (176, 169, 168), so the measure sort puts it at
     // 21 of 25 and the partition has to move it.
     //
-    // NOT 4W, which this test used before the re-review: 4W's below-floor rows are already last
-    // by seats, so its ORDER assertion was vacuous and it went red under the mutant only through
-    // the rank half. A fixture that exercises one of two asserted properties is the vacuous
-    // fixture wearing half a disguise.
+    // NOT 4W, AND THE REASON IS THE SHARPEST TRAP THIS UNIT TURNED UP.
+    //
+    // *A fixture that exercises one of two asserted properties is the vacuous fixture wearing
+    // half a disguise.*
+    //
+    // This test asserts two things: the ORDER (below-floor rows last) and the RANK (1..k, then
+    // em dashes). 4W's below-floor rows are already last by seats, so both orderings agree on it
+    // and the order half could never fail. The rank half still could -- and did. So the mutant
+    // died, the run reported this test by name as having refused it, and the property in the
+    // test's own title was never exercised at all. A reviewer and the conductor both signed off
+    // on 4W on exactly that evidence; it was found while fixing something else.
+    //
+    // CLAUDE.md's existing rule catches the fixture that fails to discriminate at all. This is
+    // the partial case, and a mutation report cannot distinguish it from real coverage: "test X
+    // went red" is true either way. The only thing that separates them is checking, per asserted
+    // property, that the fixture can distinguish correct from buggy ON THAT PROPERTY -- which is
+    // what the fixture guard below does, and why it is a separate assertion rather than a
+    // comment.
     // MUTANT: `partition={false}` at the Top routes DataTable -> red here.
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "2O" }) }));
     const rows = rowsOf(container, 1);
