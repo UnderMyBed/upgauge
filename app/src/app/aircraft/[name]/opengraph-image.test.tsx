@@ -1,4 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// THE LAST HOP INTO AN `ImageResponse`, which nothing else can reach. `Image()` returns a PNG
+// stream and hands nothing back, so every other assertion in this file settles the RESOLUTION
+// contract and none of them can see which sixth stat the card was built with. #118 measured that
+// shape three times in one cycle, each with a full green suite; extracting a helper to "make the
+// wiring testable" only moves the unpinned hop up one level unless something invokes the caller.
+//
+// `renderEntityCard` is the seam. The spy CALLS THROUGH to the real implementation rather than
+// standing in for it, so the route still rasterizes a real card and this file's existing "returns
+// a PNG response" assertion keeps testing what it always did -- the spy only records the
+// `CardInput` on its way past. `importOriginal` also keeps `CARD_SIZE`, which this route imports
+// from the same module.
+const renderSpy = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/og/card", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/og/card")>();
+  renderSpy.mockImplementation(actual.renderEntityCard);
+  return { ...actual, renderEntityCard: renderSpy };
+});
 import Image, { alt, contentType, dynamic, size } from "@/app/aircraft/[name]/opengraph-image";
 
 /** Real route, real `upgauge.duckdb`, no mock -- see route/[pair]/opengraph-image.test.tsx's
@@ -64,5 +82,53 @@ describe("/aircraft/<slug> opengraph-image", () => {
     const res = await Image({ params: Promise.resolve({ name: "B737-8" }) });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("image/png");
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// THE CARD'S SIXTH STAT (#121), and THIS route is the half issue #121 never measured. It scoped
+// the wholly-quarantined footprint at route grain only; re-derived at aircraft grain, BTS types
+// 201 (`/aircraft/TRISLNDR`) and 489 (`/aircraft/SHORT360`) have no un-quarantined filing either
+// -- both F4 in 2025-08, 5 and 27 PERFORMED departures against a filed seat count of zero. So the
+// reachable footprint is 12 pages, not the 10 the issue states.
+describe("the default export's card input", () => {
+  async function cardInputFor(name: string) {
+    renderSpy.mockClear();
+    await Image({ params: Promise.resolve({ name }) });
+    expect(renderSpy).toHaveBeenCalledTimes(1);
+    return renderSpy.mock.calls[0][0] as { stats: { label: string; value: string }[] };
+  }
+
+  // THE ORDER IS PART OF THE ASSERTION: load factor and average gauge rendered `—` even under the
+  // bug, so only the first five ALL being dashes separates `0 · 0 · — · — · 0` from five dashes.
+  // MUTANT: `stats: cardStats(totals, { label: "Carriers", ... })` at the render call -> the
+  // sixth stat reads `Carriers 1` -> red.
+  // MUTANT: restore `?? 0` in `sumColumn` -> the first five stop being dashes -> red.
+  it("rasterizes the quarantined count on a wholly-quarantined aircraft type", async () => {
+    const input = await cardInputFor("TRISLNDR");
+    expect(input.stats.map((s) => s.label)).toEqual([
+      "Seats", "Passengers", "Load factor", "Avg gauge", "Departures", "Quarantined",
+    ]);
+    expect(input.stats[5].value).toBe("2");
+    expect(input.stats.slice(0, 5).map((s) => s.value)).toEqual(["—", "—", "—", "—", "—"]);
+  });
+
+  // QUARANTINE BESIDE REAL TRAFFIC: the Caravan carries 75 quarantined rows in this window and
+  // stateable traffic across 13 operating carriers.
+  // MUTANT: key `cardSixthStat` on `quarantinedRows > 0` alone -> `Quarantined 75` -> red.
+  it("keeps the carrier count where quarantined rows sit beside stateable traffic", async () => {
+    const input = await cardInputFor("CARAVAN");
+    expect(input.stats[5]).toEqual({ label: "Carriers", value: "13" });
+    expect(input.stats.map((s) => s.value)).not.toContain("—");
+  });
+
+  // The MD-80 stopped filing in 2023-04, so its trailing-12 pivot returns no rows -- 37 of this
+  // dataset's fact-present types are in that state.
+  // MUTANT: key `cardSixthStat` on `totals.seats === null` alone -> `Quarantined 0` -> red.
+  // MUTANT: seed `sumColumn` at 0 -> the first five stop being dashes -> red.
+  it("keeps the carrier count on a type that filed nothing in the window", async () => {
+    const input = await cardInputFor("MD-80");
+    expect(input.stats[5]).toEqual({ label: "Carriers", value: "0" });
+    expect(input.stats.slice(0, 5).map((s) => s.value)).toEqual(["—", "—", "—", "—", "—"]);
   });
 });

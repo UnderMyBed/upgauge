@@ -600,22 +600,51 @@ one `zero_seats` with a filed seat count of exactly 0. **They flew.** Across *ev
 segment row in the same window the distinct set is wider (`1,2,3,4,5,6,7,10,11,18,313,314`), so a
 figure quoted here must name which population it measured.
 
-**Where this is enforced on this surface.** `app/src/app/airport/[code]/endpoints.ts` — `addSum`,
-`bySeatsDesc` (NULLS LAST, matching DuckDB's own `DESC`) and a `ratio` that returns null rather
-than `NaN`. The cell renders `—` through `lib/format.ts`, and the reason-code gutter carries the
-`Q` glyph **with the reason string**, which this page has to pass through deliberately because it
-rebuilds its rows in TypeScript rather than handing `DataTable` a raw pivot row. Issue #118.
+**Where the arithmetic lives.** `app/src/lib/nullSum.ts` — `addSum` (SUM semantics), `ratio` (null
+rather than `NaN`, and null for a zero denominator) and `numOrNull` (absence tested *before* the
+conversion, since `Number(null)` is 0), plus `sumColumn`, which folds a raw pivot column through
+all three from a **`null` seed**. It is the arithmetic half of `lib/format.ts`'s opening rule and
+is shared by **both** totals definitions: `lib/entityFacts.ts`'s `sumTotals` for `/route`,
+`/carrier` and `/aircraft`, and `app/src/app/airport/[code]/endpoints.ts` for the either-endpoint
+page, which adds `bySeatsDesc` (NULLS LAST, matching DuckDB's own `DESC`) and passes
+`quarantine_reasons` through by hand because it rebuilds its rows in TypeScript rather than handing
+`DataTable` a raw pivot row. The cell renders `—` through `lib/format.ts`; the reason-code gutter
+carries the `Q` glyph **with the reason string**. Issues #118 and #121.
 
-**Still open: `sumTotals`.** `app/src/lib/entityFacts.ts` applies the same `?? 0` *inside* a `+`
-fold for `/route`, `/carrier` and `/aircraft` and their cards. **11** route pairs have no
-un-quarantined filing at all in the trailing 12, of which **10 are reachable pages** that render
-three fabricated zeros in the stat strip and on the card: `A18–LMA` · `AET–AIN` · `AET–OTZ` ·
-`ARC–CXF` · `BTI–VEE` · `BTT–UMT` · `CIK–SCC` · `GAL–OQZ` · `HSL–JZM` · `HUS–RLU`. The eleventh is
-`VEE–VEE`, which never renders: `app/src/lib/routePair.ts` 404s a same-airport slug before any
-lookup, consistent with the § Route identity rule that a same-airport filing is not a route. It is
-named here rather than dropped so the next re-derivation gets 11 and does not read this as stale.
-`EntityTotals` is already typed `number | null` for `/airport`'s sake, so the type is **not**
-evidence this is handled. Issue #121.
+**The reachable footprint is 12 pages, and it is not all routes.** At route grain **11** pairs have
+no un-quarantined filing in the trailing 12, of which **10 are reachable pages**: `A18–LMA` ·
+`AET–AIN` · `AET–OTZ` · `ARC–CXF` · `BTI–VEE` · `BTT–UMT` · `CIK–SCC` · `GAL–OQZ` · `HSL–JZM` ·
+`HUS–RLU`. The eleventh is `VEE–VEE`, which never renders — `app/src/lib/routePair.ts` 404s a
+same-airport slug before any lookup, consistent with the § Route identity rule that a same-airport
+filing is not a route. It is named rather than dropped so the next re-derivation gets 11 and does
+not read this as stale.
+
+**Re-derive at every grain the fold serves, not only the one an issue happened to measure.** At
+aircraft grain **two** types are in the same state — BTS `201` (`/aircraft/TRISLNDR`) and `489`
+(`/aircraft/SHORT360`), both filed by F4 in 2025-08 with **5** and **27** performed departures
+against a seat count of exactly 0. At carrier grain there are **none** in this window, so
+`/carrier`'s card and foot reach the quarantined branch on no page that exists: the branch is the
+same shared one the other three carry, and its wiring on that route is pinned by a spy on the call
+rather than by a fixture, because a fallback-only surface makes the call site deletable-green.
+Issue #121 stated the route figure alone and was read as the whole footprint; it was 10 of 12.
+
+**Every wholly-quarantined page is contradicted by its own filing, not merely unstated.** Each of
+the 12 is a `zero_seats` quarantine — a filed seat count of 0 against departures that were
+*performed* — so a strip reading "0 departures" asserts the opposite of what BTS filed. That is why
+the treatment is the em dash and not a zero, on every one of the six surfaces: stat strip, table
+cell, chart, map, card and foot.
+
+**The wider branch is the empty one, and the two absences must stay separable.** `sumColumn`'s
+`null` seed means an entity that is fact-present but filed **nothing** inside the window reports its
+sums as unknowable rather than as zero — **12,115** route pairs, **45** carriers and **37** aircraft
+types, against the 290 airports `airportTotals` has answered that way since #118. (Those three, like
+the 290, are measurements stated here, not gated figures; only the route count is generated.) They
+render the same `—` for a different reason — nothing was filed, rather than nothing filed can be
+trusted — and both are the `—` this section requires. **A consumer keying on "the sum is null" alone
+answers the wrong one of them, and answers it on the 12,115 rather than the 10.** So the card's
+sixth stat and the page's foot are both gated on **two** operands, and every surface tests both
+absences: `RouteEmptyState` / `CarrierEmptyState` / `AircraftEmptyState` name which one a page is
+in, and the foot claims an exclusion only where there was one.
 
 ---
 

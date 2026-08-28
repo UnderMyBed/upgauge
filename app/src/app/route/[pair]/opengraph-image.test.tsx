@@ -1,4 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// THE LAST HOP INTO AN `ImageResponse`, which nothing else can reach. `Image()` returns a PNG
+// stream and hands nothing back, so every other assertion in this file settles the RESOLUTION
+// contract and none of them can see which sixth stat the card was built with. #118 measured that
+// shape three times in one cycle, each with a full green suite; extracting a helper to "make the
+// wiring testable" only moves the unpinned hop up one level unless something invokes the caller.
+//
+// `renderEntityCard` is the seam. The spy CALLS THROUGH to the real implementation rather than
+// standing in for it, so the route still rasterizes a real card and this file's existing "returns
+// a PNG response" assertion keeps testing what it always did -- the spy only records the
+// `CardInput` on its way past. `importOriginal` also keeps `CARD_SIZE`, which this route imports
+// from the same module.
+const renderSpy = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/og/card", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/og/card")>();
+  renderSpy.mockImplementation(actual.renderEntityCard);
+  return { ...actual, renderEntityCard: renderSpy };
+});
 import Image, { alt, contentType, dynamic, size } from "@/app/route/[pair]/opengraph-image";
 
 /** Drives the real route against the real `upgauge.duckdb` -- no mock. A mocked
@@ -73,5 +91,66 @@ describe("/route/<pair> opengraph-image", () => {
     const res = await Image({ params: Promise.resolve({ pair: "JFK-LAX" }) });
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("image/png");
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// THE CARD'S SIXTH STAT (#121). `sumTotals` used to coerce an unknowable sum to 0, so this card
+// rasterized `SEATS 0 · PASSENGERS 0 · DEPARTURES 0 · CARRIERS 1` on 10 reachable route pages --
+// figures contradicted by the very filings behind them, each a performed departure against a
+// filed seat count of zero. With the fold fixed those five become `—`, and a card has no foot, no
+// empty state and no `aria-label`, so the sixth stat is the only place left to explain them.
+//
+// `cardSixthStat`'s four cells are asserted where it lives (lib/og/entityCard.test.ts). What is
+// pinned here is that THIS route reaches it, with THIS page's fallback, on real data.
+describe("the default export's card input", () => {
+  async function cardInputFor(pair: string) {
+    renderSpy.mockClear();
+    await Image({ params: Promise.resolve({ pair }) });
+    expect(renderSpy).toHaveBeenCalledTimes(1);
+    return renderSpy.mock.calls[0][0] as { stats: { label: string; value: string }[] };
+  }
+
+  // A18-LMA (Kantishna-Lake Minchumina): its entire trailing 12 is ONE filing, 2025-06, seats 0
+  // against 1 PERFORMED departure, quarantined `zero_seats`. One of the 10 pages this issue is
+  // about.
+  //
+  // THE ORDER IS PART OF THE ASSERTION, not decoration. Load factor and average gauge rendered
+  // `—` even under the bug (their denominators were zero either way), so "the card contains a
+  // dash" passed against the buggy card. Only the first five ALL being dashes separates
+  // `0 · 0 · — · — · 0` from `— · — · — · — · —`.
+  //
+  // MUTANT: `stats: cardStats(totals, { label: "Carriers", value: ... })` at the render call
+  // (the pre-#121 line) -> the sixth stat reads `Carriers 1` -> red.
+  // MUTANT: restore `?? 0` in `sumColumn` -> the first five read `0 · 0 · — · — · 0` -> red.
+  it("rasterizes the quarantined count on a wholly-quarantined pair", async () => {
+    const input = await cardInputFor("A18-LMA");
+    expect(input.stats.map((s) => s.label)).toEqual([
+      "Seats", "Passengers", "Load factor", "Avg gauge", "Departures", "Quarantined",
+    ]);
+    expect(input.stats[5].value).toBe("1");
+    expect(input.stats.slice(0, 5).map((s) => s.value)).toEqual(["—", "—", "—", "—", "—"]);
+  });
+
+  // QUARANTINE BESIDE REAL TRAFFIC, which is what makes the gate's second operand undeletable.
+  // AKP-FAI filed 7 quarantined rows AND stateable traffic across 2 carriers in this window. Its
+  // measures are honest and its sixth stat must stay the carrier count.
+  // MUTANT: key `cardSixthStat` on `quarantinedRows > 0` alone -> `Quarantined 7` here -> red.
+  it("keeps the carrier count where quarantined rows sit beside stateable traffic", async () => {
+    const input = await cardInputFor("AKP-FAI");
+    expect(input.stats[5]).toEqual({ label: "Carriers", value: "2" });
+    expect(input.stats.map((s) => s.value)).not.toContain("—");
+  });
+
+  // THE OTHER ABSENCE. ATL-CAK filed 67 months and nothing since 2022-06, so the trailing-12
+  // pivot returns NO rows -- unknowable for a reason quarantine had no part in, which is the
+  // state 12,115 of this database's route pairs are in.
+  // MUTANT: key `cardSixthStat` on `totals.seats === null` alone -> `Quarantined 0` here, naming
+  // the one cause it is not and withholding nothing that would explain the dashes -> red.
+  // MUTANT: seed `sumColumn` at 0 -> the first five stop being dashes -> red.
+  it("keeps the carrier count on a pair that filed nothing in the window", async () => {
+    const input = await cardInputFor("ATL-CAK");
+    expect(input.stats[5]).toEqual({ label: "Carriers", value: "0" });
+    expect(input.stats.slice(0, 5).map((s) => s.value)).toEqual(["—", "—", "—", "—", "—"]);
   });
 });

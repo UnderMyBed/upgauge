@@ -739,3 +739,52 @@ describe("/carrier/<code> diff map (#110)", () => {
     expect(container.querySelector('[data-testid="diff-map"]')).toBeNull();
   });
 });
+
+/** THE STAT STRIP AND THE FOOT (#121). NO CARRIER's every trailing-12 filing is quarantined on
+ * this warehouse (measured), so this page cannot reach the wholly-quarantined clause with real
+ * data -- the branch exists, is identical to the one `/route`, `/aircraft` and `/airport` carry,
+ * and is driven live on those three. What is reachable here, and asserted below, is the other
+ * absence and the quarantine-beside-real-traffic case.
+ *
+ * The strip is read as an ORDERED LIST, never searched for a dash: under the bug load factor and
+ * average gauge rendered `—` anyway, so the buggy page read `0 · 0 · — · — · 0`. */
+function statStrip(container: HTMLElement): string[] {
+  return [...container.querySelectorAll(".stats .v")].map((n) => n.textContent ?? "");
+}
+
+describe("a carrier that filed nothing in the window states absence, not zero", () => {
+  // VX has been dormant since 2018-03; 45 of this dataset's carriers are in that state.
+  // MUTANT: seed `sumColumn` at 0 -> `["0", "0", "—", "—", "0", "0", "0"]` -> red.
+  it("renders the measures as absence while still stating the counts", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
+    expect(statStrip(container)).toEqual(["—", "—", "—", "—", "—", "0", "0"]);
+  });
+
+  // MUTANT: key the clause on `totals.seats === null` alone -> "Every filing by VX in this
+  // window is quarantined — 0 rows", naming the one cause it is not -> red.
+  it("names neither an exclusion nor quarantine", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).not.toContain("excluded from these totals");
+    expect(feet).not.toContain("is quarantined");
+    // The derived-measure disclosure and the two grain claims are not optional, and must
+    // survive an empty quarantine clause.
+    expect(feet).toContain("never averaged");
+  });
+
+  // QUARANTINE BESIDE REAL TRAFFIC, at this dataset's extreme: Wright Air Service filed 118
+  // quarantined rows in this window AND stateable traffic on 3 aircraft types. Its figures are
+  // honest, its ordinary clause is the true one, and without this the check_nots above could
+  // pass against a page that had stopped rendering a strip.
+  // MUTANT: key the clause on `quarantinedRowsOnPage > 0` -> the wholly-quarantined sentence
+  // appears over real figures -> red.
+  it("states real figures and the ordinary exclusion where rows were quarantined", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "8V" }) }));
+    const strip = statStrip(container);
+    expect(strip.slice(0, 5)).not.toContain("—");
+    expect(strip[5]).toBe("3");
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).toContain("118 quarantined rows excluded from these totals");
+    expect(feet).not.toContain("is quarantined");
+  });
+});

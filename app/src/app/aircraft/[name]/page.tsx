@@ -228,6 +228,37 @@ export async function AircraftView({
   // in app/smoke.sh does not. Same trap, same fix, as /route's identically-named value.
   const chartWindow = `chart: ${drawsFullWindow ? "the full window · " : ""}${drawnFrom} → ${drawnTo}`;
 
+  // WHAT THE QUARANTINED ROWS DID TO *THESE* NUMBERS, which is not one sentence but two cases
+  // (#121, and `airport/[code]/page.tsx` splits the identical two). "Excluded from these totals"
+  // is true only while there are totals left to exclude them from. Where every filing in the
+  // window was quarantined there is no residue: no measure above can be stated at all, and the
+  // carrier count is counted from every row regardless of quarantine -- so it is not net of an
+  // exclusion, it is a count OF the excluded rows. Telling a reader otherwise, on a page whose
+  // every other figure is an em dash, describes the data as the opposite of what it is.
+  //
+  // GATED ON BOTH, and the second half is not redundant. `seats === null` covers TWO absences:
+  // every filing quarantined, and nothing filed at all. Only the first is a quarantine story;
+  // telling the second one that "every filing is quarantined — 0 rows" would invent a finding on
+  // 37 retired types to fix it on 2. That case says nothing here and gets its real message from
+  // `AircraftEmptyState`.
+  //
+  // ONE TEMPLATE LITERAL, not adjacent JSX expressions. React's SSR emits `<!-- -->` between
+  // adjacent expression children, which `textContent` skips (so a unit test cannot tell) and a
+  // raw-bytes grep in app/smoke.sh does not -- the form this paragraph carried before #121 was
+  // unreachable from the served-build gate for exactly that reason.
+  const quarantineClause =
+    totals.seats === null
+      ? result.quarantinedRowsOnPage > 0
+        ? `Every filing on the ${type.code} in this window is quarantined — ` +
+          `${result.quarantinedRowsOnPage} row` +
+          `${result.quarantinedRowsOnPage === 1 ? "" : "s"}, each having failed an invariant — ` +
+          `so no measure above can be summed. The carrier count is a count of those rows, ` +
+          `never clamped.`
+        : ""
+      : `${result.quarantinedRowsOnPage} quarantined row` +
+        `${result.quarantinedRowsOnPage === 1 ? "" : "s"} excluded from these totals, never ` +
+        `clamped.`;
+
   const columns = buildColumns(allowlist, result.columns);
 
   const hasMap = map !== null;
@@ -350,9 +381,7 @@ export async function AircraftView({
               </p>
             )}
             <p className="foot">
-              {result.quarantinedRowsOnPage} quarantined row
-              {result.quarantinedRowsOnPage === 1 ? "" : "s"} excluded from these totals, never
-              clamped. <span className="deriv">Load factor</span> and{" "}
+              {quarantineClause} <span className="deriv">Load factor</span> and{" "}
               <span className="deriv">avg gauge</span> are computed at query time from summed
               passengers, seats and performed departures -- never averaged.
             </p>

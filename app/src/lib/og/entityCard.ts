@@ -83,8 +83,10 @@ export function cardChart(
  * docs/design/system.md requires a quarantined count to be surfaced with its reason. A card has
  * no `aria-label` and no second line to put it on, which is the argument this card already
  * accepted for the unfiled-month count (rendered as visible type for exactly that reason). So
- * the CALLER chooses `last`: /airport's route passes Quarantined instead of Carriers when its
- * totals are unknowable. Six stats either way; no change to the rule, only to which sixth.
+ * the CALLER chooses `last`, and all four routes choose it by handing this function's result
+ * from `cardSixthStat` below: Quarantined instead of the entity count when the totals are
+ * unknowable AND quarantine is why. Six stats either way; no change to the rule, only to which
+ * sixth.
  *
  * `derived` is set on load factor and average gauge and nowhere else: CLAUDE.md requires a
  * derived measure to be LABELLED as computed, and a card is a data view, not a marketing
@@ -123,12 +125,18 @@ export function cardStats(totals: EntityTotals, last: CardStat): CardStat[] {
  * no gate enforces; `airport/[code]/page.tsx` records the same debt where it infers "every filing
  * is quarantined" from the same property.
  *
- * HERE RATHER THAN IN A ROUTE. `/airport` is the only caller today because it is the only page
- * whose totals can be null; the other three still coerce (issue #121), and the moment that lands
- * their cards reach this exact state on 10 route pages. The rule is written in `cardStats`'s
- * docstring and in docs/design/system.md, so the mechanism belongs beside it and not in one
- * caller -- a shared rule with a single route-local implementation is how the same defect gets
- * re-derived per surface. */
+ * HERE RATHER THAN IN A ROUTE, and now called from all four. `/airport` was the only caller
+ * while it was the only page whose totals could be null; #121 fixed `sumTotals`, so `/route`,
+ * `/carrier` and `/aircraft` reach this state too -- on 10 route pages and 2 aircraft pages in
+ * the 2026-05 window. A shared rule with a single route-local implementation is how the same
+ * defect gets re-derived per surface, which is the whole reason this lives here rather than in
+ * whichever route needed it first. The rule is also written in `cardStats`'s docstring and in
+ * docs/design/system.md.
+ *
+ * THE QUARANTINED BRANCH IS UNREACHABLE ON `/carrier` WITH TODAY'S DATA -- no carrier's every
+ * trailing-12 filing is quarantined (measured), so that route exercises only the fallback. The
+ * gate is identical at all four call sites and is driven live on `/route`, `/aircraft` and
+ * `/airport`; `entityCard.test.ts` below pins the four cells directly. */
 export function cardSixthStat(
   totals: EntityTotals,
   quarantinedRows: number,

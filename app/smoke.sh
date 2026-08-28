@@ -1159,6 +1159,116 @@ check     "airport SEA: a healthy page states figures, not absence" "$BODY" \
 check_not "airport SEA: no measure row is wholly unknowable" "$BODY" \
   '<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>'
 
+# 10e. #121 -- the SAME NULL, on the three pages /airport is not: the stat strip and the card on
+# /route, /carrier and /aircraft, whose totals come from `sumTotals` rather than `airportTotals`.
+#
+# 10c proved the MAP excludes a wholly-quarantined pair and 10d proved the TABLE and strip do on
+# /airport. `sumTotals` was still applying `?? 0` inside a `+` fold, so on /route/A18-LMA the
+# table cell correctly rendered an em dash while the stat strip directly above it -- summing the
+# very same NULL -- reported 0 seats and 0 departures. Both halves of one page, disagreeing,
+# exactly as /airport's map and table did before #118.
+#
+# THE ORDER OF THE STRIP IS THE NEEDLE, NOT THE DASH. Load factor and average gauge have zero
+# denominators here and rendered an em dash under the bug TOO, so a bare `<div class="v">—</div>`
+# needle prints ok forever against a page reading `0 · 0 · — · — · 0`. Only the first five ALL
+# being dashes separates the two. The dash is U+2014 written LITERALLY: lib/format.ts's DASH is a
+# JS string, so React emits the raw code point and a needle copied off an `&mdash;` could never
+# fire. Same for the EN dash U+2013 in the route title below, which `routeTitle` produces.
+#
+# DATASET-PINNED as a block, for 10c's reason: a BTS revision that un-quarantines these must
+# redden this rather than silently stop testing anything. docs/data/invariants.md
+# § A wholly-quarantined group sums to NULL carries the query and the current measurement.
+
+# A18-LMA (Kantishna-Lake Minchumina): ONE filing in the whole trailing 12 -- 2025-06, seats 0
+# against 1 PERFORMED departure, quarantined `zero_seats`. One of the 10 reachable route pages.
+BODY=$(curl -s --max-time 30 "${BASE}/route/A18-LMA")
+check_dataset check "route A18-LMA: the five measures are absence, in order" "$BODY" \
+  '<div class="v">—</div></div><div class="stat"><div class="k">Passengers</div><div class="v">—</div>'
+check_dataset check "route A18-LMA: departures is absence, not a fabricated zero" "$BODY" \
+  '<div class="k">Departures</div><div class="v">—</div>'
+# The COUNTS are real facts about what was filed and must survive -- a page that blanked those
+# too would pass the check_not below vacuously.
+check_dataset check "route A18-LMA: the strip still counts the carrier that filed" "$BODY" \
+  '<div class="k">Carriers</div><div class="v">1</div>'
+check_dataset check "route A18-LMA: ...and still counts the quarantined row" "$BODY" \
+  '<div class="k">Quarantined</div><div class="v">1</div>'
+check_dataset check_not "route A18-LMA: no measure in the strip is a fabricated zero" "$BODY" \
+  '<div class="v">0</div>'
+# THE PROSE THAT EXPLAINS THE DASHES. "1 quarantined row excluded from these totals" is a
+# compound claim whose second clause is false here: there are no totals to have been excluded
+# from, and Carriers is a count OF the excluded row. Built as ONE template literal in page.tsx so
+# this raw-bytes grep can reach it -- the adjacent-JSX form it replaced could not be grepped at
+# all, which is why no needle here existed before.
+check_dataset check "route A18-LMA: the foot explains the dashes instead of miscounting them" \
+  "$BODY" 'Every filing on A18–LMA in this window is quarantined'
+check_dataset check_not "route A18-LMA: ...and claims no exclusion that could not have happened" \
+  "$BODY" 'excluded from these totals'
+check_dataset check_not "route A18-LMA: the foot agrees with its own count on the plural" \
+  "$BODY" '1 rows, each having failed'
+
+# THE OTHER ABSENCE. ATL-CAK filed 67 months and nothing since 2022-06; 12,115 route pairs are in
+# that state, against the 10 above. Quarantine had no part in it, and a surface keying on "the sum
+# is null" alone answers the wrong one of the two -- on the 12,115 rather than the 10.
+BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-CAK")
+check_dataset check "route ATL-CAK: an unfiled window is unknowable, not zero traffic" "$BODY" \
+  '<div class="k">Seats</div><div class="v">—</div>'
+check_dataset check "route ATL-CAK: the counts are still stated" "$BODY" \
+  '<div class="k">Quarantined</div><div class="v">0</div>'
+check_dataset check "route ATL-CAK: names which absence it is" "$BODY" 'No scheduled service'
+check_dataset check_not "route ATL-CAK: claims no exclusion that never happened" "$BODY" \
+  'excluded from these totals'
+check_dataset check_not "route ATL-CAK: and does not blame quarantine" "$BODY" 'is quarantined'
+# The derived-measure disclosure is a CLAUDE.md hard rule and must survive an empty clause -- the
+# quarantine sentence and this one share a paragraph.
+check     "route ATL-CAK: still labels the derived measures as computed" "$BODY" 'never averaged'
+
+# /aircraft, the grain issue #121 never measured: BTS 201 has no un-quarantined filing in the
+# window either (F4, 2025-08, 5 performed departures against 0 seats), so the footprint is 12
+# reachable pages and not the 10 the issue states.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/TRISLNDR")
+check_dataset check "aircraft TRISLNDR: seats is absence, not a fabricated zero" "$BODY" \
+  '<div class="k">Seats</div><div class="v">—</div>'
+check_dataset check "aircraft TRISLNDR: departures is absence too" "$BODY" \
+  '<div class="k">Departures</div><div class="v">—</div>'
+check_dataset check "aircraft TRISLNDR: the strip still counts the quarantined rows" "$BODY" \
+  '<div class="k">Quarantined</div><div class="v">2</div>'
+check_dataset check_not "aircraft TRISLNDR: no measure in the strip is a fabricated zero" "$BODY" \
+  '<div class="v">0</div>'
+check_dataset check "aircraft TRISLNDR: the foot explains the dashes" "$BODY" \
+  'Every filing on the TRISLNDR in this window is quarantined'
+check_dataset check_not "aircraft TRISLNDR: ...and claims no exclusion" "$BODY" \
+  'excluded from these totals'
+
+# /carrier can reach only the OTHER absence: no carrier's every trailing-12 filing is quarantined
+# on this warehouse. VX has been dormant since 2018-03; 45 carriers are in that state.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX")
+check_dataset check "carrier VX: an unfiled window is unknowable, not zero traffic" "$BODY" \
+  '<div class="k">Seats</div><div class="v">—</div>'
+check_dataset check "carrier VX: the counts are still stated" "$BODY" \
+  '<div class="k">Quarantined</div><div class="v">0</div>'
+check_dataset check_not "carrier VX: claims no exclusion that never happened" "$BODY" \
+  'excluded from these totals'
+check_dataset check_not "carrier VX: and does not blame quarantine" "$BODY" 'is quarantined'
+
+# QUARANTINE BESIDE REAL TRAFFIC, which is what makes the clause's second operand undeletable.
+# Wright Air Service filed 118 quarantined rows in this window AND stateable traffic on 3 aircraft
+# types. Its figures are honest and its foot must claim the ordinary exclusion.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/8V")
+check_dataset check "carrier 8V: quarantined rows beside real traffic keep the ordinary clause" \
+  "$BODY" '118 quarantined rows excluded from these totals'
+check_dataset check_not "carrier 8V: ...and are not reported as a wholly-quarantined page" "$BODY" \
+  'is quarantined —'
+
+# The negatives, on pages with real traffic. Without these every check_not above could pass
+# against a page that had stopped rendering a stat strip at all.
+BODY=$(curl -s --max-time 30 "${BASE}/route/JFK-LAX")
+check     "route JFK-LAX: a healthy page states figures, not absence" "$BODY" \
+  '<div class="k">Seats</div><div class="v">'
+check_not "route JFK-LAX: its seats are not an em dash" "$BODY" \
+  '<div class="k">Seats</div><div class="v">—</div>'
+check     "route JFK-LAX: and its foot claims the ordinary exclusion" "$BODY" \
+  'excluded from these totals'
+
 # 11. /carrier/<code> -- the page has to say what it is counting.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL")
 check     "carrier: renders the code"        "$BODY" '>DL<'

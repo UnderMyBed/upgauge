@@ -412,3 +412,96 @@ describe("/route/<pair> Open Graph metadata (M9 Task 6b)", () => {
     expect(meta.openGraph).toBeUndefined();
   });
 });
+
+/** THE STAT STRIP AND THE FOOT ON AN UNKNOWABLE PAGE (#121).
+ *
+ * `sumTotals` restated a NULL sum as the number 0, so these pages rendered three fabricated
+ * zeros -- and, because load factor and average gauge already rendered `—` (their denominators
+ * were zero either way), the buggy strip read `0 · 0 · — · — · 0`. That is why every assertion
+ * below reads the strip AS AN ORDERED LIST rather than looking for a dash: "the page contains an
+ * em dash" was true of the buggy page too.
+ *
+ * The three cells are `.stats .v` in page order: Seats, Passengers, Load factor, Avg gauge,
+ * Departures, Carriers, Quarantined. */
+function statStrip(container: HTMLElement): string[] {
+  return [...container.querySelectorAll(".stats .v")].map((n) => n.textContent ?? "");
+}
+
+describe("a route whose every filing was quarantined states absence, not zero", () => {
+  // A18-LMA (Kantishna-Lake Minchumina): ONE filing in the entire trailing 12 -- 2025-06,
+  // op_airline 20333, seats 0, departures_performed 1, quarantined `zero_seats`. Ten route pairs
+  // are in this state and reachable; an eleventh (VEE-VEE) is in the quarantine set but 404s as
+  // a same-airport slug before any lookup, so 11 is the pair count and 10 the page count.
+  //
+  // MUTANT: restore `?? 0` inside `sumColumn` -> the first five read
+  // `["0", "0", "—", "—", "0"]` -> red.
+  // MUTANT: remove the `??` but fold on `+` -> identical output -> red. Two mutants, one
+  // assertion, and #121 exists because fixing only the first leaves the second.
+  it("renders the five measures as absence and keeps the counts", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "A18-LMA" }) }),
+    );
+    expect(statStrip(container)).toEqual(["—", "—", "—", "—", "—", "1", "1"]);
+  });
+
+  // THE PROSE THAT EXPLAINS THE DASHES. "1 quarantined row excluded from these totals" is a
+  // compound claim whose second clause is false here: there are no totals for it to have been
+  // excluded from, and the Carriers count is a count OF the excluded row rather than a figure
+  // net of it. Same split `airport/[code]/page.tsx` makes.
+  // MUTANT: drop the `totals.seats === null` branch -> the foot claims the exclusion -> red.
+  it("explains the dashes instead of miscounting them", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "A18-LMA" }) }),
+    );
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).toContain("Every filing on A18–LMA in this window is quarantined");
+    expect(feet).toContain("1 row, each having failed an invariant");
+    expect(feet).not.toContain("excluded from these totals");
+    // Singular, on the only prose left explaining five em dashes.
+    expect(feet).not.toContain("1 rows");
+  });
+});
+
+describe("a route that filed nothing in the window states absence too", () => {
+  // THE OTHER ABSENCE, and the wider one: 12,115 route pairs last filed before this window.
+  // Their sums are unknowable for a reason quarantine had no part in, and the two must stay
+  // separable -- a consumer keying on "the sum is null" alone answers the wrong one of them, and
+  // answers it on the 12,115 rather than the 10.
+  // MUTANT: seed `sumColumn` at 0 -> `["0", "0", "—", "—", "0", "0", "0"]` -> red.
+  it("renders the measures as absence while still stating the counts", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "ATL-CAK" }) }),
+    );
+    expect(statStrip(container)).toEqual(["—", "—", "—", "—", "—", "0", "0"]);
+  });
+
+  // The foot must claim NO exclusion -- nothing was quarantined and there is nothing to have
+  // been excluded from -- and must NOT blame quarantine, which had no part in this absence.
+  // `RouteEmptyState` carries the real finding.
+  // MUTANT: key the clause on `totals.seats === null` alone -> "Every filing on ATL–CAK in this
+  // window is quarantined — 0 rows", a finding invented on 12,115 pages to fix it on 10 -> red.
+  it("names neither an exclusion nor quarantine, and leaves the finding to the empty state", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "ATL-CAK" }) }),
+    );
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).not.toContain("excluded from these totals");
+    expect(feet).not.toContain("is quarantined");
+    // The derived-measure disclosure is not optional and must survive an empty clause.
+    expect(feet).toContain("never averaged");
+    expect(screen.getByText(/no scheduled service/i)).toBeDefined();
+  });
+
+  // The negative, on a page with real traffic -- without it every check_not above could pass
+  // against a page that had stopped rendering a stat strip at all.
+  it("still states real figures on a route that filed", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }),
+    );
+    const strip = statStrip(container);
+    expect(strip).toHaveLength(7);
+    expect(strip.slice(0, 5)).not.toContain("—");
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).toContain("excluded from these totals");
+  });
+});
