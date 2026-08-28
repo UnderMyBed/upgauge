@@ -54,6 +54,53 @@ export function displayValue(hit: Resolved | undefined, rawId: unknown): string 
   return hit.code;
 }
 
+/**
+ * The display string for ONE `f` VALUE, which is a different lookup from a cell's.
+ *
+ * `resolveRows` keys its map by the FACT COLUMN -- `resolutionKey(column, r.id)`, below -- and
+ * never by the dimension key. So the obvious `resolved.get(resolutionKey(filterKey, value))` is
+ * a guaranteed MISS for every dimension whose key differs from its column and for every
+ * composite one, and `displayValue` then correctly falls back to the raw BTS id. That is how a
+ * filter chip renders `Route = 12478-12892` and `Carrier = 19790` against a real pivot result
+ * while a hand-built fixture keyed the other way shows `DL` -- the fixture cannot exercise the
+ * payload shape the resolver actually emits.
+ *
+ * Three shapes, all read from the catalog rather than branched on a name:
+ *   - one column       -> that column's lookup
+ *   - `pair` (route)   -> split on '-', one lookup per column, joined with an en dash
+ *   - `either`         -> ONE id that may sit in either column; first hit wins (both columns of
+ *                         an `either` dimension resolve through the same dim table, so they
+ *                         cannot disagree -- render.ts asserts the shared type at the catalog)
+ *
+ * An id absent from the map renders as itself, never a dash: absence of a NAME is not absence of
+ * DATA, and `resolved` only carries ids present in the rows this page actually rendered.
+ */
+export function filterValueDisplay(
+  entry: DimensionEntry,
+  value: string,
+  resolved: Map<string, Resolved>,
+): string {
+  const columns = columnsFor(entry);
+  if (columns.length === 1) {
+    return displayValue(resolved.get(resolutionKey(columns[0], value)), value);
+  }
+  if (entry.filterMode === "either") {
+    for (const column of columns) {
+      const hit = resolved.get(resolutionKey(column, value));
+      if (hit !== undefined) return displayValue(hit, value);
+    }
+    return displayValue(undefined, value);
+  }
+  // `pair`: one value encodes the WHOLE composite as '<low>-<high>' (render.ts's composite
+  // branch). A value that is not that shape is not one this app emitted, so it renders as
+  // itself rather than being half-resolved into something that reads like a real pair.
+  const parts = value.split("-");
+  if (parts.length !== columns.length) return displayValue(undefined, value);
+  return parts
+    .map((part, i) => displayValue(resolved.get(resolutionKey(columns[i], part)), part))
+    .join("\u2013");
+}
+
 /** The row columns a dimension occupies. Every dimension is its own key EXCEPT `route`,
  * whose column_expr names two columns that both resolve through dim_airport. Read from the
  * catalog, not hardcoded -- Task 1 exists so this can be data. */

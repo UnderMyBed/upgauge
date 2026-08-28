@@ -1,3 +1,4 @@
+import { entitySlugFromPath } from "@/lib/entitySlug";
 import { EARLIEST_MONTH } from "@/lib/entityFacts";
 import type { Allowlist, DimensionEntry } from "@/lib/pivot/allowlist";
 import { MAX_LIMIT } from "@/lib/pivot/bounds";
@@ -169,4 +170,36 @@ export function removeFilterValue(q: PivotQuery, key: string, value: string): Pi
     .map(([k, vs]): [string, string[]] => (k === key ? [k, vs.filter((v) => v !== value)] : [k, vs]))
     .filter(([, vs]) => vs.length > 0);
   return normalizeQuery({ ...q, filters });
+}
+
+/** `/explore/filter/<dim>`'s prefix. It lives beside the function that EMITS it and the reader
+ *  that parses it back, for the reason `ROUTE_PREFIX` states: `proxy.ts` (cache-worthiness,
+ *  decided before the page runs), `canonicalQuery.ts` (the query-key row), the page and its
+ *  `not-found.tsx` all have to agree about where the slug starts, and three copies of a string
+ *  literal is how they stop agreeing. */
+export const FILTER_PREFIX = "/explore/filter/";
+
+/** The value-list route for one dimension, carrying the current query VERBATIM so the list can
+ *  scope itself to the same window and the other active filters.
+ *
+ *  `encode(q)`, not a hand-built string: `/explore/filter/:dim` reads its query through the same
+ *  `decodeRequest` the Explorer does, and that module's spelling rule is byte-level -- a
+ *  permalink spelled any other way is refused rather than rendered. The dimension travels in the
+ *  PATH and never as a query key: `ALLOWED_KEYS` is closed, and a tenth key here would be a
+ *  change to the permalink format itself, which `pipeline/urlstate.py` is pinned to. */
+export function filterListHref(q: PivotQuery, dim: string): string {
+  return `${FILTER_PREFIX}${encodeURIComponent(dim)}?${encode(q)}`;
+}
+
+/** The `<dim>` half of a `/explore/filter/<dim>` pathname, or null if this is not one.
+ *
+ *  Delegates the decode to `entitySlugFromPath`, whose guard exists because
+ *  `decodeURIComponent` THROWS on `%zz` and an uncaught throw on the proxy path is a 500 on the
+ *  request (`canonicalQuery.ts`'s own leading-`?` incident). Rejects the bare prefix and any
+ *  nested path for `ogSlugFromPath`'s reason: `config.matcher` forwards exactly ONE dynamic
+ *  segment here, so a reader claiming more would describe traffic that never arrives. */
+export function filterDimFromPath(pathname: string): string | null {
+  const dim = entitySlugFromPath(pathname, FILTER_PREFIX);
+  if (dim === null || dim === "" || dim.includes("/")) return null;
+  return dim;
 }

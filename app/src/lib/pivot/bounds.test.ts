@@ -428,8 +428,10 @@ describe("no permalink this app has shipped becomes unreadable", () => {
 
   it("finds the hardcoded permalinks at all -- a scan matching nothing passes vacuously", () => {
     // Pinned so a refactor that moves these hrefs out of reach of the scan fails HERE, loudly,
-    // rather than turning the test below into an empty loop that reports ok.
-    expect(hardcodedPermalinks().length).toBe(8);
+    // rather than turning the test below into an empty loop that reports ok. Was 8; epic #6's
+    // `/explore/filter/:dim` added two more -- its unreadable-permalink state and its 404 page
+    // each carry the same "start from a known-valid query" literal /explore already carried.
+    expect(hardcodedPermalinks().length).toBe(10);
   });
 
   it("accepts every hardcoded /explore permalink the app serves", () => {

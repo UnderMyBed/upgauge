@@ -351,6 +351,70 @@ describe("proxy", () => {
     },
   );
 
+  // Epic #6. `/explore/filter/:dim` -- the SAME two-allow-list shape as the `?y=` pair below and
+  // the `/watch` pair above, and it needs its own unit cases for a reason review had to point
+  // out: a `return true` in `isFilterListCacheable` left the whole suite green at 1712 tests,
+  // and `app-smoke` alone was carrying a header committed before the page runs. Three cases, one
+  // per outcome, and all three are required -- a `no-store`-everywhere regression passes the two
+  // negatives vacuously, so the positive has to go red too for the trio to mean anything.
+  const FILTER_Q = "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op";
+  const FILTER_Q_ROUTE = "v=1&k=route&d=route&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op";
+
+  it("gives a filterable dimension's value list HTML_CACHE", async () => {
+    const res = await proxy(
+      new NextRequest(`http://localhost/explore/filter/op_airline_id?${FILTER_Q}`),
+    );
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it("declines to cache a value list for an unknown dimension", async () => {
+    // 404s are never cached: the dataset is rebuilt monthly, so a cached 404 outlives its cause.
+    const res = await proxy(
+      new NextRequest(`http://localhost/explore/filter/not_a_dimension?${FILTER_Q}`),
+    );
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("declines to cache a value list for a real dimension at the wrong grain", async () => {
+    // THE case a bare `allowlist.dims.has(dim)` gate cannot see, and a DIFFERENT one from the
+    // unknown slug above: `aircraft_type` is in the catalog and is segment-grain, so at `k=route`
+    // the page 404s while a membership test would happily stamp an hour of public cache on it.
+    const res = await proxy(
+      new NextRequest(`http://localhost/explore/filter/aircraft_type?${FILTER_Q_ROUTE}`),
+    );
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    // And the same slug against the segment permalink IS cached -- without this the assertion
+    // above is satisfied by a probe that refuses `aircraft_type` unconditionally.
+    const ok = await proxy(
+      new NextRequest(`http://localhost/explore/filter/aircraft_type?${FILTER_Q}`),
+    );
+    expect(ok.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it("caches the filter-only dimension's value list, which is not groupable", async () => {
+    // The probe reads `filterableDimensions`, NOT `groupableDimensions`, and this is the only
+    // case that can tell them apart: `endpoint_airport_id` is `filter_only`, so a groupable test
+    // would `no-store` the one filter this product has that no other T-100 tool expresses.
+    const res = await proxy(
+      new NextRequest(`http://localhost/explore/filter/endpoint_airport_id?${FILTER_Q}`),
+    );
+    expect(res.headers.get("Cache-Control")).toBe(CACHE);
+  });
+
+  it("declines to cache a value list whose permalink does not decode", async () => {
+    const res = await proxy(
+      new NextRequest("http://localhost/explore/filter/op_airline_id?v=1&k=seg&d=junk&m=seats"),
+    );
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("declines to cache /explore/filter with no dimension at all", async () => {
+    // The bare prefix reaches the branch (a `startsWith` test, deliberately) and must not be
+    // cached: `filterDimFromPath` returns null and the probe refuses rather than throwing.
+    const res = await proxy(new NextRequest(`http://localhost/explore/filter/?${FILTER_Q}`));
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
   // M7 Task 9. `/airport/:code?y=<year>` -- `y`'s legitimate value set is closed (the calendar
   // years this dataset covers), which is what makes validating it the right answer instead of
   // /search's blanket no-store (that branch's own test above). Both halves are required: a
