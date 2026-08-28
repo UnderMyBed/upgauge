@@ -402,7 +402,12 @@ export async function WatchPresetView({ preset }: { preset: Preset }) {
               />
             ))}
           </div>
-          <LegendRail />
+          {/* Only where a rank column exists. `DirectionTable` renders an empty state and NO
+              table when its direction has no rows, so a preset whose every direction is empty
+              would leave the rail explaining a column the page never drew -- the same defect the
+              gap pass found live on 44 `/carrier` pages. Not reachable on today's data; gated
+              here because the condition is a fact about the data, not about the code. */}
+          <LegendRail ranked={directions.some((d) => d.rows.length > 0)} />
         </div>
       </main>
     </div>

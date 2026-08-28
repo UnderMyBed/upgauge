@@ -497,8 +497,24 @@ panel AS (
     WHERE category IS NOT NULL
 ),
 -- Seats on the pairs that cannot be arcs, per category, so they are disclosed rather than lost.
+--
+-- THE COUNT IS NOT REDUNDANT WITH THE SUM, and #121 is why. `panel.seats` comes from
+-- fct_route_month, whose measures are `SUM(x) FILTER (WHERE NOT is_quarantined)` -- so
+-- `sum(seats)` here returns NULL for a category whose same-airport pairs were ALL quarantined,
+-- which is a different fact from the LEFT JOIN below missing because the category has no
+-- same-airport pair at all. Both arrive at the consumer as a NULL column, and it read them as
+-- one: `?? 0` said "no seats are being withheld" about a pair that IS being withheld by an
+-- amount nobody can state.
+--
+-- LATENT, NOT LIVE. The wholly-quarantined same-airport pair is real (8V's VEE-VEE in the
+-- trailing 12, airline 21745's STT-STT in the prior 12), but a panel folds every same-airport
+-- pair in its category together and every such fold on this warehouse contains at least one
+-- stateable pair -- measured across all 115 carriers, zero panels return NULL. No page renders
+-- the wrong sentence today; the coercion is one refresh away from making it do so.
+-- `100_fct_route_month.sql` states the rule this disambiguation serves, in its own comment:
+-- "do NOT wrap these in COALESCE(..., 0)".
 same_airport AS (
-    SELECT category, sum(seats) AS same_airport_seats
+    SELECT category, count(*) AS same_airport_pairs, sum(seats) AS same_airport_seats
     FROM panel
     WHERE is_same_airport
     GROUP BY category
@@ -582,6 +598,7 @@ SELECT
     r.passengers / nullif(r.seats, 0) AS load_factor,
     r.gauge_fall,
     r.category_total,
+    s.same_airport_pairs,
     s.same_airport_seats
 FROM anchor a
 LEFT JOIN ranked r        ON r.rn <= $cap

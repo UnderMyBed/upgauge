@@ -30,7 +30,7 @@
  */
 
 import type { GeoPoint, Panel, PanelFit } from "./albers";
-import { fitPanels, normalizeLon, project, regionOf } from "./albers";
+import { fitPanels, normalizeLon, PANEL_RECTS, project, regionOf } from "./albers";
 import { greatCircle, stepsFor } from "./greatCircle";
 import { strokeFor, DEPARTURE_FLOOR } from "./arcs";
 import { BASEMAP_FIT_POINTS } from "./basemap";
@@ -175,14 +175,36 @@ export interface SegmentMapInput {
    *  Measured for the point-to-point maps (#105): 598,829 same-airport seats across 759
    *  carrier x aircraft-type groups over the trailing 12. Dropping them silently in the
    *  generalization would have lost an honesty property the hub map already had. */
-  sameAirportSeats: number;
+  /** `null` means "such a pair exists and its seat count CANNOT be stated" -- every filing
+   *  behind it was quarantined, so `sum(seats) FILTER (WHERE NOT is_quarantined)` returned NULL.
+   *  That is a THIRD state, distinct from `0` ("no seats withheld") and from a positive count,
+   *  and #121 exists because a `?? 0` collapsed it into the first: the map would say nothing was
+   *  being withheld while a pair was being withheld by an unstateable amount.
+   *
+   *  LATENT on today's warehouse -- the quarantined same-airport pair is real (`8V`'s VEE-VEE),
+   *  but every producer folds it in with stateable pairs, so no panel actually returns NULL
+   *  (measured across all 115 carriers). The state is admitted because the producer's own SQL
+   *  can return it, not because a page shows it. Still REQUIRED: pass `0` to say "none". */
+  sameAirportSeats: number | null;
   basemapPaths?: string;
+  /** SMALL MULTIPLES ONLY (#123): the exact window to emit, replacing the one this map would
+   *  compute for itself.
+   *
+   *  A set of maps compared by POSITION has to share a frame, and each map's own window is the
+   *  panels it reaches unioned with THE INK IT ACTUALLY EMITS -- so one panel holding an airport
+   *  whose label rides above the `us` band (BLI is the real one) lifts that panel alone and the
+   *  set renders at three different heights under one heading. The set measures every member
+   *  with `segmentMapWindow`, unions the results, and hands the union back here.
+   *
+   *  Nothing else should supply it: on a single map the computed window is already exactly
+   *  right, and an override is only ever a widening agreed among siblings. */
+  cropWindow?: CropWindow;
 }
 
 /** ONE shared cap across all three point-to-point maps, never per-map.
  *
  *  It lives in this file rather than in any one map's module because it is a property of the
- *  ENGINE's legibility budget, not of any single query: past ~400 arcs on a 960x500 canvas the
+ *  ENGINE's legibility budget, not of any single query: past ~400 arcs on a 960px-wide canvas the
  *  picture is ink rather than structure, and a cap that differed per map would make two maps of
  *  the same network disagree about what "the whole network" is. `carrierTypeNetwork.ts` (#105)
  *  re-exports this rather than declaring its own. */
@@ -223,14 +245,76 @@ export const NETWORK_ARC_CAP = 400;
 const BASEMAP_FITS: Map<Panel, PanelFit> = fitPanels(BASEMAP_FIT_POINTS);
 
 const WIDTH = 960;
-const HEIGHT = 500;
+/** Frames are drawn at rect +/- this, and a cropped canvas is padded by it. ONE constant for
+ *  both, because the crop's whole job is to be the window the frames live in: two literals
+ *  would let the canvas and the border it is drawn around disagree by a pixel each time one
+ *  moved. */
+const FRAME_PAD = 6;
+
+/** The strip below the drawn map that a ONE-LINE footer sits in -- the only vertical space on
+ *  the canvas that is not a panel. A map reaching the tray therefore ends exactly at `HEIGHT`
+ *  and puts its footer exactly where every map has always put it; a shorter map carries this
+ *  same band under ITS OWN floor instead of leaving the difference blank, which is #123's
+ *  second symptom. */
+const FOOTER_BAND = 26;
+
+/** The strip a footer of `lines` lines needs. The stack is bottom-anchored and grows UPWARD, so
+ *  every line after the first eats another `FOOTER_LINE_HEIGHT` out of the map above it.
+ *
+ *  RESERVING ONE LINE'S WORTH FOR A THREE-LINE STACK IS A DEFECT, and a measured one: a
+ *  captioned map reaching the tray -- the shape EVERY `DiffMap` panel takes, since
+ *  `diffPanelTitle` always sets a title -- put its upper footer line's ascent box at y=516
+ *  against the `car` frame's bottom edge of 518, printing text across the CARIBBEAN border.
+ *  That predates the crop, which anchored the stack to a fixed canvas floor and let it grow up
+ *  into the map. It is fixed here rather than merely documented because the crop now OWNS the
+ *  bottom edge: reserving the space the stack actually needs is this function's whole job.
+ *
+ *  `HEIGHT` stays the one-line canvas, so a multi-line map's window can exceed it. That is
+ *  correct -- the viewBox is a window, not a clip -- and every gate that bounds the RECTS
+ *  against 544 still holds, because no panel moved. */
+function footerBand(lines: number): number {
+  return FOOTER_BAND + Math.max(0, lines - 1) * FOOTER_LINE_HEIGHT;
+}
+
+/**
+ * The vertical band a panel's ink can occupy, read from `PANEL_RECTS` -- the table `fitPanels`
+ * fits into, never `INSET_RECTS`, which is chrome. That is what makes the band a COMPLETE
+ * cover of the coastline: every basemap path was fit into its panel's rect by construction, so
+ * the rect (grown by the frame pad for a framed panel) contains every drawn coastline pixel
+ * without this function having to parse the injected path string.
+ *
+ * `us` is the unframed one -- it IS the base map, not an inset of it -- so its band is the bare
+ * rect. Every other panel's band is the frame the renderer actually draws.
+ */
+function panelBand(panel: Panel): [number, number] {
+  const [, y0, , y1] = PANEL_RECTS[panel];
+  return panel === "us" ? [y0, y1] : [y0 - FRAME_PAD, y1 + FRAME_PAD];
+}
+
+/**
+ * The full canvas: the deepest panel band plus the footer band. 544 today -- the bottom tray's
+ * frame floor of 518, plus 26.
+ *
+ * DERIVED, NOT DECLARED, and it did not start that way. Written as a literal it was DEAD within
+ * one change: once #123 made the emitted `viewBox` a crop computed from the panel bands and the
+ * ink, nothing read `HEIGHT` at render time any more, and setting it back to the old 500 broke
+ * no test at all -- a constant that looks like the canvas, is quoted as the canvas in three
+ * comments, and controls nothing. Deriving it removes the class: it cannot disagree with the
+ * rects, because it is a function of them.
+ *
+ * The independent check lives where it can still fail: `albers.test.ts` restates 544 as a
+ * literal and asserts every frame fits inside it, so growing a rect moves this value and
+ * reddens that pin instead of silently making the map taller.
+ */
+export const HEIGHT =
+  Math.max(...(Object.keys(PANEL_RECTS) as Panel[]).map((p) => panelBand(p)[1])) + FOOTER_BAND;
 
 /** Vertical step of the footer stack. The stack is bottom-anchored, so a map with one line puts
  * that line exactly where every map has always put it. */
 const FOOTER_LINE_HEIGHT = 12;
 
 /** How many airports get a text label. Labelling every node on a busy network would bury the
- * map in text; 8 is the density this 960x500 canvas was reviewed and shipped at.
+ * map in text; 8 is the density this canvas was reviewed and shipped at.
  *
  * The COUNT is shared between the hub and point-to-point maps; the RANKING KEY is not, and
  * that distinction is the whole of #104's label work. On a hub, each destination has exactly
@@ -256,8 +340,10 @@ export const TOP_LABEL_COUNT = 8;
  *  landmass inside it, and #111 edited both tables by hand, which is exactly the operation that
  *  gate exists to catch. The follow-up #111 names is to import `PANEL_RECTS` and delete this. */
 export const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, number]> = {
-  ak: [36, 322, 176, 468],
-  hi: [192, 392, 292, 468],
+  // #122 moved the five tray rects down 44px so `car`'s frame clears the `us` rect; `pac` did
+  // not move. Widths and heights are untouched, so no panel was re-fit -- see `PANEL_RECTS`.
+  ak: [36, 366, 176, 512],
+  hi: [192, 436, 292, 512],
   // #111: reshaped AND relocated. Real Guam + Northern Marianas geometry is 0.2052:1 -- five
   // times taller than wide -- and 216px of height is what puts Tinian and Saipan 6px apart.
   // The top-left margin is the only place a rect that tall does not sit underneath the opaque
@@ -267,17 +353,17 @@ export const INSET_RECTS: Record<Exclude<Panel, "us">, [number, number, number, 
   // #111: Midway. No committed geometry -- Natural Earth carries it only inside a feature that
   // also spans the Caribbean -- so it keeps the subject-derived fit. The frame is still drawn,
   // or the arc reaching Midway floats in unlabelled space.
-  nwhi: [368, 392, 408, 468],
+  nwhi: [368, 436, 408, 512],
   // #111: American Samoa. 181 wide, not 163: the 2.1419:1 aspect that produced 163 was measured
   // under PANEL_PARAMS.pac. Under its own parallels it is 2.3801:1 on the 3-decimal reference
   // points fitPanels actually reads.
-  sam: [736, 392, 917, 468],
+  sam: [736, 436, 917, 512],
   // Widened by M7 Task 7b to match albers.ts's own PANEL_RECTS.car -- see that file's
   // comment for the measurement (real PR/USVI geometry is ~3.89:1 wide, not the original
   // rect's 1.32:1). Keep this literal in sync with PANEL_RECTS.car; a frame border drawn to
   // a different rect than the one the coastline was actually fit to would visibly not match
   // the landmass inside it.
-  car: [424, 392, 720, 468],
+  car: [424, 436, 720, 512],
 };
 
 /** Order and label text for the insets below. `us` never gets a frame -- it is the base map
@@ -332,9 +418,21 @@ export type SameAirportTotal = "included" | "excluded";
  * they are not drawn -- so it stays one sentence with one owner. Only the clause naming what
  * does carry them differs, because on a hub something does and here nothing does, and a shared
  * tail would make one of the two maps state something false. */
-export function sameAirportNote(seats: number, total: SameAirportTotal): string | null {
-  if (seats <= 0) return null;
+export function sameAirportNote(seats: number | null, total: SameAirportTotal): string | null {
   const tail = total === "included" ? "included in this total." : "and from the route counts.";
+  // THE UNSTATEABLE CASE IS NOT THE EMPTY ONE (#121). A pair exists, it is being withheld from
+  // the arcs, and its seats cannot be summed because every filing behind it failed an invariant.
+  // Saying nothing here -- which `seats <= 0` would do once the type admits null -- withholds
+  // the one disclosure this field exists to make; saying "0 same-airport seats" would assert a
+  // measurement nobody has. So it gets its own sentence, in the form CLAUDE.md requires for
+  // quarantine everywhere else: the fact, then the reason, never a clamp.
+  if (seats === null) {
+    return (
+      `Same-airport seats excluded from the arcs above, ${tail} The amount cannot be stated: ` +
+      `every filing behind them failed an invariant, never clamped.`
+    );
+  }
+  if (seats <= 0) return null;
   return `${seats.toLocaleString("en-US")} same-airport seats excluded from the arcs above, ${tail}`;
 }
 
@@ -438,12 +536,113 @@ interface MapPlan {
   footerLines: FooterLine[];
   ariaLabel: string;
   basemapPaths?: string;
+  /** An exact window to emit instead of the computed one. See `SegmentMapInput.cropWindow`. */
+  cropWindow?: CropWindow;
+}
+
+/** A running vertical extent of everything the core emits. Seeded empty and widened per mark. */
+interface InkExtent {
+  top: number;
+  bottom: number;
+}
+
+/** The emitted `viewBox`'s vertical window. */
+export interface CropWindow {
+  top: number;
+  bottom: number;
+}
+
+/**
+ * THE CANVAS IS CROPPED TO THE PANELS THAT CARRY POINTS (#123, absorbing #124), and this is
+ * the only thing about it that changes -- the `viewBox` WINDOW, never the projection.
+ * `fitPanels(BASEMAP_FIT_POINTS)` is still called with bit-identical input and every drawn
+ * point keeps the coordinate it has always had; the M7 Task 8 rule that a per-page fit reuses
+ * the coastline's baked fit VERBATIM is untouched, and unioning subject points into that fit
+ * remains the wrong answer it has always been. Cropping a window moves nothing. Re-fitting
+ * would move everything.
+ *
+ * WHY IT EXISTS: `renderMapCore` already emits an inset FRAME only for a panel the network
+ * reaches (`fits.has(panel)` below). The canvas was not subject to the same rule, so an
+ * Alaska-only network drew a small ALASKA inset under ~320px of empty conterminous panel --
+ * measured on `/airport/BET`, `/airport/A18`, `/airport/JZM` and `/airport/OQZ`. One predicate
+ * now decides both, which is why this reads `fits` rather than re-deriving reach.
+ *
+ * VERTICAL ONLY. The footer stack is painted at x=8 and runs the full 960px -- `SegmentMap.tsx`
+ * documents the 158-character budget as a hard requirement, because those sentences reach the
+ * reader nowhere else. A horizontal crop would clip disclosure copy, so there is none, and a
+ * `us`-reaching map is very nearly full width anyway.
+ *
+ * THE BANDS ARE UNIONED WITH THE INK ACTUALLY EMITTED, so clipping is structurally impossible
+ * rather than empirically absent. A great circle bows outside the rect between its endpoints, a
+ * node's label runs below its centre, and the subject marker's own code is drawn at y-8 in
+ * 11px -- 19px above a point that `panelContainment.test.ts` only guarantees is inside the
+ * rect. Bands alone would clip all three on the right page.
+ *
+ * The TOP is clamped at 0 because that guarantee is gated: `panelContainment.test.ts` asserts
+ * every subject disc AND its label sit inside the canvas, so this clamp can only ever remove
+ * blank margin. The BOTTOM is not clamped -- the footer band is added under whatever the map's
+ * own floor turns out to be, so the disclosure can never end up under the canvas edge.
+ *
+ * BOTH HALVES BIND, and each has its own case, because a panel's rect bounds a point and not
+ * the ink that point paints:
+ *
+ *   TOP -- `renderMapCore` draws the subject's own code at y-8 in 11px type, so on
+ *   `/airport/BLI`, the northernmost fact-present `us` airport, that ink reaches y=2.93 against
+ *   a `us` band top of 18. Without the union the label is sliced off.
+ *
+ *   BOTTOM -- the subject disc is r=4.5 with a 1.8 stroke centred on it, so it reaches 5.4 past
+ *   its own point, and a node label's descender reaches 5.0. `/airport/EYW` is the case: EYW
+ *   projects to y=423.14, less than a pixel above the `us` band floor of 424 -- it is what
+ *   `US_EXTENT_ANCHORS` exists to keep inside the rect -- so its disc reaches 428.50 and the
+ *   served window is `0 12 960 443` with this term and `0 12 960 438` without it.
+ *
+ * `networkMap.test.ts` holds both. Note what does NOT decide which term wins: `FOOTER_BAND` is
+ * added AFTER `Math.max(bandBottom, ink.bottom)`, so comparing it against the 5.4px overhang
+ * says nothing about whether the ink term binds. It reads like an argument for deleting the
+ * term, and it is not one.
+ */
+function cropWindow(
+  reached: Iterable<Panel>,
+  ink: InkExtent,
+  footerLines: number,
+): { top: number; height: number; bottom: number } {
+  const bands = [...new Set(reached)].map(panelBand);
+
+  // A MAP THAT REACHES NO PANEL AT ALL GETS THE WHOLE CANVAS, and this arm is not defensive
+  // padding -- it is a live, linked page. `fetchCarrierTypeNetwork` DELIBERATELY returns a
+  // non-null input with zero segments on two arms (`carrierTypeNetwork.ts`): a pair whose every
+  // route is quarantined, and one whose only filing is same-airport. `/carrier/F4?type=SHORT360`
+  // and `/aircraft/AS350-B2?carrier=8E` are both of those, and the second is one click from its
+  // own page's `MapPicker`. The whole reason those arms return a map rather than `null` is that
+  // the disclosure has to reach the reader -- returning null "hides a data-quality fact behind a
+  // missing panel" -- so this is exactly where a broken canvas costs the most.
+  //
+  // Without the arm, `Math.min(...[])` is `Infinity` and `Math.max(...[])` is `-Infinity`: the
+  // page served `viewBox="0 Infinity 960 -Infinity"` with the quarantine sentence painted at
+  // `y="-Infinity"`. That is this module's own "a map that lies by omission", reached by the
+  // crop rather than by the producer. `ink` is empty here too and cannot rescue it -- with no
+  // points there are no arcs, no nodes and no marker, so both bounds are the empty interval.
+  //
+  // The full canvas is the right answer rather than a nominal box: it is what these pages served
+  // before the crop existed, it puts the footer back on the floor every other map uses, and
+  // there is no drawn content whose extent could argue for anything smaller.
+  const band = footerBand(footerLines);
+  if (bands.length === 0) return { top: 0, height: HEIGHT + band - FOOTER_BAND, bottom: HEIGHT + band - FOOTER_BAND };
+
+  const bandTop = Math.min(...bands.map((b) => b[0]));
+  const bandBottom = Math.max(...bands.map((b) => b[1]));
+  const top = Math.max(0, Math.floor(Math.min(bandTop, ink.top) - FRAME_PAD));
+  const bottom = Math.ceil(Math.max(bandBottom, ink.bottom) + band);
+  return { top, height: bottom - top, bottom };
 }
 
 /**
  * Draw order (mirrors the mockup, and is itself part of the contract): inset frames for panels
  * the network actually reaches -> the injected basemap, if any -> arcs, thinnest first ->
  * nodes, each with its label if it has one -> the subject marker -> the footer stack.
+ *
+ * The footer is emitted LAST for a second reason since #123: its baseline is anchored to the
+ * cropped canvas's floor, which is not known until every other mark has been measured.
  */
 function renderMapCore(plan: MapPlan): string {
   // subjectFits decides WHICH panels this map reaches, and its own fit values are the FALLBACK
@@ -459,11 +658,21 @@ function renderMapCore(plan: MapPlan): string {
 
   let body = "";
 
+  // Every mark's vertical reach, accumulated as it is drawn, so `cropWindow` can union it with
+  // the panel bands. Seeded to the empty interval (+/-Infinity), never to the canvas: seeding
+  // it to 0/HEIGHT would make the union always return the whole canvas and quietly disable the
+  // crop, which is precisely the "gate that passes for the wrong reason" shape.
+  const ink: InkExtent = { top: Infinity, bottom: -Infinity };
+  const mark = (top: number, bottom: number) => {
+    if (top < ink.top) ink.top = top;
+    if (bottom > ink.bottom) ink.bottom = bottom;
+  };
+
   // Inset frames -- only for panels with at least one point in them, and `us` is never framed.
   for (const { panel, label } of INSETS) {
     if (!fits.has(panel)) continue;
     const [x0, y0, x1, y1] = INSET_RECTS[panel];
-    body += `<rect x="${x0 - 6}" y="${y0 - 6}" width="${x1 - x0 + 12}" height="${y1 - y0 + 12}" fill="none" stroke="var(--rule-2)" style="stroke-width:1"/>`;
+    body += `<rect x="${x0 - FRAME_PAD}" y="${y0 - FRAME_PAD}" width="${x1 - x0 + 2 * FRAME_PAD}" height="${y1 - y0 + 2 * FRAME_PAD}" fill="none" stroke="var(--rule-2)" style="stroke-width:1"/>`;
     body += `<text x="${x0 - 4}" y="${y0 + 6}" font-size="8" letter-spacing="0.1em" fill="var(--ink-3)">${esc(label)}</text>`;
   }
 
@@ -496,6 +705,10 @@ function renderMapCore(plan: MapPlan): string {
 
     const pts = path.map(([x, y]) => `${fmt(x)},${fmt(y)}`).join(" ");
     const stroke = strokeFor(s, maxSeats);
+    // EVERY vertex, not just the endpoints: a great circle bows away from the straight line
+    // between them, so an endpoint-only extent understates the arc by the whole of its bulge.
+    // Half the stroke width, because a polyline is centred on its path.
+    for (const [, y] of path) mark(y - stroke.width / 2, y + stroke.width / 2);
     // `stroke-dasharray` omitted entirely when `dash` is empty (the solid, above-both-floors
     // case -- most arcs) rather than emitted as `stroke-dasharray=""`. Browsers treat the empty
     // attribute as "no dashing," identically to its absence, so this was never a rendering bug
@@ -506,9 +719,12 @@ function renderMapCore(plan: MapPlan): string {
 
   for (const node of plan.nodes) {
     const [x, y] = project(node.lat, node.lon, fits);
-    body += `<circle cx="${fmt(x)}" cy="${fmt(y)}" r="${node.belowFloor ? 1.3 : 2}" fill="${node.belowFloor ? "var(--ink-3)" : "var(--ink)"}"/>`;
+    const r = node.belowFloor ? 1.3 : 2;
+    body += `<circle cx="${fmt(x)}" cy="${fmt(y)}" r="${r}" fill="${node.belowFloor ? "var(--ink-3)" : "var(--ink)"}"/>`;
+    mark(y - r, y + r);
     if (plan.labelled.has(node.code)) {
       body += `<text x="${fmt(x + 5)}" y="${fmt(y + 3)}" font-size="9" font-weight="600" fill="var(--ink)">${esc(node.code)}</text>`;
+      mark(...textBand(y + 3, 9));
     }
   }
 
@@ -516,23 +732,47 @@ function renderMapCore(plan: MapPlan): string {
     const [ox, oy] = project(plan.marker.lat, plan.marker.lon, fits);
     body += `<circle cx="${fmt(ox)}" cy="${fmt(oy)}" r="4.5" fill="var(--field)" stroke="var(--signal)" style="stroke-width:1.8"/>`;
     body += `<text x="${fmt(ox - 7)}" y="${fmt(oy - 8)}" text-anchor="end" font-size="11" font-weight="600" fill="var(--signal)">${esc(plan.marker.code)}</text>`;
+    // The disc's own stroke is 1.8 centred on r=4.5, so its outer edge is 5.4 from the centre.
+    mark(oy - 5.4, oy + 5.4);
+    mark(...textBand(oy - 8, 11));
   }
 
-  // The footer stack is bottom-anchored: the LAST line sits on the canvas floor and earlier
-  // lines stack upward from it, so a map with one line puts that line exactly where every map
-  // has always put it.
+  const computed = cropWindow(fits.keys(), ink, plan.footerLines.length);
+  // An explicit window replaces the computed one WHOLESALE rather than being unioned with it.
+  // The caller supplying it has already unioned this map's own window into it -- that is the
+  // only way it can be produced (`segmentMapWindow`) -- so unioning again would be a no-op that
+  // reads as though the override were advisory. It is not: a small multiple needs every panel
+  // to emit the IDENTICAL box, and "widen to at least this" cannot guarantee that.
+  const crop = plan.cropWindow
+    ? { ...plan.cropWindow, height: plan.cropWindow.bottom - plan.cropWindow.top }
+    : computed;
+
+  // The footer stack is bottom-anchored: the LAST line sits on the CROPPED canvas's floor and
+  // earlier lines stack upward from it, so a map with one line puts that line exactly where
+  // every map has always put it -- `crop.bottom` is `HEIGHT` on any map that reaches the tray.
+  // Anchoring it to `HEIGHT` instead would leave the disclosure off the bottom of a cropped
+  // canvas, which is the one thing a shorter map must not cost the reader.
   plan.footerLines.forEach((line, i) => {
-    const y = HEIGHT - 6 - (plan.footerLines.length - 1 - i) * FOOTER_LINE_HEIGHT;
+    const y = crop.bottom - 6 - (plan.footerLines.length - 1 - i) * FOOTER_LINE_HEIGHT;
     const style = line.emphasis ? ` font-weight="600" fill="var(--ink)"` : ` fill="var(--ink-2)"`;
     body += `<text x="8" y="${y}" font-size="10"${style}>${esc(line.text)}</text>`;
   });
 
   return (
-    `<svg viewBox="0 0 ${WIDTH} ${HEIGHT}" width="${WIDTH}" height="${HEIGHT}" ` +
+    `<svg viewBox="0 ${crop.top} ${WIDTH} ${crop.height}" width="${WIDTH}" height="${crop.height}" ` +
     `role="img" aria-label="${esc(plan.ariaLabel)}" ` +
     `style="font-family:var(--font-mono);font-variant-numeric:tabular-nums" ` +
     `xmlns="http://www.w3.org/2000/svg">${body}</svg>`
   );
+}
+
+/** The vertical ink box of one text run, from its BASELINE and font size. Both bounds are
+ *  deliberate OVER-estimates -- a full font-size of ascent, and 0.3 of one of descent, against
+ *  IBM Plex Mono's real 0.78/0.22 -- so the crop errs toward showing blank rather than toward
+ *  shaving a glyph. Same over-estimate idiom, and the same reason, as
+ *  `panelContainment.test.ts`'s on-canvas check. */
+function textBand(baseline: number, fontSize: number): [number, number] {
+  return [baseline - fontSize, baseline + 0.3 * fontSize];
 }
 
 /**
@@ -741,9 +981,13 @@ function tallyNodes(lines: SegmentDatum[]): NodeTally[] {
  * and the person looking at the map did not, which is the exact inversion these sentences exist
  * to prevent. Shortening them was not available: the reason clause and the "and from the route
  * counts" clause are each there because an earlier round found the map lying without them.
- * Stacking them as extra footer rows is wrong for a measured reason -- the inset frames run to
- * y=474 while the footer grows upward from y=494 in 12px steps, so the third row lands inside a
- * labelled inset.
+ * Stacking them as extra footer rows is wrong for the WIDTH reason above and not for a
+ * stacking one -- three rows of ~158-character prose is the same clipped text on three lines.
+ * It used to also collide: frames ran to y=474 while the footer grew upward from a fixed y=494
+ * in 12px steps, so a third row landed inside a labelled inset. That is no longer true --
+ * `footerBand` reserves a line's height for every row, so the top of a three-row stack clears
+ * the deepest frame by the same 10px a single row does. The width argument is the whole
+ * argument now.
  *
  * So the component renders these as HTML beneath the map, where text wraps at any width -- the
  * shape `AircraftMixChart.tsx:81-99` already uses for `rampNote`/`gapNote` and
@@ -837,7 +1081,65 @@ export function renderSegmentMap(input: SegmentMapInput): string {
     footerLines,
     ariaLabel,
     basemapPaths: input.basemapPaths,
+    cropWindow: input.cropWindow,
   });
+}
+
+/**
+ * WHETHER THIS MAP DRAWS AN ARC -- the predicate the legend rail's "Arc rendering" group has to
+ * ask, and not the same question as "is there a map" (#123).
+ *
+ * Every row in that group describes an ARC: width scales with seats, dashed is below the load
+ * factor floor, dotted-muted is below the departure floor, and one paragraph explains why a
+ * cross-panel arc is a straight line. A map can render with none of them -- a hub map still
+ * paints its origin disc, and `fetchCarrierTypeNetwork` deliberately returns a map with zero
+ * segments so its quarantine disclosure reaches the reader -- and on those pages the rail was
+ * explaining three encodings the reader cannot see. Same rule as the fleet-shading group one
+ * module over: the test is "was it DRAWN", never "is there data for it".
+ *
+ * `drawableSegments` is the renderer's OWN filter, the one that decides which polylines are
+ * emitted, so this cannot answer differently from the map beside it.
+ */
+export function segmentArcsDrawn(input: SegmentMapInput): boolean {
+  return drawableSegments(input.segments).length > 0;
+}
+
+/**
+ * The window `renderSegmentMap` WOULD emit for this input -- read back off its own output.
+ *
+ * ASKING THE RENDERER IS THE POINT, not a shortcut. The window is the reached panels' bands
+ * unioned with every mark the renderer emits: arc vertices including a great circle's bow, node
+ * label boxes, the subject marker and its code. A second implementation that recomputed that
+ * would be a copy of the drawing pass, and the two would drift the first time a mark changed
+ * shape -- the exact failure `mixChartDraws` exists to prevent one module over. This renders
+ * once and parses the one attribute it needs, so there is only ever one answer.
+ *
+ * It costs a second render of each panel in a set, and the reason that is affordable is NOT
+ * that diff panels are small -- they are capped AT `NETWORK_ARC_CAP` like any other map, which
+ * `DiffMap`'s own `countNote` says out loud ("on OO's added panel that would read 400 instead of
+ * 1,624"). It is affordable because rendering is cheap. Measured on a 400-arc captioned panel,
+ * 20 iterations after warmup: `renderSegmentMap` 1.83ms, `segmentMapWindow` 2.29ms -- so the
+ * worst case, three capped panels on `/carrier/OO`, pays about 6.9ms extra, a rounding error
+ * beside the DuckDB work that produced the diff. `DiffMap` is the only caller and no other
+ * surface pays it at all. (A machine measurement, so it rots; the ORDER of magnitude is the
+ * claim, and re-measure before quoting it.)
+ */
+export function segmentMapWindow(input: SegmentMapInput): CropWindow {
+  const svg = renderSegmentMap(input);
+  const box = svg.match(/viewBox="0 ([\d.-]+) \d+ ([\d.-]+)"/);
+  // FAIL LOUD, WITH THE REASON. This runs on the served `/carrier` path, so a non-null assertion
+  // here is a bare `TypeError` on a real page -- a 500 whose message names neither this function
+  // nor the string it could not read. It is unreachable today only because `renderMapCore` always
+  // emits a finite `viewBox`, and that became true only when the zero-segment arm was added to
+  // `cropWindow`: this parse is downstream of an invariant that was violated in production once
+  // already. Say what broke.
+  if (box === null) {
+    throw new Error(
+      `segmentMapWindow: no parsable viewBox in the rendered map (got ${svg.slice(0, 120)})`,
+    );
+  }
+  const [, top, height] = box.map(Number);
+  return { top, bottom: top + height };
 }
 
 // `NodeMark` and `renderMapCore` are what `networkMap.ts` builds on. `MapPlan` and

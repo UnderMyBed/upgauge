@@ -64,7 +64,7 @@ export function normalizeLon(lon: number): number {
  *   be. They are three panels rather than one because a SINGLE Albers fit cannot carry them:
  *   the Marianas, American Samoa and Midway span roughly 5,000 km, and one panel scaled to
  *   that extent puts Saipan and Tinian -- 18 km apart, and an undirected route carrying 78,420
- *   seats over the trailing 12 -- 2.73px apart even at the full width of a 960x500 canvas. The
+ *   seats over the trailing 12 -- 2.73px apart even at the full width of the canvas. The
  *   seat figure is `fct_route_month`'s, because the map draws one arc per UNDIRECTED route;
  *   `fct_segment_month`'s directed halves are 39,908 and 38,512, and quoting either as a route
  *   total understates the arc by half. Measured; the
@@ -169,14 +169,53 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
   sam: { p1: -14.4, p2: -14.2, lam0: -170.7, phi0: -14.3 },
 };
 
-// Canvas 960x500 (mockup's W/H), 16px outer pad. us/ak/hi rects are the mockup's own,
-// unchanged. `nwhi` (368-408), `car` (424-720) and `sam` (736-917) sit in the bottom inset
-// tray with ak (36-176) and hi (192-292), left to right, all five ending on the tray's shared
-// 468 baseline. Frames are drawn at rect +/- 6px (`networkMap.ts`), so the mockup's own 16px
-// rect-to-rect gutter leaves 4px between neighbouring frames: ak->hi, nwhi->car and car->sam
-// all measure it. hi->nwhi does NOT -- that gap is 76px, because it is where `pac` used to sit
-// before it left the tray, and nothing was moved up to close it. `pac` is the one inset NOT in
-// the tray; see below for why.
+// Canvas 960x544, 16px outer pad. `us` and `pac` keep the mockup's own rects; the five
+// bottom-tray rects sit 44px below where the mockup put them, and the canvas is taller by the
+// same 44px to hold them -- see THE TRAY CLEARS THE `us` RECT below. `nwhi` (368-408), `car`
+// (424-720) and `sam` (736-917) sit in that tray with ak (36-176) and hi (192-292), left to
+// right, all five ending on the tray's shared 512 baseline. Frames are drawn at rect +/- 6px
+// (`segmentMap.ts`), so the mockup's own 16px rect-to-rect gutter leaves 4px between
+// neighbouring frames: ak->hi, nwhi->car and car->sam all measure it. hi->nwhi does NOT --
+// that gap is 76px, because it is where `pac` used to sit before it left the tray, and nothing
+// was moved up to close it. `pac` is the one inset NOT in the tray; see below for why.
+//
+// THE TRAY CLEARS THE `us` RECT, AND NOTHING ELSE IN THIS TABLE DOES (#122). `us` is the one
+// panel with no frame, so nothing separates it from an inset drawn on top of it -- and the
+// bottom tray used to be drawn INSIDE its vertical range. At the tray's old 392-468, `car`'s
+// frame [418,386]-[726,474] held 17 fact-present airports belonging to `us`: 12 Florida and 5
+// south Texas, MIA at (708.4, 401.0) and EYW at (690.7, 423.1). They were drawn inside a box
+// labelled CARIBBEAN. Moving the tray down 44px puts `car`'s frame top at 430, SIX CLEAR OF
+// `PANEL_RECTS.us`'s bottom edge of 424, and takes that count to zero.
+//
+// State it against the RECT, not against EYW. Every `us` airport is inside the `us` rect --
+// that is `panelContainment.test.ts`'s standing property, and `US_EXTENT_ANCHORS` is what
+// makes it true down to the Keys -- so a tray below 424 cannot hold a `us` airport for ANY
+// dataset, rather than merely not holding today's. Clearing EYW's measured 423.1 instead would
+// be one BTS coordinate revision from breaking, which is the same mistake the clearance floor
+// in `panelContainment.test.ts` exists to refuse.
+//
+// SIX, because six is what the ink needs. A point exactly on the rect's bottom edge paints a
+// 4.5px subject disc (`segmentMap.ts`'s marker) or a 9px node label whose descender reaches
+// y+5. One frame pad clears both. It is not a round number chosen for looks.
+//
+// AND THE CANVAS HAD TO GROW, which is the part a future reader will want re-derived rather
+// than taken on trust. The frame is 88px tall (76 rect + 2x6 pad) and the 960x500 canvas this
+// replaced left 500-424 = 76px below the `us` rect. 76 < 88: there is NO placement of this frame on that
+// canvas disjoint from `us`. Nor anywhere else on it -- the left and right margins are 157.7px
+// wide against the drawn coastline, and the top strip is 18px. Shrinking `car` to fit is worse
+// than it sounds: the aspect is locked at 3.8869:1 by the fill gate, so a 76px strip caps the
+// rect at 203px wide, a 47% smaller Caribbean, and STT and SPB are already only 2.8px apart
+// inside it. Growing the canvas is the only move that keeps the inset legible.
+//
+// THE MOVE COSTS NO RE-FIT, AND THAT IS STRUCTURAL RATHER THAN LUCKY. `fitPanels` below reads
+// a rect as `k = min((rx1-rx0)/dx, (ry1-ry0)/dy)` -- WIDTHS AND HEIGHTS ONLY -- and then
+// `oy = ry0 + ...`, in which `ry0` appears exactly once, additively. So adding 44 to both
+// `ry0` and `ry1` leaves `k` and `ox` bit-identical and moves `oy` by exactly +44. Measured
+// against the shipped generator, all six panels with committed geometry: dk=0 and dox=0
+// everywhere, doy=+44.000000000 for ak/hi/car/sam and 0 for us/pac. `ak`, `hi`, `car` and
+// `sam` therefore regenerate as a pure y translation of their old path bytes, and `us` and
+// `pac` regenerate byte-identically -- which is what `basemap.test.ts`'s four path hashes
+// check. A rect RESIZE would not have this property; only a translation does.
 //
 // `car`'s width was widened by M7 Task 7b once real geometry existed to check the original
 // 100x76 square against (Task 4/7's own open item -- there was nothing to measure it
@@ -189,7 +228,8 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
 // floating in the middle of a mostly-empty labelled box, not a rendering bug but a
 // misleading rectangle. Widened to 296px (76 * 3.89, rounded) so both dimensions bind
 // together and the coastline fills its frame the same way every other panel's does; height
-// (392-468, matching hi) is unchanged so the bottom inset row keeps one shared baseline.
+// (76px, matching hi) is unchanged so the bottom inset row keeps one shared baseline, which
+// #122 moved from 468 to 512 for all five at once.
 //
 // `pac` got the same treatment, for the OPPOSITE mismatch, once its own geometry existed
 // (`ne_50m_pac.json`). Guam + the Northern Marianas' raw-Albers extent under `PANEL_PARAMS
@@ -198,7 +238,8 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
 // placeholder (aspect 1.32:1) bound on height and left the islands a 15.6px-wide sliver.
 //
 // AND THEN IT HAD TO MOVE, which is the part worth reading. A 44x216 rect grown upward from
-// the tray (308,252)-(352,468) is a correct SIZE in the wrong PLACE: its frame lands inside
+// the tray -- (308,252)-(352,468) against the tray's y of the time, which #122 has since moved
+// down 44px -- was a correct SIZE in the wrong PLACE: its frame lands inside
 // the conterminous panel, whose drawn coastline occupies x[157.7, 802.3] y[18.0, 418.5], and
 // `globals.css`'s `.map svg path[data-panel]` fills every basemap path with OPAQUE
 // `--panel-2`. Draw order in `renderNetworkMap` is frames, then basemap, then arcs -- so the
@@ -277,12 +318,14 @@ export const PANEL_PARAMS: Record<Panel, PanelParams> = {
 // still a deliberate hand-copy and is still not imported from here; keep the two in sync.
 export const PANEL_RECTS: Record<Panel, PanelRect> = {
   us: [26, 18, 934, 424],
-  ak: [36, 322, 176, 468],
-  hi: [192, 392, 292, 468],
+  // The bottom tray, 44px below the mockup's own y (#122). One shared baseline at 512; every
+  // width and height is unchanged, so every `k` is.
+  ak: [36, 366, 176, 512],
+  hi: [192, 436, 292, 512],
   pac: [40, 30, 84, 246],
-  nwhi: [368, 392, 408, 468],
-  car: [424, 392, 720, 468],
-  sam: [736, 392, 917, 468],
+  nwhi: [368, 436, 408, 512],
+  car: [424, 436, 720, 512],
+  sam: [736, 436, 917, 512],
 };
 
 const PANEL_ORDER: Panel[] = ["us", "ak", "hi", "pac", "nwhi", "car", "sam"];

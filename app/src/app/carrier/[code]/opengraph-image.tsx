@@ -9,7 +9,7 @@ import {
   trailing12Query,
 } from "@/lib/entityFacts";
 import { CARD_SIZE, renderEntityCard } from "@/lib/og/card";
-import { cardChart, cardStats, cardSubtitle } from "@/lib/og/entityCard";
+import { cardChart, cardSixthStat, cardStats, cardSubtitle } from "@/lib/og/entityCard";
 import { formatCount } from "@/lib/format";
 
 // FORCE-DYNAMIC, same line and same reason as page.tsx's: Next's convention doc states a
@@ -67,17 +67,33 @@ export default async function Image({ params }: { params: Promise<{ code: string
   ]);
 
   const chart = cardChart(mix, carrier.code);
+  const totals = sumTotals(result.rows);
 
   return renderEntityCard({
     title: carrier.code,
     subtitle: cardSubtitle(carrier.name, query.timeFrom, query.timeTo),
-    stats: cardStats(sumTotals(result.rows), {
-      label: "Aircraft types",
-      value: formatCount(result.rows.length),
-    }),
+  // THE SIXTH STAT, chosen by the SHARED rule (`cardSixthStat`), not by this route. When every
+  // filing in the window was quarantined the five measures above are all `—`, and a card has no
+  // foot, no empty state and no `aria-label` -- so the stat row is the only place left to say
+  // why, and the entity count gives way to the quarantined one. Gated on BOTH operands: keyed on
+  // the null alone it would answer "Quarantined 0" on every page that simply filed nothing,
+  // naming the one cause it is not. `quarantinedRowsOnPage` is a `count(*) FILTER` (lib/db.ts)
+  // and cannot be NULL, which is why it keeps its own `?? 0` there and is the right operand here.
+    stats: cardStats(
+      totals,
+      cardSixthStat(totals, result.quarantinedRowsOnPage, {
+        label: "Aircraft types",
+        value: formatCount(result.rows.length),
+      }),
+    ),
     chartSvg: chart.svg,
     chartNote: chart.note,
     gaps: chart.gaps,
+    // The other two absence causes, each carried as its own count and rendered as its own
+    // phrase (#121). A card has no aria-label and no foot, so a merged count here would be the
+    // wrong word with nothing to correct it.
+    unknowable: chart.unknowable,
+    understated: chart.understated,
     asOf,
   });
 }

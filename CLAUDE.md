@@ -81,15 +81,15 @@ box its own timer keeps at `:deploy`. `warehouse.yml` polls BTS and publishes th
 `image.yml` builds and gates the container, `promote.yml` moves the tag. `make portability` proves
 the WORKDIR/data contract by breaking it, and is hand-run — no workflow invokes it.
 
-Current gates (`app-check`/`app-smoke` measured 2026-08-27, `verify`/`goldens` 2026-08-08,
+Current gates (`app-check`/`app-smoke` measured 2026-08-28, `verify`/`goldens` 2026-08-08,
 `portability` 2026-08-09, the rest 2026-08-10; the only counts kept here — history lives in git):
 
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 49 skip without `data/` |
-| `make app-check` | 1,471 app tests · without a built `upgauge.duckdb`, 519 of them fail |
-| `make app-smoke` | 634 served-build checks |
-| `make image-smoke` | the host set less the 10 host-only gap checks, which print as skipped — **338 when last measured (2026-08-10); NOT re-measured since — the host set has grown by 96 checks since, so 338 is a floor and not the current figure — and it needs Docker plus the pinned release asset** — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
+| `make app-check` | 1,654 app tests · without a built `upgauge.duckdb` only 1,509 are COLLECTED and 542 of those fail — the two figures count different sets, so "N of the total fail" was never the sentence it read as |
+| `make app-smoke` | 706 served-build checks |
+| `make image-smoke` | the host set less the 10 host-only gap checks, which print as skipped — **338 when last measured (2026-08-10); NOT re-measured since — the host set has grown by 168 checks since, so 338 is a floor and not the current figure — and it needs Docker plus the pinned release asset** — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
 | `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
 | `make goldens` | byte-identical |
@@ -409,7 +409,25 @@ signature element; it does not own these.
   guard one property, **assert WHICH check refuses a fixture, not that something did** — otherwise
   every guard but one is deletable green. Three times in #126: the allow-list, `_provenance_failures`
   itself, then the `EDGE_EVALUATED` membership branch, whose sole catch is `and not true` — `and
-  false`, which switches the edge rate limit off on every path.
+  false`, which switches the edge rate limit off on every path. Check discrimination per ASSERTED
+  PROPERTY, not per test: **a fixture that exercises one of two asserted properties is the vacuous
+  fixture wearing half a disguise** — the mutant dies, the run names that test as having refused
+  it, and the property in its own title was never touched. Three units hit it in one cycle: a
+  Top-routes fixture whose sparse rows were already last by seats, so only the rank half could
+  fail; a `DiffMap` union whose two fixtures both put the highest panel at index 0, leaving
+  `top: Math.min` deletable-green while `bottom: Math.max` three lines below died; and an x-axis
+  fixture sited inside the COVID window, whose own `--panel-2` rect stretched the domain and
+  masked the missing axis.
+- **A mutation harness is untested code that reports on its own correctness, and it lies both
+  ways.** `--reporter basic` does not exist in Vitest 4, so every run crashes before a test
+  executes and a parser reading "no failures" calls the mutant dead — seven false kills in one
+  unit, nine in another, in a single cycle. Assert a GREEN BASELINE and a matching test count
+  before each mutant, and die loudly on a crash or a zero-test run. The same cycle had four of
+  four harnesses damage the tree: a `git checkout --` that reverted the author's own uncommitted
+  work, an `io.open(p,"w")` that truncated a committed file before the expression filling it
+  raised, a cleanup that unlinked files it had not written, and a rename sweep that moved 286 of
+  another agent's files. Compute content before opening a file, and assert the path is inside
+  your own worktree.
 - **`make app-smoke` exists because unit tests structurally cannot see a whole class of bug.**
   Green suite, broken production: `__dirname` under Turbopack, `decodeURIComponent` throwing,
   `process.chdir`, the DuckDB platform-switch `require`, and query normalization — every one

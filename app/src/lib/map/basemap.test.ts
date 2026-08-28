@@ -518,6 +518,17 @@ describe("the panels that must not have moved (#111, re-scoped by #115 and #119)
     // said fixing it would rewrite EVERY panel's geometry. It rewrites ONE: exactly two DATA
     // lines, the `us` path literal and one appended fit point. Say DATA lines -- the file's own
     // diff is larger, because the generator rewrites its header comment alongside them.
+    //
+    // #122 IS A THIRD KIND OF MOVE, and the one this pair of assertions reads most sharply. It
+    // changes no fit POINT at all -- `BASEMAP_FIT_POINTS` is byte-identical across it -- and
+    // only the RECTS the points are fitted into: the five bottom-tray rects go down 44px so
+    // `car`'s frame clears the `us` rect. `fitPanels` reads a rect's width and height for `k`
+    // and adds `ry0` once into `oy`, so a rect TRANSLATION moves `oy` by exactly the offset and
+    // leaves `k` and `ox` untouched. `ak`, `hi`, `car` and `sam` are therefore a pure +44 y
+    // translation of their previous bytes (verified vertex by vertex: dx = {0}, dy = {44} on
+    // all 225 of them), and `us`, `pac` and `nwhi` did not move at all -- which is why the `us`
+    // hash below is the SAME string #119 left, and why that is worth more than three moved
+    // ones. Four DATA lines. A rect RESIZE would have no such property; only a translation.
     const hashes = Object.fromEntries(
       (["us", "ak", "hi", "car"] as const).map((panel) => [
         panel,
@@ -525,12 +536,10 @@ describe("the panels that must not have moved (#111, re-scoped by #115 and #119)
       ]),
     );
     expect(hashes).toEqual({
-      // #119: was a1355b846c078a0d58e39957b3a95df9e2b6bc8babc1119130c860e309f0f3c6.
       us: "f5c28bd9b3fb0140e5c42f90b5eb0c11e52d0eb0fc7da0a7fce7238ac215272d",
-      // #115: was c424a4acc83b813379e6cf2cc4839aa14d7d003f2d0b26b629dac2e316303f5f.
-      ak: "c1f4b68dedacd7d4afcb932c2ec28250c11575bfaaf31558486c299279773b0b",
-      hi: "bdaf4ac90b2a8dffd4d5e5cc29f1e8eea5ea434e764d5d2825eec998ce9d6743",
-      car: "1d837f6ba9d12262f246c242f8e1a4a794eea6ba22127c22e60b8823ebaff49f",
+      ak: "4dc29f10c557dd95124e80b51a8d01803bffe1cb0835aa01b15bad9c23a84b62",
+      hi: "5bc9c147816b0e76e940e7a4b360a0455098d1aa0904689eaaa41333c13099c5",
+      car: "4d2ef75a8c4c2a4b53eb070db5f5f341c3d58af4c4d503919edcee1daaccd647",
     });
   });
 
@@ -558,9 +567,13 @@ describe("the panels that must not have moved (#111, re-scoped by #115 and #119)
       us: { k: 892.2437067538316, ox: 487.0155615347458, oy: 236.5663339691636 },
       // #115: was { k: 377.8396853372171, ox: 87.7779935792461, oy: 481.4201810606285 } --
       // the fit that put ADK at (-3.1, 453.4) and SYA at (-35.2, 433.5), off the canvas.
-      ak: { k: 244.54496902469134, ox: 118.90105390013588, oy: 449.3790559215478 },
-      hi: { k: 1221.0803508579845, ox: 247.8265564145108, oy: 442.31592580205955 },
-      car: { k: 5304.317346044431, ox: 603.4689616699768, oy: 440.65076212255065 },
+      // #122 then moved `oy` alone, on these three and on `sam`: same `k`, same `ox`, +44. That
+      // signature -- one field of three, by one identical offset, on exactly the tray panels --
+      // is what distinguishes a rect translation from every other reason a fit could move, and
+      // it is why this assertion is frozen literals rather than a hash.
+      ak: { k: 244.54496902469134, ox: 118.90105390013588, oy: 493.3790559215478 },
+      hi: { k: 1221.0803508579845, ox: 247.8265564145108, oy: 486.31592580205955 },
+      car: { k: 5304.317346044431, ox: 603.4689616699768, oy: 484.65076212255065 },
     });
   });
 });
@@ -578,6 +591,13 @@ describe("no inset frame is drawn over the conterminous landmass", () => {
   // Nothing caught it because both the acceptance criterion and the frame-overlap test that
   // implements it enumerate the six INSET panels. `us` is the unframed, full-canvas panel that
   // paints the land, so it was in neither list. This test is the one that looks at it.
+  //
+  // THE RULE HOLDS FOR ALL SIX INSETS, WITH NO EXEMPTION. `car` is in the list below like every
+  // other panel: since #122 moved the bottom tray clear of the `us` rect, its frame starts at
+  // y=430 and the drawn conterminous coastline ends at y=418.5, so no rect-versus-polygon test
+  // can find an overlap. An `it.each` that quietly omitted a panel would read as though the
+  // property held everywhere, so if this list ever shrinks, the panel it drops needs a stated
+  // reason and a gate of its own -- not a shorter list.
   //
   // Against the DRAWN SUBPATHS, not the coastline's bounding box: `hi`'s frame sits inside that
   // bbox (x[157.7, 802.3] y[18.0, 418.5]) while containing no land at all, so a bbox test would
@@ -650,7 +670,7 @@ describe("no inset frame is drawn over the conterminous landmass", () => {
     expect(LAND.length).toBeGreaterThan(40);
   });
 
-  it.each(["ak", "hi", "pac", "nwhi", "sam"] as const)(
+  it.each(["ak", "hi", "pac", "nwhi", "car", "sam"] as const)(
     "%s's frame is clear of drawn lower-48 land",
     (panel) => {
       const [x0, y0, x1, y1] = PANEL_RECTS[panel];
@@ -664,27 +684,4 @@ describe("no inset frame is drawn over the conterminous landmass", () => {
       expect(`${panel} over [${over}]`).toBe(`${panel} over []`);
     },
   );
-
-  it("records `car` as the one pre-existing violation, rather than omitting it", () => {
-    // `car` (M7 Task 7b) is the same class of defect and shipped a milestone earlier: its rect
-    // (424,392)-(720,468) overlaps drawn Florida and Texas, measured at 1,024 px^2 on a 0.1px
-    // sample grid -- 4.6% of its rect, against `pac`'s 31.3%. BOTH FIGURES MOVE WITH THE `us`
-    // FIT, which neither rect is involved in, and nothing regenerates them: re-measure on any
-    // fit change rather than carrying them forward. Out of scope for #111, still not fixed --
-    // it is #122 -- but a
-    // test that simply left `car` out of the list above would read as though the property held
-    // everywhere. This asserts the exemption is EXACTLY those two states: if `car` ever grows
-    // past them, or is fixed, this goes red and someone re-reads the rule.
-    const [x0, y0, x1, y1] = PANEL_RECTS.car;
-    const frame: [number, number, number, number] = [
-      x0 - FRAME_PAD,
-      y0 - FRAME_PAD,
-      x1 + FRAME_PAD,
-      y1 + FRAME_PAD,
-    ];
-    const over = [
-      ...new Set(LAND.filter((l) => rectOverlapsPolygon(frame, l.poly)).map((l) => l.name)),
-    ].sort();
-    expect(over).toEqual(["FL", "TX"]);
-  });
 });

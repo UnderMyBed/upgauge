@@ -561,3 +561,131 @@ describe("/aircraft/<slug> network map on a type with nothing in the window", ()
     );
   });
 });
+
+/** THE STAT STRIP AND THE FOOT ON AN UNKNOWABLE PAGE (#121), and this surface is the half the
+ * issue never measured: it scoped the wholly-quarantined footprint at route grain only. At
+ * aircraft grain, BTS types 201 and 489 have no un-quarantined filing in the trailing 12
+ * either -- both F4 in 2025-08, 5 and 27 PERFORMED departures against a filed seat count of
+ * zero. `/aircraft/TRISLNDR` and `/aircraft/SHORT360` rendered three fabricated zeros, so the
+ * reachable footprint is 12 pages and not 10.
+ *
+ * The strip is read as an ORDERED LIST, never searched for a dash: load factor and average gauge
+ * rendered `—` under the bug too, so the buggy page read `0 · 0 · — · — · 0`. */
+function statStrip(container: HTMLElement): string[] {
+  return [...container.querySelectorAll(".stats .v")].map((n) => n.textContent ?? "");
+}
+
+describe("an aircraft type whose every filing was quarantined states absence, not zero", () => {
+  // MUTANT: restore `?? 0` inside `sumColumn` -> `["0", "0", "—", "—", "0", ...]` -> red.
+  // MUTANT: remove the `??` and fold on `+` -> identical output -> red.
+  it("renders the five measures as absence and keeps the counts", async () => {
+    const { container } = render(await page("TRISLNDR"));
+    expect(statStrip(container)).toEqual(["—", "—", "—", "—", "—", "1", "2"]);
+  });
+
+  // MUTANT: drop the `totals.seats === null` branch -> the foot claims "2 quarantined rows
+  // excluded from these totals" under five em dashes -> red.
+  it("explains the dashes instead of miscounting them", async () => {
+    const { container } = render(await page("TRISLNDR"));
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).toContain("Every filing on the TRISLNDR in this window is quarantined");
+    expect(feet).toContain("2 rows, each having failed an invariant");
+    expect(feet).not.toContain("excluded from these totals");
+  });
+});
+
+describe("an aircraft type that filed nothing in the window states absence too", () => {
+  // The MD-80 stopped filing in 2023-04. 37 of this dataset's fact-present types are in that
+  // state -- unknowable for a reason quarantine had no part in.
+  // MUTANT: seed `sumColumn` at 0 -> three zeroes -> red.
+  it("renders the measures as absence while still stating the counts", async () => {
+    const { container } = render(await page("MD-80"));
+    expect(statStrip(container)).toEqual(["—", "—", "—", "—", "—", "0", "0"]);
+  });
+
+  // MUTANT: key the clause on `totals.seats === null` alone -> "Every filing on the MD-80 in
+  // this window is quarantined — 0 rows" -> red.
+  it("names neither an exclusion nor quarantine", async () => {
+    const { container } = render(await page("MD-80"));
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).not.toContain("excluded from these totals");
+    expect(feet).not.toContain("is quarantined");
+    expect(feet).toContain("never averaged");
+  });
+
+  // The negative, so neither check above can pass against a page that stopped rendering a strip.
+  // The Caravan additionally carries 75 quarantined rows BESIDE stateable traffic -- 13
+  // carriers' worth -- which is the case that makes the clause's first operand undeletable.
+  it("still states real figures where quarantined rows sit beside stateable traffic", async () => {
+    const { container } = render(await page("CARAVAN"));
+    const strip = statStrip(container);
+    expect(strip.slice(0, 5)).not.toContain("—");
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).toContain("excluded from these totals");
+    expect(feet).not.toContain("is quarantined");
+  });
+});
+
+describe("/aircraft/<name>: the legend rail follows the CHART, not the rows (#123)", () => {
+  // ONE GATE PER CALL SITE, not one per rule. `mixChartDraws` is a single predicate, but each
+  // page decides for itself whether to pass it to `<LegendRail>` -- and reverting any ONE of
+  // those four call sites to `hasMix` is a live defect on that surface alone. A rule-level test
+  // cannot see that: CLAUDE.md's "enumerate the matrix per CALL SITE".
+  //
+  // DATASET-PINNED SUBJECT. aircraft_type 658 (short_name CRJ700, BOMBARDIER BD-700 GLOBAL
+  // EXPRESS) files exactly ONE month, 2019-06, 900 seats, and no other type shares that short
+  // name, so the slug resolves unambiguously. B737-8 is the file's standing many-month subject.
+  // If this reddens after a BTS refresh, re-derive a one-month subject rather than deleting the
+  // test: the type with `count(DISTINCT year_month) = 1` in `fct_segment_month`.
+  it("renders NO fleet-shading group for a subject whose chart cannot draw", async () => {
+    const { container } = render(await AircraftPage({ params: Promise.resolve({ name: "CRJ700" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Fleet shading");
+    expect(rail.textContent).not.toContain("COVID is in the window on purpose");
+    // NOT VACUOUS: the rail is mounted and the chart really did decline to draw. Without these
+    // a page that failed to render at all would satisfy both negatives above.
+    expect(rail.textContent).toContain("Gauge rail");
+    expect(container.querySelector(".chart svg[role='img']")).toBeNull();
+  });
+
+  it("DOES render it for a subject whose chart draws", async () => {
+    // The positive control. It passes under the bug -- which is exactly why the absence
+    // assertion above is the one that catches it -- but without it, deleting the group outright
+    // would satisfy every negative in this file.
+    const { container } = render(await AircraftPage({ params: Promise.resolve({ name: "B737-8" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).toContain("Fleet shading");
+    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+  });
+});
+
+describe("/aircraft/<name>: the legend rail's arc group follows the ARCS (#123)", () => {
+  // EVERY ROW IN THAT GROUP DESCRIBES AN ARC -- width by seats, dashed below the load-factor
+  // floor, dotted-muted below the departure floor, and why a cross-panel arc is a straight line.
+  // A map can render with none of them, so "a map was drawn" is the wrong gate: `fetchCarrierTypeNetwork` returns a map with ZERO segments when a
+  // pair's only filing is same-airport -- `8E x AS350-B2` is that view, pinned at the producer
+  // by `carrierTypeNetwork.test.ts`.
+  //
+  // Asserted as an ABSENCE, because the presence form passes under the bug. And per CALL SITE:
+  // each page decides for itself what to pass, so reverting one is a live defect on that surface
+  // alone. Mutant: pass `hasMap` back to `<LegendRail map={...}>` here and this goes red.
+  it("renders NO arc-rendering group when no arc was drawn", async () => {
+    const { container } = render(await filtered("AS350-B2", "carrier=8E"));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Arc rendering");
+    expect(rail.textContent).not.toContain("width scales with seats");
+    // NOT VACUOUS, and this is the half that matters: the MAP is still mounted -- dropping the
+    // map to satisfy the negative would delete the disclosure this view exists to carry.
+    expect(container.querySelector(".map svg[role='img']")).not.toBeNull();
+    expect(container.querySelectorAll("polyline").length).toBe(0);
+    expect(rail.textContent).toContain("Gauge rail");
+  });
+
+  it("DOES render it when arcs were drawn", async () => {
+    // FILTERED, because this page's map exists only under a `carrier=` filter -- an unfiltered
+    // /aircraft draws no map at all, so it is the wrong control for an arc-group assertion.
+    const { container } = render(await filtered("B737-8", "carrier=DL"));
+    expect(container.querySelector("aside.legend")!.textContent).toContain("Arc rendering");
+    expect(container.querySelectorAll("polyline").length).toBeGreaterThan(0);
+  });
+});

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { addSum } from "@/lib/nullSum";
 import {
   airportTotals,
   airportTrafficQuery,
@@ -134,8 +135,9 @@ describe("the chart's mix, against the warehouse", () => {
   it("totals both endpoints, with same-airport filings counted once", async () => {
     const asOf = await dataAsOf();
     const mix = await fetchAirportMix(14747, "2015-01", asOf);
-    expect(mix.rows.reduce((a, r) => a + r.seats, 0)).toBe(550395521);
-    expect(mix.rows.reduce((a, r) => a + r.departures, 0)).toBe(3949177);
+    // SUM semantics (#121): `MixRow.seats` is nullable, and `+` would coerce a NULL back to 0.
+    expect(mix.rows.reduce<number | null>((a, r) => addSum(a, r.seats), null)).toBe(550395521);
+    expect(mix.rows.reduce<number | null>((a, r) => addSum(a, r.departures), null)).toBe(3949177);
     expect(mix.rows.length).toBe(2910);
     expect(mix.truncated).toBe(false);
   });

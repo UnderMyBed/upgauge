@@ -17,12 +17,15 @@ import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
+import { networkArcsDrawn } from "@/lib/map/networkMap";
 import { NetworkMap } from "@/components/NetworkMap";
 import { AIRCRAFT_MIX_LIMIT } from "@/lib/chart/aircraftMix";
+import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
 import { fetchAirportNetwork } from "@/lib/map/airportNetwork";
 import { EARLIEST_YEAR, parseYear, yearTrack, yearWindow, type ParsedYear } from "@/lib/year";
 import { encode } from "@/lib/pivot/urlstate";
 import { EARLIEST_MONTH, trailing12From } from "@/lib/entityFacts";
+import { quarantineClause } from "@/lib/quarantineClause";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
 import type { AirportRef } from "@/lib/resolve";
 import type { Allowlist } from "@/lib/pivot/allowlist";
@@ -258,6 +261,12 @@ export async function AirportView({
   const totals = airportTotals(traffic.rows, airport.id);
   const isEmpty = rows.length === 0;
   const hasMix = mix.rows.length > 0;
+  /** WHETHER THE CHART DREW, which is not whether it has rows (#123). One filed month has rows
+   *  and draws a line of text, so `hasMix` is the right gate for RENDERING `AircraftMixChart`
+   *  -- it is what makes the absence note appear -- and the wrong one for the legend rail's
+   *  fleet-shading group, which would then explain a ramp the reader cannot see. Read from the
+   *  chart's own predicate, never re-derived here. */
+  const chartDrawn = mixChartDraws(mix.rows);
 
   // The range the chart can DRAW, which is not the range it was fetched over -- ISN's history
   // ends in 2019-10. Naming the requested window over a chart that stops five years earlier is
@@ -276,6 +285,11 @@ export async function AirportView({
   const chartWindow = `chart: ${drawsFullWindow ? "the full window · " : ""}${drawnFrom} → ${drawnTo}`;
 
   const hasNetwork = network !== null;
+  /** WHETHER AN ARC WAS DRAWN, which is not whether a map was (#123). A hub map always paints
+   *  its origin disc, so `/airport/A18` and `/airport/OQZ` render a map with zero polylines --
+   *  and the rail's "Arc rendering" group describes three arc encodings and nothing else. Same
+   *  rule as `chartDrawn` above, applied to the group beside it. */
+  const arcsDrawn = network !== null && networkArcsDrawn(network);
   // Same "one string" discipline as `chartWindow` immediately above, and the same reason: a
   // grep over the served bytes (app/smoke.sh), not `textContent`, is what actually proves this
   // survives to production. States which window the MAP drew, which is the table's trailing
@@ -307,41 +321,17 @@ export async function AirportView({
     `${formatCount(totals.destinations)} destination` +
     `${totals.destinations === 1 ? "" : "s"} counted once each.`;
 
-  // WHAT THE QUARANTINED ROWS DID TO *THESE* NUMBERS, which is not one sentence but two cases.
-  // "Excluded from these totals" is true only while there are totals left to exclude them
-  // from. Where every filing in the window was quarantined there is no residue: the measures
-  // cannot be stated at all, and `carriers`/`destinations` are counted from every row
-  // regardless of quarantine (`airportTotals`), so those counts are not net of an exclusion --
-  // they are counts OF the excluded rows. Telling a reader otherwise, on a page whose every
-  // other figure is an em dash, describes the data as the opposite of what it is.
-  //
-  // GATED ON BOTH, and the second half is not redundant. `seats === null` covers TWO absences:
-  // every filing quarantined, and nothing filed at all (`airportTotals([])` -- 290 fact-present
-  // airports are in that state in this window; docs/data/invariants.md carries the denominator,
-  // which is a gated figure and rots in a hand-written copy). Only the first is a quarantine
-  // story; telling the second one that "every filing is quarantined — 0 rows" would invent a
-  // finding on 290 pages to fix it on 3. The nothing-filed case keeps the ordinary clause (0
-  // rows excluded, which is true and vacuous) and gets its real message from AirportEmptyState.
-  const quarantineClause =
-    totals.seats === null
-      ? // "EVERY filing is quarantined" is inferred, not counted: it follows from the sums being
-        // null ONLY because `fct_segment_month` carries no NULL `seats`/`passengers`/
-        // `departures_performed` on a non-quarantined row (measured: 0, 0, 0). One such row
-        // would make this sentence false while leaving the branch reachable -- or, if it were
-        // the group's only row, drop the page into the silent branch below with five dashes and
-        // nothing explaining them. The property is a warehouse invariant nothing asserts today.
-        totals.quarantinedRows > 0
-        ? `Every filing at ${airport.code} in this window is quarantined — ` +
-          `${totals.quarantinedRows} row${totals.quarantinedRows === 1 ? "" : "s"}, ` +
-          `each having failed an invariant — so no measure above can be summed. The carrier and ` +
-          `destination counts are counts of those rows, never clamped.`
-        : // Nothing was filed, and nothing was quarantined. "0 quarantined rows excluded from
-          // these totals" is the same false shape as the branch above it: there are no totals
-          // for anything to have been excluded from. AirportEmptyState carries this page's
-          // finding, so this clause has nothing to add and says nothing.
-          ""
-      : `${totals.quarantinedRows} quarantined row` +
-        `${totals.quarantinedRows === 1 ? "" : "s"} excluded from these totals, never clamped.`;
+  // ONE implementation, in lib/quarantineClause.ts, shared by all four entity pages. This page
+  // is where the three-branch split was first worked out (#118); #121 copied it to the other
+  // three, and review found one of those copies was dead string nothing could reach. The cases
+  // and the wording now live in one tested place, and this page supplies only its own subject
+  // and its own count line -- which really is different here, because /airport states TWO counts.
+  const quarantineClauseText = quarantineClause({
+    subject: `at ${airport.code}`,
+    counts: "The carrier and destination counts are",
+    seatsAreNull: totals.seats === null,
+    quarantinedRows: totals.quarantinedRows,
+  });
 
   return (
     <div className="wrap">
@@ -448,7 +438,7 @@ export async function AirportView({
             )}
             <p className="foot">
               Every figure on this page counts {airport.code} at <b>both</b> endpoints —
-              departures and arrivals — with the {destinationsClause} {quarantineClause}{" "}
+              departures and arrivals — with the {destinationsClause} {quarantineClauseText}{" "}
               <span className="deriv">Load factor</span> and{" "}
               <span className="deriv">avg gauge</span> are computed at query time from summed
               passengers, seats and performed departures — never averaged.
@@ -459,15 +449,18 @@ export async function AirportView({
               click from the raw rows that produced it.
             </p>
           </div>
-          {/* The rail describes the encodings THIS page uses and no others. The fleet-shading
-              and map (arc rendering) groups are each asked for only when that element is
-              actually drawn. `hasNetwork` follows the same PATTERN as `hasMix` but not the
-              same VALUES, and an earlier version of this comment said "mirrors `hasMix`
-              exactly", which is false: `hasMix` is over the full window
-              (EARLIEST_MONTH..asOf) while `hasNetwork` is over `mapWindow`, so `?y=<year>`
-              with no filings in that year gives `hasMix && !hasNetwork` -- which is exactly
-              why the branch above renders the chart without the map. */}
-          <LegendRail fleetMix={hasMix} map={hasNetwork} />
+          {/* The rail describes the encodings THIS page uses and no others, and DRAWN is the
+              test -- not "the data for it exists". `chartDrawn`, never `hasMix`: gating on
+              `hasMix` shipped the fleet-shading swatches and the COVID-window sentence beside
+              a one-month airport's line of absence text (#123, measured on A18/JZM/OQZ), which
+              is the stale "how to read this" the rail exists to replace. `hasNetwork` is
+              already the drawn test for the map group -- `NetworkMap` is rendered under the
+              same condition and always paints its origin disc.
+              The two gates follow the same PATTERN and not the same VALUES: the chart is over
+              the full window (EARLIEST_MONTH..asOf) while `hasNetwork` is over `mapWindow`, so
+              `?y=<year>` with no filings in that year gives `chartDrawn && !hasNetwork` --
+              which is exactly why the branch above renders the chart without the map. */}
+          <LegendRail fleetMix={chartDrawn} map={arcsDrawn} />
         </div>
       </main>
     </div>

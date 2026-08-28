@@ -600,22 +600,109 @@ one `zero_seats` with a filed seat count of exactly 0. **They flew.** Across *ev
 segment row in the same window the distinct set is wider (`1,2,3,4,5,6,7,10,11,18,313,314`), so a
 figure quoted here must name which population it measured.
 
-**Where this is enforced on this surface.** `app/src/app/airport/[code]/endpoints.ts` — `addSum`,
-`bySeatsDesc` (NULLS LAST, matching DuckDB's own `DESC`) and a `ratio` that returns null rather
-than `NaN`. The cell renders `—` through `lib/format.ts`, and the reason-code gutter carries the
-`Q` glyph **with the reason string**, which this page has to pass through deliberately because it
-rebuilds its rows in TypeScript rather than handing `DataTable` a raw pivot row. Issue #118.
+**Where the arithmetic lives.** `app/src/lib/nullSum.ts` — `addSum` (SUM semantics), `ratio` (null
+rather than `NaN`, and null for a zero denominator) and `numOrNull` (absence tested *before* the
+conversion, since `Number(null)` is 0), plus `sumColumn`, which folds a raw pivot column through
+all three from a **`null` seed**. It is the arithmetic half of `lib/format.ts`'s opening rule and
+is shared by **both** totals definitions: `lib/entityFacts.ts`'s `sumTotals` for `/route`,
+`/carrier` and `/aircraft`, and `app/src/app/airport/[code]/endpoints.ts` for the either-endpoint
+page, which adds `bySeatsDesc` (NULLS LAST, matching DuckDB's own `DESC`) and passes
+`quarantine_reasons` through by hand because it rebuilds its rows in TypeScript rather than handing
+`DataTable` a raw pivot row. The cell renders `—` through `lib/format.ts`; the reason-code gutter
+carries the `Q` glyph **with the reason string**. Issues #118 and #121.
 
-**Still open: `sumTotals`.** `app/src/lib/entityFacts.ts` applies the same `?? 0` *inside* a `+`
-fold for `/route`, `/carrier` and `/aircraft` and their cards. **11** route pairs have no
-un-quarantined filing at all in the trailing 12, of which **10 are reachable pages** that render
-three fabricated zeros in the stat strip and on the card: `A18–LMA` · `AET–AIN` · `AET–OTZ` ·
-`ARC–CXF` · `BTI–VEE` · `BTT–UMT` · `CIK–SCC` · `GAL–OQZ` · `HSL–JZM` · `HUS–RLU`. The eleventh is
-`VEE–VEE`, which never renders: `app/src/lib/routePair.ts` 404s a same-airport slug before any
-lookup, consistent with the § Route identity rule that a same-airport filing is not a route. It is
-named here rather than dropped so the next re-derivation gets 11 and does not read this as stale.
-`EntityTotals` is already typed `number | null` for `/airport`'s sake, so the type is **not**
-evidence this is handled. Issue #121.
+**The reachable footprint is 12 pages, and it is not all routes.** At route grain **11** pairs have
+no un-quarantined filing in the trailing 12, of which **10 are reachable pages**: `A18–LMA` ·
+`AET–AIN` · `AET–OTZ` · `ARC–CXF` · `BTI–VEE` · `BTT–UMT` · `CIK–SCC` · `GAL–OQZ` · `HSL–JZM` ·
+`HUS–RLU`. The eleventh is `VEE–VEE`, which never renders — `app/src/lib/routePair.ts` 404s a
+same-airport slug before any lookup, consistent with the § Route identity rule that a same-airport
+filing is not a route. It is named rather than dropped so the next re-derivation gets 11 and does
+not read this as stale.
+
+**Re-derive at every grain the fold serves, not only the one an issue happened to measure.** At
+aircraft grain **two** types are in the same state — BTS `201` (`/aircraft/TRISLNDR`) and `489`
+(`/aircraft/SHORT360`), both filed by F4 in 2025-08 with **5** and **27** performed departures
+against a seat count of exactly 0. At carrier grain there are **none** in this window, so
+`/carrier`'s card and foot reach the quarantined branch on no page that exists: the branch is the
+same shared one the other three carry, and its wiring on that route is pinned by a spy on the call
+rather than by a fixture, because a fallback-only surface makes the call site deletable-green.
+**Re-derive at every grain the fold serves.** A footprint measured at one grain is not the
+footprint.
+
+**Every wholly-quarantined page is contradicted by its own filing, not merely unstated.** Each of
+the 12 is a `zero_seats` quarantine — a filed seat count of 0 against departures that were
+*performed* — so a strip reading "0 departures" asserts the opposite of what BTS filed. **Never a
+zero, on any of the six surfaces — but the treatment is not one treatment.** Stat strip, table
+cell and card render the em dash through `lib/format.ts`; the map omits the arc and counts it; the
+chart **breaks the area** where a whole month is unstateable, because a gap is what an
+unstateable month is on a time axis and a dash has no place to go there — and **draws the cell at
+zero inside a month it can still draw**, disclosed in words instead. **Not because holing one band
+is impossible** — measured through the real `Plot.areaY` pipeline, omitting one band's datum leaves
+19 emitted paths with 18 byte-identical and moves only the holed band's own, so neighbours are
+untouched. It is because omission collapses that band's own path from six points to four, a
+straight edge interpolating across the gap, which is the same invention the whole-month treatment
+refuses; and because holing it honestly needs a per-**band** run map where this codebase tracks one
+per **axis**. An engineering cost not spent, with its consequence named. The foot states the cause. **Name the treatment per surface** — "the
+em dash everywhere" is how a sweep declares a surface fixed that never was.
+
+**The chart coerced the same NULL, one surface over, and needed a different answer.** `sumTotals`
+and the stat strip were the first half of #121; `fetchAircraftMix` applied the identical `?? 0`,
+so a `(month, band)` cell whose every filing was quarantined was drawn as a zero-height band —
+"this type flew nothing that month". Measured over the pairs the chart actually draws (≥ 2 filed
+months): **768** such cells across **302** route pairs, **55** cells / 8 carriers, **62** cells /
+11 aircraft types.
+
+**A stacked area's y is cumulative, so the two shapes of that defect take different treatments,
+and the split is measured rather than assumed.** A month with **no** stateable cell has no height
+anywhere and breaks the runs exactly as an unfiled month does — **339** such months, carrying zero
+stateable seats, so breaking them erases nothing. A month with **some** stateable cells is still
+drawn, because dropping it would erase what can be stated: **407** such months hold **11,687,092**
+stateable seats, the worst (`LAS–LAX` 2024-11) **297,295** across 12 cells with one unknowable. It
+is disclosed as *understated* instead. The shortfall is not bounded near zero — 26 of the 606 rows
+behind those cells are `load_factor_gt_1` carrying 19,870 filed seats, not `zero_seats`.
+`docs/design/system.md` § Charts carries the exact wording each cause gets; the rule is that the
+gap count never absorbs the quarantine count, because "N months with no filings" is false of a
+month that was filed.
+
+**Downstream of the same rows: the crossover annotation refuses rather than ranks.** A year holding
+a type whose seats cannot be stated has no leader — "B overtakes A" is a claim about which type was
+biggest, and an unknown rival cannot be shown to have lost. **State the grain**: the refusal is at
+year × type — a type's WHOLE-YEAR total must be unstateable — which fires on **214 pairs across
+273 pair-years** of 23,041, and changes the rendered annotation on **18** of them (6 lose it, 12
+move year or direction). The cell-grain figure two paragraphs up (768 cells / 302 pairs) answers a
+different question and is not this one.
+
+**One state is admitted because the producer can return it, not because a page shows it.**
+`SegmentMapInput.sameAirportSeats` takes `number | null`, where null means a same-airport pair is
+being withheld from the arcs by an amount that cannot be summed. `carrierDiff.ts` reached it with
+`?? 0`, conflating that with the `LEFT JOIN` missing (the category has no same-airport pair, where
+0 is honest); `map_carrier_diff.sql` now emits a pair COUNT so the two are separable.
+**This is latent, not live, and the two are one measurement apart.** The wholly-quarantined
+same-airport *pair* is real (`8V`'s VEE–VEE in the trailing 12, airline 21745's
+STT–STT in the prior 12), but a panel folds every same-airport pair in its category together and
+every such fold contains at least one stateable pair — measured across all **115** carriers with
+route-month rows, **zero** panels return NULL. No page renders the wrong sentence today. The
+coercion was removed anyway: `sql/02_marts/100_fct_route_month.sql:62` states the rule in its own
+comment — *"do NOT wrap these in COALESCE(..., 0)"* — and a latent conflation is one refresh from
+being a live one.
+
+**The wider branch is the empty one, and the two absences must stay separable.** `sumColumn`'s
+`null` seed means an entity that is fact-present but filed **nothing** inside the window reports its
+sums as unknowable rather than as zero. **State the grain with the figure, because these three are
+counted at two of them.** At warehouse grain: **12,115** route pairs, **45** `airline_id`s and
+**37** BTS aircraft codes. At PAGE grain — which is what "renders an absence" means — they are
+**11,939**, **44** and **36**: 176 of the stale pairs are same-airport and 404 before any lookup,
+one dormant `airline_id` carries no `dim_carrier` row, and `CE-180` resolves to two fact-present
+airframes and 404s as ambiguous. This is the 11-versus-10 distinction of the wholly-quarantined
+set, one level up. Against the 290 airports
+`airportTotals` has answered that way since #118. (Those three, like
+the 290, are measurements stated here, not gated figures; only the route count is generated.) They
+render the same `—` for a different reason — nothing was filed, rather than nothing filed can be
+trusted — and both are the `—` this section requires. **A consumer keying on "the sum is null" alone
+answers the wrong one of them, and answers it on the 12,115 rather than the 10.** So the card's
+sixth stat and the page's foot are both gated on **two** operands, and every surface tests both
+absences: `RouteEmptyState` / `CarrierEmptyState` / `AircraftEmptyState` name which one a page is
+in, and the foot claims an exclusion only where there was one.
 
 ---
 
@@ -734,7 +821,7 @@ reason — the fallback branch catches whatever the two explicit tests miss:
   trailing 12 (`fct_route_month`, since a map draws one arc per undirected route;
   `fct_segment_month`'s directed halves are 39,908 and 38,512) — **2.73px** apart even at full
   canvas width. Conversely, under the shipped Marianas-scaled `pac` fit, PPG would land at
-  (1892.5, 1102.0) and MDY at (1367.6, −429.7), both off a 960×500 canvas. Those two are
+  (1892.5, 1102.0) and MDY at (1367.6, −429.7), both off a 960×544 canvas. Those two are
   counterfactuals under one specific rect: `fitPanels`'s `ox`/`oy` move with it, so re-derive
   them rather than carrying them forward. Three panels, not
   one: `pac` (`lon < −200`), `sam` (`lat < 0`) and `nwhi` (Midway). Note that `lon < −200` is

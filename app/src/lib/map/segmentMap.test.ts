@@ -2,13 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   disclosureNotes,
   drawableSegments,
+  HEIGHT,
+  INSET_RECTS,
   NETWORK_ARC_CAP,
   reachedPanelsFor,
   renderSegmentMap,
+  sameAirportNote,
   TOP_LABEL_COUNT,
   type SegmentDatum,
   type SegmentMapInput,
 } from "./segmentMap";
+import { PANEL_RECTS } from "./albers";
 
 /** Real coordinates throughout, per this engine's brief -- a synthetic grid would make the
  * geometry assertions (panel membership, cross-panel straight lines, fit reuse) vacuous. */
@@ -530,13 +534,23 @@ describe("renderSegmentMap", () => {
     // identical chrome), so it outranks the window note rather than sitting beside it in the
     // same muted weight. Without a caption the window line must stay on the canvas floor,
     // exactly where every map has always put it.
+    // READ OFF THE EMITTED viewBox, not a literal, since #123: "the canvas floor" is now the
+    // CROP's floor and a `us`-only map like this one no longer runs to the full 544. Deriving
+    // the expectation is also strictly stronger than the literal was -- it asserts the
+    // RELATIONSHIP (last line 6 above the floor, each earlier line 12 above the last), which is
+    // the property, rather than a coordinate that happened to satisfy it.
+    const floorOf = (svg: string) => {
+      const [, y, , h] = svg.match(/viewBox="([\d.-]+) ([\d.-]+) ([\d.-]+) ([\d.-]+)"/)!.slice(1).map(Number);
+      return y + h;
+    };
     const plain = renderSegmentMap(input([seg("SEA", "PDX")]));
-    expect(plain).toContain('<text x="8" y="494" font-size="10" fill="var(--ink-2)">');
+    expect(plain).toContain(`<text x="8" y="${floorOf(plain) - 6}" font-size="10" fill="var(--ink-2)">`);
 
     const captioned = renderSegmentMap(input([seg("SEA", "PDX")], { title: "Added" }));
-    expect(captioned).toContain('<text x="8" y="482" font-size="10" fill="var(--ink-2)">');
+    const floor = floorOf(captioned);
+    expect(captioned).toContain(`<text x="8" y="${floor - 18}" font-size="10" fill="var(--ink-2)">`);
     expect(captioned).toContain(
-      '<text x="8" y="494" font-size="10" font-weight="600" fill="var(--ink)">Added</text>',
+      `<text x="8" y="${floor - 6}" font-size="10" font-weight="600" fill="var(--ink)">Added</text>`,
     );
     expect(ariaLabel(captioned)).toContain("Added. Route map,");
   });
@@ -672,5 +686,319 @@ describe("NETWORK_ARC_CAP", () => {
     // the same network that capped differently would disagree about what "the whole network"
     // is.
     expect(NETWORK_ARC_CAP).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+/** THE THIRD STATE OF `sameAirportSeats` (#121).
+ *
+ * The field had two meanings and three states. `0` means no seats are withheld; a positive count
+ * names them; and NULL means a same-airport pair IS being withheld whose seats cannot be summed,
+ * because `fct_route_month.seats` is itself `SUM(x) FILTER (WHERE NOT is_quarantined)` and every
+ * filing behind the pair was quarantined. `carrierDiff.ts` collapsed the third into the first
+ * with `?? 0`, so the map said nothing was withheld while something was.
+ *
+ * `sql/02_marts/100_fct_route_month.sql:62` already stated the rule in its own comment -- "do NOT
+ * wrap these in COALESCE(..., 0)" -- which the TypeScript was breaking one layer up. */
+describe("sameAirportNote tells an absent pair from an unstateable one", () => {
+  // MUTANT: `if (seats === null) return null` (treating it like the empty case) -> the one
+  // disclosure this field exists to make disappears on exactly the pages that need it -> red.
+  it("states the withholding even when the amount cannot be given", () => {
+    const note = sameAirportNote(null, "excluded");
+    expect(note).not.toBeNull();
+    expect(note).toContain("cannot be stated");
+    expect(note).toContain("every filing behind them failed an invariant");
+    // It must NOT invent a figure -- "0 same-airport seats" is the claim this replaces.
+    expect(note).not.toContain("0 same-airport seats");
+  });
+
+  // MUTANT: `if (seats <= 0) return null` placed BEFORE the null branch -- `null <= 0` is true
+  // in JS, so the unstateable case would silently take the empty path -> red.
+  it("still says nothing when there is genuinely nothing to withhold", () => {
+    expect(sameAirportNote(0, "excluded")).toBeNull();
+  });
+
+  it("still names the figure when it can be stated", () => {
+    expect(sameAirportNote(1234, "excluded")).toContain("1,234 same-airport seats");
+  });
+});
+
+describe("a map with nothing drawable still serves a usable canvas (#122/#123)", () => {
+  // THE ARM THE CROP ALMOST DELETED. `fetchCarrierTypeNetwork` deliberately returns a non-null
+  // `SegmentMapInput` with ZERO segments on two arms -- every route quarantined, and an only
+  // filing that is same-airport -- specifically so the disclosure reaches the reader instead of
+  // vanishing behind a missing panel. `/carrier/F4?type=SHORT360` and
+  // `/aircraft/AS350-B2?carrier=8E` are those two views, and `carrierTypeNetwork.test.ts` pins
+  // both at the producer. Nothing pinned them at the RENDERER, which is how a crop computed
+  // from an empty band list shipped: `Math.min(...[])` is `Infinity`.
+  //
+  // WHAT THE FIXTURE VARIES: the segment list is EMPTY, which is the one input no other test in
+  // this file supplies -- every other fixture hands the renderer at least one drawable arc, so
+  // `fits` is never empty and `cropWindow` never sees a bandless map. The disclosure fields are
+  // non-zero so the footer actually has something to lose.
+  const empty = () => input([], { totalRoutes: 3, quarantinedRoutes: 3 });
+
+  it("emits a finite viewBox rather than Infinity", () => {
+    // Mutant: delete `cropWindow`'s `bands.length === 0` arm and this reads
+    // `viewBox="0 Infinity 960 -Infinity"`.
+    const svg = renderSegmentMap(empty());
+    const box = svg.match(/viewBox="([^"]*)"/)![1];
+    expect(`${box} :: all finite: ${box.split(" ").every((n) => Number.isFinite(Number(n)))}`).toBe(
+      `${box} :: all finite: true`,
+    );
+    expect(box).toBe(`0 0 960 ${HEIGHT}`);
+    expect(svg).toContain(`height="${HEIGHT}"`);
+  });
+
+  it("paints the disclosure at a real coordinate, which is the whole point of the arm", () => {
+    // The footer is the ONLY thing on this map. Asserting the y POSITION, not the presence of
+    // the sentence: the text was in the markup before this fix too -- at `y="-Infinity"`, which
+    // renders nothing. Presence passes under the bug; the coordinate does not.
+    const svg = renderSegmentMap(empty());
+    expect(svg).toContain(`<text x="8" y="${HEIGHT - 6}" font-size="10"`);
+    expect(svg).not.toContain("Infinity");
+  });
+
+  it("draws no arc, no node and no inset frame -- there is nothing to draw", () => {
+    // Not vacuous, and it keeps the arm honest: the fix must give the canvas back WITHOUT
+    // inventing content or a labelled empty inset for a panel nothing reaches.
+    const svg = renderSegmentMap(empty());
+    expect(svg).not.toContain("<polyline");
+    expect(svg).not.toContain("<circle");
+    expect(svg).not.toContain("<rect");
+    expect(svg).not.toContain("CARIBBEAN");
+  });
+});
+
+describe("the full canvas is the deepest panel plus the footer band", () => {
+  it("derives HEIGHT from the rects, and it comes to 544", () => {
+    // HEIGHT IS DERIVED, AND THIS IS THE PIN THAT MAKES THAT SAFE. Written as a literal it went
+    // DEAD the moment #123 made the emitted `viewBox` a crop computed from the panel bands: the
+    // renderer stopped reading it, so setting it back to the old 500 broke no test at all --
+    // a constant quoted as "the canvas" in three comments and controlling nothing. It is now a
+    // function of `PANEL_RECTS`, so it cannot disagree with the rects; this asserts the VALUE,
+    // so growing a rect cannot silently make every map taller.
+    //
+    // 544 = 512 (the tray's shared baseline) + 6 (the frame pad) + 26 (the footer band).
+    // Mutant: put the tray back at 468 and this reads 500 -- red here, and red on
+    // `albers.test.ts`'s independent literal restatement of the same number.
+    expect(HEIGHT).toBe(544);
+  });
+
+  it("puts a tray-reaching map's floor exactly on HEIGHT, so the footer does not move", () => {
+    // The relationship the footer's position depends on. A map that reaches the bottom tray must
+    // crop to the full canvas -- otherwise the disclosure line, which has sat on the canvas floor
+    // since M7, would shift on the pages that changed least.
+    const svg = renderSegmentMap(input([seg("MIA", "SJU")]));
+    const [, y, , h] = svg
+      .match(/viewBox="([\d.-]+) ([\d.-]+) ([\d.-]+) ([\d.-]+)"/)!
+      .slice(1)
+      .map(Number);
+    expect(y + h).toBe(HEIGHT);
+    expect(svg).toContain(`<text x="8" y="${HEIGHT - 6}" font-size="10"`);
+  });
+});
+
+describe("the canvas is cropped to the panels that carry points (#123, absorbing #124)", () => {
+  /** `[top, bottom]` of the emitted window. Every assertion below reads the SVG's own
+   *  `viewBox`, because that IS the property -- the crop changes nothing else about the
+   *  rendered bytes. */
+  function window_(svg: string): [number, number] {
+    const [, y, , h] = svg
+      .match(/viewBox="([\d.-]+) ([\d.-]+) ([\d.-]+) ([\d.-]+)"/)!
+      .slice(1)
+      .map(Number);
+    return [y, y + h];
+  }
+
+  /** Every y coordinate the renderer emits: circle centres, rect/text origins, and every
+   *  vertex of every polyline. Deliberately not the rect HEIGHTS -- those are handled by the
+   *  frame band, and mixing them in would hide a clipped frame behind its own origin. */
+  function inkYs(svg: string): number[] {
+    return [
+      ...[...svg.matchAll(/ (?:cy|y)="(-?[\d.]+)"/g)].map((m) => Number(m[1])),
+      ...[...svg.matchAll(/points="([^"]*)"/g)].flatMap((m) =>
+        m[1].split(" ").map((pt) => Number(pt.split(",")[1])),
+      ),
+    ];
+  }
+
+  it("crops an Alaska-only network to the Alaska band, not to the whole canvas", () => {
+    // THE DEFECT, ASSERTED AS A WINDOW. An Alaska-only network drew a small ALASKA inset under
+    // ~320px of empty conterminous panel, because `renderMapCore` already emitted an inset
+    // FRAME only for a panel the network reaches while the CANVAS was not subject to the same
+    // rule. Reproduced on `/airport/BET`, `/airport/A18`, `/airport/JZM` and `/airport/OQZ`.
+    //
+    // BOTH ENDS ARE ASSERTED, and that is the whole design of this test. "The height shrank"
+    // passes for a renderer that crops to the ink and drops the frame's own top edge; "the top
+    // moved" passes for one that crops the top and leaves 300px of blank below. The window is
+    // the property, so the window is what is asserted -- CLAUDE.md: when the property is a
+    // position or a window, assert the position or the window.
+    //
+    // 354 is `ak`'s frame top (366 - 6) less one more frame pad; 544 is the canvas floor, the
+    // tray's frame bottom of 518 plus the 26px footer band. Mutant: return the full canvas from
+    // `cropWindow` and this reads `[0, 544]` -- red on the top, and red on a height of 544
+    // against 190.
+    const svg = renderSegmentMap(input([seg("ANC", "FAI")]));
+    expect(window_(svg)).toEqual([354, 544]);
+
+    // Stated as a ratio too, because the issue's own unit was "~320px of empty canvas": the
+    // conterminous panel is simply not in the picture any more.
+    const [top, bottom] = window_(svg);
+    expect(`${bottom - top}px tall, under half the full canvas: ${bottom - top < 272}`).toBe(
+      `${bottom - top}px tall, under half the full canvas: true`,
+    );
+  });
+
+  it("crops to the FRAME, not to the ink, so an inset keeps its own border and label", () => {
+    // The near-miss this test exists for: cropping to the drawn marks alone would be a smaller
+    // window that still "renders a map", and it would slice the top edge off the ALASKA frame
+    // and the label sitting just inside it. ANC and FAI both project well below the frame's top
+    // edge, so ink-only cropping is observably different here rather than theoretically so.
+    const svg = renderSegmentMap(input([seg("ANC", "FAI")]));
+    const [top] = window_(svg);
+    const frameTop = INSET_RECTS.ak[1] - 6;
+    expect(`window top ${top} is above the ak frame top ${frameTop}: ${top < frameTop}`).toBe(
+      `window top ${top} is above the ak frame top ${frameTop}: true`,
+    );
+    // ...and the ink really is lower, so the previous assertion is not vacuous.
+    expect(Math.min(...inkYs(svg))).toBeGreaterThanOrEqual(frameTop);
+  });
+
+  it.each([
+    ["ak only", [seg("ANC", "FAI")]],
+    ["hi only", [seg("HNL", "OGG")]],
+    ["us only", [seg("SEA", "PDX")]],
+    ["us + car", [seg("MIA", "SJU")]],
+    ["us + ak, cross-panel", [seg("SEA", "ANC")]],
+    ["a network reaching four panels", [seg("JFK", "SJU"), seg("SEA", "ANC"), seg("HNL", "OGG")]],
+  ] as const)("clips nothing on %s: every emitted coordinate is inside the window", (_name, segs) => {
+    // THE PROPERTY THAT MAKES THE CROP SAFE RATHER THAN LUCKY. `cropWindow` unions the reached
+    // panels' bands with the ink actually emitted, so a great circle bowing outside its rect, a
+    // node label below its centre, or a subject code drawn 19px above its own point cannot fall
+    // outside the window.
+    //
+    // NO ROW HERE KILLS THE INK TERM, and saying so is the point: every fixture in this file is
+    // a segment map, which has no subject marker, and a node's label is drawn BELOW its point
+    // (SEA's label ink top is 36.5 against a band top of 18 -- inside, not above). Dropping
+    // `ink` from `cropWindow` leaves all six rows green. What kills it is `networkMap.test.ts`'s
+    // "keeps a far-northern subject's own label inside the cropped canvas", whose subject
+    // MARKER draws its code 19px above its own point, and `DiffMap.test.tsx`'s ink-split set.
+    // These rows are the no-clipping property across panel combinations; they are not that
+    // mutant's executioner.
+    const svg = renderSegmentMap(input([...segs]));
+    const [top, bottom] = window_(svg);
+    const outside = inkYs(svg).filter((y) => y < top || y > bottom);
+    expect(`outside the window: ${outside}`).toBe("outside the window: ");
+  });
+
+  it.each([
+    ["us only", [seg("SEA", "PDX")], undefined],
+    ["us + car, reaching the tray", [seg("MIA", "SJU")], undefined],
+    ["ak only", [seg("ANC", "FAI")], undefined],
+    // THE CAPTIONED ROWS ARE THE ONES THAT USED TO FAIL, and they are the shape that actually
+    // ships: `DiffMap` sets a title on EVERY panel (`diffPanelTitle`), so a two-line footer is
+    // the diff map's normal case, not an edge one. Measured before `footerBand` existed, on a
+    // captioned tray-reaching map: the upper line's ascent box sat at y=516 against the `car`
+    // frame's bottom edge of 518 -- text printed across the CARIBBEAN border, at a margin of
+    // MINUS 2px. Three rows without a title could not see it.
+    ["us + car, captioned (the DiffMap shape)", [seg("MIA", "SJU")], "AS added"],
+    ["us only, captioned", [seg("SEA", "PDX")], "AS added"],
+  ] as const)("keeps the footer clear of the deepest panel band on %s", (_n, segs, title) => {
+    // WHAT `FOOTER_BAND` ACTUALLY BUYS, asserted against the thing it has to clear. The footer
+    // is painted at the crop's floor; the deepest PANEL BAND is the lowest edge the map can draw
+    // to -- an inset's frame border runs exactly there -- so the disclosure must start below it
+    // or it is printed over a frame.
+    //
+    // AGAINST THE BAND, NOT THE INK. The margin over ink is dominated by the band (the deepest
+    // node sits far above an inset's frame edge), so an ink-based assertion measures ~80px of
+    // slack and is insensitive to `FOOTER_BAND` entirely -- it would guard a constant it cannot
+    // see. (`networkMap.test.ts`'s EYW case covers the ink side, where a mark DOES hang past its
+    // band.) Over the BAND
+    // the margin is `FOOTER_BAND - 16` = 10px for a one-line footer, and `footerBand` keeps it
+    // at 10 for any number of lines by reserving `FOOTER_LINE_HEIGHT` for each one after the
+    // first. It is the TOP line of the stack that has to clear the map, so the assertion below
+    // takes the minimum baseline, not the last one.
+    //
+    // Mutant: `FOOTER_BAND` 26 -> 3 and every row here reports a negative margin. A second
+    // mutant now matters as much -- `footerBand` returning a flat `FOOTER_BAND` regardless of
+    // line count -- and it reddens the two captioned rows alone, which is exactly the split
+    // this parameterisation exists to draw.
+    const svg = renderSegmentMap(input([...segs], title === undefined ? {} : { title }));
+    const bandBottom = Math.max(
+      ...reachedPanelsFor([...segs]).map((p) =>
+        p === "us" ? PANEL_RECTS.us[3] : PANEL_RECTS[p][3] + 6,
+      ),
+    );
+    const footerTop = Math.min(
+      ...[...svg.matchAll(/<text x="8" y="([\d.]+)" font-size="10"/g)].map((m) => Number(m[1]) - 10),
+    );
+    expect(`footer starts ${footerTop - bandBottom}px below the deepest band: ${footerTop > bandBottom}`).toBe(
+      `footer starts ${footerTop - bandBottom}px below the deepest band: true`,
+    );
+  });
+
+  it("keeps the disclosure footer inside the window on a cropped canvas", () => {
+    // The one thing a shorter canvas must not cost the reader. `SegmentMap.tsx` documents these
+    // sentences as a hard requirement -- they reach the reader nowhere else -- and they are
+    // painted at the canvas floor, so anchoring them to `HEIGHT` while cropping the window
+    // would push them off the bottom of every sparse page.
+    //
+    // THE FIXTURE MUST BE A MAP THAT DOES NOT REACH THE TRAY. An Alaska-only one cannot fail:
+    // `ak`'s band runs to the tray floor, so that map's `crop.bottom` IS `HEIGHT` and anchoring
+    // to `HEIGHT` is a no-op on it. `SEA -> PDX` is
+    // `us` only, so its window ends at 450 while `HEIGHT` is 544 -- 94px below the canvas.
+    // Mutant: anchor the footer stack to `HEIGHT` again and all three baselines land outside
+    // the window here.
+    const svg = renderSegmentMap(
+      input([seg("SEA", "PDX")], { title: "Added", totalRoutes: 9, quarantinedRoutes: 2 }),
+    );
+    const [top, bottom] = window_(svg);
+    const baselines = [...svg.matchAll(/<text x="8" y="([\d.]+)" font-size="10"/g)].map((m) =>
+      Number(m[1]),
+    );
+    expect(baselines.length).toBeGreaterThan(0);
+    for (const y of baselines) {
+      expect(`footer baseline ${y} within [${top}, ${bottom}]: ${y > top && y <= bottom}`).toBe(
+        `footer baseline ${y} within [${top}, ${bottom}]: true`,
+      );
+    }
+  });
+
+});
+
+describe("no inset frame is drawn over an airport belonging to another panel (#122)", () => {
+  it("draws the CARIBBEAN frame clear of MIA, the airport that used to sit inside it", () => {
+    // THE FIXTURE HAS TO CONTAIN THE NEAR MISS OR IT CANNOT FAIL. A test asserting "the frame
+    // is drawn" or "no overlap exists" over a `JFK`-shaped network passes under the bug, because
+    // nothing in it comes near the Caribbean inset. MIA is the airport that WAS inside the old
+    // frame -- (708.4, 401.1), 30px below its top edge of 386 -- so this fixture is the defect
+    // itself, and `MIA -> SJU` is a real route pair, so it is also a page that genuinely renders.
+    //
+    // Mutant: restore `INSET_RECTS.car`/`PANEL_RECTS.car` to y 392/468 and this reports MIA's
+    // circle inside the frame. The DB-free structural companion is `albers.test.ts`'s "car's
+    // frame clears the us rect"; the whole-population version is in `panelContainment.test.ts`.
+    const svg = renderSegmentMap(input([seg("MIA", "SJU")]));
+    expect(svg).toContain("CARIBBEAN");
+
+    const [x0, y0, x1, y1] = INSET_RECTS.car;
+    // BY IDENTITY, NOT BY POSITION. "The higher of the two circles" is MIA today and becomes
+    // SJU under this test's own documented mutant -- SJU rises to 399.9 when the tray moves back
+    // up -- so a positional pick still goes red but accuses SJU of sitting inside the frame SJU
+    // BELONGS IN, a false reading of a true failure.
+    // `renderMapCore` emits a labelled node's `<text>` immediately after its own `<circle>`, so
+    // the code beside the mark is what names it.
+    const labelled = [
+      ...svg.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)"[^>]*\/><text[^>]*>([A-Z]{3})</g),
+    ].map((m) => ({ x: Number(m[1]), y: Number(m[2]), code: m[3] }));
+    const mia = labelled.find((c) => c.code === "MIA")!;
+    expect(mia).toBeDefined();
+    expect(
+      `MIA at (${mia.x}, ${mia.y}) inside the car frame: ` +
+        `${mia.x >= x0 - 6 && mia.x <= x1 + 6 && mia.y >= y0 - 6 && mia.y <= y1 + 6}`,
+    ).toBe(`MIA at (${mia.x}, ${mia.y}) inside the car frame: false`);
+    // Not vacuous: MIA must be within a node's reach of the frame, or this is a fixture that
+    // could never have been inside it. The old rect's top edge was 386 and MIA is at 401.
+    expect(mia.y).toBeGreaterThan(PANEL_RECTS.car[1] - 6 - 60);
   });
 });

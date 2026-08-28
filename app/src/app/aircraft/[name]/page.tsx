@@ -5,14 +5,17 @@ import { resolveAircraftSlug } from "@/lib/aircraftSlug";
 import { headers } from "next/headers";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { BASE_URL } from "@/lib/siteUrl";
+import { quarantineClause } from "@/lib/quarantineClause";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
+import { segmentArcsDrawn } from "@/lib/map/segmentMap";
 import { MapPicker } from "@/components/MapPicker";
 import { SegmentMap } from "@/components/SegmentMap";
 import { BY_CARRIER, fetchAircraftMix } from "@/lib/chart/aircraftMix";
+import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
 import { fetchCarrierTypeNetwork } from "@/lib/map/carrierTypeNetwork";
 import { rawFilterValue, resolveCarrierFilter } from "@/lib/map/mapFilter";
 import { pickerOptions } from "@/lib/map/picker";
@@ -216,6 +219,12 @@ export async function AircraftView({
   const truncated = result.rows.length >= limit;
   const isEmpty = result.rows.length === 0;
   const hasMix = mix.length > 0;
+  /** WHETHER THE CHART DREW, which is not whether it has rows (#123). One filed month has rows
+   *  and draws a line of text, so `hasMix` is the right gate for RENDERING `AircraftMixChart`
+   *  -- it is what makes the absence note appear -- and the wrong one for the legend rail's
+   *  fleet-shading group, which would then explain a ramp the reader cannot see. Read from the
+   *  chart's own predicate, never re-derived here. */
+  const chartDrawn = mixChartDraws(mix);
   // The range the chart can DRAW, which is not the range it was fetched over -- 39 of the 112
   // fact-present types last filed before the current trailing-12 window (measured), so naming
   // the requested window here would put "2015-01 → 2026-04" over a chart that stops in 2023.
@@ -228,9 +237,30 @@ export async function AircraftView({
   // in app/smoke.sh does not. Same trap, same fix, as /route's identically-named value.
   const chartWindow = `chart: ${drawsFullWindow ? "the full window · " : ""}${drawnFrom} → ${drawnTo}`;
 
+  // ONE implementation, in lib/quarantineClause.ts, for all four entity pages. #121 shipped four
+  // copies of this three-branch prose and review found `/carrier`'s could be replaced with
+  // garbage while every test and every served check stayed green -- its wholly-quarantined branch
+  // is unreachable on this warehouse, so nothing but a unit test can reach the string. The three
+  // cases and the wording are asserted there; this page supplies only what differs.
+  //
+  // Still ONE template literal at the render site below: React's SSR emits `<!-- -->` between
+  // ADJACENT expression children, so the `{n} quarantined row{s}` prefix this replaced could not
+  // be reached by a raw-bytes grep in app/smoke.sh. (Its tail was a single static JSX child and
+  // always was greppable -- the prefix is the half that was not.)
+  const quarantineClauseText = quarantineClause({
+    subject: `on the ${type.code}`,
+    counts: "The carrier count is",
+    seatsAreNull: totals.seats === null,
+    quarantinedRows: result.quarantinedRowsOnPage,
+  });
+
   const columns = buildColumns(allowlist, result.columns);
 
   const hasMap = map !== null;
+  /** See `/airport`'s `arcsDrawn` (#123). `fetchCarrierTypeNetwork` deliberately returns a map
+   *  with ZERO segments when every route is quarantined or the only filing is same-airport, so
+   *  its disclosure reaches the reader -- and that map draws no arc for the rail to explain. */
+  const arcsDrawn = map !== null && segmentArcsDrawn(map);
   const basePath = `/aircraft/${canonical}`;
   // The picker reads the rows the page ALREADY awaited -- this page groups by `op_airline_id`,
   // which is exactly the dimension its map filters on, so the control costs no second query.
@@ -350,9 +380,7 @@ export async function AircraftView({
               </p>
             )}
             <p className="foot">
-              {result.quarantinedRowsOnPage} quarantined row
-              {result.quarantinedRowsOnPage === 1 ? "" : "s"} excluded from these totals, never
-              clamped. <span className="deriv">Load factor</span> and{" "}
+              {quarantineClauseText} <span className="deriv">Load factor</span> and{" "}
               <span className="deriv">avg gauge</span> are computed at query time from summed
               passengers, seats and performed departures -- never averaged.
             </p>
@@ -374,7 +402,7 @@ export async function AircraftView({
               muted below the 30-departure floor (`lib/map/arcs.ts`) -- and nothing else on the
               served page explains any of them. Asked for only when a map was drawn, so an
               unfiltered page does not carry a legend for an element it does not have. */}
-          <LegendRail fleetMix={hasMix} stack={BY_CARRIER} map={hasMap} />
+          <LegendRail fleetMix={chartDrawn} stack={BY_CARRIER} map={arcsDrawn} />
         </div>
       </main>
     </div>

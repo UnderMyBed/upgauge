@@ -53,6 +53,66 @@ export function gapNote(gaps: number): string {
   return `${plural(gaps, "month")} with no filings, drawn as gaps rather than interpolated.`;
 }
 
+/** THE SECOND CAUSE, AND IT IS NOT THE FIRST ONE (#121). A month that WAS filed and whose every
+ * filing failed an invariant is a hole in the chart for a different reason, and folding it into
+ * `gapNote`'s count puts a false sentence -- "with no filings" -- on the one line a sighted
+ * reader gets. That is the compound-claim-with-one-false-clause shape this project has shipped
+ * before: `/watch/new-routes` told every visitor its rows were service nobody flew last year
+ * while 521 of 688 had another carrier on the pair.
+ *
+ * Same geometry as a gap, different sentence. Both are stated, separately, on the key AND in the
+ * aria-label -- `/airport`'s foot already sets the precedent that the CAUSE of an absence is
+ * named per page, and a rasterized card has no other channel at all. */
+export function unknowableNote(months: number): string {
+  return (
+    `${plural(months, "month")} filed but wholly quarantined — every filing failed an ` +
+    `invariant, so the stack cannot be drawn there and the month is left as a gap.`
+  );
+}
+
+/** THE THIRD SENTENCE, for months that ARE drawn but understate themselves. Unlike the two
+ * above this is not a hole: at least one band is stateable, so the month is drawn from what can
+ * be stated. The shortfall is real and unbounded -- 26 of the 606 rows behind these cells are
+ * `load_factor_gt_1` carrying 19,870 filed seats, not the `zero_seats` the rest are -- so
+ * leaving it unsaid would let a reader take the stack height as the month's total.
+ *
+ * Erasing the month instead was measured and rejected: 407 such months hold 11,687,092 stateable
+ * seats, the worst (LAS-LAX 2024-11) 297,295 across 12 cells with ONE unknowable. Showing the
+ * dirt is a trust feature; erasing a filing is the same dishonesty as inventing one.
+ *
+ * IT SAYS "DRAWN AT ZERO HEIGHT" BECAUSE THAT IS WHAT HAPPENS. 420 of the 768 null cells sit
+ * inside a month the chart can still draw, and 249 of those belong to a top-five MEMBER band
+ * across 87 route pairs -- a NAMED band visibly dropping to the floor for one month. A reader
+ * watching the ATR-72 flatten on HNL-OGG 2020-07 can only recover that from this sentence, so it
+ * describes the mark rather than gesturing at a total.
+ *
+ * WHY NOT HOLE THE ONE BAND, and the honest answer is not the one an earlier revision of this
+ * comment gave. It claimed a stacked area's cumulative y leaves every band ABOVE an omitted datum
+ * with no computable y. That is FALSE, and measured false: three bands over three months, the
+ * middle band's middle datum zero-filled against omitted, through this file's own `area()` mark
+ * and `renderPlotToSvg` -- 19 paths emitted, 18 byte-IDENTICAL, and the only one that moves is
+ * the holed band's own. d3's stack treats a missing row at an x exactly as a zero for every other
+ * series, so neighbours are untouched.
+ *
+ * What omission actually costs is the holed band's OWN path: `M40,90L350,160L640,90...` (six
+ * points, dipping to the floor) collapses to `M40,90L640,90...` (four points, a straight edge
+ * across the gap). That is interpolation -- drawing seats for a month whose seats cannot be
+ * stated -- which is the same dishonesty the whole-month treatment refuses, so it is not an
+ * improvement on zero-filling but a different way of inventing.
+ *
+ * Holing it HONESTLY would mean breaking that band's area into runs of its own, and this
+ * codebase tracks exactly one run map per AXIS (`MonthAxis.run`, keyed by month and shared by
+ * every band) rather than one per band. That is an engineering cost deliberately not spent here,
+ * not an impossibility -- stated as the constraint it is, so the next reader weighing it has the
+ * real trade in front of them. */
+export function understatedNote(months: number): string {
+  return (
+    `${plural(months, "month")} understated — a quarantined filing is drawn at zero height ` +
+    `there, so its band flattens and the stack is lower than the real total by an amount that ` +
+    `cannot be stated.`
+  );
+}
+
 function midpoint(a: Date, b: Date): Date {
   return new Date((a.getTime() + b.getTime()) / 2);
 }
@@ -123,6 +183,8 @@ function describe({
   stack,
   crossover,
   gaps,
+  unknowable,
+  understated,
 }: {
   title: string;
   dimension: MixDimension;
@@ -131,6 +193,8 @@ function describe({
   stack: { key: string; label: string }[];
   crossover: { year: string; from: string; to: string } | null;
   gaps: number;
+  unknowable: number;
+  understated: number;
 }): string {
   const types = stack.filter((s) => s.key !== OTHER_KEY).map((s) => s.label);
   const other = stack.find((s) => s.key === OTHER_KEY);
@@ -141,6 +205,11 @@ function describe({
     // A reader who cannot see the holes has to be told they are there, or the label describes
     // a continuous series the chart deliberately does not draw.
     gaps === 0 ? null : `${gapNote(gaps)}`,
+    // SEPARATE SENTENCES, never one merged count (#121). A reader who cannot see the holes is
+    // told how many there are AND which cause each set has; merging them would name the wrong
+    // cause for whichever set is not "no filings".
+    unknowable === 0 ? null : unknowableNote(unknowable),
+    understated === 0 ? null : understatedNote(understated),
     crossover === null
       ? null
       : `${crossover.to} overtakes ${crossover.from} in ${crossover.year}.`,
@@ -194,8 +263,31 @@ export function buildMixPlotConfig(args: MixPlotArgs): Plot.PlotOptions {
       stack,
       crossover,
       gaps: axis.gaps.length,
+      unknowable: axis.unknowable.length,
+      understated: axis.understated.length,
     }),
-    x: { type: "utc", label: null, ticks: "1 year", tickFormat: "%Y" },
+    // THE DOMAIN IS THE STATED WINDOW, PINNED -- not whatever the marks happen to span.
+    //
+    // Plot infers a domain from the data, and the marks carry only the months that can be DRAWN.
+    // Every sentence around the chart names first->last FILED month instead: the page's own
+    // `chart: A → B` line, `describe()`'s aria-label, and both absence counts. Those were the
+    // same range until #121 stopped plotting a wholly-quarantined month -- after which
+    // /route/LIT-MOB said `chart: 2017-05 → 2024-08` over an axis whose last tick was 2021, with
+    // 38 of its 85 claimed gap months and its one wholly-quarantined month falling outside the
+    // frame entirely. 43 of 16,694 drawn route pairs and 7 of 917 airports diverged that way.
+    //
+    // Pinning it is what makes a gap appear WHERE THE SENTENCE SAYS IT IS, and it restores two
+    // things that silently depended on the two ranges agreeing: the COVID rect's clamp (six pairs
+    // drew the band past their last drawn month, the exact failure `covid`'s own comment says the
+    // clamp prevents -- and the rect was itself stretching the axis) and `annotationLate`, whose
+    // midpoint is computed from the same `first`/`last`.
+    x: {
+      type: "utc",
+      label: null,
+      ticks: "1 year",
+      tickFormat: "%Y",
+      domain: [monthStart(first), monthStart(last)],
+    },
     y: { label: "Seats", grid: true, ticks: 4, tickFormat: "~s" },
     // The tokens go through as-is: Plot passes an ordinal scale's range straight to the
     // `fill` attribute, so `globals.css` stays the single source for the ramp (verified on
@@ -261,12 +353,23 @@ export interface PreparedMix {
   /** Every distinct filed month, ascending. Zero-padded YYYY-MM, so lexical order IS
    * chronological. */
   months: string[];
+  /** The subset of `months` carrying at least one summable cell -- what the chart can actually
+   * draw, and what the `< 2` gate is taken on. Returned beside `months` so a caller stating the
+   * absence in words can tell "nothing was filed" from "everything filed was quarantined". */
+  stateable: string[];
   plot: {
     args: MixPlotArgs;
     /** Bottom-of-stack first, which is shade order -- the caller's legend reverses it. */
     stack: StackEntry[];
     /** Unfiled months inside the drawn window. Stated on the chart AND in its aria-label. */
     gaps: number;
+    /** Filed-but-wholly-quarantined months inside the drawn window. A HOLE like a gap, and a
+     * DIFFERENT sentence -- see `unknowableNote`. Counted apart from `gaps` so neither
+     * sentence names the other's cause. */
+    unknowable: number;
+    /** Drawn months that a quarantined filing understates -- see `understatedNote`. Not a
+     * hole: these months are drawn from the bands that can be stated. */
+    understated: number;
   } | null;
 }
 
@@ -277,8 +380,13 @@ function monthStart(month: string): Date {
   return new Date(`${month}-01T00:00:00Z`);
 }
 
-function pct(share: number): string {
-  return `${(share * 100).toFixed(1)}%`;
+/** The em dash, never `0.0%`, when the share cannot be stated: `lib/format.ts`'s opening rule
+ * reaches the legend too. Where every type in the Other bucket was wholly quarantined its seats
+ * are unknowable, and a rail reading `Other · 1 type · 0.0% of seats` states a measurement
+ * nobody has -- live on /route/SEA-YAK before this. `lib/format.ts` is not reused here because
+ * this is a percentage to one decimal, which none of its four formatters produce. */
+function pct(share: number | null): string {
+  return share === null ? "\u2014" : `${(share * 100).toFixed(1)}%`;
 }
 
 function maxDate(a: Date, b: Date): Date {
@@ -291,20 +399,76 @@ function minDate(a: Date, b: Date): Date {
 
 /** WHY THERE IS NO CHART, in the one wording every surface that lacks one must use.
  *
- * `prepareMixPlot` returns `plot: null` for two DIFFERENT findings -- nothing filed in the
- * window, and exactly one filed month (a stacked area over one month has a degenerate x domain
- * and serializes to zero width). The page distinguished them and the OG card did not: the card
- * printed a flat "No filings in this window." over data the page described as one filed month,
- * which on `/airport/A18` was a card claiming nothing was ever filed about an airport whose
- * entire window is a single quarantined filing. A social card is the surface that fires first
- * on a shared link, so it was the wrong copy in the most-read place.
+ * `prepareMixPlot` returns `plot: null` for findings that are NOT the same, and the card is the
+ * surface where getting that wrong is unrecoverable: it printed a flat "No filings in this
+ * window." over data the page described as one filed month, which on `/airport/A18` claimed
+ * nothing was ever filed about an airport whose entire window is a single quarantined filing.
+ *
+ * A THIRD FINDING, and it is the one this chart's whole absence vocabulary exists for: months
+ * were filed and NOT ONE of them can be stated. `Only one month of filings` is false of it (there
+ * may be several) and `No filings` is false of it too (there were filings; every one failed an
+ * invariant). Three route pairs are in that state with two or more filed months -- BGR-DAB,
+ * BHB-MCO and HSV-SUX -- and 28 more with exactly one. Before this branch existed they rendered
+ * a frame carrying a COVID band, zero paths, and an `aria-label` naming a band drawn nowhere.
  *
  * One function rather than two that agree today -- the same rule `lib/og/entityCard.ts` opens
- * with for the stats and the chart itself. */
-export function mixAbsenceNote(months: string[], dimension: MixDimension): string {
-  return months.length === 0
-    ? `No ${dimension.absent} filings in this window.`
-    : `Only one month of filings in this window (${months[0]}) \u2014 a stacked area needs at least two.`;
+ * with for the stats and the chart itself.
+ *
+ * `stateable` is the subset of `months` carrying at least one summable cell. Passing both, rather
+ * than deriving one, is what keeps this function's answer tied to the same set `prepareMixPlot`
+ * gates on -- the two disagreeing about which months they meant is exactly the defect above.
+ *
+ * REQUIRED, not defaulted to `months`. A default is a silent fifth caller getting the pre-#121
+ * sentence with nothing red, on the axis that has no per-call-site enumeration; `CardInput`'s
+ * `unknowable`/`understated` are required for the same reason and that is what forced all four
+ * OG routes to wire them. Here the typechecker is the gate. */
+export function mixAbsenceNote(
+  months: string[],
+  dimension: MixDimension,
+  stateable: string[],
+): string {
+  if (months.length === 0) return `No ${dimension.absent} filings in this window.`;
+  if (stateable.length === 0) {
+    const every = months.length === 1 ? "" : "every one ";
+    return (
+      `${plural(months.length, "month")} of filings in this window, ${every}wholly quarantined ` +
+      `\u2014 every filing failed an invariant, so no ${dimension.absent} seats can be stated ` +
+      `and there is nothing to draw.`
+    );
+  }
+  // Unchanged bytes for the ordinary one-month case, which is most of them and which several
+  // fixtures pin verbatim.
+  if (stateable.length === months.length) {
+    return `Only one month of filings in this window (${months[0]}) \u2014 a stacked area needs at least two.`;
+  }
+  return (
+    `Only one month of filings in this window can be stated (${stateable[0]}) \u2014 a stacked ` +
+    `area needs at least two, and the other ${plural(months.length - stateable.length, "month")} ` +
+    `filed but wholly quarantined.`
+  );
+}
+
+/**
+ * WHETHER THE CHART DRAWS ANYTHING -- the predicate a SURFACE has to ask, and the reason it is
+ * exported rather than left inline below (#123).
+ *
+ * "Mix rows exist" and "a chart was drawn" are different questions, and every page that gated
+ * on the first one asked the wrong one. A subject with a single filed month has rows and draws
+ * NOTHING: a stacked area over one month has a degenerate x domain and serializes to zero
+ * width, so `prepareMixPlot` returns `plot: null` and `AircraftMixChart` renders
+ * `mixAbsenceNote` instead. On `/airport/A18` and `/airport/OQZ` the legend rail therefore
+ * explained a monochrome gauge ramp, and named the COVID shading window, beside a line of text
+ * -- the exact stale "how to read this" `docs/design/system.md` says the rail exists to replace.
+ * (#123 also names `/airport/JZM`; re-derived against the warehouse, JZM files TWO months and
+ * has always drawn its chart. Naming it here would be a third copy of a claim the issue got
+ * wrong, in the file that owns the predicate.)
+ *
+ * `prepareMixPlot` is routed THROUGH this rather than repeating the test, so a page and the
+ * chart beside it cannot disagree about whether there is a chart. Two functions that agree
+ * today is what produced the defect.
+ */
+export function mixChartDraws(rows: MixRow[]): boolean {
+  return new Set(rows.filter((r) => r.seats !== null).map((r) => r.month)).size >= 2;
 }
 
 export function prepareMixPlot(
@@ -313,7 +477,17 @@ export function prepareMixPlot(
   dimension: MixDimension,
 ): PreparedMix {
   const months = [...new Set(rows.map((r) => r.month))].sort();
-  if (months.length < 2) return { months, plot: null };
+  // THE GATE AND THE AXIS MUST MEAN THE SAME SET OF MONTHS. This counted every FILED month while
+  // `toBands` builds its axis from the STATEABLE ones, so a subject whose every month is wholly
+  // quarantined passed a `>= 2` gate and then produced an axis with no runs, no span and all
+  // three absence counts at zero -- a frame with a COVID band, zero paths, and an `aria-label`
+  // naming a band drawn nowhere, on the one page where the sentence this module exists to print
+  // is the entire finding. Reachable on BGR-DAB, BHB-MCO and HSV-SUX. `mixAbsenceNote` above
+  // takes both sets for the same reason.
+  // `mixChartDraws` reads the same subset, so a page routed through it and this gate cannot
+  // disagree about whether there is a chart.
+  const stateable = [...new Set(rows.filter((r) => r.seats !== null).map((r) => r.month))].sort();
+  if (!mixChartDraws(rows)) return { months, stateable, plot: null };
 
   const { bands, other, axis } = toBands(rows);
   const crossover = findCrossover(rows);
@@ -379,9 +553,12 @@ export function prepareMixPlot(
 
   return {
     months,
+    stateable,
     plot: {
       stack,
       gaps: axis.gaps.length,
+      unknowable: axis.unknowable.length,
+      understated: axis.understated.length,
       args: {
         title,
         dimension,

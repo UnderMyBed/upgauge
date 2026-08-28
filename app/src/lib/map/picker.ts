@@ -164,7 +164,7 @@ export function pickerOptions(args: {
  * the page as quarantined, which is a louder lie than the one this function exists to stop. SQL
  * NULL arrives as `null`, never `undefined` (verified against the live pivot: `/carrier/F4`'s
  * two quarantined types come back `seats: null`, `typeof "object"`). Both page pivots go through
- * `trailing12Query`, whose measures always include `seats` (`entityFacts.ts:106`). */
+ * `trailing12Query`, whose measures always include `seats` (`lib/entityFacts.ts`). */
 function seatsOf(row: Record<string, unknown>): number | null {
   const raw = row.seats;
   if (raw === undefined) {

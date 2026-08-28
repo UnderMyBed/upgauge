@@ -3,12 +3,14 @@ import { cache } from "react";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveRoutePair } from "@/lib/routePair";
 import { BASE_URL } from "@/lib/siteUrl";
+import { quarantineClause } from "@/lib/quarantineClause";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
+import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
 import { encode } from "@/lib/pivot/urlstate";
 import {
   EARLIEST_MONTH,
@@ -202,6 +204,12 @@ export async function RouteView({
   const truncated = result.rows.length >= limit;
   const isEmpty = result.rows.length === 0;
   const hasMix = mix.length > 0;
+  /** WHETHER THE CHART DREW, which is not whether it has rows (#123). One filed month has rows
+   *  and draws a line of text, so `hasMix` is the right gate for RENDERING `AircraftMixChart`
+   *  -- it is what makes the absence note appear -- and the wrong one for the legend rail's
+   *  fleet-shading group, which would then explain a ramp the reader cannot see. Read from the
+   *  chart's own predicate, never re-derived here. */
+  const chartDrawn = mixChartDraws(mix);
   // The range the chart can DRAW, which is not the range it was fetched over. The fetch asks
   // for EARLIEST_MONTH -> asOf; a subject that stopped filing in 2022 yields an x axis ending
   // in 2022, and 12,115 of 23,041 route pairs last filed before the current trailing-12 window,
@@ -230,6 +238,23 @@ export async function RouteView({
   // The subject line, shared by the entity header, the chart's own subtitle and the card's
   // title so the three can never name the pair differently.
   const title = routeTitle(canonical);
+
+  // ONE implementation, in lib/quarantineClause.ts, for all four entity pages. #121 shipped four
+  // copies of this three-branch prose and review found `/carrier`'s could be replaced with
+  // garbage while every test and every served check stayed green -- its wholly-quarantined branch
+  // is unreachable on this warehouse, so nothing but a unit test can reach the string. The three
+  // cases and the wording are asserted there; this page supplies only what differs.
+  //
+  // Still ONE template literal at the render site below: React's SSR emits `<!-- -->` between
+  // ADJACENT expression children, so the `{n} quarantined row{s}` prefix this replaced could not
+  // be reached by a raw-bytes grep in app/smoke.sh. (Its tail was a single static JSX child and
+  // always was greppable -- the prefix is the half that was not.)
+  const quarantineClauseText = quarantineClause({
+    subject: `on ${title}`,
+    counts: "The carrier count is",
+    seatsAreNull: totals.seats === null,
+    quarantinedRows: result.quarantinedRowsOnPage,
+  });
 
   return (
     <div className="wrap">
@@ -290,9 +315,7 @@ export async function RouteView({
               </p>
             )}
             <p className="foot">
-              {result.quarantinedRowsOnPage} quarantined row
-              {result.quarantinedRowsOnPage === 1 ? "" : "s"} excluded from these totals, never
-              clamped. <span className="deriv">Load factor</span> and{" "}
+              {quarantineClauseText} <span className="deriv">Load factor</span> and{" "}
               <span className="deriv">avg gauge</span> are computed at query time from summed
               passengers, seats and performed departures -- never averaged.
             </p>
@@ -304,7 +327,7 @@ export async function RouteView({
           {/* The rail describes the encodings THIS page uses and no others -- the same reason
               LegendRail's own header gives for leaving the mockup's map group out of /explore.
               The fleet-shading group is asked for only when a chart is actually drawn. */}
-          <LegendRail fleetMix={hasMix} />
+          <LegendRail fleetMix={chartDrawn} />
         </div>
       </main>
     </div>

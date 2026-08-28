@@ -5,13 +5,16 @@ import { resolveCarrier } from "@/lib/carrier";
 import { headers } from "next/headers";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { BASE_URL } from "@/lib/siteUrl";
+import { quarantineClause } from "@/lib/quarantineClause";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { DiffMap } from "@/components/DiffMap";
+import { segmentArcsDrawn } from "@/lib/map/segmentMap";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
+import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
 import { fetchCarrierDiff } from "@/lib/map/carrierDiff";
 import { encode } from "@/lib/pivot/urlstate";
 import {
@@ -377,10 +380,41 @@ export async function CarrierView({
   const truncated = result.rows.length >= limit;
   const isEmpty = result.rows.length === 0;
   const hasMix = mix.length > 0;
+  /** WHETHER THE CHART DREW, which is not whether it has rows (#123). One filed month has rows
+   *  and draws a line of text, so `hasMix` is the right gate for RENDERING `AircraftMixChart`
+   *  -- it is what makes the absence note appear -- and the wrong one for the legend rail's
+   *  fleet-shading group, which would then explain a ramp the reader cannot see. Read from the
+   *  chart's own predicate, never re-derived here. */
+  const chartDrawn = mixChartDraws(mix);
+
+  // ONE implementation, in lib/quarantineClause.ts, for all four entity pages. #121 shipped four
+  // copies of this three-branch prose and review found `/carrier`'s could be replaced with
+  // garbage while every test and every served check stayed green -- its wholly-quarantined branch
+  // is unreachable on this warehouse, so nothing but a unit test can reach the string. The three
+  // cases and the wording are asserted there; this page supplies only what differs.
+  //
+  // Still ONE template literal at the render site below: React's SSR emits `<!-- -->` between
+  // ADJACENT expression children, so the `{n} quarantined row{s}` prefix this replaced could not
+  // be reached by a raw-bytes grep in app/smoke.sh. (Its tail was a single static JSX child and
+  // always was greppable -- the prefix is the half that was not.)
+  const quarantineClauseText = quarantineClause({
+    subject: `by ${carrier.code}`,
+    counts: "The aircraft-type count is",
+    seatsAreNull: totals.seats === null,
+    quarantinedRows: result.quarantinedRowsOnPage,
+  });
+
   const routeCols = routeDimColumns(allowlist);
   const hasRoutes = routesResult.rows.length > 0;
   const hasOrigins = originsResult.rows.length > 0;
   const hasMap = typeMap !== null;
+  /** See `/airport`'s `arcsDrawn` (#123). TWO maps can earn the rail's arc group on this page --
+   *  the type map and the diff map's three panels -- so it is a disjunction, not the type map
+   *  alone: a carrier with no type filter still gets a diff map, and `LegendRail`'s own header
+   *  says both are covered by the one group. Either drawing an arc earns it; neither does not. */
+  const arcsDrawn =
+    (typeMap !== null && segmentArcsDrawn(typeMap)) ||
+    diff.panels.some((p) => segmentArcsDrawn(p.map));
 
   // #107. The picker reads the pivot THIS PAGE ALREADY AWAITED -- `query` groups by
   // `aircraft_type`, which is exactly the dimension the map filters on -- so the control costs
@@ -581,9 +615,7 @@ export async function CarrierView({
             <p className="foot">{grainNote(carrier)}</p>
             <p className="foot">{identityNote(carrier)}</p>
             <p className="foot">
-              {result.quarantinedRowsOnPage} quarantined row
-              {result.quarantinedRowsOnPage === 1 ? "" : "s"} excluded from these totals, never
-              clamped. <span className="deriv">Load factor</span> and{" "}
+              {quarantineClauseText} <span className="deriv">Load factor</span> and{" "}
               <span className="deriv">avg gauge</span> are computed at query time from summed
               passengers, seats and performed departures -- never averaged.
             </p>
@@ -593,8 +625,14 @@ export async function CarrierView({
             </p>
           </div>
           {/* The rail describes the encodings THIS page uses and no others; the fleet-shading
-              group is asked for only when a chart is actually drawn. */}
-          <LegendRail fleetMix={hasMix} map={hasMap} />
+              group is asked for only when a chart is actually drawn, and the rank group only
+              where a rank column exists. `ranked` shipped as a literal when #127's partition and
+              #123's rail gating were merged, and the integration gap pass caught it: 44 of the
+              114 carrier pages file nothing in the trailing 12, so `isEmpty` suppresses the main
+              table and BOTH ranked tables, and the rail explained a column the page did not
+              render. `hasRoutes || hasOrigins` is the same gate those two tables already use
+              below -- the capability existed; the rail was the one consumer ignoring it. */}
+          <LegendRail fleetMix={chartDrawn} map={arcsDrawn} ranked={hasRoutes || hasOrigins} />
         </div>
       </main>
     </div>

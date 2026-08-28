@@ -412,3 +412,189 @@ describe("/route/<pair> Open Graph metadata (M9 Task 6b)", () => {
     expect(meta.openGraph).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------------------
+// THE FLOOR PARTITION AT THIS CALL SITE (#127, review finding 1). See /carrier's copy of this
+// block for why a component-level test cannot stand in for one here: `partition` defaults to
+// true but /explore opts out, so a per-call-site opt-out is caught only by a test that reads
+// this page's own rendered rows.
+describe("/route/<pair> sorts below-floor rows last", () => {
+  /** One rendered row of the carriers table: below-floor flag, and seats as the page printed
+   * them (`null` for the absence marker, a different finding from 0). */
+  function carrierRows(container: HTMLElement) {
+    return [...container.querySelectorAll("table.data-table tbody tr")].map((tr) => {
+      const seats = tr.querySelectorAll("td.num")[0]?.textContent ?? "";
+      return {
+        belowFloor: tr.getAttribute("data-below-floor") === "true",
+        seats: seats === "\u2014" ? null : Number(seats.replace(/,/g, "")),
+      };
+    });
+  }
+
+  it("renders the below-floor carriers as one contiguous block at the foot", async () => {
+    // MKE-ORD: 15 carrier rows in the trailing 12, 10 of them below floor.
+    // MUTANT: `partition={false}` at page.tsx's DataTable -> red here only.
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "MKE-ORD" }) }),
+    );
+    const flags = carrierRows(container).map((r) => r.belowFloor);
+    const first = flags.indexOf(true);
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(flags.slice(0, first).length).toBeGreaterThan(0);
+    expect(flags.slice(first).includes(false)).toBe(false);
+  });
+
+  it("still discriminates: a below-floor carrier here out-seats a scored one", async () => {
+    // THE FIXTURE GUARD, AND IT IS EXECUTABLE -- this was a prose claim until the final review
+    // caught that /route was the one call site the round's own remedy never reached. /airport
+    // got a guard `it()`, /carrier two inline guards, /route a sentence.
+    //
+    // The sentence was also load-bearing and wrong: it said JFK-LAX "cannot be the fixture:
+    // every carrier on it clears the floor". JFK-LAX does carry a below-floor carrier row, last
+    // of five. It is unusable because the ORDERINGS AGREE there, which is the only property that
+    // matters and is not the one the comment named.
+    //
+    // The population is against this test: over the 400 busiest routes in the trailing 12, 327
+    // satisfy its assertions with the orderings already agreeing and only 2 disagree. MKE-ORD is
+    // one of the two, so it is one refresh away from vacuous -- exactly the 4W disease this
+    // branch invented the guard for.
+    //
+    // MECHANISM: a below-floor carrier (4,195 seats, 25 departures) out-seats a scored one
+    // (2,924 seats, 45 departures), so the measure sort puts it at 5 of 15 and the partition has
+    // to move it. If a refresh ends that, THIS goes red and the fixture moves; the test above
+    // does not quietly stop testing anything.
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "MKE-ORD" }) }),
+    );
+    const rows = carrierRows(container);
+    const seatsOf = (below: boolean) =>
+      rows.filter((r) => r.belowFloor === below && r.seats !== null).map((r) => r.seats as number);
+    expect(Math.max(...seatsOf(true))).toBeGreaterThan(Math.min(...seatsOf(false)));
+  });
+});
+
+/** THE STAT STRIP AND THE FOOT ON AN UNKNOWABLE PAGE (#121).
+ *
+ * `sumTotals` restated a NULL sum as the number 0, so these pages rendered three fabricated
+ * zeros -- and, because load factor and average gauge already rendered `—` (their denominators
+ * were zero either way), the buggy strip read `0 · 0 · — · — · 0`. That is why every assertion
+ * below reads the strip AS AN ORDERED LIST rather than looking for a dash: "the page contains an
+ * em dash" was true of the buggy page too.
+ *
+ * The three cells are `.stats .v` in page order: Seats, Passengers, Load factor, Avg gauge,
+ * Departures, Carriers, Quarantined. */
+function statStrip(container: HTMLElement): string[] {
+  return [...container.querySelectorAll(".stats .v")].map((n) => n.textContent ?? "");
+}
+
+describe("a route whose every filing was quarantined states absence, not zero", () => {
+  // A18-LMA (Kantishna-Lake Minchumina): ONE filing in the entire trailing 12 -- 2025-06,
+  // op_airline 20333, seats 0, departures_performed 1, quarantined `zero_seats`. Ten route pairs
+  // are in this state and reachable; an eleventh (VEE-VEE) is in the quarantine set but 404s as
+  // a same-airport slug before any lookup, so 11 is the pair count and 10 the page count.
+  //
+  // MUTANT: restore `?? 0` inside `sumColumn` -> the first five read
+  // `["0", "0", "—", "—", "0"]` -> red.
+  // MUTANT: remove the `??` but fold on `+` -> identical output -> red. Two mutants, one
+  // assertion, and #121 exists because fixing only the first leaves the second.
+  it("renders the five measures as absence and keeps the counts", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "A18-LMA" }) }),
+    );
+    expect(statStrip(container)).toEqual(["—", "—", "—", "—", "—", "1", "1"]);
+  });
+
+  // THE PROSE THAT EXPLAINS THE DASHES. "1 quarantined row excluded from these totals" is a
+  // compound claim whose second clause is false here: there are no totals for it to have been
+  // excluded from, and the Carriers count is a count OF the excluded row rather than a figure
+  // net of it. Same split `airport/[code]/page.tsx` makes.
+  // MUTANT: drop the `totals.seats === null` branch -> the foot claims the exclusion -> red.
+  it("explains the dashes instead of miscounting them", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "A18-LMA" }) }),
+    );
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).toContain("Every filing on A18–LMA in this window is quarantined");
+    expect(feet).toContain("1 row, each having failed an invariant");
+    expect(feet).not.toContain("excluded from these totals");
+    // Singular, on the only prose left explaining five em dashes.
+    expect(feet).not.toContain("1 rows");
+  });
+});
+
+describe("a route that filed nothing in the window states absence too", () => {
+  // THE OTHER ABSENCE, and the wider one: 12,115 route pairs last filed before this window.
+  // Their sums are unknowable for a reason quarantine had no part in, and the two must stay
+  // separable -- a consumer keying on "the sum is null" alone answers the wrong one of them, and
+  // answers it on the 12,115 rather than the 10.
+  // MUTANT: seed `sumColumn` at 0 -> `["0", "0", "—", "—", "0", "0", "0"]` -> red.
+  it("renders the measures as absence while still stating the counts", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "ATL-CAK" }) }),
+    );
+    expect(statStrip(container)).toEqual(["—", "—", "—", "—", "—", "0", "0"]);
+  });
+
+  // The foot must claim NO exclusion -- nothing was quarantined and there is nothing to have
+  // been excluded from -- and must NOT blame quarantine, which had no part in this absence.
+  // `RouteEmptyState` carries the real finding.
+  // MUTANT: key the clause on `totals.seats === null` alone -> "Every filing on ATL–CAK in this
+  // window is quarantined — 0 rows", a finding invented on 12,115 pages to fix it on 10 -> red.
+  it("names neither an exclusion nor quarantine, and leaves the finding to the empty state", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "ATL-CAK" }) }),
+    );
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).not.toContain("excluded from these totals");
+    expect(feet).not.toContain("is quarantined");
+    // The derived-measure disclosure is not optional and must survive an empty clause.
+    expect(feet).toContain("never averaged");
+    expect(screen.getByText(/no scheduled service/i)).toBeDefined();
+  });
+
+  // The negative, on a page with real traffic -- without it every check_not above could pass
+  // against a page that had stopped rendering a stat strip at all.
+  it("still states real figures on a route that filed", async () => {
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }),
+    );
+    const strip = statStrip(container);
+    expect(strip).toHaveLength(7);
+    expect(strip.slice(0, 5)).not.toContain("—");
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).toContain("excluded from these totals");
+  });
+});
+
+describe("/route/<pair>: the legend rail follows the CHART, not the rows (#123)", () => {
+  // ONE GATE PER CALL SITE, not one per rule. `mixChartDraws` is a single predicate, but each
+  // page decides for itself whether to pass it to `<LegendRail>` -- and reverting any ONE of
+  // those four call sites to `hasMix` is a live defect on that surface alone. A rule-level test
+  // cannot see that: CLAUDE.md's "enumerate the matrix per CALL SITE".
+  //
+  // DATASET-PINNED SUBJECT. BUR-HNL files exactly ONE month (2026-05, 5,949 seats) over the whole
+  // window, so its stacked area has a degenerate x domain and `AircraftMixChart` prints its
+  // absence note instead. JFK-LAX is the file's standing many-month subject.
+  // If this reddens after a BTS refresh, re-derive a one-month subject rather than deleting the
+  // test: the pair with `count(DISTINCT year_month) = 1` in `fct_segment_month`.
+  it("renders NO fleet-shading group for a subject whose chart cannot draw", async () => {
+    const { container } = render(await RoutePage({ params: Promise.resolve({ pair: "BUR-HNL" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Fleet shading");
+    expect(rail.textContent).not.toContain("COVID is in the window on purpose");
+    // NOT VACUOUS: the rail is mounted and the chart really did decline to draw. Without these
+    // a page that failed to render at all would satisfy both negatives above.
+    expect(rail.textContent).toContain("Gauge rail");
+    expect(container.querySelector(".chart svg[role='img']")).toBeNull();
+  });
+
+  it("DOES render it for a subject whose chart draws", async () => {
+    // The positive control. It passes under the bug -- which is exactly why the absence
+    // assertion above is the one that catches it -- but without it, deleting the group outright
+    // would satisfy every negative in this file.
+    const { container } = render(await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).toContain("Fleet shading");
+    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+  });
+});

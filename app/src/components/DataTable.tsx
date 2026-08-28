@@ -113,13 +113,76 @@ function isBelowFloor(row: Record<string, unknown>): boolean {
   return departures !== null && departures < DEPARTURE_FLOOR;
 }
 
+/** One row in render order, carrying everything the render loop needs -- it derives nothing
+ * of its own. `rank` is 1-based among SCORED rows only; see `orderRows`. */
+interface OrderedRow {
+  row: Record<string, unknown>;
+  belowFloor: boolean;
+  rank: number | null;
+}
+
+/** Below-floor rows last, the measure order preserved inside each block.
+ *
+ * TWO BUCKETS AND AN APPEND, never `Array.prototype.sort` with a boolean comparator. The
+ * requirement is that the incoming order survives inside each block, and this shape makes that
+ * STRUCTURAL -- nothing inside a bucket is ever compared, so the stability does not rest on
+ * V8's sort being stable, and "re-sorts within the group" is not a change anyone can make here
+ * by accident. A comparator would also invite a measure tiebreak later, which is the same bug
+ * wearing a different hat.
+ *
+ * `isBelowFloor` and nothing else decides the bucket -- NOT `reasonFor`. The two are
+ * independent signals (see below), and the base rate that matters here is the share of
+ * BELOW-FLOOR rows showing some other glyph: roughly one in four shows `Q` or `⌀`, because the
+ * gutter picks one code by severity. Partitioning on the winning glyph would leave every one of
+ * those sitting among the scored rows -- the same re-coupling `reasonFor`'s own comment exists
+ * to prevent, re-introduced one layer down. */
+function partitionByFloor(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+  const scored: Record<string, unknown>[] = [];
+  const sparse: Record<string, unknown>[] = [];
+  for (const row of rows) (isBelowFloor(row) ? sparse : scored).push(row);
+  return [...scored, ...sparse];
+}
+
+/** The rendered order and each row's rank, in one pass.
+ *
+ * RANK COUNTS SCORED ROWS ONLY. A below-floor row gets `null`, which the rank cell renders as
+ * `—`: docs/design/system.md says such a row is "sorted below scored rows, excluded from
+ * ranking", and a number printed against it would be neither its position by measure nor a
+ * withheld one. Measured on the real warehouse, this is not hypothetical -- `/carrier`'s Top
+ * routes table renders 141 below-floor rows across 24 of 70 carriers. On 20 of those 24 a
+ * below-floor row sits above the last row rather than only at the foot; the four carrying ten
+ * or more such rows, by the position of their FIRST one, are `TJ` (3 of 15, 13 below), `V8`
+ * (9 of 21, 13), `4W` (12 of 25, 14) and `AN` (15 of 25, 11).
+ *
+ * `partition` is the rule, and `false` is the exception one caller asks for -- see the
+ * component's own `partition` note. Defaulted ON there so a sixth table surface inherits the
+ * rule rather than the exemption.
+ *
+ * WITH `partition` OFF, NOTHING IS RANKED. A rank is a row's position among scored rows *in the
+ * order the product chose*, so an unpartitioned table has no such order and no rank to state --
+ * returning one would number a sequence the floor rule never arranged. Left ranked, the pair
+ * renders a column that walks 1, —, 2 down the page. The component makes that combination
+ * unwritable (its props reject `rank` beside `partition={false}`); this makes the pure function
+ * honest on its own, so a direct caller cannot reach the same shape by another door. */
+export function orderRows(
+  rows: Record<string, unknown>[],
+  partition: boolean,
+): OrderedRow[] {
+  const ordered = partition ? partitionByFloor(rows) : rows;
+  let scored = 0;
+  return ordered.map((row) => {
+    const belowFloor = isBelowFloor(row);
+    return { row, belowFloor, rank: partition && !belowFloor ? ++scored : null };
+  });
+}
+
 /** The gutter glyph and the below-floor row treatment are independent signals, not one
- * collapsed state. Measured over the trailing 12 months at route grain: 21,569 rows total,
- * 13,470 below floor, 3,278 zero-pax, and 3,202 of those are BOTH -- 97.7% of every zero-pax
- * row is also below floor. A single `reason` used to gate row treatment made that 14.8% of
- * all rows (the near-entirety of the zero-pax class) render as ordinary scored rows, which
- * silently dropped the below-floor signal from exactly the rows the design system calls the
- * trust moment. The gutter still shows one glyph, chosen by severity (`Q` > `⌀` > `n`,
+ * collapsed state. A row can be below floor AND zero-pax at once, and nearly every zero-pax row
+ * is; run the other way -- which is the direction that matters -- roughly one in four below-floor
+ * rows shows `⌀` or `Q` rather than `n`. A single `reason` used to gate row treatment rendered
+ * all of those as ordinary scored rows, silently dropping the below-floor signal from exactly
+ * the rows the design system calls the trust moment. The gutter still shows one glyph, chosen
+ * by severity (`Q` > `⌀` > `n`,
  * `reasonFor`); the row treatment (`data-below-floor`, dashed rule, muted text, muted gauge
  * tick) is driven by `isBelowFloor()` directly and applies whenever the row is below floor,
  * regardless of which glyph won. See docs/design/system.md, "reason-code gutter". */
@@ -130,21 +193,62 @@ function reasonFor(row: Record<string, unknown>): Reason {
   return null;
 }
 
-export function DataTable({
-  columns,
-  rows,
-  resolved,
-  rank = false,
-}: {
+interface DataTableBaseProps {
   columns: ColumnSpec[];
+  /** In the caller's own order. This component re-orders them on exactly one axis -- below-floor
+   * rows last (`orderRows`) -- and never on a measure: a caller that wants rank-by-measure still
+   * sorts `rows` itself before handing them here. */
   rows: Record<string, unknown>[];
   resolved?: Map<string, Resolved>;
-  /** A leading 1-based rank column -- `/watch`'s leaderboard shape (system.md, "`/watch`
-   * leaderboard": "the standard table plus a leading rank column, mono, --ink-3"). The rank IS
-   * the row's position in `rows`; DataTable never re-sorts or re-derives it from a column, so a
-   * caller that wants rank-by-measure must sort `rows` itself before handing them here. */
-  rank?: boolean;
-}) {
+}
+
+/** `rank` and `partition` are ONE choice, not two independent ones, so the props make the
+ * illegal pair unwritable rather than merely unused.
+ *
+ * `rank` is a row's position among scored rows in the order the product chose; `partition` is
+ * what arranges that order, so ranking an unpartitioned table asks for a position in an order
+ * nothing established. `orderRows` answers that honestly -- it ranks nothing at all -- so the
+ * pair renders a rank column of em dashes end to end: a column that costs its width and says
+ * nothing. No caller writes it today, which is exactly why a comment saying "don't" would not
+ * hold: the type is what still refuses it after everyone who read the comment has moved on.
+ *
+ * - a ranked table takes the partition (`rank` implies `partition` is on or omitted);
+ * - an unranked table may decline it -- `/explore` is the one that does.
+ *
+ * `orderRows` enforces the same rule for a direct caller, which the type cannot reach. */
+type DataTableProps = DataTableBaseProps &
+  (
+    | {
+        /** A leading rank column -- `/watch`'s leaderboard shape (system.md, "`/watch`
+         * leaderboard": "the standard table plus a leading rank column, mono, --ink-3"). It
+         * numbers SCORED rows 1..k in render order; a below-floor row is excluded from ranking
+         * and its cell reads `—`. */
+        rank: true;
+        partition?: true;
+      }
+    | {
+        rank?: false;
+        /** Below-floor rows sort last (docs/design/system.md, "The data table"). ON by default,
+         * so a table surface added later inherits the rule rather than this exemption.
+         *
+         * `false` for `/explore` ALONE, and the reason is that page's contract rather than a
+         * preference. The floor rule is a property of a RANKED table -- one whose order the
+         * product chose. `/explore` renders the order its own query specifies: `s=` carries a
+         * sort key AND a direction, and where it is absent the query still resolves to one
+         * (`render.ts` falls back to the first selected measure), so either way the rows come
+         * back in the order the permalink encodes. Re-ordering them afterwards would break the
+         * promise that the page shows the query you wrote -- most visibly for
+         * `s=departures_performed` ascending, which is someone explicitly asking to see the
+         * sparsest rows first. See the call site in app/explore/page.tsx. */
+        partition?: boolean;
+      }
+  );
+
+export function DataTable(props: DataTableProps) {
+  const { columns, rows, resolved } = props;
+  const rank = props.rank ?? false;
+  const partition = props.partition ?? true;
+  const ordered = orderRows(rows, partition);
   return (
     <div className="table-scroll">
       <table className="data-table">
@@ -166,9 +270,8 @@ export function DataTable({
           </tr>
         </thead>
         <tbody>
-          {rows.map((row, i) => {
+          {ordered.map(({ row, belowFloor, rank: position }, i) => {
             const reason = reasonFor(row);
-            const belowFloor = isBelowFloor(row);
             return (
               <tr key={i} data-below-floor={belowFloor ? "true" : undefined}>
                 <ReasonCode
@@ -179,7 +282,11 @@ export function DataTable({
                 />
                 {rank && (
                   <td className="rank" data-testid="rank-cell">
-                    {i + 1}
+                    {/* `—` for a row excluded from ranking, never a number and never blank:
+                        a blank cell reads as a rendering fault (system.md's own rule for the
+                        measure columns), and any number here would be a rank the floor rule
+                        says this row does not have. */}
+                    {position ?? "\u2014"}
                   </td>
                 )}
                 {columns.map((c) => (

@@ -9,6 +9,23 @@
 // import binding referenced inside `vi.mock` would break on hoisting, since `vi.mock` calls are
 // hoisted above every import statement in the file.
 import { vi } from "vitest";
+
+// THE CALL SITE, WHICH NO FIXTURE CAN REACH. `/carrier`'s wholly-quarantined foot is unreachable
+// on this warehouse -- no carrier's every trailing-12 filing is quarantined (measured) -- so
+// before the clause was hoisted to lib/, its copy of that sentence could be replaced with garbage
+// and all 1,516 tests plus all 663 served checks stayed green. Review found exactly that, on the
+// call site one file over from the card whose identical hole #121 had already closed with a spy.
+//
+// The clause itself is asserted at its four cells in lib/quarantineClause.test.ts. What is left
+// to pin is that THIS page reaches it with ITS OWN subject and count line, and that hop is
+// reachable on any carrier -- the arguments are supplied before the branch is chosen. The spy
+// CALLS THROUGH, so the rendered page is the real one.
+const clauseSpy = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/quarantineClause", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/quarantineClause")>();
+  clauseSpy.mockImplementation(actual.quarantineClause);
+  return { ...actual, quarantineClause: clauseSpy };
+});
 vi.mock("next/headers", async () => {
   const { RAW_QUERY_HEADER } = await import("@/lib/rawQuery");
   // Default: an empty raw query, matching a bare request with no `?` at all -- which is what
@@ -237,7 +254,7 @@ describe("/carrier/<code> aircraft-mix chart", () => {
 });
 
 // Virgin America: airline_id 21171, 4,275 filed rows over 2015-01..2018-03 and nothing since
-// (measured). 45 of this database's 114 fact-present carriers last filed before the current
+// (measured). 45 of this database's 115 fact-present `airline_id`s last filed before the current
 // trailing-12 window -- 39%, so a resolvable carrier with an empty table is a normal case here,
 // not an oddity, and the chart is the only panel with anything in it.
 describe("/carrier/<code> with nothing in the trailing 12 months", () => {
@@ -271,6 +288,31 @@ describe("/carrier/<code> with nothing in the trailing 12 months", () => {
     const text = content(container);
     expect(text).toMatch(/no marketing-carrier field/i);
     expect(text).toMatch(/current identity/i);
+  });
+
+  it("does not explain a rank column on a page that renders none", async () => {
+    // FOUND BY THE INTEGRATION GAP PASS, on a line resolved by hand when #127's `ranked` was
+    // merged onto #123's rail gating: `ranked` shipped as a literal while `fleetMix` and `map`
+    // beside it were live values. A dormant carrier renders no main table (`isEmpty`) and
+    // neither ranked table (`hasRoutes`/`hasOrigins` both false), so there is no rank column on
+    // the page at all -- and the rail still said "in the rank column: below the floor, so not
+    // ranked". 44 of the 114 carrier pages file nothing in the trailing 12.
+    //
+    // MUTANT: `ranked` back to a literal -> red here, and the SEA control below stays green.
+    // The control is the half that keeps this honest: the rail IS mounted and does carry its
+    // unconditional groups, so this is not asserting an absent rail.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail).not.toBeNull();
+    expect(rail.textContent).toContain("Row marks");
+    expect(container.querySelectorAll("td.rank, th.rank").length).toBe(0);
+    expect(rail.textContent).not.toContain("rank column");
+  });
+
+  it("does explain it on a carrier that renders one", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    expect(container.querySelectorAll("td.rank").length).toBeGreaterThan(0);
+    expect(container.querySelector("aside.legend")!.textContent).toContain("rank column");
   });
 });
 
@@ -737,5 +779,293 @@ describe("/carrier/<code> diff map (#110)", () => {
     // there is no orphan heading and no empty map.
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
     expect(container.querySelector('[data-testid="diff-map"]')).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// THE FLOOR PARTITION AT THIS PAGE'S THREE CALL SITES (#127, review finding 1). DataTable's own
+// tests prove the component partitions and that the default is on; they cannot prove any given
+// page reaches it with the default intact. Since /explore carries an opt-out, `partition` is a
+// real axis rather than a constant, and a per-call-site `partition={false}` is invisible to
+// every test that does not read THAT page's rendered rows -- verified: adding it to any of the
+// three tables below left all 1,483 tests green before these existed.
+//
+// /carrier is where the change has its largest measured effect: across the trailing 12 months,
+// its Top routes table renders 141 below-floor rows over 24 of 70 carriers, and Top origins 85
+// over 22.
+//
+// WHAT MAKES A FIXTURE HERE DISCRIMINATING: in the pivot's own order, a SCORED row appears
+// after a below-floor one. Only then do the measure order and the partitioned order differ, and
+// only then can a row-order test fail for the reason its name gives.
+//
+// "some below-floor row out-seats some scored one" is a PROXY for that, and it is WRONG. The
+// pivot sorts `seats DESC`, which is NULLS LAST, so a wholly-quarantined group -- seats NULL,
+// therefore no claim about the floor, therefore scored -- sits BELOW a below-floor row holding a
+// stated 0. Zero does not out-seat NULL, and the orderings disagree anyway. Reviewing this work
+// I asserted that proxy in two permanent files and used it to justify deleting coverage; two of
+// the three people who then re-derived it reached the same wrong answer. Asserting through a
+// proxy the buggy case also satisfies is this project's signature failure, recorded here because
+// the proxy is the seductive part, not the conclusion.
+//
+// Re-swept over all 114 fact-present carriers and 110 aircraft short names, through the real
+// queries and their real limits, with the correct predicate:
+//
+//     CARRIER-TYPETABLE        6 below-floor rows over  4 pages -- 0 disagreements
+//     CARRIER-TOPROUTES      141 below-floor rows over 24 pages -- 2 (2O, F4)
+//     CARRIER-TOPORIGINS      85 below-floor rows over 22 pages -- 1 (F4)
+//     AIRCRAFT-CARRIERTABLE    6 below-floor rows over  6 pages -- 0 disagreements
+//
+// So both Top-N tables ARE testable behaviourally, and both are tested below, each on a carrier
+// that disagrees for a DIFFERENT reason. Only the aircraft-type table here and /aircraft's
+// carrier table have no discriminating page anywhere in the warehouse; those two are pinned on
+// the prop instead, in app/floorPartition.callsites.test.tsx, which states why.
+describe("/carrier/<code> sorts below-floor rows last", () => {
+  /** One table's rendered rows: the below-floor flag, and seats as the page PRINTED them --
+   * `null` where the cell is the absence marker, which is a different finding from 0 and is the
+   * whole mechanism the Top-origins fixture below turns on. */
+  function rowsOf(container: HTMLElement, tableIndex: number) {
+    const table = container.querySelectorAll("table.data-table")[tableIndex];
+    if (table === undefined) throw new Error(`no table ${tableIndex} on this page`);
+    return [...table.querySelectorAll("tbody tr")].map((tr) => {
+      const seats = tr.querySelectorAll("td.num")[0]?.textContent ?? "";
+      return {
+        belowFloor: tr.getAttribute("data-below-floor") === "true",
+        seats: seats === "\u2014" ? null : Number(seats.replace(/,/g, "")),
+      };
+    });
+  }
+
+  /** A below-floor row may not be followed by a scored one, and the table must hold at least one
+   * of each -- otherwise the assertion is vacuous and passes against the bug. */
+  function expectContiguousSuffix(flags: boolean[]) {
+    const first = flags.indexOf(true);
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(flags.slice(0, first).length).toBeGreaterThan(0);
+    expect(flags.slice(first).includes(false)).toBe(false);
+  }
+
+  it("sorts the Top routes table's below-floor rows last, and withholds their rank", async () => {
+    // 2O: 25 rows, 2 below floor, disagreeing the ORDINARY way -- a below-floor row (179 seats,
+    // 28 departures) out-seats three scored ones (176, 169, 168), so the measure sort puts it at
+    // 21 of 25 and the partition has to move it.
+    //
+    // NOT 4W, AND THE REASON IS THE SHARPEST TRAP THIS UNIT TURNED UP.
+    //
+    // *A fixture that exercises one of two asserted properties is the vacuous fixture wearing
+    // half a disguise.*
+    //
+    // This test asserts two things: the ORDER (below-floor rows last) and the RANK (1..k, then
+    // em dashes). 4W's below-floor rows are already last by seats, so both orderings agree on it
+    // and the order half could never fail. The rank half still could -- and did. So the mutant
+    // died, the run reported this test by name as having refused it, and the property in the
+    // test's own title was never exercised at all. A reviewer and the conductor both signed off
+    // on 4W on exactly that evidence; it was found while fixing something else.
+    //
+    // CLAUDE.md's existing rule catches the fixture that fails to discriminate at all. This is
+    // the partial case, and a mutation report cannot distinguish it from real coverage: "test X
+    // went red" is true either way. The only thing that separates them is checking, per asserted
+    // property, that the fixture can distinguish correct from buggy ON THAT PROPERTY -- which is
+    // what the fixture guard below does, and why it is a separate assertion rather than a
+    // comment.
+    // MUTANT: `partition={false}` at the Top routes DataTable -> red here.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "2O" }) }));
+    const rows = rowsOf(container, 1);
+    expectContiguousSuffix(rows.map((r) => r.belowFloor));
+    // THE FIXTURE GUARD: a below-floor row really does out-seat a scored one here, so the two
+    // orderings genuinely disagree. Red -- not quietly vacuous -- if a refresh moves 2O.
+    const seatsOf = (below: boolean) =>
+      rows.filter((r) => r.belowFloor === below && r.seats !== null).map((r) => r.seats as number);
+    expect(Math.max(...seatsOf(true))).toBeGreaterThan(Math.min(...seatsOf(false)));
+    // ...and the rank column follows the partition rather than merely counting rows.
+    const table = container.querySelectorAll("table.data-table")[1];
+    const ranks = [...table.querySelectorAll('[data-testid="rank-cell"]')].map(
+      (n) => n.textContent,
+    );
+    const scored = rows.filter((r) => !r.belowFloor).length;
+    expect(ranks.slice(0, scored)).toEqual(Array.from({ length: scored }, (_, i) => String(i + 1)));
+    expect(new Set(ranks.slice(scored))).toEqual(new Set(["\u2014"]));
+  });
+
+  it("sorts the Top origins table's below-floor rows past a scored row with no stated seats", async () => {
+    // THE TEST A COMMENT IN THIS FILE PREVIOUSLY SAID COULD NOT BE WRITTEN. F4's Top origins is
+    // 7 rows: three scored, then two below floor holding a stated 0, then two scored whose seats
+    // are NULL because every filing in the window was quarantined. `seats DESC` is NULLS LAST, so
+    // 0 sorts ABOVE NULL and the sparse rows land at 4 and 5 of 7 -- the orderings disagree
+    // without any below-floor row out-seating anything.
+    // MUTANT: `partition={false}` at the Top origins DataTable -> red here.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "F4" }) }));
+    const rows = rowsOf(container, 2);
+    expectContiguousSuffix(rows.map((r) => r.belowFloor));
+    // THE FIXTURE GUARD, stated as the mechanism rather than as a restatement: a below-floor row
+    // with a stated seat count, and a scored row with none. That pair is exactly what NULLS LAST
+    // interleaves, so if a refresh ends it this goes red instead of turning vacuous.
+    expect(rows.some((r) => r.belowFloor && r.seats !== null)).toBe(true);
+    expect(rows.some((r) => !r.belowFloor && r.seats === null)).toBe(true);
+  });
+});
+
+/** THE STAT STRIP AND THE FOOT (#121). NO CARRIER's every trailing-12 filing is quarantined on
+ * this warehouse (measured), so this page cannot reach the wholly-quarantined clause with real
+ * data -- the branch exists, is identical to the one `/route`, `/aircraft` and `/airport` carry,
+ * and is driven live on those three. What is reachable here, and asserted below, is the other
+ * absence and the quarantine-beside-real-traffic case.
+ *
+ * The strip is read as an ORDERED LIST, never searched for a dash: under the bug load factor and
+ * average gauge rendered `—` anyway, so the buggy page read `0 · 0 · — · — · 0`. */
+function statStrip(container: HTMLElement): string[] {
+  return [...container.querySelectorAll(".stats .v")].map((n) => n.textContent ?? "");
+}
+
+describe("a carrier that filed nothing in the window states absence, not zero", () => {
+  // VX has been dormant since 2018-03. 45 `airline_id`s are, of which 44 have a `dim_carrier`
+  // row and therefore a page -- state the grain, because these are counted at two of them.
+  // MUTANT: seed `sumColumn` at 0 -> `["0", "0", "—", "—", "0", "0", "0"]` -> red.
+  it("renders the measures as absence while still stating the counts", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
+    expect(statStrip(container)).toEqual(["—", "—", "—", "—", "—", "0", "0"]);
+  });
+
+  // MUTANT: key the clause on `totals.seats === null` alone -> "Every filing by VX in this
+  // window is quarantined — 0 rows", naming the one cause it is not -> red.
+  it("names neither an exclusion nor quarantine", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).not.toContain("excluded from these totals");
+    expect(feet).not.toContain("is quarantined");
+    // The derived-measure disclosure and the two grain claims are not optional, and must
+    // survive an empty quarantine clause.
+    expect(feet).toContain("never averaged");
+  });
+
+  // QUARANTINE BESIDE REAL TRAFFIC, at this dataset's extreme: Wright Air Service filed 118
+  // quarantined rows in this window AND stateable traffic on 3 aircraft types. Its figures are
+  // honest, its ordinary clause is the true one, and without this the check_nots above could
+  // pass against a page that had stopped rendering a strip.
+  // MUTANT: key the clause on `quarantinedRowsOnPage > 0` -> the wholly-quarantined sentence
+  // appears over real figures -> red.
+  it("states real figures and the ordinary exclusion where rows were quarantined", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "8V" }) }));
+    const strip = statStrip(container);
+    expect(strip.slice(0, 5)).not.toContain("—");
+    expect(strip[5]).toBe("3");
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).toContain("118 quarantined rows excluded from these totals");
+    expect(feet).not.toContain("is quarantined");
+  });
+});
+
+describe("the foot's quarantine clause comes from the shared rule, with this page's words", () => {
+  // MUTANT: inline a route-local string in place of the `quarantineClause(...)` call -> the spy
+  // records nothing -> red. That is the mutant that survived the whole suite before this test.
+  // MUTANT: pass `carrier.name` as the subject, or "The carrier count is" as the counts -> the
+  // argument assertions redden. A call-count-only test would admit both.
+  it("passes its own subject and its own count line", async () => {
+    clauseSpy.mockClear();
+    render(await CarrierPage({ params: Promise.resolve({ code: "8V" }) }));
+    expect(clauseSpy).toHaveBeenCalled();
+    const arg = clauseSpy.mock.calls[0][0];
+    // "by" and not "at"/"on": a carrier FILES, an airport is filed AT. Each grain's preposition
+    // is the page's to supply, and getting it from the wrong page is the drift this pins.
+    expect(arg.subject).toBe("by 8V");
+    // /carrier's entity count is aircraft types, not carriers -- the one page where it differs.
+    expect(arg.counts).toBe("The aircraft-type count is");
+    expect(arg.quarantinedRows).toBe(118);
+    expect(arg.seatsAreNull).toBe(false);
+  });
+});
+
+describe("/carrier/<code>: the legend rail follows the CHART, not the rows (#123)", () => {
+  // ONE GATE PER CALL SITE, not one per rule. `mixChartDraws` is a single predicate, but each
+  // page decides for itself whether to pass it to `<LegendRail>` -- and reverting any ONE of
+  // those four call sites to `hasMix` is a live defect on that surface alone. A rule-level test
+  // cannot see that: CLAUDE.md's "enumerate the matrix per CALL SITE".
+  //
+  // DATASET-PINNED SUBJECT. W7 files exactly ONE month, 2019-03, 882 seats.
+  //
+  // SAY WHY IT RESOLVES, and it is not that the code is unique -- `dim_carrier` holds TWO `W7`
+  // airline_ids (20078 Western Pacific, 21944 Nealco d/b/a Watermakers Air). What makes
+  // `/carrier/W7` a page rather than the silent-pick refusal is `lookup_carrier_by_code.sql`'s
+  // FACT-PRESENCE clause: only one of the two has rows. That is CLAUDE.md's `/carrier/PA` rule
+  // read the other way round, and a sentence about a CODE here would be a claim the query never
+  // made. DL is the file's standing many-month subject.
+  // If this reddens after a BTS refresh, re-derive a one-month subject rather than deleting the
+  // test: the carrier with `count(DISTINCT year_month) = 1` in `fct_segment_month`.
+  it("renders NO fleet-shading group for a subject whose chart cannot draw", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "W7" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Fleet shading");
+    expect(rail.textContent).not.toContain("COVID is in the window on purpose");
+    // NOT VACUOUS: the rail is mounted and the chart really did decline to draw. Without these
+    // a page that failed to render at all would satisfy both negatives above.
+    expect(rail.textContent).toContain("Gauge rail");
+    expect(container.querySelector(".chart svg[role='img']")).toBeNull();
+  });
+
+  it("DOES render it for a subject whose chart draws", async () => {
+    // The positive control. It passes under the bug -- which is exactly why the absence
+    // assertion above is the one that catches it -- but without it, deleting the group outright
+    // would satisfy every negative in this file.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).toContain("Fleet shading");
+    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+  });
+});
+
+/** Drives the page through a raw-query header, the only way this page admits a filter
+ *  (`app/src/proxy.ts` + #106) -- the same shape as /aircraft's own `filtered`. */
+function filteredCarrier(code: string, rawQuery: string) {
+  vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: rawQuery }));
+  return CarrierPage({ params: Promise.resolve({ code }) });
+}
+
+describe("/carrier/<code>: the legend rail's arc group follows the ARCS (#123)", () => {
+  // EVERY ROW IN THAT GROUP DESCRIBES AN ARC -- width by seats, dashed below the load-factor
+  // floor, dotted-muted below the departure floor, and why a cross-panel arc is a straight line.
+  // A map can render with none of them, so "a map was drawn" is the wrong gate: `fetchCarrierTypeNetwork` deliberately returns a map with ZERO
+  // segments when every route of a pair is quarantined, so its disclosure reaches the reader --
+  // `F4 x SHORT360` is that view, pinned at the producer by `carrierTypeNetwork.test.ts`.
+  //
+  // Asserted as an ABSENCE, because the presence form passes under the bug. And per CALL SITE:
+  // each page decides for itself what to pass, so reverting one is a live defect on that surface
+  // alone. Mutant: pass `hasMap` back to `<LegendRail map={...}>` here and this goes red.
+  it("renders NO arc-rendering group when no arc was drawn", async () => {
+    const { container } = render(await filteredCarrier("F4", "type=SHORT360"));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Arc rendering");
+    expect(rail.textContent).not.toContain("width scales with seats");
+    // NOT VACUOUS, and this is the half that matters: the MAP is still mounted -- dropping the
+    // map to satisfy the negative would delete the disclosure this view exists to carry.
+    expect(container.querySelector(".map svg[role='img']")).not.toBeNull();
+    expect(container.querySelectorAll("polyline").length).toBe(0);
+    expect(rail.textContent).toContain("Gauge rail");
+  });
+
+  it("DOES render it when arcs were drawn", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    expect(container.querySelector("aside.legend")!.textContent).toContain("Arc rendering");
+    expect(container.querySelectorAll("polyline").length).toBeGreaterThan(0);
+  });
+
+  it("DOES render it when only the TYPE MAP draws, and the diff map has no panel", async () => {
+    // WHICH HALF OF THE DISJUNCTION REFUSES THIS FIXTURE. `arcsDrawn` on this page is
+    // `typeMap draws || any diff panel draws`, and every other fixture here sits where the
+    // first half cannot be the reason: `F4 x SHORT360` has BOTH halves false, and an unfiltered
+    // `DL` has `typeMap === null`, so only the diff half can ever be true. Delete the type-map
+    // disjunct entirely and all of them stay green -- the guard is deletable, which is CLAUDE.md's
+    // "assert WHICH check refuses a fixture, not that something did".
+    //
+    // WHAT THIS FIXTURE VARIES: a carrier with ZERO diff panels whose filtered type map
+    // nonetheless draws real arcs -- the one combination that isolates the first disjunct. F4
+    // has no diff panel at all (measured), and `F4 x ISLANDER` draws 3 polylines. Seven
+    // fact-present carriers have no diff panel and eight (carrier, type) views on them draw from
+    // the type map alone, so this is a served shape, not a constructed one.
+    //
+    // Mutant: drop `typeMap !== null && segmentArcsDrawn(typeMap)` from `arcsDrawn` and this
+    // goes red -- a page full of arcs with no group explaining them, #123's defect inverted.
+    const { container } = render(await filteredCarrier("F4", "type=ISLANDER"));
+    expect(container.querySelectorAll('[data-testid="diff-panel"]').length).toBe(0);
+    expect(container.querySelectorAll("polyline").length).toBeGreaterThan(0);
+    expect(container.querySelector("aside.legend")!.textContent).toContain("Arc rendering");
   });
 });

@@ -1782,8 +1782,20 @@ data read here — the two costs are not comparable.
 
 **The thresholds `f` is left to, stated plainly rather than assumed.**
 `deploy/cloudflare/rate-limit.json` blocks a source IP past **10 requests per 10 s** per
-`(ip.src, cf.colo.id)`, with a 10 s mitigation timeout — a sustained **1 req/s**. Two things about
-it are easy to get wrong and both matter here:
+`(ip.src, cf.colo.id)`, with a 10 s mitigation timeout — a sustained **1 req/s**. Four things
+about it are easy to get wrong, and all four matter here:
+
+- **The ruleset holds exactly ONE rule, and that is asserted before anything reads it.**
+  `cloudflare-apply.sh` PUTs the file with `--data @"$file"`, so its bytes are the request body
+  and every entry in `rules` ships. Each check reads one rule; appending a second — a second
+  expression, a second threshold, a second action — once left all fifteen of them green, because
+  they indexed `rules[0]` and nothing counted. Since #126 the first rule's expression is
+  genuinely hard to weaken, which makes *appending* one strictly easier than weakening it. The
+  constraint is "exactly one" rather than "every rule satisfies the same checks" because the
+  checks do not divide per rule — coverage is a property of the union of them, exclusion of all
+  of them — and **nobody has established how two rules in the `http_ratelimit` entrypoint
+  compose** against this zone. Measure that, record it here, and only then split the checks;
+  until someone does, the gate states what it knows.
 
 - **Its expression covers `/api/`, `/explore`, all four entity prefixes and the four
   `*/opengraph-image` paths — and nothing else** (#83, widened to three entity prefixes by #113
@@ -1812,6 +1824,12 @@ it are easy to get wrong and both matter here:
   four prefixes stay covered: it costs one clause, it survives a future narrowing of any one of
   them, and the cards are the most expensive request on the site.
 
+  > ⚠️ **The redundancy is checked against every spelling Next accepts, not just this app's.**
+  > Next generates a card from `opengraph-image` with a `.js`, `.ts` or `.tsx` extension, and the
+  > check globbed `.tsx` alone — so a fifth card at `/watch/[preset]/opengraph-image.ts` left the
+  > suite green, at which point this clause silently becomes load-bearing and the paragraph above,
+  > the test's own docstring and the `description` that ships to the zone are all false together.
+  >
   > ⚠️ **A clause that is redundant today gets retired by accident tomorrow unless a test names
   > it.** Deleting the card clause leaves every path-coverage assertion green, because the
   > prefixes cover those paths too — so coverage is not the property. The subset is:
@@ -1905,6 +1923,118 @@ it are easy to get wrong and both matter here:
   the exclusion test, while adding `starts_with(path, "/_next/")` turns the exclusion test red on
   `/_next/static/chunks/main.js`. Both mutants were run.
 
+  **One fixture per SUBRESOURCE FAMILY, because a path predicate reads a segment and an
+  extension and has no third axis.** A single `/_next/` path stands for a whole tree and bounds
+  only itself. The families, read off the production build rather than assumed:
+
+  | family | the narrowing a lone `.js` fixture misses |
+  |---|---|
+  | `/_next/static/chunks/*.js` | — |
+  | `/_next/static/chunks/*.css` | `ends_with(".css")` |
+  | `/_next/static/media/*.woff2` | `ends_with(".woff2")`, `starts_with("/_next/static/media/")` |
+
+  These are the three families the 13 subresources counted above fall into.
+
+  **The `.css` shares its directory with the `.js`** — there is no `/_next/static/css/` — so
+  segment and extension are two *independent* axes, not one, and a fixture set varying only the
+  filename covers neither. The `.woff2` faces come from `next/font/google`
+  (`app/src/app/layout.tsx:2`). With only the `.js` fixture present, each narrowing in the
+  right-hand column passed **every** test in that file while pulling a real visitor's asset
+  fetches into the 10-per-10 s bucket; `ends_with(".woff2")` alone makes a page view **five**
+  slots, which falsifies the one-slot arithmetic this section's affordability argument rests on.
+
+  **The mutant, stated so it reproduces.** Adding one of those clauses to the disjunction turns
+  the *exclusion test* red, and the failure names the fixture that caught it. Drop that fixture
+  and re-run the same mutant and the *exclusion test* goes green — that, and not a claim about
+  the suite, is what makes the row necessary. The suite does not go green: the substitution sweep
+  reddens on the same expression for its own reason, because a clause with no `COVERED` fixture
+  under it is unbounded whatever it excludes. Two tests, two properties; do not collapse them
+  into "drop the fixture and the mutant passes", which is false and is falsifiable in one
+  command.
+
+  Filenames in the fixtures are **structural, not measurements** — the real ones are per-build
+  content hashes (`chunks/0cz1d0mv5g_q7.js`), so a pinned hash would rot on the next build with
+  nothing forcing a re-measure. The segment and the extension are the load-bearing part.
+
+  **Each asset family is bound to an authority outside the fixture table — the ones that EXIST.**
+  Neither authority enumerates what a build emits, so a genuinely new family is not forced into
+  the table by them, and saying otherwise would claim more than the gate delivers. What does
+  hold: adding any clause to the expression without a `COVERED` fixture under it reds the
+  substitution sweep, which requires every clause to have one (verified with `ends_with(".svg")`,
+  `ends_with(".ttf")`, `starts_with("/_vercel/")` and `starts_with("/_next/static/webpack/")` —
+  each dies there). So a new family cannot be brought *inside* the rule unnoticed; it can be
+  emitted by a build and go unlisted here, and that residual is real. `app/smoke.sh` greps the
+  served HTML for the stylesheet's href and pins
+  `^/_next/static/chunks/.+\.css$` — an independent, served-vantage confirmation that css and js
+  share `chunks/`. The fonts have **no** smoke equivalent, which is why the same test asserts the
+  other direction instead: something under `app/src` imports `next/font`, therefore the
+  `media/*.woff2` family exists, therefore the table must carry a row for it. Both halves are
+  asserted, so if the app stops importing `next/font` the test says to remove the row with it
+  rather than leaving a fixture excluding a family nothing emits.
+
+  > ⚠️ **Which rows are enforced, measured by deleting each and running the file.** Eight of the
+  > nine are individually necessary, bound to two different things. The three `/_next/` rows are
+  > bound to what the app **emits** (above). `/`, `/watch`, `/watch/gauge`, `/sitemap.xml` and
+  > `/robots.txt` are bound to what it **serves**: every path in `proxy.ts`'s matcher that the
+  > expression does not match must be listed here, so a new page route joins the rate limit or
+  > joins this table and cannot quietly do neither. `/search` is the single exemption, carrying
+  > its reason beside the name — it is deliberately outside both, and listing it would assert the
+  > opposite. **`/favicon.ico` alone is deletable with the file green**: not a matcher path, not
+  > an asset family, held by review. One row, named.
+  >
+  > The three asset rows carry one requirement more: each must be separated from its neighbours
+  > by a path **segment** or an **extension**, so a fourth row cannot be another `chunks/*.js`
+  > that looks like coverage and adds none. That narrow candidate space **is** the test —
+  > allowing arbitrary affixes makes it satisfiable by any two distinct strings, which is a
+  > recorded mutant. It over-rejects a `/_next/` route that is not `dir/file.ext` (`/_next/image`
+  > is the live example) and fails closed.
+
+  **A fixture for a PREFIX must differ in the SUFFIX too, and every prefix needs two.** The same
+  rule on the coverage side. One fixture under a prefix does not bound the prefix, it bounds that
+  fixture: `starts_with(path, "/route/JFK-LAX")` satisfies every assertion the known pair makes
+  while bounding none of the 404 family the clause exists for, and `ends_with(<any suffix the
+  fixtures share>)` fails the same way from the other side. #117 established this on `/route/`;
+  the other five clauses carried one fixture each until #129. **Measured against those
+  pre-#129 tables — not against the tables as they now stand — 71 single-literal substitutions
+  dropped part of what the clause they replaced matched and passed every test in the file** —
+  `ends_with("/pivot")` for `/api/`, `ends_with("A")` for `/airport/`,
+  `ends_with("L")` for `/carrier/`, `ends_with("8")` for `/aircraft/`. Each leaves the origin
+  exposed on what the real prefix covers and the literal does not.
+
+  **They were LOSSY, and only 16 of those 71 were "strictly less".** The other **55 were
+  incomparable** — they drop part of the clause's family *and* pick up paths it never matched, so
+  `ends_with("/pivot")` also answers for `/anything/pivot`. All four named above are in the 55.
+  The conclusion is identical for both groups, because the axis that matters is what a
+  substitution DROPS; the distinction is kept because calling them all subsets is a claim about
+  the other 55 that is simply false. Those three counts describe the state #129 closed and are
+  kept only as the evidence for the two-fixture rule; **they are not a current measurement, and
+  the current one is not written down because the test computes it** — every lossy substitution
+  over the tables as they stand is refused, and a single escape reddens it.
+
+  So each prefix now carries two rows that diverge immediately after it **and** end in different
+  characters — `/api/health` beside `/api/pivot`, `/airport/ZZZZ` beside `/airport/SEA`,
+  `/carrier/PA`, `/aircraft/CE-180`, `/explore/ZZZZ`. That pair kills both operator families at
+  once: no `starts_with` longer than the prefix covers both, and no `ends_with` covers both,
+  which leaves the empty literal — and that matches every path, so `UNCOVERED` refuses it.
+
+  > ⚠️ **The property is gated, not measured once.**
+  > `test_no_single_literal_substitution_can_make_a_clause_lossy` substitutes every prefix and
+  > every suffix of every fixture, under both operators, into every clause, and requires every
+  > **lossy** substitution — one that drops part of what the clause it replaced matched — to be
+  > refused. A seventh clause added without its suffix-disjoint pair fails there, on the
+  > substitution that proves it, rather than in whatever milestone next runs the search by hand.
+  >
+  > It also asserts **which** check refuses, per clause, and **which check that is comes off the
+  > fixtures, never off the operator**. A clause whose `COVERED` paths no other clause matches is
+  > held by the coverage table alone — dropping one of its paths breaks that table outright, and
+  > all six prefixes are here. A clause whose every `COVERED` path is *also* matched by another
+  > clause is invisible to the table, and is held instead by the rule that a clause must keep
+  > covering the paths it matches. `ends_with("/opengraph-image")` is the one: **all four cards
+  > sit under an entity prefix, so a narrowed card clause leaves the coverage table green.**
+  > Keying that on the operator instead would encode today's expression as a law and refuse a
+  > second suffix clause (`/twitter-image`, with its own fixtures) that is perfectly boundable.
+  > Without the split, every guard but one is deletable with the suite green.
+
   **A narrowing may read only a signal the EDGE decides.** Narrowing the rule by anything the
   client chooses is a bypass, not an exemption. `and not any(http.request.headers["rsc"][*] == "1")` —
   drafted to spare React's own prefetches — is `curl -H 'RSC: 1'` away from disabling the rule
@@ -1997,6 +2127,48 @@ it are easy to get wrong and both matter here:
   *unconditionally*, so every request reaches the origin, over an attacker-chosen unbounded `q`.
   It is cheap per request — one resolver query, no render — which is why it was not folded in
   here, but it is the one remaining path with no cache in front of it and no limit on it.
+- **The gate is on the SCRIPT, not on one file, and it reaches what the zone kept.**
+  `cloudflare-apply.sh` PUTs three files with `--data @"$file"`, so all three are request bodies
+  and the "every key ships" argument is the same for each. Each is now pinned by KEY SET, and two
+  membership checks that could not see an insertion are gone. The tunnel's was the worst:
+  `{"hostname": …, "service": "http://app:3000"} in ingress` passed with a shadowing entry
+  *prepended* at index 0 — cloudflared is first-match-wins, so every production request went to a
+  different service with the whole suite green. It is pinned by POSITION now. On the cache rule,
+  `enabled: false` (edge HTML caching off site-wide), a foreign `http.host`, and an added
+  `action_parameters.cache_key` all shipped ungated; the cache key matters here specifically,
+  because leaving the residual `f` axis to the edge is an argument about what the CDN stores
+  *under*.
+
+  **And `success: true` is not agreement.** The API applies what it recognises and drops the
+  rest without an error — measured on the `http_ratelimit` entrypoint, where a PUT updated the
+  description and rules and ignored `name`. Every other gate here constrains what we SEND; the
+  script now walks every scalar it sent and looks it up in the ruleset the response echoes back,
+  which costs no extra request. Four things about that comparison are deliberate:
+
+  - **It reports dropped-or-altered, never added.** Paths are enumerated from what was sent, so a
+    field Cloudflare *adds* (`id`, `version`, a defaulted `ratelimit` member) is invisible to it.
+    Forbidding unknown fields is the send side's job, by key-set equality. Two different questions.
+  - **`name` is exempt.** The zone freezes a ruleset's name at creation and ignores it on every
+    later PUT, so a divergence is not fixable by editing the file. Flagging it would halt the
+    deploy with a remedy that cannot converge — and `cache-rules.json` is PUT first, against an
+    entrypoint where nothing has been measured. It is reported as a note instead.
+  - **`characteristics` is compared as a set**, because it is set-valued at the edge while `rules`
+    is order-significant. Index comparison would turn a harmless reordering into two spurious
+    drifts; comparing it whole is also the one place an *added* member is caught.
+  - **Drift accumulates and fails once, at the end.** Exiting inside the PUT loop would halt at
+    whichever file tripped — and the ordering makes that worst-case, since `cache-rules.json`
+    goes first and carries no security control while `rate-limit.json` is second. The PUTs are
+    idempotent, so applying all of them and failing once is strictly better than stopping half
+    way. It reuses the DNS block's own `fail=0` … `[ $fail -eq 0 ]` shape.
+
+  The tunnel PUT is excluded, and the honest reason is narrower than "a different envelope":
+  the comparator enumerates paths from what was sent, so extra keys are tolerated by construction
+  and four scalar leaves cannot pass vacuously. The reason is that nobody has established *where*
+  that endpoint echoes the applied config — if `.result` is the configuration rather than an
+  object containing `.config`, a correct apply reports four drifts. **The DNS check below is not
+  a substitute:** it establishes that the hostname resolves to this tunnel and is proxied, and
+  says nothing about what the tunnel routes it to.
+
 - **Every path group shares ONE counter, not one each.** A rate-limiting rule counts per
   (rule, characteristics), and this is a single rule keyed on `(ip.src, cf.colo.id)` — so
   `/api/pivot`, `/explore`, a card and an entity page all draw on the same 10-per-10 s bucket.

@@ -219,6 +219,18 @@ describe("/airport/<code>", () => {
     expect(container.textContent).toMatch(/quarantined row/i);
     expect(container.textContent).toMatch(/never averaged/i);
   });
+
+  it("DOES render the fleet-shading rail group when a chart was drawn (#123)", async () => {
+    // The other side of the #123 gate, and the reason it is here rather than only on A18:
+    // without it, "never render the group" satisfies the absence assertion there and silently
+    // deletes a group four pages need. SEA has many filed months, so the chart draws and the
+    // rail must explain it. Note this direction passes under the BUG too -- that is exactly why
+    // the absence test is the one that catches it, and why both have to exist.
+    const { container } = render(await renderSEA());
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).toContain("Fleet shading");
+    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+  });
 });
 
 // #114, at the page. The unit tests prove the producer counts and the renderer states; this
@@ -237,6 +249,35 @@ describe("/airport/<code> whose whole network is one quarantined route pair", ()
     expect(container.querySelectorAll("polyline").length).toBe(0);
     expect(container.querySelector('[data-testid="network-notes"]')!.textContent).toContain(
       "1 quarantined route not drawn — failed an invariant, never clamped.",
+    );
+  });
+
+  it("renders NO fleet-shading rail group, because no chart was drawn (#123)", async () => {
+    // THE DEFECT STATED AS AN ABSENCE, which is the only form that can fail. A18 has exactly
+    // one filed month, so `AircraftMixChart` takes its `plot === null` branch and draws a line
+    // of text -- while the rail rendered the two gauge swatches and "The shaded months are
+    // 2020-03 to 2021-06. COVID is in the window on purpose", explaining a ramp that is not on
+    // the page. A test asserting the group IS present on a normal page passes under the bug;
+    // `docs/design/system.md` names this failure directly.
+    //
+    // Mutant: put `fleetMix={hasMix}` back on page.tsx's `<LegendRail>` and this goes red on
+    // both assertions, while the SEA test below stays green.
+    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "A18" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Fleet shading");
+    expect(rail.textContent).not.toContain("COVID is in the window on purpose");
+
+    // NOT VACUOUS, and this is the half that keeps the assertion honest: the rail is mounted,
+    // it carries its unconditional groups, and the chart really did decline to draw.
+    expect(rail.textContent).toContain("Gauge rail");
+    expect(container.querySelector(".chart svg[role='img']")).toBeNull();
+    // THE sentence, not merely some sentence. A18's one filed month is ITSELF wholly quarantined,
+    // so `mixAbsenceNote` names that cause rather than the bare month count. Integrating #121 and
+    // #123 moved this string: #123 pinned the note it found here, #121 changed which branch A18
+    // reaches, and neither unit could see the other. The property under test is unchanged -- the
+    // chart declined to draw and said why.
+    expect(container.querySelector(".chart")!.textContent).toContain(
+      "wholly quarantined — every filing failed an invariant",
     );
   });
 
@@ -621,6 +662,14 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
     expect(feet).toContain("Every filing at A18 in this window is quarantined");
     expect(feet).toContain("no measure above can be summed");
     expect(feet).not.toContain("excluded from these totals");
+    // BOTH counts, which is the one thing about this sentence that is genuinely this page's:
+    // /airport is the only entity page carrying a destinations count beside its carrier count,
+    // and the shared clause takes that noun phrase from the caller.
+    // MUTANT: pass "The carrier count is" here -> red. The 1:1 shape of A18 (1 row, 1 carrier,
+    // 1 destination) is exactly why a looser assertion would not notice.
+    expect(feet).toContain(
+      "The carrier and destination counts are counted from those rows, not net of them.",
+    );
   });
 
   it("agrees with its own count on the plural, on both halves of the sentence", async () => {
@@ -714,5 +763,92 @@ describe("/airport/<code> with nothing filed in the window", () => {
     // MUTANT: collapse the nested ternary back to a two-way on `quarantinedRows > 0` -> red.
     expect(feet).not.toContain("excluded from these totals");
     expect(feet).not.toContain("quarantined row");
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// THE FLOOR PARTITION AT THIS CALL SITE (#127). DataTable.test.tsx proves the component
+// partitions; it cannot prove this page reaches it with the partition on. A pinned function is
+// not a pinned call site (CLAUDE.md), and the exemption /explore now carries makes the prop a
+// real axis rather than a constant -- so the default has to be asserted where a page uses it.
+//
+// /airport is where the defect was reported and it is the only surface whose rows never pass
+// through a SQL ORDER BY at all: endpoints.ts folds the pivot by carrier in TypeScript and
+// sorts with `bySeatsDesc`. No SQL fix could have reached this page.
+describe("/airport/<code> sorts below-floor rows last", () => {
+  /** One rendered row of the carriers table: its carrier cell, its seats, and whether the page
+   * gave it the below-floor treatment. */
+  function carrierRowsRendered(container: HTMLElement) {
+    const table = container.querySelector("table.data-table");
+    if (table === null) throw new Error("expected a carriers table on this page");
+    return [...table.querySelectorAll("tbody tr")].map((tr) => ({
+      carrier: tr.querySelector("td.id")?.textContent ?? "",
+      seats: Number((tr.querySelectorAll("td.num")[0]?.textContent ?? "").replace(/,/g, "")),
+      belowFloor: tr.getAttribute("data-below-floor") === "true",
+    }));
+  }
+
+  async function stt() {
+    const r = await resolveAirportCode("STT");
+    if (r.kind !== "ok") throw new Error("expected STT to resolve for this fixture");
+    return await AirportView({ airport: r.airport });
+  }
+
+  it("renders the below-floor rows as one contiguous block at the bottom", async () => {
+    // MUTANT M9: flip DataTable's `partition` default to false -> red. MUTANT M1 (delete the
+    // partition entirely) -> red. Neither is visible to any test that counts dashed rows.
+    const rows = carrierRowsRendered(render(await stt()).container);
+    const firstBelow = rows.findIndex((r) => r.belowFloor);
+    expect(firstBelow).toBeGreaterThanOrEqual(0);
+    expect(rows.slice(firstBelow).every((r) => r.belowFloor)).toBe(true);
+  });
+
+  it("still discriminates: a below-floor row here outranks a scored one by seats", async () => {
+    // THE FIXTURE GUARD, and it is the whole reason STT is the airport named here. The test
+    // above is only meaningful while the measure order and the partitioned order DISAGREE on
+    // this page -- if every below-floor row were already last by seats, both orderings would
+    // agree and "contiguous block at the bottom" would pass against the bug it exists to catch.
+    // That is exactly how M4c's two-sort fixture failed.
+    //
+    // Measured at the time of writing (trailing 12 to 2026-05): MQ files 380 seats on 5
+    // departures and sits below floor, while VD files 115 seats on 120 departures and does
+    // not -- so the measure sort puts a below-floor row ABOVE a scored one. If a BTS refresh
+    // ends that, this goes red and the fixture MOVES to another airport (CLAUDE.md, "MOVE the
+    // fixture") rather than the assertion above quietly becoming vacuous.
+    // `Number.isFinite` drops the unknowable row -- STT's F4 renders `—` for every measure
+    // (its whole window is quarantined), and NaN would poison both extrema. It is neither
+    // below floor nor comparable by seats, so it takes no part in this comparison.
+    const rows = carrierRowsRendered(render(await stt()).container);
+    const seatsOf = (below: boolean) =>
+      rows.filter((r) => r.belowFloor === below && Number.isFinite(r.seats)).map((r) => r.seats);
+    expect(Math.max(...seatsOf(true))).toBeGreaterThan(Math.min(...seatsOf(false)));
+  });
+});
+
+describe("/airport/<code>: the legend rail's arc group follows the ARCS (#123)", () => {
+  // EVERY ROW IN THAT GROUP DESCRIBES AN ARC -- width by seats, dashed below the load-factor
+  // floor, dotted-muted below the departure floor, and why a cross-panel arc is a straight line.
+  // A map can render with none of them, so "a map was drawn" is the wrong gate: a hub map always paints its origin disc, so `/airport/A18` and
+  // `/airport/OQZ` render a map with zero polylines.
+  //
+  // Asserted as an ABSENCE, because the presence form passes under the bug. And per CALL SITE:
+  // each page decides for itself what to pass, so reverting one is a live defect on that surface
+  // alone. Mutant: pass `hasNetwork` back to `<LegendRail map={...}>` here and this goes red.
+  it("renders NO arc-rendering group when no arc was drawn", async () => {
+    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "A18" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Arc rendering");
+    expect(rail.textContent).not.toContain("width scales with seats");
+    // NOT VACUOUS, and this is the half that matters: the MAP is still mounted -- dropping the
+    // map to satisfy the negative would delete the disclosure this view exists to carry.
+    expect(container.querySelector(".map svg[role='img']")).not.toBeNull();
+    expect(container.querySelectorAll("polyline").length).toBe(0);
+    expect(rail.textContent).toContain("Gauge rail");
+  });
+
+  it("DOES render it when arcs were drawn", async () => {
+    const { container } = render(await renderSEA());
+    expect(container.querySelector("aside.legend")!.textContent).toContain("Arc rendering");
+    expect(container.querySelectorAll("polyline").length).toBeGreaterThan(0);
   });
 });

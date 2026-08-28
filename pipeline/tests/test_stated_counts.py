@@ -96,6 +96,7 @@ STATED: dict[str, tuple[str, ...]] = {
         "app/src/lib/map/albers.ts",
         "app/src/lib/map/greatCircle.test.ts",
         "app/src/lib/map/greatCircle.ts",
+        "app/src/lib/map/networkMap.test.ts",
         "app/src/lib/map/networkMap.ts",
         "app/src/lib/map/panelContainment.test.ts",
         "app/src/lib/map/segmentMap.test.ts",
@@ -139,6 +140,8 @@ STATED: dict[str, tuple[str, ...]] = {
     "route_pairs_with_same_airport": (
         "app/smoke.sh",
         "app/src/app/route/[pair]/page.tsx",
+        # #121: the denominator for how narrow the crossover annotation's new refusal is.
+        "app/src/lib/chart/crossover.ts",
         "app/src/components/AircraftMixChart.test.tsx",
         "app/src/lib/chart/aircraftMix.test.ts",
         "app/src/lib/chart/aircraftMix.ts",
@@ -166,6 +169,14 @@ STATED: dict[str, tuple[str, ...]] = {
         "app/smoke.sh",
         "app/src/app/route/[pair]/page.test.tsx",
         "app/src/app/route/[pair]/page.tsx",
+        # #121: `sumColumn`'s null SEED is what makes these pairs render an absence rather than
+        # a fabricated zero, so the count is the evidence for the seed and belongs beside it --
+        # in the module, in its own tests, in `sumTotals`'s tests, and on the route card whose
+        # sixth stat has to name which of the two absences a page is in.
+        "app/src/app/route/[pair]/opengraph-image.test.tsx",
+        "app/src/lib/entityFacts.test.ts",
+        "app/src/lib/nullSum.test.ts",
+        "app/src/lib/nullSum.ts",
         "docs/data/invariants.md",
         "docs/design/system.md",
         "docs/product/features.md",

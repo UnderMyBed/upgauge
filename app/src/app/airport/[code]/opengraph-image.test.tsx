@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 
 // THE LAST HOP INTO AN ImageResponse, which nothing else can reach. `Image()` returns a PNG
-// stream, so every other assertion in this file calls the route's EXPORTED helpers directly and
-// none of them can see whether the default export still calls them -- measured, replacing
-// `stats: airportCardStats(totals)` with a hard-coded literal left all 1,464 tests green. That
-// is the third instance of this shape in one change (`<Chart note={null} />`, the `cardSixthStat`
-// literal, and this), and extracting a function to "make the wiring testable" only moves the
-// unpinned hop up one level unless something actually invokes the caller.
+// stream and hands nothing back, so no assertion that calls a helper directly can see whether the
+// default export still calls it -- measured during #118, replacing this route's sixth-stat call
+// with a hard-coded literal left all 1,464 tests green. That was the third instance of the shape
+// in one change (`<Chart note={null} />`, the `cardSixthStat` literal, and this), and extracting a
+// function to "make the wiring testable" only moves the unpinned hop up one level unless
+// something actually invokes the caller. #121 deleted the extracted helper for that reason; the
+// spy below is what was doing the work all along.
 //
 // `renderEntityCard` is the seam. The spy CALLS THROUGH to the real implementation rather than
 // standing in for it, so the route still rasterizes a real card and this file's existing
@@ -19,13 +20,7 @@ vi.mock("@/lib/og/card", async (importOriginal) => {
   renderSpy.mockImplementation(actual.renderEntityCard);
   return { ...actual, renderEntityCard: renderSpy };
 });
-import Image, {
-  airportCardStats,
-  alt,
-  contentType,
-  dynamic,
-  size,
-} from "@/app/airport/[code]/opengraph-image";
+import Image, { alt, contentType, dynamic, size } from "@/app/airport/[code]/opengraph-image";
 
 /** Real route, real `upgauge.duckdb`, no mock -- see route/[pair]/opengraph-image.test.tsx's
  * header for why the resolution contract is what these assert and why a mocked resolver would
@@ -86,41 +81,17 @@ describe("/airport/<code> opengraph-image", () => {
 });
 
 // ---------------------------------------------------------------------------------------
-// THE COMPOSITION, not the rule and not the wiring. `cardSixthStat`'s four cells are asserted
-// where it lives (lib/og/entityCard.test.ts); these assert that THIS page pairs it with the
-// right fallback and the right five measures. They call the exported function directly, so they
-// cannot see whether `Image()` still calls it -- that hop needs the spy in the describe below,
-// and believing these covered it is what left the mutant alive.
-describe("the card's stat row composes the shared rule with this page's fallback", () => {
-  const base = { loadFactor: null, avgGauge: null, carriers: 1, destinations: 1 };
-
-  it("carries the quarantined count when no measure can be stated", () => {
-    // MUTANT: inline `{ label: "Carriers", ... }` in place of the cardSixthStat call -> red.
-    const stats = airportCardStats({
-      ...base, seats: null, passengers: null, departures: null, quarantinedRows: 1,
-    });
-    expect(stats).toHaveLength(6);
-    expect(stats[5]).toEqual({ label: "Quarantined", value: "1" });
-    expect(stats.slice(0, 5).map((s) => s.value)).toEqual(["—", "—", "—", "—", "—"]);
-  });
-
-  it("carries the carrier count on a page that filed nothing", () => {
-    // The 290-page cell, through the real composition.
-    const stats = airportCardStats({
-      ...base, seats: null, passengers: null, departures: null, quarantinedRows: 0, carriers: 0,
-    });
-    expect(stats[5]).toEqual({ label: "Carriers", value: "0" });
-  });
-
-  it("carries the carrier count on an ordinary page", () => {
-    const stats = airportCardStats({
-      ...base, seats: 100, passengers: 90, departures: 4, quarantinedRows: 0, carriers: 7,
-    });
-    expect(stats[5]).toEqual({ label: "Carriers", value: "7" });
-    expect(stats[0]).toEqual({ label: "Seats", value: "100" });
-  });
-});
-
+// THE COMPOSITION, THROUGH THE REAL ROUTE ONLY. `cardSixthStat`'s four cells are asserted where
+// it lives (lib/og/entityCard.test.ts); what is left to pin here is that THIS page pairs it with
+// the right fallback and the right five measures -- and that hop cannot be reached by calling an
+// exported helper, because `Image()` returns a PNG stream and hands nothing back.
+//
+// This file used to call an exported `airportCardStats` for three of these cases. #121 deleted
+// that wrapper (every card now composes `cardStats` with `cardSixthStat` inline, so it named
+// nothing the expression does not), and its own docstring had already recorded that calling it
+// from a test proved nothing about the route: replacing the call with a hard-coded `Carriers`
+// literal left the whole suite green. Every case it covered is below, driven through the spy,
+// where the same mutant dies.
 describe("the default export's card input", () => {
   // A18 and 05A are the two absences, and both have fewer than two filed months, so `cardChart`
   // returns early and no Plot/jsdom rendering happens in this node-environment file.
@@ -149,14 +120,85 @@ describe("the default export's card input", () => {
     expect(input.stats[5]).toEqual({ label: "Carriers", value: "0" });
   });
 
+  it("keeps the entity count on a page with quarantined rows beside real traffic", async () => {
+    // THE THIRD BRANCH, and the one that makes the second operand non-deletable. STT filed 9
+    // quarantined rows in this window AND 2,081,101 stateable seats across 16 carriers -- 24 of
+    // the 29 /airport pages carrying a quarantined group look like this. Its measures are
+    // honest and its sixth stat must stay the carrier count.
+    //
+    // MUTANT: key `cardSixthStat` on `quarantinedRows > 0` alone -> STT flips to
+    // "Quarantined 9" -> red HERE. MUTANT: key it on `totals.seats === null` alone -> STT is
+    // unaffected, but 05A above flips to "Quarantined 0", naming the one cause it is not
+    // -> red THERE. Neither test catches the other's mutant, which is why both exist.
+    const input = await cardInputFor("STT");
+    expect(input.stats[5]).toEqual({ label: "Carriers", value: "16" });
+    expect(input.stats.map((x) => x.value)).not.toContain("—");
+  });
+
   it("rasterizes the page's own no-chart sentence, not a card-local one", async () => {
     // The other hop this file is the only place to reach: `chartNote` reaching `renderEntityCard`
     // at all. `card.test.tsx` pins that CardFrame RENDERS a note it is given; this pins that the
     // route SUPPLIES one.
     // MUTANT: `chartNote: null` at the render call -> red.
     const input = await cardInputFor("A18");
+    // A18's ONE filed month is itself wholly quarantined, so "only one month of filings" was
+    // true and useless -- it described the count and not the finding, on a card with no foot and
+    // no aria-label to add one. `mixAbsenceNote`'s third branch names the cause instead.
+    // MUTANT: call `mixAbsenceNote(months, dimension)` without the stateable set -> the old
+    // sentence returns -> red.
     expect(input.chartNote).toBe(
-      "Only one month of filings in this window (2025-06) — a stacked area needs at least two.",
+      "1 month of filings in this window, wholly quarantined — every filing failed an " +
+        "invariant, so no aircraft-type seats can be stated and there is nothing to draw.",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+/** THE CARD'S DISCLOSURE CHANNEL. Round 2 closed this on `/route` and ONLY `/route`: setting
+ * `unknowable: 0` on `/airport`, `understated: 0` on `/carrier` and `unknowable: 0` on
+ * `/aircraft` simultaneously left all 1,561 tests green -- the fix applied per RULE where the
+ * defect is per CALL SITE, which is the failure CLAUDE.md names and the commit that made it
+ * quoted. `smoke.sh` cannot reach any of it: a card is a rasterized PNG with no aria-label, no
+ * foot and no empty state, which is why `CardInput`'s docstring calls a wrong word here
+ * unrecoverable. The spy is the only seam that sees these values. */
+describe("the card's absence counts and note reach renderEntityCard", () => {
+  async function cardInput(SLUG: string) {
+    renderSpy.mockClear();
+    await Image({ params: Promise.resolve({ code: SLUG }) });
+    expect(renderSpy).toHaveBeenCalledTimes(1);
+    return renderSpy.mock.calls[0][0] as {
+      gaps: number;
+      unknowable: number;
+      understated: number;
+      chartNote: string | null;
+      chartSvg: string | null;
+    };
+  }
+
+  // RLU carries BOTH: 3 wholly-quarantined months and 1 understated one over the full window.
+  // 110 airports carry at least one, so this channel is live on real cards, not hypothetical.
+  // MUTANT: `unknowable: 0` at the render call -> red. MUTANT: `understated: 0` -> red.
+  it("carries both absence counts for an airport that has both", async () => {
+    const input = await cardInput("RLU");
+    expect(input.unknowable).toBe(3);
+    expect(input.understated).toBe(1);
+  });
+
+  // A second airport, so neither count can pass by borrowing the other's value.
+  it("carries the wholly-quarantined count on an airport with only that", async () => {
+    const input = await cardInput("JBR");
+    expect(input.unknowable).toBe(6);
+    expect(input.understated).toBe(0);
+  });
+
+  // THE NOTE, and this catches the mutant a hard-coded literal makes: replacing
+  // `chartNote: chart.note` with `"No filings in this window."` -- the exact wording
+  // `mixAbsenceNote`'s docstring records as having shipped once and calls unrecoverable on a
+  // card -- left all 1,561 green. A page that HAS a chart must carry no note at all, so any
+  // literal reddens here whatever it says.
+  it("carries no note on a card that has a chart to draw", async () => {
+    const input = await cardInput("SEA");
+    expect(input.chartSvg).not.toBeNull();
+    expect(input.chartNote).toBeNull();
   });
 });
