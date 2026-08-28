@@ -402,7 +402,7 @@ export async function WatchPresetView({ preset }: { preset: Preset }) {
               />
             ))}
           </div>
-          <LegendRail />
+          <LegendRail ranked />
         </div>
       </main>
     </div>

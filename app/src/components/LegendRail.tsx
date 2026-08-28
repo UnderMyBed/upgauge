@@ -19,6 +19,17 @@ import { BY_AIRCRAFT_TYPE, type MixDimension } from "@/lib/chart/aircraftMix";
  * reader how to read the thing next to it. Defaulted, so `/explore`, `/route`, `/airport` and
  * `/carrier` are untouched.
  *
+ * `ranked` is the same rule again, for the one mark this rail did not name. `—` appears in two
+ * different columns and means two different things: under a measure it is "no measure to state",
+ * and in a rank column it is "not ranked", because a below-floor row is excluded from ranking
+ * (docs/design/system.md, "The data table"). The rank column carries no visible header -- it is
+ * `aria-label`led only -- so a sighted reader has nothing on the page telling the two apart, and
+ * this rail is where the product explains its own marks rather than a "how to read this" page
+ * that goes stale. Opt-in because only `/carrier` and `/watch` render a rank column at all, and
+ * a rail explaining a column that is not there is the exact staleness this element replaces.
+ * It explains the ENCODING, not today's rows -- the same reason the gauge group names `<110`
+ * regional metal on a page that may have none.
+ *
  * `map` is the M7 counterpart, opt-in for the same reason: three pages draw a map and the rest
  * do not. `/airport/<code>` draws a hub network, `/carrier/<code>` a point-to-point network for
  * one aircraft type, and `/aircraft/<name>` the same for one carrier -- `/carrier` also carries
@@ -31,7 +42,13 @@ export function LegendRail({
   fleetMix = false,
   stack = BY_AIRCRAFT_TYPE,
   map = false,
-}: { fleetMix?: boolean; stack?: MixDimension; map?: boolean } = {}) {
+  ranked = false,
+}: {
+  fleetMix?: boolean;
+  stack?: MixDimension;
+  map?: boolean;
+  ranked?: boolean;
+} = {}) {
   return (
     <aside className="legend">
       <h4>Chart legend</h4>
@@ -91,6 +108,16 @@ export function LegendRail({
           <b className="k">—</b>
           <em>no measure to state — never a zero</em>
         </div>
+        {/* SAME GLYPH, DIFFERENT COLUMN, DIFFERENT CLAIM -- and the rank column has no visible
+            header to tell them apart, so without this row the distinction exists only in
+            `aria-label` and in the design system. `.k` for the same reason as the row above: a
+            withheld rank is a data-availability mark, not an out-of-limit code. */}
+        {ranked ? (
+          <div className="lrow">
+            <b className="k">—</b>
+            <em>in the rank column: below the floor, so not ranked</em>
+          </div>
+        ) : null}
         <div className="lrow">
           <span className="g deriv font-mono">abc</span>
           <em>computed measure</em>

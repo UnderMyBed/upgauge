@@ -36,9 +36,10 @@
 // behavioural proof that the prop MEANS something lives in DataTable.test.tsx and in the
 // row-order tests on /airport and /route.
 //
-// It also generalises: this asserts over EVERY DataTable a page renders, so a seventh call site
-// added to any of these pages is covered the day it appears rather than the day someone
-// remembers to add a test for it.
+// It also generalises: this asserts over EVERY DataTable each page below renders, so a further
+// call site added to one of them is covered the day it appears rather than the day someone
+// remembers to add a test for it. All eight in the product are here -- /airport, /route,
+// /aircraft, /carrier x3, /watch and /explore.
 import { describe, expect, it, vi } from "vitest";
 
 const spy = vi.hoisted(() => ({
@@ -63,6 +64,8 @@ import { CarrierView } from "@/app/carrier/[code]/page";
 import { RouteView } from "@/app/route/[pair]/page";
 import { AircraftView } from "@/app/aircraft/[name]/page";
 import { ExploreView } from "@/app/explore/page";
+import { WatchPresetView } from "@/app/watch/[preset]/page";
+import { presetBySlug } from "@/lib/watch";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 import { resolveCarrier } from "@/lib/carrier";
 import { resolveAircraftSlug } from "@/lib/aircraftSlug";
@@ -143,6 +146,22 @@ describe("every DataTable call site declares the floor partition it means", () =
     // aircraft-type table has no discriminating page in the warehouse and rests on this.
     const ps = await partitionsOf(() => carrier("4W"));
     expect(ps.length).toBe(3);
+    expect(ps.every(partitioned)).toBe(true);
+  });
+
+  it("/watch takes the partition", async () => {
+    // THE EIGHTH CALL SITE, which an earlier revision of this file's header claimed to cover
+    // while having no entry for it. /watch is a structural no-op for the partition -- its rows
+    // carry `t12_departures_performed` and never `departures_performed`, so no preset row ever
+    // claims the floor -- but "the prop is unnecessary here" and "the prop is asserted here" are
+    // different statements, and only the second survives someone adding a table.
+    //
+    // The props union already refuses `partition={false}` beside `rank`, so a future RANKED
+    // table here cannot decline it. An UNRANKED one could, and that is the door this closes.
+    const preset = presetBySlug("gauge");
+    if (preset === null) throw new Error("expected the gauge preset to resolve");
+    const ps = await partitionsOf(() => WatchPresetView({ preset }));
+    expect(ps.length).toBeGreaterThan(0);
     expect(ps.every(partitioned)).toBe(true);
   });
 

@@ -131,10 +131,11 @@ interface OrderedRow {
  * wearing a different hat.
  *
  * `isBelowFloor` and nothing else decides the bucket -- NOT `reasonFor`. The two are
- * independent signals (see below), and 97.7% of zero-pax rows are also below floor
- * (docs/design/system.md), so partitioning on the winning GLYPH instead of on the floor would
- * leave every quarantined-and-sparse row sitting among the scored ones. That is the same
- * re-coupling `reasonFor`'s own comment exists to prevent, re-introduced one layer down. */
+ * independent signals (see below), and the base rate that matters here is the share of
+ * BELOW-FLOOR rows showing some other glyph: roughly one in four shows `Q` or `⌀`, because the
+ * gutter picks one code by severity. Partitioning on the winning glyph would leave every one of
+ * those sitting among the scored rows -- the same re-coupling `reasonFor`'s own comment exists
+ * to prevent, re-introduced one layer down. */
 function partitionByFloor(rows: Record<string, unknown>[]): Record<string, unknown>[] {
   const scored: Record<string, unknown>[] = [];
   const sparse: Record<string, unknown>[] = [];
@@ -176,12 +177,12 @@ export function orderRows(
 }
 
 /** The gutter glyph and the below-floor row treatment are independent signals, not one
- * collapsed state. Measured over the trailing 12 months at route grain: 21,569 rows total,
- * 13,470 below floor, 3,278 zero-pax, and 3,202 of those are BOTH -- 97.7% of every zero-pax
- * row is also below floor. A single `reason` used to gate row treatment made that 14.8% of
- * all rows (the near-entirety of the zero-pax class) render as ordinary scored rows, which
- * silently dropped the below-floor signal from exactly the rows the design system calls the
- * trust moment. The gutter still shows one glyph, chosen by severity (`Q` > `⌀` > `n`,
+ * collapsed state. A row can be below floor AND zero-pax at once, and nearly every zero-pax row
+ * is; run the other way -- which is the direction that matters -- roughly one in four below-floor
+ * rows shows `⌀` or `Q` rather than `n`. A single `reason` used to gate row treatment rendered
+ * all of those as ordinary scored rows, silently dropping the below-floor signal from exactly
+ * the rows the design system calls the trust moment. The gutter still shows one glyph, chosen
+ * by severity (`Q` > `⌀` > `n`,
  * `reasonFor`); the row treatment (`data-below-floor`, dashed rule, muted text, muted gauge
  * tick) is driven by `isBelowFloor()` directly and applies whenever the row is below floor,
  * regardless of which glyph won. See docs/design/system.md, "reason-code gutter". */

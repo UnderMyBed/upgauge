@@ -1409,6 +1409,37 @@ check_re  "carrier?type: the 308 preserves the filter, not just the code" "$LOC"
   "^[Ll]ocation: $(re_escape '/carrier/DL?type=B737-8')$"
 check     "carrier?type: the 308 keeps the project Cache-Control"    "$HDRS" "$HTML_CACHE_EXPECTED"
 
+# 11c. THE WITHHELD RANK (#127). A below-floor row is excluded from ranking, so its rank cell is
+# an em dash rather than a number. No unit test can see this reach a browser, and NOTHING ELSE IN
+# THIS FILE READS ONE: the four existing rank needles are /watch-only, and /watch structurally
+# never produces a dash -- its rows carry `t12_departures_performed`, never `departures_performed`,
+# so no preset row ever claims the floor.
+#
+# The needle is a raw U+2014, which is what React EMITS for the `"\u2014"` string literal in
+# DataTable's rank cell -- verified by hexdump against this served build (`e2 80 94`), not copied
+# from the source. That is the check CLAUDE.md's "bytes React emits" rule exists for: a needle
+# written as `&mdash;` here would print `ok` forever without ever matching anything.
+#
+# 2O, dataset-pinned: 25 Top routes, 2 below floor, and its sparse rows genuinely interleave under
+# the measure sort (a 179-seat below-floor row out-seats scored rows at 176, 169 and 168).
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/2O")
+check_dataset check_re "carrier/2O: a below-floor row's rank cell is the em dash" \
+  "$BODY" '<td[^>]*rank[^>]*>\xe2\x80\x94</td>'
+# The positive control. An implementation that dashed EVERY rank cell -- which is exactly what
+# `orderRows` does when the partition is off -- satisfies the check above on its own.
+check_dataset check_re "carrier/2O: ...while the scored block still numbers from 1" \
+  "$BODY" '<td[^>]*rank[^>]*>1</td>'
+
+# The correction landed in the user-facing copy, not only in system.md: `—` means two different
+# things in two different columns, and the rank column has no visible header to tell them apart.
+check     "carrier: the legend rail says what a rank dash means" \
+  "$BODY" 'in the rank column: below the floor, so not ranked'
+# ...and it is OPT-IN, so a page with no rank column does not explain one. This is the half that
+# distinguishes "the rail was given the line" from "the rail states it unconditionally".
+BODY=$(curl -s --max-time 30 "${BASE}/explore")
+check_not "explore: no rank-column legend on a page with no rank column" \
+  "$BODY" 'in the rank column'
+
 # 12. /aircraft/<slug> -- the slug is not a key, and the chart stacks by carrier.
 BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8")
 check     "aircraft: renders the short name" "$BODY" '>B737-8<'

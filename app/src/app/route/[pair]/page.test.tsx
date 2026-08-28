@@ -419,21 +419,56 @@ describe("/route/<pair> Open Graph metadata (M9 Task 6b)", () => {
 // true but /explore opts out, so a per-call-site opt-out is caught only by a test that reads
 // this page's own rendered rows.
 describe("/route/<pair> sorts below-floor rows last", () => {
+  /** One rendered row of the carriers table: below-floor flag, and seats as the page printed
+   * them (`null` for the absence marker, a different finding from 0). */
+  function carrierRows(container: HTMLElement) {
+    return [...container.querySelectorAll("table.data-table tbody tr")].map((tr) => {
+      const seats = tr.querySelectorAll("td.num")[0]?.textContent ?? "";
+      return {
+        belowFloor: tr.getAttribute("data-below-floor") === "true",
+        seats: seats === "\u2014" ? null : Number(seats.replace(/,/g, "")),
+      };
+    });
+  }
+
   it("renders the below-floor carriers as one contiguous block at the foot", async () => {
-    // MKE-ORD: 15 carrier rows in the trailing 12, 10 of them below floor, and a scored row
-    // sits below a sparse one under the measure sort (measured) -- so the two orderings
-    // disagree and this can fail for the reason it claims. JFK-LAX cannot be the fixture: every
-    // carrier on it clears the floor by three orders of magnitude.
+    // MKE-ORD: 15 carrier rows in the trailing 12, 10 of them below floor.
     // MUTANT: `partition={false}` at page.tsx's DataTable -> red here only.
     const { container } = render(
       await RoutePage({ params: Promise.resolve({ pair: "MKE-ORD" }) }),
     );
-    const flags = [...container.querySelectorAll("table.data-table tbody tr")].map(
-      (tr) => tr.getAttribute("data-below-floor") === "true",
-    );
+    const flags = carrierRows(container).map((r) => r.belowFloor);
     const first = flags.indexOf(true);
     expect(first).toBeGreaterThanOrEqual(0);
     expect(flags.slice(0, first).length).toBeGreaterThan(0);
     expect(flags.slice(first).includes(false)).toBe(false);
+  });
+
+  it("still discriminates: a below-floor carrier here out-seats a scored one", async () => {
+    // THE FIXTURE GUARD, AND IT IS EXECUTABLE -- this was a prose claim until the final review
+    // caught that /route was the one call site the round's own remedy never reached. /airport
+    // got a guard `it()`, /carrier two inline guards, /route a sentence.
+    //
+    // The sentence was also load-bearing and wrong: it said JFK-LAX "cannot be the fixture:
+    // every carrier on it clears the floor". JFK-LAX does carry a below-floor carrier row, last
+    // of five. It is unusable because the ORDERINGS AGREE there, which is the only property that
+    // matters and is not the one the comment named.
+    //
+    // The population is against this test: over the 400 busiest routes in the trailing 12, 327
+    // satisfy its assertions with the orderings already agreeing and only 2 disagree. MKE-ORD is
+    // one of the two, so it is one refresh away from vacuous -- exactly the 4W disease this
+    // branch invented the guard for.
+    //
+    // MECHANISM: a below-floor carrier (4,195 seats, 25 departures) out-seats a scored one
+    // (2,924 seats, 45 departures), so the measure sort puts it at 5 of 15 and the partition has
+    // to move it. If a refresh ends that, THIS goes red and the fixture moves; the test above
+    // does not quietly stop testing anything.
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "MKE-ORD" }) }),
+    );
+    const rows = carrierRows(container);
+    const seatsOf = (below: boolean) =>
+      rows.filter((r) => r.belowFloor === below && r.seats !== null).map((r) => r.seats as number);
+    expect(Math.max(...seatsOf(true))).toBeGreaterThan(Math.min(...seatsOf(false)));
   });
 });

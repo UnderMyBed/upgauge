@@ -594,7 +594,7 @@ export async function CarrierView({
           </div>
           {/* The rail describes the encodings THIS page uses and no others; the fleet-shading
               group is asked for only when a chart is actually drawn. */}
-          <LegendRail fleetMix={hasMix} map={hasMap} />
+          <LegendRail fleetMix={hasMix} map={hasMap} ranked />
         </div>
       </main>
     </div>
