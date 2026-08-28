@@ -9,6 +9,7 @@ import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
+import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
 import { encode } from "@/lib/pivot/urlstate";
 import {
   EARLIEST_MONTH,
@@ -202,6 +203,12 @@ export async function RouteView({
   const truncated = result.rows.length >= limit;
   const isEmpty = result.rows.length === 0;
   const hasMix = mix.length > 0;
+  /** WHETHER THE CHART DREW, which is not whether it has rows (#123). One filed month has rows
+   *  and draws a line of text, so `hasMix` is the right gate for RENDERING `AircraftMixChart`
+   *  -- it is what makes the absence note appear -- and the wrong one for the legend rail's
+   *  fleet-shading group, which would then explain a ramp the reader cannot see. Read from the
+   *  chart's own predicate, never re-derived here. */
+  const chartDrawn = mixChartDraws(mix);
   // The range the chart can DRAW, which is not the range it was fetched over. The fetch asks
   // for EARLIEST_MONTH -> asOf; a subject that stopped filing in 2022 yields an x axis ending
   // in 2022, and 12,115 of 23,041 route pairs last filed before the current trailing-12 window,
@@ -304,7 +311,7 @@ export async function RouteView({
           {/* The rail describes the encodings THIS page uses and no others -- the same reason
               LegendRail's own header gives for leaving the mockup's map group out of /explore.
               The fleet-shading group is asked for only when a chart is actually drawn. */}
-          <LegendRail fleetMix={hasMix} />
+          <LegendRail fleetMix={chartDrawn} />
         </div>
       </main>
     </div>

@@ -734,7 +734,7 @@ reason — the fallback branch catches whatever the two explicit tests miss:
   trailing 12 (`fct_route_month`, since a map draws one arc per undirected route;
   `fct_segment_month`'s directed halves are 39,908 and 38,512) — **2.73px** apart even at full
   canvas width. Conversely, under the shipped Marianas-scaled `pac` fit, PPG would land at
-  (1892.5, 1102.0) and MDY at (1367.6, −429.7), both off a 960×500 canvas. Those two are
+  (1892.5, 1102.0) and MDY at (1367.6, −429.7), both off a 960×544 canvas. Those two are
   counterfactuals under one specific rect: `fitPanels`'s `ox`/`oy` move with it, so re-derive
   them rather than carrying them forward. Three panels, not
   one: `pac` (`lon < −200`), `sam` (`lat < 0`) and `nwhi` (Midway). Note that `lon < −200` is

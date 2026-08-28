@@ -301,6 +301,25 @@ fleet-shading group, which only a page carrying a chart gets. A rail that explai
 ramp on a page with no ramp is exactly the stale "how to read this" this element exists to
 replace, and it costs the reader trust in the groups that *are* relevant.
 
+**The test is "was it DRAWN", never "is there data for it".** They are different questions, and a
+page gating on the second asks the wrong one. It bites twice:
+
+- **Fleet shading** — a subject with a single filed month *has* mix rows and draws a line of text,
+  because a stacked area over one month has a degenerate x domain. `/airport/A18` and `/airport/OQZ`
+  are the live cases. The predicate is `mixChartDraws` (`lib/chart/mixPlotConfig.ts`), and
+  `prepareMixPlot` is routed **through** it so a page and the chart beside it cannot disagree.
+- **Arc rendering** — every row in that group describes an *arc*, and a map can render without one.
+  A hub map always paints its origin disc (`/airport/A18`, `/airport/OQZ`), and
+  `fetchCarrierTypeNetwork` deliberately returns a zero-segment map so its quarantine disclosure
+  reaches the reader (`/carrier/F4?type=SHORT360`, `/aircraft/AS350-B2?carrier=8E`). The predicates
+  are `segmentArcsDrawn` / `networkArcsDrawn`, both reading the renderer's own `drawableSegments`.
+  Gating on "a map exists" would delete the map to satisfy the rail, which is the wrong repair: the
+  map stays, the group goes.
+
+Both are asserted as an **absence**, because the presence form passes under the bug — and **per call
+site**, since each page decides for itself what to pass. Four pages pass `fleetMix`, three pass
+`map`; a rule-level test cannot see one of them being reverted.
+
 **The rail carries methodology, never per-subject numbers.** The fleet-shading group states
 that one ramp is ordered by seats per departure, that a darkening stack is an upgauge, and
 that membership is a *different* ordering — but not how many types "Other" holds on this
@@ -571,6 +590,44 @@ specific panels ever run. The extra panels exist precisely because a two-test sp
   *both* directions at once (east past PQI, Maine, and south of EYW, Key West) — no single
   rectangle holds them and the lower 48 legibly.
 
+**The canvas is 960×544, and each page's `viewBox` is cropped to the panels its own network
+reaches.** A page that reaches no inset must not spend the tray's height on blank canvas: an
+Alaska-only network drew a small ALASKA inset under ~320px of empty conterminous panel, on
+`/airport/BET`, `/airport/A18`, `/airport/JZM` and `/airport/OQZ`. Those pages now serve
+`viewBox="0 354 960 190"` against a conterminous page's `0 12 960 532` — measured on a served
+build, and `.map svg { height: auto }` means the intrinsic ratio is what the page actually spends.
+
+The crop reuses `renderMapCore`'s own `fits.has(panel)` predicate, the one that already decides
+which inset frames are drawn, so the canvas and the frame follow one rule instead of two.
+
+- **The `viewBox` window is the only thing that changes.** `fitPanels(BASEMAP_FIT_POINTS)` is
+  called with bit-identical input and no drawn point moves. Cropping a window and re-fitting a
+  panel are different operations, and the M7 Task 8 rule — a per-page fit reuses the coastline's
+  baked fit verbatim, never unioning the subject's points into it — is untouched.
+- **Vertical only.** The disclosure footer is painted at x=8 and runs the full 960px; a horizontal
+  crop would clip copy that reaches the reader nowhere else.
+- **The window is the panel bands unioned with the ink actually emitted**, so clipping is
+  structurally impossible rather than empirically absent. A great circle bows outside its rect, a
+  node label runs below its centre, and a subject's own code is drawn 19px above a point only
+  guaranteed to be inside the rect.
+- **The footer is anchored to the crop's floor**, not to the canvas height, or every sparse page
+  would lose its disclosure off the bottom.
+- **A small multiple crops as a set: measure, union, hand back.** `DiffMap` stacks three maps of one
+  carrier and compares them by position, so three different heights would be a second, unintended
+  encoding. Two things split a set — *reach* (one panel goes to Alaska) and *ink*, which is easier
+  to miss: with BLI in the added panel alone every panel reaches `us` and only `us`, yet the boxes
+  came out `0 9 960 453`, `0 12 960 450`, `0 12 960 450`. One union closes both, because a map's
+  window is its bands unioned with its own ink. The set measures every member with
+  `segmentMapWindow` — which asks the renderer rather than recomputing its geometry — and hands the
+  union back to each. *Reserving panels across the set is not a second step:* `floor`, `ceil` and
+  `max(0, ·)` are monotone, so the union of the unreserved windows is identical to the union of the
+  reserved ones.
+- **A map that reaches no panel gets the whole canvas.** `fetchCarrierTypeNetwork` returns a
+  zero-segment map on two arms so its disclosure survives; with no bands to union, the crop has no
+  extent to take and returns the full canvas rather than an empty one. Without that arm the page
+  served `viewBox="0 Infinity 960 -Infinity"` and painted the disclosure at `y="-Infinity"` — the
+  same "lies by omission" the non-null arms exist to prevent, arriving through the canvas instead.
+
 Note for implementers: raw Albers grows northward while screen `y` grows down. The `y` term
 must be negated or the country renders upside down — asserting that two projected points are
 merely *present* does not catch this; only their relative screen order does.
@@ -644,7 +701,7 @@ serves.
 
 **Folding Midway into `pac` instead would be a regression, not a simplification.** `pac`'s baked
 fit is scaled to the Marianas' own extent, so Midway lands at (1367.6, −429.7) under the shipped
-fit — off a 960×500 canvas — and `/airport/MDY?y=2021` loses its own subject while the caption says
+fit — off a 960×544 canvas — and `/airport/MDY?y=2021` loses its own subject while the caption says
 only the landmass is missing. MDY has exactly one filing in the window (MDY–HNL, HA, 2021-09,
 278 seats), so `/airport/MDY?y=2021` and `/airport/HNL?y=2021` are the two pages this decision
 is about.
@@ -656,7 +713,7 @@ over that coastline alone is right for the coastline and too narrow for the airp
 Measured against the built warehouse over all 9,796 fact-present airport × window views: **seven**
 fact-present Alaskan airports projected outside `PANEL_RECTS.ak` — ADK, AKB, FQW, IKO, SNP, STG,
 SYA, across **69** of those views — and **three** put the subject's own `r=4.5` disc *or* its
-right-anchored label off the 960×500 canvas, where `globals.css`'s `svg:not(:root) { overflow:
+right-anchored label off the canvas, where `globals.css`'s `svg:not(:root) { overflow:
 hidden }` clips it away: ADK at (−3.1, 453.4), AKB at (7.0, 454.5) and SYA at (−35.2, 433.5),
 across **27** views. `/airport/SYA?y=2018` rendered a map of a network whose centre was not on it.
 **AKB is the one a disc-only check misses** — its disc was on-canvas and its label ran to x = −19.8,
@@ -745,14 +802,37 @@ and so fires where the live sweep skips, and second because it names the cause r
 reporting a moved `k`; it also asserts separately that the anchor *binds* the fit's southern edge
 rather than sitting inside it.
 
-**The guard is asymmetric, and the unwatched direction is south.** An anchor placed too far *north*
-is caught twice — the containment sweep, and the clearance assertion one step before it. An anchor
-placed too far *south* (a transcription typo, or an extent not in the source at all) silently
-**shrinks** the lower 48 while every airport stays comfortably inside its rect; the only thing that
-moves is the hand-pinned `us` fit constant, which the same commit is already updating. That is
-review catching it, not a gate. Both `AK_EXTENT_ANCHORS` and `US_EXTENT_ANCHORS` are hand
-transcriptions of extrema from a file the repo does not commit and no `make` target fetches, so the
-transcription is unverifiable in CI. Tracked as **#128**.
+**A declared extent anchor is now bound in the direction that had no gate at all, and the two
+directions are still not symmetric.** Too far *out* is caught by `panelContainment.test.ts`'s "a
+declared extent anchor sits just outside the airports it exists to place": an anchor exists to put a
+panel's edge where its outermost airport is, so anchor and airport must agree to within **4px** on
+whichever axis the anchor is derived to bind — and an anchor binding *no* axis is refused outright,
+since it is doing nothing. That direction needed its own gate because over-reaching makes every
+containment property *more* true: the panel shrinks, every airport moves further inside its rect,
+and the only artifact that disagrees is the hand-pinned fit constant the same commit is re-pinning.
+
+*State the asymmetry rather than claiming parity, because it is about 4× and it was measured.* On
+Attu, **over**-reach reddens the new gate at **0.5°**; **under**-reach fires nothing at all at 1°
+and only trips the containment sweep at **2°**, once an airport actually falls outside its rect. The
+new gate is itself one-sided by construction: under-reaching *shrinks* the anchor-to-airport gap, so
+it can never trip a ceiling. Under-reach remains the containment sweep's job, and it is the coarser
+of the two.
+
+**The gate binds to the airport population, not to a second copy of the constant.** Measured gaps
+are 0.86px (Marquesas Keys), 3.30px (Attu) and 1.03px (Amatignak); at half a degree of over-reach
+they are 8.30px and 4.39px, both red, while the containment sweep stays green. **If it reddens,
+re-derive the anchor from 1:10m — do not widen the ceiling**, which is narrow on purpose: `ak` draws
+2.4px per degree of longitude, so a comfortable ceiling there cannot catch a transposed digit. A red
+may also be a true signal that the dataset moved; read the value before assuming the test is wrong.
+
+*What it does not reach*, run rather than assumed: Amatignak over-reaching by ≤0.2°. `ak` binds on
+width, so that anchor governs only vertical centring and 0.2° moves it ~1.1px. The bound is
+`regionOf`'s own — Amatignak sits at 51.215 against `lat > 51`, so it cannot move more than 0.215°
+without being re-filed as `us`, which the `ak` declared-extent test catches by name.
+
+Both constants remain hand transcriptions from a file the repo does not commit and no `make` target
+fetches. That is deliberate: adding a network dependency to a build step that has none costs more
+than the class of error it removes.
 
 **Blast radius, because the issue predicted the opposite.** #119 was filed saying the fix would
 rewrite every path byte in `basemapPaths.generated.ts`, every panel's geometry. It rewrites **one**:
@@ -772,21 +852,25 @@ Midway is scored the way its page actually renders it rather than through the `u
 now carries no exemptions**: the two it shipped with, EYW and MTH, were closed by the `us` declared
 extent above, and the assertion is an exact sorted set precisely so that fixing them is red too.
 
-**What #119 did *not* close, because the issue's own second clause was false.** It read "EYW and
-MTH … land inside the Caribbean inset's frame", citing `/airport/EYW` drawing its subject disc on a
-labelled CARIBBEAN box. Re-derived clause by clause against the warehouse: EYW and MTH have **never**
-shared a route pair with any `car`-panel airport in any year, and an inset frame is only drawn for a
-panel a network actually reaches — so `/airport/EYW` never draws that box at all. What is true is
-the *other* clause, and it is far wider than two airports. Counting fact-present airports whose
-`regionOf` panel is `us` and whose projected point falls inside the drawn `car` frame — the rect
-`[424, 392, 720, 468]` grown by the 6px the renderer draws its border at, so `[418, 386]`–`[726,
-474]`, inclusive on all four edges — gives **18 before #119 and 17 after it**. Only SRQ falls out,
-because everything shifted ~5px up; the defect is untouched. MIA is inside on both sides, at
-(711.6, 406.3) before and **(708.4, 401.0)** now, about 22px above EYW either way. That is `car`'s
-rect overlapping the bottom-right of `us`'s — the pre-existing overlap the land test below records
-as `["FL", "TX"]` — not an extent defect, and no `us` fit can reach it. It is **#122**, it moves
-rects, and moving rects lights up the frame-overlap, canvas-bounds and tray-baseline gates that
-#119 leaves untouched by construction.
+**An inset frame is never drawn over an airport that belongs to another panel.** `us` is the one
+panel with no frame of its own, so nothing separates it from an inset laid over it — and the bottom
+inset tray used to be drawn *inside* the `us` rect's vertical range. `car`'s frame held **17**
+fact-present `us` airports (12 Florida, 5 south Texas; MIA at (708.4, 401.0), EYW at (690.7, 423.1)),
+each drawn with its own code beside it inside a box labelled CARIBBEAN.
+
+The tray now sits below the `us` rect: **`car`'s frame top is 430 against the rect's bottom edge of
+424**, one frame pad clear. Stated against the *rect* rather than against the southernmost airport,
+because every `us` airport is inside that rect by the containment sweep's standing property — so no
+dataset can put one under the tray, rather than today's happening not to. The pad is six because a
+point exactly on the rect's floor still paints a 4.5px subject disc or a label descender reaching
+y+5.
+
+Three gates hold it, and they are deliberately different instruments: `albers.test.ts` asserts the
+clearance structurally and needs no warehouse; `panelContainment.test.ts` sweeps all 1,047
+fact-present airports against all six frames; `segmentMap.test.ts` renders `MIA → SJU`, the near
+miss, because a fixture without an airport near the frame cannot fail. `basemap.test.ts` holds every
+inset frame clear of drawn conterminous land **with no exemption** — `car` is in that list like any
+other panel.
 
 None of 9,796, 344, 69, 27 or the per-island pixel widths is generated; like 757/79/7 above they
 are measurements dated by the commit that took them, and must be re-measured when quoted. The two
@@ -847,8 +931,8 @@ height, never its position**, so relocating to the top-left margin — frame (34
 which no lower-48 coastline reaches, since `us` land spans x[157.7, 802.3] — preserved every
 figure above verbatim. There it measures **0 px² of land**, every label glyph clear, and exactly
 one arc crossing on `/airport/SFO`: SFO–GUM, which terminates inside the panel and must enter it.
-`pac` is therefore the one inset outside the bottom tray; the other five keep the shared 468
-baseline. **`sam` is 181×76** and **`nwhi` is 40×76**.
+`pac` is therefore the one inset outside the bottom tray; the other five keep one shared
+baseline, at **512**. **`sam` is 181×76** and **`nwhi` is 40×76**.
 
 *Every pixel figure in the two paragraphs above depends on the `us` fit, and nothing regenerates
 them* — the rect they describe was never shipped, so no gate reads them: they are re-measured by
@@ -876,10 +960,10 @@ fitted to 180.9 × 76.0. It is sized for the tray anyway because the frame has t
 node and its 9px label; a fidelity-matched box would be about 30×13px, narrower than the word
 printed on top of it.
 
-**`car` has the same defect, at ~1,024 px² over drawn Florida and Texas — 4.6% of its rect,
-against `pac`'s 31.3%.** It shipped in M7 Task 7b and is not fixed here. It is recorded
-because `basemap.test.ts` asserts every other inset frame is clear of drawn land, and a test that
-simply omitted `car` would read as though the property held everywhere.
+**Every inset frame is clear of drawn conterminous land, and `basemap.test.ts` asserts it for all
+six.** The list in that test is the property: an `it.each` that quietly omitted a panel would read
+as though the rule held everywhere, so a panel leaving it needs a stated reason and a gate of its
+own, never a shorter list.
 
 **The generated paths carry no presentation attributes, so the paint is a stylesheet rule and
 must stay one.** `basemapPaths.generated.ts` emits geometry alone — `<path data-panel="us"

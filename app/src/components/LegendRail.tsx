@@ -12,6 +12,14 @@ import { BY_AIRCRAFT_TYPE, type MixDimension } from "@/lib/chart/aircraftMix";
  * page with no ramp on it would be exactly the stale "how to read this" this element exists
  * to replace.
  *
+ * WHAT A CALLER MUST PASS IS "A CHART DREW", NOT "THERE ARE ROWS" (#123). Every page passed
+ * the second and they are different questions: a subject with one filed month has rows and
+ * draws a line of text, because a stacked area over one month has a degenerate x domain.
+ * `mixChartDraws` (lib/chart/mixPlotConfig.ts) is the predicate, and `prepareMixPlot` is
+ * routed through it so the chart and the rail beside it cannot disagree. This component
+ * cannot check for itself -- it is handed a boolean and never the rows -- so the rule lives
+ * here as a contract on the prop.
+ *
  * `stack` is M4d's application of the SAME rule one level down: the chart is now stacked by
  * either aircraft type or operating carrier, and the two ramps do not mean the same thing. On
  * `/aircraft/<slug>` every band is the same airframe, so "larger metal" and "the five types

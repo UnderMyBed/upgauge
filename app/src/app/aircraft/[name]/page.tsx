@@ -10,9 +10,11 @@ import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
+import { segmentArcsDrawn } from "@/lib/map/segmentMap";
 import { MapPicker } from "@/components/MapPicker";
 import { SegmentMap } from "@/components/SegmentMap";
 import { BY_CARRIER, fetchAircraftMix } from "@/lib/chart/aircraftMix";
+import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
 import { fetchCarrierTypeNetwork } from "@/lib/map/carrierTypeNetwork";
 import { rawFilterValue, resolveCarrierFilter } from "@/lib/map/mapFilter";
 import { pickerOptions } from "@/lib/map/picker";
@@ -216,6 +218,12 @@ export async function AircraftView({
   const truncated = result.rows.length >= limit;
   const isEmpty = result.rows.length === 0;
   const hasMix = mix.length > 0;
+  /** WHETHER THE CHART DREW, which is not whether it has rows (#123). One filed month has rows
+   *  and draws a line of text, so `hasMix` is the right gate for RENDERING `AircraftMixChart`
+   *  -- it is what makes the absence note appear -- and the wrong one for the legend rail's
+   *  fleet-shading group, which would then explain a ramp the reader cannot see. Read from the
+   *  chart's own predicate, never re-derived here. */
+  const chartDrawn = mixChartDraws(mix);
   // The range the chart can DRAW, which is not the range it was fetched over -- 39 of the 112
   // fact-present types last filed before the current trailing-12 window (measured), so naming
   // the requested window here would put "2015-01 → 2026-04" over a chart that stops in 2023.
@@ -231,6 +239,10 @@ export async function AircraftView({
   const columns = buildColumns(allowlist, result.columns);
 
   const hasMap = map !== null;
+  /** See `/airport`'s `arcsDrawn` (#123). `fetchCarrierTypeNetwork` deliberately returns a map
+   *  with ZERO segments when every route is quarantined or the only filing is same-airport, so
+   *  its disclosure reaches the reader -- and that map draws no arc for the rail to explain. */
+  const arcsDrawn = map !== null && segmentArcsDrawn(map);
   const basePath = `/aircraft/${canonical}`;
   // The picker reads the rows the page ALREADY awaited -- this page groups by `op_airline_id`,
   // which is exactly the dimension its map filters on, so the control costs no second query.
@@ -374,7 +386,7 @@ export async function AircraftView({
               muted below the 30-departure floor (`lib/map/arcs.ts`) -- and nothing else on the
               served page explains any of them. Asked for only when a map was drawn, so an
               unfiltered page does not carry a legend for an element it does not have. */}
-          <LegendRail fleetMix={hasMix} stack={BY_CARRIER} map={hasMap} />
+          <LegendRail fleetMix={chartDrawn} stack={BY_CARRIER} map={arcsDrawn} />
         </div>
       </main>
     </div>

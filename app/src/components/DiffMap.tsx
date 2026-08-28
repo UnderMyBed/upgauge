@@ -1,4 +1,5 @@
 import { SegmentMap } from "@/components/SegmentMap";
+import { segmentMapWindow } from "@/lib/map/segmentMap";
 import {
   DIFF_CATEGORIES,
   DIFF_CATEGORY_LABELS,
@@ -103,7 +104,7 @@ function otherCarrierNote(carrier: string): string {
  * PANELS ARE STACKED, NOT SET SIDE BY SIDE, and that is a measurement rather than a taste.
  * `.body` is `minmax(0, 1fr) 214px` inside a 1200px `.wrap` with 20px padding and a 24px gap, so
  * the main column is 922px; three across is 291px each, and `renderSegmentMap`'s canvas is
- * `viewBox="0 0 960 500"` whose labels are `font-size="10"` -- roughly 3px once scaled. A small
+ * 960px wide whose labels are `font-size="10"` -- roughly 3px once scaled. A small
  * multiple whose panels cannot be read is not a comparison. Stacking preserves the encoding --
  * first, second, third is still position -- and gives each panel the full column.
  *
@@ -139,6 +140,54 @@ export function DiffMap({
     (d): d is CarrierDiff => d !== undefined,
   );
 
+  // ONE CANVAS WINDOW ACROSS THE SET (#123). `renderSegmentMap` crops each map's canvas to what
+  // that map needs -- the panels it reaches, unioned with the ink it actually emits. Right for a
+  // single map, wrong for a small multiple: panels of different heights, stacked under one
+  // heading, are a second and unintended encoding on top of the position one this component
+  // already spends on category (see the header).
+  //
+  // MEASURE, UNION, HAND BACK. Two things can split the set, and only the union closes both.
+  // Reach is the obvious one -- a dropped-routes panel that goes to Alaska and an added-routes
+  // panel that stays conterminous. INK is the one that is easy to miss: with BLI (the
+  // northernmost fact-present `us` airport, whose node label rides above the `us` band) in the
+  // added panel alone, every panel reaches `us` and only `us`, yet the boxes came out
+  // `0 9 960 453`, `0 12 960 450`, `0 12 960 450` -- different top AND different height.
+  //
+  // RESERVING PANELS ACROSS THE SET IS NOT A SECOND STEP, and it is worth saying so because it
+  // looks like one. Passing every member the union of the panels ANY of them reaches is provably
+  // inert: `floor`, `ceil` and `max(0, .)` are all monotone, so the union of the unreserved
+  // windows is identical to the union of the reserved ones -- the union of the parts is the
+  // whole either way. Reserving and then NOT unioning is the combination that splits the set, so
+  // the union is the step that matters and it is the only one.
+  //
+  // MEASURE THE INPUT THAT IS ACTUALLY RENDERED. The panel input is built ONCE, here, and the
+  // same object is both measured and handed to `<SegmentMap>`. Measuring `d.map` and rendering
+  // `{...d.map, title}` is a divergence that looks harmless and is not: `title` adds a second
+  // footer line, the window a two-line footer needs is 12px taller, and the override would then
+  // pin every panel to a box measured for a footer it does not have -- putting the upper line
+  // back over the map it was just moved off. `segmentMapWindow` asks the renderer rather than
+  // recomputing its geometry, so the only way to ask the wrong question is to hand it the wrong
+  // input.
+  //
+  // `title` is refined from the producer's bare label to the carrier-qualified form, because it
+  // is the only field reaching the SVG's accessible name and `arcsSentence`'s "N routes drawn"
+  // does not name the carrier.
+  //
+  // Neither measuring nor sharing widens what is DRAWN: no fit changes, no extra frame is
+  // emitted, and a panel still draws only the panels its own network reaches.
+  const panels = ordered.map((d) => ({
+    d,
+    input: { ...d.map, title: diffPanelTitle(carrier, d.category) },
+  }));
+  const windows = panels.map((p) => segmentMapWindow(p.input));
+  const cropWindow =
+    windows.length === 0
+      ? undefined
+      : {
+          top: Math.min(...windows.map((w) => w.top)),
+          bottom: Math.max(...windows.map((w) => w.bottom)),
+        };
+
   // A carrier with no change AND nothing withheld gets no section at all -- fetchAirportNetwork's
   // "no panel rather than an empty panel" rule. `quarantinedRoutes` ALONE is enough to render,
   // though: F4 (21615) has 3 undrawable carrier-routes and ZERO drawable arcs, so gating the
@@ -162,7 +211,7 @@ export function DiffMap({
         </p>
       ) : null}
 
-      {ordered.map((d) => {
+      {panels.map(({ d, input }) => {
         // KEYED ON THE DATA, not on `d.category === "downgauged"`. `SegmentDatum.rankedBy` is
         // `number | null | undefined` and the producer emits an explicit `null` on added and
         // dropped (carrierDiff.ts:116), so `"rankedBy" in seg` and `seg.rankedBy !== undefined`
@@ -182,10 +231,8 @@ export function DiffMap({
             <div className="dp-window" data-testid="diff-panel-window">
               {d.window}
             </div>
-            {/* `title` is refined from the producer's bare label to the carrier-qualified form,
-                because it is the only field reaching the SVG's accessible name and
-                `arcsSentence`'s "N routes drawn" does not name the carrier. */}
-            <SegmentMap map={{ ...d.map, title: diffPanelTitle(carrier, d.category) }} />
+            {/* `input` is the OBJECT THAT WAS MEASURED, above -- see the comment there. */}
+            <SegmentMap map={{ ...input, cropWindow }} />
             {/* ONE `.foot` container, one `<p>` per note. `.foot` carries `border-top`
                 (globals.css:449), so sibling `.foot` paragraphs stack a hairline rule EACH --
                 on a downgauged panel that is three rules in a row counting SegmentMap's own

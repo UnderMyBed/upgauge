@@ -148,7 +148,7 @@ describe("NetworkMap", () => {
 
   it("draws real American Samoa coastline for a network reaching `sam` (#111)", () => {
     // Catches American Samoa being folded back into `pac`: under a Marianas-scaled fit PPG
-    // projects to (1892.5, 1102.0) under this commit's `pac` fit, off a 960x500 canvas, so
+    // projects to (1892.5, 1102.0) under this commit's `pac` fit, off the canvas, so
     // `sam` is a panel and not a rect tweak. A page reaching it must get its own labelled frame with real land under the dot.
     const html = render(<NetworkMap network={samoaReachingNetwork()} />).container.innerHTML;
     expect(html).toContain("AMERICAN SAMOA");
@@ -172,7 +172,7 @@ describe("NetworkMap", () => {
   it("keeps Midway's own node on the canvas", () => {
     // The regression #111 would otherwise have shipped. Baking a `pac` fit takes `pac` off
     // networkMap.ts's `?? subjectFits` fallback; folding Midway into `pac` as well would
-    // project it to (1367.6, -429.7) -- off a 960x500 canvas -- and `/airport/MDY?y=2021`
+    // project it to (1367.6, -429.7) -- off the canvas -- and `/airport/MDY?y=2021`
     // would lose its own subject while the caption cheerfully said only the landmass was
     // missing. `nwhi` exists so Midway keeps the subject-derived fit, which centres it in its
     // own frame. A POSITION assertion, because a "the arc is present" one passes under the bug

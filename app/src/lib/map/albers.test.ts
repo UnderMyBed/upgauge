@@ -29,7 +29,7 @@ describe("regionOf", () => {
     //
     // `not pac` is #111's: `pac`'s fit is baked to Guam + the Northern Marianas, whose extent
     // is ~5,000 km away, so a PPG that falls into `pac` projects to (1892.5, 1102.0) -- off a
-    // 960x500 canvas. Counterfactual under THIS commit's `pac` fit: `ox`/`oy` move with the
+    // canvas. Counterfactual under THIS commit's `pac` fit: `ox`/`oy` move with the
     // rect, so re-derive rather than copying a figure from an earlier revision of it.
     expect(regionOf(-14.3, -170.7)).toBe("sam");
   });
@@ -156,13 +156,58 @@ describe("PANEL_RECTS", () => {
     }
   });
 
-  it("keeps every inset frame inside the 960x500 canvas", () => {
-    // WIDTH/HEIGHT are networkMap.ts's, restated here rather than imported because importing
-    // the renderer into a projection test would couple Task 4's file to Task 6's.
+  it("keeps every inset frame inside the 960x544 canvas", () => {
+    // WIDTH/HEIGHT are segmentMap.ts's, restated here rather than imported because importing
+    // the renderer into a projection test would couple Task 4's file to Task 6's -- and because
+    // a canvas derived from these very rects would make this assertion vacuous. The literal is
+    // the point: it has to be a number someone chose and this test has to be what proves the
+    // rects still fit inside it.
+    //
+    // 544, not the mockup's 500, since #122. The tray moved down 44px to clear the `us` rect
+    // (`PANEL_RECTS`' own comment has the arithmetic) and the canvas grew by the same 44 to
+    // hold it. Run as the mutant: leave HEIGHT/this literal at 500 and `car`, `ak`, `hi`,
+    // `nwhi` and `sam` all report `false` here -- their frames end at 518.
     for (const { panel, frame } of INSETS) {
       const [x0, y0, x1, y1] = frame;
-      expect(`${panel}: ${x0 >= 0 && y0 >= 0 && x1 <= 960 && y1 <= 500}`).toBe(`${panel}: true`);
+      expect(`${panel}: ${x0 >= 0 && y0 >= 0 && x1 <= 960 && y1 <= 544}`).toBe(`${panel}: true`);
     }
+  });
+
+  it("keeps `car`'s frame below the `us` rect, which has no frame to defend it (#122)", () => {
+    // THE PROPERTY #122 EXISTS TO STATE, AND IT NEEDS NO DATABASE -- which is why it lives here
+    // as well as in `panelContainment.test.ts`'s population sweep, the one that skips in a
+    // checkout without a built warehouse. `us` is the only panel drawn WITHOUT a frame, so
+    // nothing separates it from an inset laid over it, and `car`'s frame used to be drawn
+    // inside its vertical range: at the tray's old y it held 17 fact-present `us` airports --
+    // 12 Florida, 5 south Texas, MIA at (708.4, 401.0) and EYW at (690.7, 423.1) -- inside a
+    // box labelled CARIBBEAN.
+    //
+    // Asserted against the `us` RECT, never against the southernmost airport. Every `us`
+    // airport is inside the `us` rect by the containment sweep's standing property, so a frame
+    // below that rect cannot hold one for ANY dataset. Clearing today's measured EYW instead
+    // would be one BTS coordinate revision from breaking.
+    //
+    // The floor is a full FRAME_PAD rather than "> 0" because a point sitting exactly ON the
+    // rect's bottom edge still paints below it: a 4.5px subject disc, or a 9px node label whose
+    // descender reaches y+5. A border one pixel under the edge would cross both.
+    //
+    // `car` ALONE, and the restraint is the honest part. `ak` is 146px tall and its frame
+    // reaches y=360, well inside the `us` rect; `hi`, `nwhi` and `pac` sit inside its x range
+    // too. None of them can be given this property without moving the whole layout, and none of
+    // them NEEDS it: `us` airports reach below y=386 only over the Florida peninsula and south
+    // Texas, which is exactly the x span `car` occupies. What holds the other five is measured,
+    // not structural -- `basemap.test.ts` for drawn land and `panelContainment.test.ts`'s frame
+    // sweep for airports, both of which report zero for all five. Do not "generalise" this loop
+    // to the tray; it goes red on `ak` immediately, which is how this comment came to exist.
+    //
+    // Mutant: restore `car` to [424, 392, 720, 468] and this reports `car clears the us rect by
+    // -38: false`. The containment sweep stays GREEN -- translating a rect translates
+    // everything projected into it, so it cannot see a rect move.
+    const [, , , usBottom] = PANEL_RECTS.us;
+    const clearance = PANEL_RECTS.car[1] - FRAME_PAD - usBottom;
+    expect(`car clears the us rect by ${clearance}: ${clearance >= FRAME_PAD}`).toBe(
+      `car clears the us rect by ${clearance}: true`,
+    );
   });
 
   it("keeps the bottom inset tray on one baseline", () => {
@@ -174,8 +219,11 @@ describe("PANEL_RECTS", () => {
     // to end at 468 while starting 140px above the tray -- a ragged row the assertion could not
     // see. Naming the tray explicitly is what keeps it honest.
     for (const panel of ["ak", "hi", "nwhi", "car", "sam"] as const) {
-      expect(`${panel}: ${PANEL_RECTS[panel][3]}`).toBe(`${panel}: 468`);
+      expect(`${panel}: ${PANEL_RECTS[panel][3]}`).toBe(`${panel}: 512`);
     }
-    expect(PANEL_RECTS.pac[3]).toBeLessThan(392);
+    // `pac` is not merely absent from the list above, it is nowhere near the row: its rect ENDS
+    // above where the tray BEGINS. Read from the tray's own top rather than a literal, so the
+    // claim survives the row moving -- which it did, 392 -> 436, in #122.
+    expect(PANEL_RECTS.pac[3]).toBeLessThan(PANEL_RECTS.ak[1]);
   });
 });

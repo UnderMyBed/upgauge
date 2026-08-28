@@ -26,6 +26,14 @@ const COORDS = {
   MDY: { lat: 28.2, lon: -177.38 }, // nwhi
   SJU: { lat: 18.44, lon: -66.0 }, // car
   PPG: { lat: -14.33, lon: -170.71 }, // sam -- southern hemisphere
+  // Key West -- the SOUTHERNMOST fact-present `us` airport, 0.86px above the `us` rect's floor
+  // and the airport `US_EXTENT_ANCHORS` exists to keep inside it. Its subject disc reaches 5.4px
+  // past its own point, which is the crop's `ink.bottom` term's own case.
+  EYW: { lat: 24.55611111, lon: -81.76 }, // us, on the rect's southern edge
+  // Bellingham -- the NORTHERNMOST fact-present `us` airport (measured over all 1,047), and the
+  // one fixture that exercises the crop's ink term. Its subject marker's own label is drawn at
+  // y-8 in 11px type, so its ink reaches y=2.93 while the `us` panel band starts at 18.
+  BLI: { lat: 48.79277778, lon: -122.5375 }, // us, at the top of the rect
 } as const;
 
 function originArc(code: keyof typeof COORDS): ArcDatum {
@@ -400,6 +408,66 @@ describe("renderNetworkMap", () => {
     for (const label of ["ALASKA", "HAWAI", "MARIANAS", "MIDWAY", "CARIBBEAN", "AMERICAN SAMOA"]) {
       expect(`${label}: ${svg.includes(label)}`).toBe(`${label}: true`);
     }
+  });
+
+  it("keeps a far-northern subject's own label inside the cropped canvas (#123)", () => {
+    // THE CASE THAT MAKES THE CROP'S INK TERM LOAD-BEARING, and it took a mutant to find that
+    // no other fixture did. `cropWindow` unions the reached panels' bands with the ink actually
+    // emitted; drop the ink term and every assertion in `segmentMap.test.ts`'s crop block still
+    // passes, because a segment map has no subject marker and a node's label is drawn BELOW its
+    // point. The marker is the mark that reaches upward: `renderMapCore` draws the subject's
+    // code at y-8 in 11px type, so its ink runs about 19px above a point that
+    // `panelContainment.test.ts` only guarantees is inside the rect.
+    //
+    // BLI is that point in production, not a contrived one -- the northernmost fact-present
+    // `us` airport, projecting to y=21.93, so its label ink reaches 2.93 against a `us` band
+    // top of 18. Without the union the window would start at 12 and `/airport/BLI` would serve
+    // a subject disc whose own code is sliced off by `svg:not(:root) { overflow: hidden }` --
+    // the same class of defect as #115's off-canvas AKB label, one panel over.
+    //
+    // Mutant: drop `ink.top` from `cropWindow`'s `top` and this goes red at 12 against 2.
+    const svg = renderNetworkMap({ ...fixture(), origin: originArc("BLI") });
+    const [, y] = svg.match(/viewBox="([\d.-]+) ([\d.-]+) /)!.slice(1).map(Number);
+    const labelTop = Math.min(
+      ...[...svg.matchAll(/<text x="[\d.-]+" y="([\d.-]+)" text-anchor="end" font-size="11"/g)].map(
+        (m) => Number(m[1]) - 11,
+      ),
+    );
+    expect(`window top ${y} is above the subject label top ${labelTop.toFixed(2)}: ${y <= labelTop}`).toBe(
+      `window top ${y} is above the subject label top ${labelTop.toFixed(2)}: true`,
+    );
+    // Not vacuous: the label really does sit above the `us` band, which is what the union is for.
+    expect(labelTop).toBeLessThan(PANEL_RECTS.us[1]);
+  });
+
+  it("keeps the footer its full band below a subject disc that hangs past its panel (#123)", () => {
+    // THE BOTTOM HALF OF THE CROP'S INK UNION, and the twin of the BLI case above. A panel's
+    // rect bounds a POINT; it says nothing about the ink that point paints. EYW sits 0.86px
+    // above the `us` band's floor of 424 -- the tightest airport on the panel, which is why
+    // `US_EXTENT_ANCHORS` exists -- and its subject disc (r=4.5 plus a 1.8 stroke centred on it)
+    // reaches 428.50, four and a half pixels BELOW the band.
+    //
+    // THE PROPERTY IS THE FOOTER'S MARGIN, NOT CONTAINMENT. The disc is never clipped either way:
+    // `footerBand` adds 26px under whichever floor is chosen, so a window measured to the band
+    // alone still ends at 450, comfortably past 428.50. What the ink term buys is that the
+    // footer clears everything DRAWN by the same margin `footerBand` guarantees over a frame --
+    // 10px -- rather than by whatever is left after a mark hangs into the band.
+    //
+    // Mutant: drop `ink.bottom` from `cropWindow`'s `bottom`. The window goes `0 12 960 443` ->
+    // `0 12 960 438`, the footer baseline 449 -> 444, and its ink starts 5.5px under the disc
+    // instead of 10.5 -- red here, and green in all 341 other map tests, which is how a comment
+    // calling this term non-binding survived a review round.
+    const svg = renderNetworkMap({ ...fixture(), origin: originArc("EYW") });
+    const discBottom =
+      Number(svg.match(/<circle cx="[\d.-]+" cy="([\d.-]+)" r="4.5"/)![1]) + 5.4;
+    const footerTop = Math.min(
+      ...[...svg.matchAll(/<text x="8" y="([\d.]+)" font-size="10"/g)].map((m) => Number(m[1]) - 10),
+    );
+    expect(
+      `footer starts ${(footerTop - discBottom).toFixed(1)}px below the disc: ${footerTop - discBottom >= 10}`,
+    ).toBe(`footer starts ${(footerTop - discBottom).toFixed(1)}px below the disc: true`);
+    // Not vacuous: the disc really does hang past the `us` band, which is what the union is for.
+    expect(discBottom).toBeGreaterThan(PANEL_RECTS.us[3]);
   });
 
   it("carries an accessible role and label", () => {

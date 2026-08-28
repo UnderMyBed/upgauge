@@ -307,13 +307,36 @@ export function mixAbsenceNote(months: string[], dimension: MixDimension): strin
     : `Only one month of filings in this window (${months[0]}) \u2014 a stacked area needs at least two.`;
 }
 
+/**
+ * WHETHER THE CHART DRAWS ANYTHING -- the predicate a SURFACE has to ask, and the reason it is
+ * exported rather than left inline below (#123).
+ *
+ * "Mix rows exist" and "a chart was drawn" are different questions, and every page that gated
+ * on the first one asked the wrong one. A subject with a single filed month has rows and draws
+ * NOTHING: a stacked area over one month has a degenerate x domain and serializes to zero
+ * width, so `prepareMixPlot` returns `plot: null` and `AircraftMixChart` renders
+ * `mixAbsenceNote` instead. On `/airport/A18` and `/airport/OQZ` the legend rail therefore
+ * explained a monochrome gauge ramp, and named the COVID shading window, beside a line of text
+ * -- the exact stale "how to read this" `docs/design/system.md` says the rail exists to replace.
+ * (#123 also names `/airport/JZM`; re-derived against the warehouse, JZM files TWO months and
+ * has always drawn its chart. Naming it here would be a third copy of a claim the issue got
+ * wrong, in the file that owns the predicate.)
+ *
+ * `prepareMixPlot` is routed THROUGH this rather than repeating the test, so a page and the
+ * chart beside it cannot disagree about whether there is a chart. Two functions that agree
+ * today is what produced the defect.
+ */
+export function mixChartDraws(rows: MixRow[]): boolean {
+  return new Set(rows.map((r) => r.month)).size >= 2;
+}
+
 export function prepareMixPlot(
   rows: MixRow[],
   title: string,
   dimension: MixDimension,
 ): PreparedMix {
   const months = [...new Set(rows.map((r) => r.month))].sort();
-  if (months.length < 2) return { months, plot: null };
+  if (!mixChartDraws(rows)) return { months, plot: null };
 
   const { bands, other, axis } = toBands(rows);
   const crossover = findCrossover(rows);
