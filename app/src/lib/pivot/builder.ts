@@ -2,7 +2,7 @@ import { EARLIEST_MONTH } from "@/lib/entityFacts";
 import type { Allowlist, DimensionEntry } from "@/lib/pivot/allowlist";
 import { MAX_LIMIT } from "@/lib/pivot/bounds";
 import { normalizeQuery, type Grain, type Grouping, type PivotQuery } from "@/lib/pivot/types";
-import { encode } from "@/lib/pivot/urlstate";
+import { encode, MONTH_RE } from "@/lib/pivot/urlstate";
 
 /** The permalink for a query. Four page files each kept a private copy of this one line
  *  before Task 1; the builder is the natural owner because it is the thing that emits hrefs. */
@@ -43,13 +43,29 @@ export function setGrain(q: PivotQuery, grain: Grain, a: Allowlist): PivotQuery 
     return e === undefined || atGrain(e, grain);
   };
   const dimensions = q.dimensions.filter((k) => keeps(k) && !a.dims.get(k)?.filterOnly);
+  if (dimensions.length === 0) {
+    // Never emit an empty `d` -- the server rejects it. Falling back to the first groupable
+    // dimension at the NEW grain is the only choice that is always available against a catalog
+    // that groups at least one dimension per grain -- true of every catalog this product has
+    // shipped, but unproven, so a catalog with NONE refuses the switch rather than crashing:
+    // nothing on this spine may throw, and `[undefined.key]` is a raw TypeError, not the
+    // UrlStateError every caller catches.
+    const fallback = groupableDimensions(a, grain)[0];
+    if (fallback === undefined) return q;
+    return repairSort(
+      normalizeQuery({
+        ...q,
+        grain,
+        dimensions: [fallback.key],
+        filters: q.filters.filter(([k]) => keeps(k)),
+      }),
+    );
+  }
   return repairSort(
     normalizeQuery({
       ...q,
       grain,
-      // Never emit an empty `d` -- the server rejects it. Falling back to the first groupable
-      // dimension at the NEW grain is the only choice that is always available.
-      dimensions: dimensions.length > 0 ? dimensions : [groupableDimensions(a, grain)[0].key],
+      dimensions,
       filters: q.filters.filter(([k]) => keeps(k)),
     }),
   );
@@ -110,6 +126,12 @@ export function setLimit(q: PivotQuery, n: number): PivotQuery {
  *  the same relationship `lib/year.ts` has with `/airport`'s `y`. A reversed pair is corrected,
  *  not refused: a control that produced `from > to` would otherwise emit a dead link. */
 export function setWindow(q: PivotQuery, from: string, to: string, asOf: string): PivotQuery {
+  // Shape first, clamp second -- clamping never validates shape (`m < EARLIEST_MONTH` on
+  // 'abc' is a lexical, not calendar, comparison, so a non-'YYYY-MM' string clamps to `asOf` at
+  // BOTH ends and is silently ACCEPTED as a real, if narrow, window instead of being refused).
+  // `MONTH_RE` is the codec's own shape check (urlstate.ts), imported rather than restated so
+  // the two can't drift on what a month looks like.
+  if (!MONTH_RE.test(from) || !MONTH_RE.test(to)) return q;
   const clamp = (m: string) => (m < EARLIEST_MONTH ? EARLIEST_MONTH : m > asOf ? asOf : m);
   const lo = clamp(from);
   const hi = clamp(to);
@@ -120,7 +142,18 @@ export function setWindow(q: PivotQuery, from: string, to: string, asOf: string)
   });
 }
 
-export function addFilter(q: PivotQuery, key: string, value: string): PivotQuery {
+/** Unlike `toggleDimension`, a `filterOnly` dimension (`endpoint_airport_id`) IS accepted here
+ *  -- that flag means "filter-only", not "unfilterable". Refuses (no-op) an unknown dimension,
+ *  one that is not offered at `q.grain`, or an empty value, matching `toggleDimension`'s own
+ *  idiom: this is the one place a clicked or typed string enters the spine, and `setGrain`'s
+ *  grain-drop repair (mutant 2) is worthless if a filter re-minted here can put the same
+ *  wrong-grain dimension straight back. Value-TYPE validation (an out-of-range integer, a
+ *  malformed composite `route` value) is deliberately NOT duplicated here -- that is
+ *  `render.ts`'s `checkFilterValue`, which owns the catalog-introspected column type and is
+ *  already the single place that rule lives. */
+export function addFilter(q: PivotQuery, key: string, value: string, a: Allowlist): PivotQuery {
+  const e = a.dims.get(key);
+  if (e === undefined || !atGrain(e, q.grain) || value === "") return q;
   const existing = q.filters.find(([k]) => k === key);
   if (existing !== undefined && existing[1].includes(value)) return q;
   const filters: [string, string[]][] = existing

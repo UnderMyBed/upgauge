@@ -339,7 +339,11 @@ describe("/aircraft/<slug> for a type that has stopped flying", () => {
     );
     // Gating the chart on `!isEmpty` -- the obvious way to write the mount -- blanks the only
     // panel with anything in it, and would pass every other test in this file.
-    expect(screen.getByRole("link", { name: /2015-01/ })).toBeDefined();
+    const widened = screen.getByRole("link", { name: /2015-01/ });
+    expect(widened).toBeDefined();
+    // The accessible NAME is static JSX text ("...2015-01...") regardless of the actual
+    // href -- only reading the attribute proves the link really carries the widened window.
+    expect(widened.getAttribute("href")).toContain("t=2015-01:");
   });
 
   it("names the range the chart actually draws, not the range it asked for", async () => {

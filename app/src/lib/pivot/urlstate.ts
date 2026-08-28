@@ -11,7 +11,11 @@ export class UrlStateError extends Error {
   }
 }
 
-const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+/** `YYYY-MM` shape, exported so `lib/pivot/builder.ts`'s `setWindow` can refuse a malformed
+ * month before it reaches the codec, rather than re-declaring this regex (the same
+ * one-source-of-truth reasoning as `ALLOWED_KEYS` above: a second hand-maintained copy is how
+ * the two drift). */
+export const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 // Maps, not object literals -- `URL_TO_GRAIN["constructor"]` etc. on a plain object would
 // return a truthy Function and sail past an `if (!grain)` guard, only caught later (and

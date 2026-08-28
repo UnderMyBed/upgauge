@@ -3,6 +3,7 @@ import { FIXTURE } from "@/lib/pivot/allowlist.fixture";
 import { decodeRequest } from "@/lib/pivot/bounds";
 import { encode } from "@/lib/pivot/urlstate";
 import { normalizeQuery, type PivotQuery } from "@/lib/pivot/types";
+import type { Allowlist } from "@/lib/pivot/allowlist";
 import {
   addFilter, groupableDimensions, filterableDimensions, removeFilterValue,
   setGrain, setGrouping, setLimit, setSort, setWindow, toggleDimension, toggleMeasure,
@@ -35,6 +36,12 @@ const SEEDS: PivotQuery[] = [
   q({ grouping: "mainline", filters: [["op_airline_id", ["19790"]]] }),
   q({ grain: "route", filters: [["route", ["12478-12892"]]], dimensions: ["route", "year"] }),
   q({ dimensions: ["origin_state", "dest_state"], measures: ["seats"], limit: 1000 }),
+  // Review-round addition: a filter resting on a segment-only dimension, carried into a
+  // setGrain:route mutation. This is the seed that kills mutant 2 (dropping the `.filter` on
+  // `filters` in setGrain) -- render.ts:170 validates a FILTER's dimension against `q.grain`
+  // exactly like a grouping dimension, and no other seed here exercises that path.
+  q({ dimensions: ["aircraft_type"], measures: ["avg_gauge"], sort: "avg_gauge",
+      filters: [["aircraft_type", ["612"]]] }),
 ];
 
 /** Every mutation the builder can emit, as (name, fn) so a failure names the culprit. */
@@ -49,8 +56,8 @@ function mutations(seed: PivotQuery): [string, PivotQuery][] {
   for (const [f, t] of [["2015-01", "2026-04"], ["2025-05", "2026-04"], ["2030-01", "2030-12"], ["2026-04", "2015-01"]]) {
     out.push([`setWindow:${f}:${t}`, setWindow(seed, f, t, ASOF)]);
   }
-  out.push(["addFilter", addFilter(seed, "op_airline_id", "19790")]);
-  out.push(["addFilter:either", addFilter(seed, "endpoint_airport_id", "12892")]);
+  out.push(["addFilter", addFilter(seed, "op_airline_id", "19790", FIXTURE)]);
+  out.push(["addFilter:either", addFilter(seed, "endpoint_airport_id", "12892", FIXTURE)]);
   for (const [k, vs] of seed.filters) for (const v of vs) out.push([`removeFilterValue:${k}`, removeFilterValue(seed, k, v)]);
   return out;
 }
@@ -87,6 +94,25 @@ describe("each repair, named", () => {
     expect(after.dimensions.length).toBeGreaterThan(0);
   });
 
+  it("setGrain never throws, even against a catalog with nothing groupable at the new grain", () => {
+    // Unreachable against any catalog this product has shipped -- every grain groups at least
+    // one dimension in FIXTURE -- but nothing on this spine may throw, and
+    // `groupableDimensions(a, grain)[0].key` on an empty array is a raw TypeError, not the
+    // UrlStateError every caller catches.
+    const tiny: Allowlist = {
+      dims: new Map([
+        ["only_dim", {
+          key: "only_dim", label: "Only", columnExpr: "only_dim", grain: "segment",
+          joinDim: null, joinKey: null, filterOnly: false, filterMode: null, valueType: "VARCHAR",
+        }],
+      ]),
+      meas: new Map([["seats", { key: "seats", label: "Seats", isAdditive: true, expr: "SUM(seats)" }]]),
+    };
+    const before = q({ dimensions: ["only_dim"] });
+    expect(() => setGrain(before, "route", tiny)).not.toThrow();
+    expect(setGrain(before, "route", tiny)).toBe(before);
+  });
+
   it("toggling off the measure the sort names re-points the sort", () => {
     const before = q({ measures: ["seats", "passengers"], sort: "seats" });
     expect(toggleMeasure(before, "seats").sort).toBe("passengers");
@@ -98,9 +124,26 @@ describe("each repair, named", () => {
   });
 
   it("addFilter accepts endpoint_airport_id, which toggleDimension refused", () => {
-    expect(addFilter(q(), "endpoint_airport_id", "12892").filters).toEqual([
+    expect(addFilter(q(), "endpoint_airport_id", "12892", FIXTURE).filters).toEqual([
       ["endpoint_airport_id", ["12892"]],
     ]);
+  });
+
+  it("addFilter refuses a dimension not offered at the query's grain", () => {
+    // aircraft_type is 'segment'-grain. This is exactly the shape mutant 2 exists to prevent
+    // one click later: setGrain repairs a wrong-grain filter away, and addFilter must not be
+    // able to re-mint it.
+    const before = q({ grain: "route", dimensions: ["route"] });
+    expect(addFilter(before, "aircraft_type", "612", FIXTURE).filters).toEqual([]);
+  });
+
+  it("addFilter refuses an unknown dimension", () => {
+    expect(addFilter(q(), "not_a_dim", "1", FIXTURE).filters).toEqual([]);
+  });
+
+  it("addFilter refuses an empty value", () => {
+    // `f=key:` is a malformed-filter parse error at the codec, not an empty filter.
+    expect(addFilter(q(), "origin_state", "", FIXTURE).filters).toEqual([]);
   });
 
   it("the last dimension and the last measure are not removable", () => {
@@ -121,6 +164,21 @@ describe("each repair, named", () => {
     expect(setWindow(q(), "2026-04", "2015-01", ASOF)).toMatchObject({
       timeFrom: "2015-01", timeTo: "2026-04",
     });
+  });
+
+  it("setWindow refuses a malformed month instead of passing it through unchecked", () => {
+    // '2015-1' is not 'YYYY-MM' (single-digit month, no leading zero) -- clamping never checks
+    // shape, so this used to pass straight through to a 'malformed time range' at decodeRequest.
+    const before = q();
+    expect(setWindow(before, "2015-1", "2015-12", ASOF)).toBe(before);
+  });
+
+  it("setWindow refuses a non-month string instead of silently narrowing to a single point", () => {
+    // 'abc' is neither < EARLIEST_MONTH nor > asOf lexically in the way a real month would be,
+    // so the bare clamp used to accept it, mapping BOTH ends to asOf -- a silently wrong window
+    // rather than a refusal.
+    const before = q();
+    expect(setWindow(before, "abc", "abc", ASOF)).toBe(before);
   });
 
   it("removing a filter's last value drops the filter, not just the value", () => {

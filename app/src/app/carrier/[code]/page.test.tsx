@@ -262,7 +262,11 @@ describe("/carrier/<code> with nothing in the trailing 12 months", () => {
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
     expect(container.querySelector("table")).toBeNull();
     expect(screen.getByText(/Virgin America \(VX\) filed no segments/)).toBeDefined();
-    expect(screen.getByRole("link", { name: /2015-01/ })).toBeDefined();
+    const widened = screen.getByRole("link", { name: /2015-01/ });
+    expect(widened).toBeDefined();
+    // The accessible NAME is static JSX text ("...2015-01...") regardless of the actual
+    // href -- only reading the attribute proves the link really carries the widened window.
+    expect(widened.getAttribute("href")).toContain("t=2015-01:");
   });
 
   it("still draws the history, and names the range it can actually draw", async () => {
