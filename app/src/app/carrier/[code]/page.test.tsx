@@ -739,3 +739,125 @@ describe("/carrier/<code> diff map (#110)", () => {
     expect(container.querySelector('[data-testid="diff-map"]')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------------------
+// THE FLOOR PARTITION AT THIS PAGE'S THREE CALL SITES (#127, review finding 1). DataTable's own
+// tests prove the component partitions and that the default is on; they cannot prove any given
+// page reaches it with the default intact. Since /explore carries an opt-out, `partition` is a
+// real axis rather than a constant, and a per-call-site `partition={false}` is invisible to
+// every test that does not read THAT page's rendered rows -- verified: adding it to any of the
+// three tables below left all 1,483 tests green before these existed.
+//
+// /carrier is where the change has its largest measured effect: across the trailing 12 months,
+// its Top routes table renders 141 below-floor rows over 24 of 70 carriers, and Top origins 85
+// over 22.
+//
+// WHAT MAKES A FIXTURE HERE DISCRIMINATING: in the pivot's own order, a SCORED row appears
+// after a below-floor one. Only then do the measure order and the partitioned order differ, and
+// only then can a row-order test fail for the reason its name gives.
+//
+// "some below-floor row out-seats some scored one" is a PROXY for that, and it is WRONG. The
+// pivot sorts `seats DESC`, which is NULLS LAST, so a wholly-quarantined group -- seats NULL,
+// therefore no claim about the floor, therefore scored -- sits BELOW a below-floor row holding a
+// stated 0. Zero does not out-seat NULL, and the orderings disagree anyway. Reviewing this work
+// I asserted that proxy in two permanent files and used it to justify deleting coverage; two of
+// the three people who then re-derived it reached the same wrong answer. Asserting through a
+// proxy the buggy case also satisfies is this project's signature failure, recorded here because
+// the proxy is the seductive part, not the conclusion.
+//
+// Re-swept over all 114 fact-present carriers and 110 aircraft short names, through the real
+// queries and their real limits, with the correct predicate:
+//
+//     CARRIER-TYPETABLE        6 below-floor rows over  4 pages -- 0 disagreements
+//     CARRIER-TOPROUTES      141 below-floor rows over 24 pages -- 2 (2O, F4)
+//     CARRIER-TOPORIGINS      85 below-floor rows over 22 pages -- 1 (F4)
+//     AIRCRAFT-CARRIERTABLE    6 below-floor rows over  6 pages -- 0 disagreements
+//
+// So both Top-N tables ARE testable behaviourally, and both are tested below, each on a carrier
+// that disagrees for a DIFFERENT reason. Only the aircraft-type table here and /aircraft's
+// carrier table have no discriminating page anywhere in the warehouse; those two are pinned on
+// the prop instead, in app/floorPartition.callsites.test.tsx, which states why.
+describe("/carrier/<code> sorts below-floor rows last", () => {
+  /** One table's rendered rows: the below-floor flag, and seats as the page PRINTED them --
+   * `null` where the cell is the absence marker, which is a different finding from 0 and is the
+   * whole mechanism the Top-origins fixture below turns on. */
+  function rowsOf(container: HTMLElement, tableIndex: number) {
+    const table = container.querySelectorAll("table.data-table")[tableIndex];
+    if (table === undefined) throw new Error(`no table ${tableIndex} on this page`);
+    return [...table.querySelectorAll("tbody tr")].map((tr) => {
+      const seats = tr.querySelectorAll("td.num")[0]?.textContent ?? "";
+      return {
+        belowFloor: tr.getAttribute("data-below-floor") === "true",
+        seats: seats === "\u2014" ? null : Number(seats.replace(/,/g, "")),
+      };
+    });
+  }
+
+  /** A below-floor row may not be followed by a scored one, and the table must hold at least one
+   * of each -- otherwise the assertion is vacuous and passes against the bug. */
+  function expectContiguousSuffix(flags: boolean[]) {
+    const first = flags.indexOf(true);
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(flags.slice(0, first).length).toBeGreaterThan(0);
+    expect(flags.slice(first).includes(false)).toBe(false);
+  }
+
+  it("sorts the Top routes table's below-floor rows last, and withholds their rank", async () => {
+    // 2O: 25 rows, 2 below floor, disagreeing the ORDINARY way -- a below-floor row (179 seats,
+    // 28 departures) out-seats three scored ones (176, 169, 168), so the measure sort puts it at
+    // 21 of 25 and the partition has to move it.
+    //
+    // NOT 4W, AND THE REASON IS THE SHARPEST TRAP THIS UNIT TURNED UP.
+    //
+    // *A fixture that exercises one of two asserted properties is the vacuous fixture wearing
+    // half a disguise.*
+    //
+    // This test asserts two things: the ORDER (below-floor rows last) and the RANK (1..k, then
+    // em dashes). 4W's below-floor rows are already last by seats, so both orderings agree on it
+    // and the order half could never fail. The rank half still could -- and did. So the mutant
+    // died, the run reported this test by name as having refused it, and the property in the
+    // test's own title was never exercised at all. A reviewer and the conductor both signed off
+    // on 4W on exactly that evidence; it was found while fixing something else.
+    //
+    // CLAUDE.md's existing rule catches the fixture that fails to discriminate at all. This is
+    // the partial case, and a mutation report cannot distinguish it from real coverage: "test X
+    // went red" is true either way. The only thing that separates them is checking, per asserted
+    // property, that the fixture can distinguish correct from buggy ON THAT PROPERTY -- which is
+    // what the fixture guard below does, and why it is a separate assertion rather than a
+    // comment.
+    // MUTANT: `partition={false}` at the Top routes DataTable -> red here.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "2O" }) }));
+    const rows = rowsOf(container, 1);
+    expectContiguousSuffix(rows.map((r) => r.belowFloor));
+    // THE FIXTURE GUARD: a below-floor row really does out-seat a scored one here, so the two
+    // orderings genuinely disagree. Red -- not quietly vacuous -- if a refresh moves 2O.
+    const seatsOf = (below: boolean) =>
+      rows.filter((r) => r.belowFloor === below && r.seats !== null).map((r) => r.seats as number);
+    expect(Math.max(...seatsOf(true))).toBeGreaterThan(Math.min(...seatsOf(false)));
+    // ...and the rank column follows the partition rather than merely counting rows.
+    const table = container.querySelectorAll("table.data-table")[1];
+    const ranks = [...table.querySelectorAll('[data-testid="rank-cell"]')].map(
+      (n) => n.textContent,
+    );
+    const scored = rows.filter((r) => !r.belowFloor).length;
+    expect(ranks.slice(0, scored)).toEqual(Array.from({ length: scored }, (_, i) => String(i + 1)));
+    expect(new Set(ranks.slice(scored))).toEqual(new Set(["\u2014"]));
+  });
+
+  it("sorts the Top origins table's below-floor rows past a scored row with no stated seats", async () => {
+    // THE TEST A COMMENT IN THIS FILE PREVIOUSLY SAID COULD NOT BE WRITTEN. F4's Top origins is
+    // 7 rows: three scored, then two below floor holding a stated 0, then two scored whose seats
+    // are NULL because every filing in the window was quarantined. `seats DESC` is NULLS LAST, so
+    // 0 sorts ABOVE NULL and the sparse rows land at 4 and 5 of 7 -- the orderings disagree
+    // without any below-floor row out-seating anything.
+    // MUTANT: `partition={false}` at the Top origins DataTable -> red here.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "F4" }) }));
+    const rows = rowsOf(container, 2);
+    expectContiguousSuffix(rows.map((r) => r.belowFloor));
+    // THE FIXTURE GUARD, stated as the mechanism rather than as a restatement: a below-floor row
+    // with a stated seat count, and a scored row with none. That pair is exactly what NULLS LAST
+    // interleaves, so if a refresh ends it this goes red instead of turning vacuous.
+    expect(rows.some((r) => r.belowFloor && r.seats !== null)).toBe(true);
+    expect(rows.some((r) => !r.belowFloor && r.seats === null)).toBe(true);
+  });
+});
