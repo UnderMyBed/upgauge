@@ -20,6 +20,21 @@ describe("DimensionChips", () => {
     // 14 groupable of 15 catalog rows: endpoint_airport_id is filter_only.
     expect(container.querySelectorAll(".chip").length).toBe(14);
     expect(texts(container, ".chip")).not.toContain("Airport (either end)");
+
+    // THE HALF THAT MAKES THIS TEST'S OWN TITLE TRUE. A count plus an absence is satisfied by a
+    // hardcoded array of the same 14 labels -- the exact bug the title forbids -- because a
+    // hand-written list is precisely as long as the catalog it was copied from. Only a catalog
+    // the hand-written version could not have known about discriminates. FIXTURE is a shared
+    // module singleton, so this CLONES rather than mutates; a mutated fixture would leak into
+    // every other test in the run.
+    const widened = { ...FIXTURE, dims: new Map(FIXTURE.dims) };
+    widened.dims.set("synthetic_dim", {
+      key: "synthetic_dim", label: "Synthetic dim", columnExpr: "synthetic_dim", grain: "both",
+      joinDim: null, joinKey: null, filterOnly: false, filterMode: null, valueType: "VARCHAR",
+    });
+    const grown = render(<DimensionChips query={q()} allowlist={widened} />);
+    expect(grown.container.querySelectorAll(".chip").length).toBe(15);
+    expect(texts(grown.container, ".chip")).toContain("Synthetic dim");
   });
 
   it("marks the selected dimensions and links the rest", () => {

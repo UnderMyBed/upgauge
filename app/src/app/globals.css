@@ -823,6 +823,11 @@ svg.plot {
 }
 .chip {
   font-family: var(--font-mono);
+  /* CLAUDE.md requires numerics monospaced AND tabular-figure, and chips carry real numerics:
+     LimitControl renders 25/50/100/250/1000 and WindowControl a year track. Without this the
+     digits are proportional inside a mono family, so `2025` and `2026` sit at different widths
+     and the track shimmers as the current year moves. */
+  font-variant-numeric: tabular-nums;
   font-size: 11px;
   color: var(--ink-2);
   text-decoration: underline;

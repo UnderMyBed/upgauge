@@ -506,6 +506,63 @@ BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&
 check_not "explore: no false below-floor marking without a departure count" "$BODY" 'data-below-floor="true"'
 check "explore: DATA AS OF is present" "$BODY" 'DATA AS OF'
 
+# 4b. The Explorer builder (epic #6, Task 6) -- composed onto all three states of /explore.
+#
+# EVERY NEEDLE BELOW IS WRITTEN IN THE BYTES REACT EMITS, not the bytes page.tsx contains, and the
+# difference bites twice here: `className` is emitted as `class`, and `&` inside an href attribute
+# is emitted as `&amp;` -- so a needle copied from a permalink literal (`?v=1&k=seg`) can never
+# fire on an anchor. Each was mutation-run before it was allowed to count as coverage.
+BUILDER_Q='v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op'
+BODY=$(curl -s --max-time 15 "${BASE}/explore?${BUILDER_Q}")
+check     "explore: renders the builder"           "$BODY" 'class="builder"'
+check     "explore: labels a row with its URL key" "$BODY" 'class="chip-key">d<'
+# Real anchors only. A <button> would be inert in the served HTML -- every view here works with
+# JS off, and a native form GET cannot emit this permalink format at all.
+#
+# SCOPED TO THE BUILDER, and that is not a nicety: `TopBar` renders a real search form on every
+# page, so `<button` and `<input` are BOTH present in this body legitimately. Run against `$BODY`
+# these two report FAIL for the right page -- measured, not predicted. `between` cuts from the
+# builder's own class to the `.body` div that follows it. If the builder were missing entirely
+# the cut would start at the top of the document and sweep the top bar's form back in, so the
+# absence checks go RED rather than vacuously green; the positive check below pins that the
+# region extracted really is the builder.
+BUILDER=$(between "$BODY" 'class="builder"' 'class="body"')
+check     "explore: the extracted region really is the builder" "$BUILDER" 'class="chip-key"'
+check_not "explore: the builder emits no button"   "$BUILDER" '<button'
+check_not "explore: the builder emits no input"    "$BUILDER" '<input'
+
+# THE INBOUND LINK THAT ENDS /explore/filter's ISLAND. Task 5 shipped that route with nothing
+# linking to it; CLAUDE.md's rule is that neither sitemap.ts nor proxy.ts's matcher counts, and
+# `/watch` shipped exactly this way one milestone after a review existed to prevent it. Asserted
+# on the SERVED bytes, because that is the only place "a visitor can reach it" is actually true.
+check     "explore: links into the filter value list" \
+  "$BODY" 'href="/explore/filter/op_airline_id?v=1&amp;k=seg'
+check     "explore: offers the either-end filter too" \
+  "$BODY" 'href="/explore/filter/endpoint_airport_id?v=1&amp;'
+
+# The ERROR state gets one too -- the state a "render it above the results table" implementation
+# skips, because decode() threw and there is no table for it to sit above.
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=nope&m=seats&t=2025-05:2026-04&n=5&g=op")
+check     "explore: the error state still gets a builder" "$BODY" 'class="builder"'
+
+# A filter chip shows the RESOLVED value, not the raw BTS id. `d=year_month` groups by month, so
+# runPivot resolves NOTHING for op_airline_id -- the page has to resolve its own filter values or
+# this reads `Carrier = 19790`.
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=year_month&m=seats&t=2025-05:2026-04&f=op_airline_id:19790&s=-seats&n=25&g=op")
+check     "explore: a filter chip resolves its id to a code" "$BODY" 'Carrier = DL'
+
+# D4, gated on BOTH operands, and the three bodies are the check: keyed on the grouping alone the
+# disclosure fires on the second, keyed on the filter alone it fires on the third.
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&f=op_airline_id:19790&s=-seats&n=25&g=ml")
+check     "explore: discloses a mainline rollup filtered on the operating carrier" \
+  "$BODY" 'rolled-up row can show more seats'
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=ml")
+check_not "explore: no rollup disclosure on an unfiltered mainline view" "$BODY" 'rolled-up row'
+check     "explore: ...and that mainline view really rendered its foot" "$BODY" 'quarantined row'
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&f=op_airline_id:19790&s=-seats&n=25&g=op")
+check_not "explore: no rollup disclosure on a filtered operating view" "$BODY" 'rolled-up row'
+check     "explore: ...and that operating view really rendered its foot" "$BODY" 'quarantined row'
+
 # 5. The caching header is the cost control, so it is a test, not a hope.
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=5&g=op")
 check "explore: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"

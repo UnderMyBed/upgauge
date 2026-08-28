@@ -127,7 +127,9 @@ describe("/explore/filter/[dim]", () => {
   // `renderPivot` GROUP BYs `coalesce(m.parent_airline_id, f.op_airline_id)` while the `f` clause
   // it builds targets the RAW `op_airline_id` (sql/03_queries/pivot_mainline_join.sql documents
   // that gap) -- so spreading `...query` displayed AS at 62,663,219 seats and linked to a query
-  // returning 46,551,806, with HA and VX folded into the figure and dropped by the link.
+  // returning 46,551,806, with HA (8,861,773) and QX/Horizon (7,249,640) folded into the figure
+  // and dropped by the link. NOT VX -- Virgin America last filed 2018-03 and files zero seats in
+  // this window, so it cannot be in the 16,111,413-seat gap however plausible the name looks.
   //
   // The check is not "the figure looks right": it FOLLOWS the emitted href and re-runs it. A
   // hardcoded expected number would rot with the next BTS refresh and would not test the
@@ -154,6 +156,29 @@ describe("/explore/filter/[dim]", () => {
     // And NOT on an operating-grouped query, or the note is decoration rather than a disclosure.
     const op = await renderList("op_airline_id");
     expect(op.container.textContent).not.toContain("Listed by operating carrier as filed");
+  });
+
+  // THE SECOND OPERAND. The test above varies only the GROUPING, so it passes just as well
+  // against a gate keyed on `g=ml` alone -- which is what shipped, and which printed "Listed by
+  // operating carrier as filed" on a list of AIRFRAMES. `g=ml` rewrites the carrier column and
+  // nothing else, so an aircraft_type list is byte-identical under both groupings and the
+  // sentence describes nothing on the page. Asserted alongside a positive check that the list
+  // really rendered, so a 404 or an empty page cannot satisfy the absence vacuously.
+  it("says nothing about operating carriers on a mainline-grouped list that has none", async () => {
+    const ML = "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=ml";
+    const { container } = await renderList("aircraft_type", ML);
+    expect(container.querySelectorAll(".mp-list a").length).toBeGreaterThan(0);
+    expect(container.textContent).not.toContain("Listed by operating carrier as filed");
+  });
+
+  // The either-end dimension is enumerated through origin/dest AIRPORT, so it carries no
+  // carriers either -- and its slug is not `op_airline_id`, which is why the gate reads the
+  // RENDERED sources rather than the slug.
+  it("says nothing about operating carriers on a mainline-grouped either-end list", async () => {
+    const ML = "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=ml";
+    const { container } = await renderList("endpoint_airport_id", ML);
+    expect(container.querySelectorAll(".mp-list a").length).toBeGreaterThan(0);
+    expect(container.textContent).not.toContain("Listed by operating carrier as filed");
   });
 
   it("renders a composite dimension as a resolved pair and filters on <low>-<high>", async () => {

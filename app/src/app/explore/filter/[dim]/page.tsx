@@ -152,8 +152,12 @@ async function renderSource(
   // LABELLED the list by the rollup while every link it emitted filtered the raw column, so the
   // page stated a figure its own link could not reproduce. Measured on the live warehouse at
   // t=2025-05:2026-04, `g=ml`: the AS row displayed 62,663,219 seats and its link returned
-  // 46,551,806 -- HA and VX folded into the number and silently dropped by the link, 25.7% wrong,
-  // under HTML_CACHE. Enumerating on the operating carrier lists AS, HA and VX separately, which
+  // 46,551,806 -- HA (8,861,773) and QX/Horizon (7,249,640) folded into the number and silently
+  // dropped by the link, a 16,111,413-seat gap, 25.7% wrong, under HTML_CACHE. NOT VX: Virgin
+  // America last filed 2018-03, so it is in `map_mainline_group` under AS but contributes ZERO
+  // seats to this window and cannot be in the gap -- a wrongly-named pair here would send the
+  // next reader looking for a carrier that is not there. Enumerating on the operating carrier
+  // lists AS, HA and QX separately, which
   // is right: each is a value the filter can actually select. The `g=ml` note in the render below
   // says so on the page rather than leaving the reader to notice.
   const listQuery = normalizeQuery({
@@ -298,7 +302,15 @@ export async function FilterListView({ rawQuery, dim }: { rawQuery: string; dim:
               ) : null}
             </div>
           ))}
-          {query.grouping === "mainline" ? (
+          {/* GATED ON BOTH OPERANDS. `g=ml` rewrites the SELECT/GROUP BY of the CARRIER column
+              and nothing else, so this sentence is only about a list that carries carriers.
+              Keyed on the grouping alone it printed "Listed by operating carrier as filed" on
+              `/explore/filter/aircraft_type?...&g=ml` -- a list of airframes, whose figures are
+              byte-identical under `g=ml` and `g=op` because no carrier column is grouped in it.
+              Same rule, same reason, as `cardSixthStat` in CLAUDE.md. Read off the RENDERED
+              sources rather than the slug: `endpoint_airport_id` is enumerated through the two
+              airport dimensions, so the slug alone cannot tell you what the list holds. */}
+          {query.grouping === "mainline" && rendered.some((r) => r.key === "op_airline_id") ? (
             <p className="mp-note">
               Listed by operating carrier as filed. A filter matches the carrier that operated the
               metal, so a rolled-up group is not one of the values you can pick here.

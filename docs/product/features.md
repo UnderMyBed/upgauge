@@ -89,6 +89,8 @@ table" section.
      including a filter value containing a comma, an ampersand, and a percent sign, and both
      `grain="route"` and `grouping="mainline"` (not just the defaults).
 2. **CSV / Parquet export of any result.** Nerds want the data, not just the picture.
+   **Unbuilt**: nothing in the app emits either format, on the result header or anywhere else
+   (`docs/design/system.md` § The Explorer). The permalink is the only export that ships.
 3. **Compare mode.** Pin 2–5 entities (routes, carriers, airports, *aircraft types*) and
    overlay on one chart. Most-requested feature in every data explorer ever built.
 4. **Rolling-12 toggle.** Month / quarter / rolling-12. Rolling-12 kills seasonality and
