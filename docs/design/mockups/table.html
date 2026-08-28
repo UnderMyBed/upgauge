@@ -87,8 +87,6 @@ tr.thin .rail .tick{width:1px;background:var(--ink-3)}
 
 tr.thin td{color:var(--ink-2);border-bottom:1px dashed var(--rule-2)}
 tr.thin .pair{font-weight:400}
-.sep td{border-bottom:0;height:auto;padding-top:12px;padding-bottom:3px;
-  font-size:9.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--ink-2)}
 
 /* ---------- SIGNATURE: legend rail (from A), absorbing C's codes ---------- */
 .legend{border:1px solid var(--ink);background:var(--field);position:sticky;top:10px}
@@ -196,7 +194,6 @@ const ROWS = [
 {dest:"SFO",cc:"UA",seats:522495,lf:0.8129,gauge:159.9,dep:3268,ser:[47160,43398,37924,48832,52937,62509,52692,41076,34646,32365,32952,36004]},
 {dest:"SEA",cc:"OO",seats:501089,lf:0.7782,gauge:73.6,dep:6810,ser:[44114,44400,46660,48032,48342,50396,42080,38289,38552,31260,33946,35018]},
 {dest:"SNA",cc:"AS",seats:486465,lf:0.8402,gauge:159.4,dep:3052,ser:[39315,36263,36894,41342,46836,44971,45519,46982,37035,33954,39611,37743]},
-{sep:"Below the 30-departure floor — reported, never scored or ranked"},
 {dest:"PDX",cc:"OO",seats:2780,lf:0.0000,gauge:73.2,dep:38,thin:1,code:"⌀",ser:[76,152,444,434,146,520,146,293,217,287,65]},
 {dest:"SEA",cc:"HA",seats:489,lf:0.6605,gauge:244.5,dep:2,thin:1,code:"n",ser:[189,300]},
 {dest:"AUS",cc:"AA",seats:190,lf:0.9789,gauge:190.0,dep:1,thin:1,code:"n",ser:[190]},
@@ -218,7 +215,6 @@ function spark(ser,thin){
 }
 const n0=v=>v.toLocaleString('en-US'),pc=v=>(v*100).toFixed(2),g1=v=>v.toFixed(1);
 document.getElementById('tb').innerHTML = ROWS.map(r=>{
-  if(r.sep) return `<tr class="sep"><td class="gut"></td><td colspan="8">${r.sep}</td></tr>`;
   return `<tr class="${r.thin?'thin':''}">
     <td class="gut">${r.code?(r.code==="n"?`<span class="nl">n</span>`:r.code):""}</td>
     <td class="pair">PDX–${r.dest}</td>

@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { DataTable, type ColumnSpec } from "@/components/DataTable";
+import { DataTable, orderRows, type ColumnSpec } from "@/components/DataTable";
 import { resolutionKey } from "@/lib/resolve";
 
 const COLUMNS: ColumnSpec[] = [
@@ -584,5 +584,122 @@ describe("DataTable: the partition is the default, and /explore is the exemption
     // The TREATMENT is unaffected by the exemption -- /explore still dashes and mutes its
     // below-floor rows, it just does not move them. Only the ORDER is the visitor's.
     expect(container.querySelectorAll("tr[data-below-floor='true']").length).toBe(2);
+  });
+});
+
+describe("DataTable: the 30-departure floor is a boundary, not a vibe", () => {
+  // Review finding 3. Every fixture in this file and in the page suites sits far from the
+  // boundary -- 6810, 120, 99, 38, 5, 2, 1 -- so `departures < DEPARTURE_FLOOR` could become
+  // `<=` with all 1,483 tests green. Before #127 that slip only mis-drew a dashed rule; now it
+  // also moves the row to the foot and deletes its rank number, so the boundary is worth a
+  // fixture of its own.
+  //
+  // 30 IS SCORED. The rule is "below the 30-departure floor", so a row AT the floor clears it.
+  const BOUNDARY_ROWS = [
+    { carrier: "OVER", seats: 300, departures_performed: 31 },
+    { carrier: "UNDER", seats: 200, departures_performed: 29 },
+    { carrier: "AT", seats: 100, departures_performed: 30 },
+  ];
+
+  it("puts 29 below the floor and leaves 30 and 31 above it", () => {
+    // MUTANT: `<=` at DataTable.tsx's isBelowFloor -> AT joins the sparse bucket, the rendered
+    // order becomes OVER, UNDER, AT and two rows are dashed. Both assertions go red.
+    //
+    // The seats are chosen so the two orderings DISAGREE: UNDER out-seats AT, so the measure
+    // sort puts the below-floor row above the scored one and the partition has to move it.
+    // Ordering them 31/30/29 by seats would let a broken floor pass.
+    const { container } = render(<DataTable columns={FLOOR_COLUMNS} rows={BOUNDARY_ROWS} />);
+    expect(renderedOrder(container)).toEqual(["OVER", "AT", "UNDER"]);
+    expect(
+      renderedRows(container).filter((r) => r.belowFloor).map((r) => r.id),
+    ).toEqual(["UNDER"]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// `orderRows` DIRECTLY (review finding 8). Everything above reaches it through a rendered
+// table, which is the right place to assert what a reader sees but the wrong place to pin a
+// pure function's contract: the partition and the rank both live here, and a caller that is not
+// a React component gets no coverage from a DOM assertion.
+describe("orderRows", () => {
+  const rows = [
+    { id: "a", departures_performed: 100 },
+    { id: "b", departures_performed: 5 },
+    { id: "c", departures_performed: 60 },
+  ];
+
+  it("returns the partitioned order with scored rows ranked 1..k", () => {
+    expect(orderRows(rows, true).map((r) => [r.row.id, r.belowFloor, r.rank])).toEqual([
+      ["a", false, 1],
+      ["c", false, 2],
+      ["b", true, null],
+    ]);
+  });
+
+  it("ranks NOTHING when the partition is off", () => {
+    // Review finding 4, closed at the function rather than only at the component. A rank is a
+    // position among scored rows IN THE ORDER THE PRODUCT CHOSE; with no partition there is no
+    // such order, so there is no rank to state.
+    //
+    // MUTANT: `rank: belowFloor ? null : ++scored` (the pre-review form) -> [1, null, 2], a
+    // column reading 1, —, 2 down the page. Red here, and invisible to every other test in this
+    // repo, because the component's props now make that pair unwritable in JSX.
+    expect(orderRows(rows, false).map((r) => [r.row.id, r.belowFloor, r.rank])).toEqual([
+      ["a", false, null],
+      ["b", true, null],
+      ["c", false, null],
+    ]);
+  });
+
+  it("preserves the caller's order and holds on the degenerate inputs", () => {
+    expect(orderRows([], true)).toEqual([]);
+    expect(orderRows([rows[1]], true).map((r) => r.rank)).toEqual([null]);
+    // Every row below floor: one empty bucket, order untouched, nothing ranked.
+    const allSparse = [
+      { id: "x", departures_performed: 1 },
+      { id: "y", departures_performed: 2 },
+    ];
+    expect(orderRows(allSparse, true).map((r) => r.row.id)).toEqual(["x", "y"]);
+    expect(orderRows(allSparse, true).every((r) => r.rank === null)).toBe(true);
+  });
+
+  it("reads an absent, null or NaN departure count as no claim about the floor", () => {
+    // The #118 matrix, pinned at the function. `Number(null)` is 0, so the absence has to be
+    // tested before the conversion; a row that never queried the count is SCORED, not sparse.
+    const probe = [
+      { id: "absent" },
+      { id: "null", departures_performed: null },
+      { id: "undef", departures_performed: undefined },
+      { id: "zero", departures_performed: 0 },
+    ];
+    expect(orderRows(probe, true).map((r) => [r.row.id, r.belowFloor])).toEqual([
+      ["absent", false],
+      ["null", false],
+      ["undef", false],
+      ["zero", true],
+    ]);
+  });
+});
+
+describe("DataTable: a ranked table cannot decline the partition", () => {
+  it("rejects `rank` beside `partition={false}` at compile time", () => {
+    // Review finding 4. THE ASSERTION HERE IS THE `@ts-expect-error`, not the expect() below:
+    // if the props ever admit this pair again, `tsc --noEmit` fails on an unused expect-error
+    // directive and `make app-check` goes red. Verified as a mutant -- collapsing the props
+    // union back to two independent optional booleans makes this file stop compiling.
+    //
+    // The pair is not merely unused: it renders a rank column reading 1, —, 2 down the page,
+    // because rank counts scored rows and nothing has gathered them.
+    const forbidden = (
+      // @ts-expect-error -- `rank` requires the partition; see DataTableProps.
+      <DataTable columns={FLOOR_COLUMNS} rows={FLOOR_ROWS} rank partition={false} />
+    );
+    void forbidden;
+    // Both legal shapes still typecheck, so the union cannot be "fixed" by forbidding one of
+    // them outright -- which would pass the test above and break /watch and /explore.
+    const ranked = <DataTable columns={FLOOR_COLUMNS} rows={FLOOR_ROWS} rank />;
+    const unpartitioned = <DataTable columns={FLOOR_COLUMNS} rows={FLOOR_ROWS} partition={false} />;
+    expect(render(ranked).container.querySelectorAll('[data-testid="rank-cell"]').length).toBe(4);
+    expect(renderedOrder(render(unpartitioned).container)).toEqual(["3M", "MQ", "VD", "LF"]);
   });
 });

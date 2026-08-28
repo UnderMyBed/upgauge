@@ -151,9 +151,16 @@ function partitionByFloor(rows: Record<string, unknown>[]): Record<string, unkno
  * routes table renders 141 below-floor rows across 24 of 70 carriers, four of them mid-table
  * (`TJ` 3 of 15, `V8` 9 of 21, `4W` 12 of 25, `AN` 15 of 25).
  *
- * `partition` is the rule, and `false` is the exception one caller asks for -- see the `rows`
- * prop's own note. Defaulted ON so a sixth table surface inherits the rule rather than the
- * exemption. */
+ * `partition` is the rule, and `false` is the exception one caller asks for -- see the
+ * component's own `partition` note. Defaulted ON there so a sixth table surface inherits the
+ * rule rather than the exemption.
+ *
+ * WITH `partition` OFF, NOTHING IS RANKED. A rank is a row's position among scored rows *in the
+ * order the product chose*, so an unpartitioned table has no such order and no rank to state --
+ * returning one would number a sequence the floor rule never arranged. Left ranked, the pair
+ * renders a column that walks 1, —, 2 down the page. The component makes that combination
+ * unwritable (its props reject `rank` beside `partition={false}`); this makes the pure function
+ * honest on its own, so a direct caller cannot reach the same shape by another door. */
 export function orderRows(
   rows: Record<string, unknown>[],
   partition: boolean,
@@ -162,7 +169,7 @@ export function orderRows(
   let scored = 0;
   return ordered.map((row) => {
     const belowFloor = isBelowFloor(row);
-    return { row, belowFloor, rank: belowFloor ? null : ++scored };
+    return { row, belowFloor, rank: partition && !belowFloor ? ++scored : null };
   });
 }
 
@@ -183,35 +190,60 @@ function reasonFor(row: Record<string, unknown>): Reason {
   return null;
 }
 
-export function DataTable({
-  columns,
-  rows,
-  resolved,
-  rank = false,
-  partition = true,
-}: {
+interface DataTableBaseProps {
   columns: ColumnSpec[];
   /** In the caller's own order. This component re-orders them on exactly one axis -- below-floor
    * rows last (`orderRows`) -- and never on a measure: a caller that wants rank-by-measure still
    * sorts `rows` itself before handing them here. */
   rows: Record<string, unknown>[];
   resolved?: Map<string, Resolved>;
-  /** A leading rank column -- `/watch`'s leaderboard shape (system.md, "`/watch` leaderboard":
-   * "the standard table plus a leading rank column, mono, --ink-3"). It numbers SCORED rows
-   * 1..k in render order; a below-floor row is excluded from ranking and gets `—`. */
-  rank?: boolean;
-  /** Below-floor rows sort last (docs/design/system.md, "The data table"). ON by default, so a
-   * table surface added later inherits the rule rather than this exemption.
-   *
-   * `false` for `/explore` ALONE, and the reason is that page's contract rather than a
-   * preference: the floor rule is a property of a RANKED table, where the order is the
-   * product's editorial choice. `/explore` has no rank column and its order is the visitor's
-   * own stated request -- `s=departures_performed` ascending is someone explicitly asking to
-   * see the sparsest rows first (lib/pivot/urlstate.ts:120, :223-225) -- and silently
-   * overriding that would break the permalink's promise that the page shows the query you
-   * wrote. See the call site in app/explore/page.tsx. */
-  partition?: boolean;
-}) {
+}
+
+/** `rank` and `partition` are ONE choice, not two independent ones, so the props make the
+ * illegal pair unwritable rather than merely unused.
+ *
+ * `rank` is a row's position among scored rows in the order the product chose; `partition` is
+ * what arranges that order. Ranking an unpartitioned table renders a column reading 1, —, 2 down
+ * the page -- monotonic nowhere, and a defect a reader sees before any test does. No caller
+ * writes that pair today, which is exactly why a comment saying "don't" would not hold: the
+ * type is what still refuses it after everyone who read the comment has moved on.
+ *
+ * - a ranked table takes the partition (`rank` implies `partition` is on or omitted);
+ * - an unranked table may decline it -- `/explore` is the one that does.
+ *
+ * `orderRows` enforces the same rule for a direct caller, which the type cannot reach. */
+type DataTableProps = DataTableBaseProps &
+  (
+    | {
+        /** A leading rank column -- `/watch`'s leaderboard shape (system.md, "`/watch`
+         * leaderboard": "the standard table plus a leading rank column, mono, --ink-3"). It
+         * numbers SCORED rows 1..k in render order; a below-floor row is excluded from ranking
+         * and its cell reads `—`. */
+        rank: true;
+        partition?: true;
+      }
+    | {
+        rank?: false;
+        /** Below-floor rows sort last (docs/design/system.md, "The data table"). ON by default,
+         * so a table surface added later inherits the rule rather than this exemption.
+         *
+         * `false` for `/explore` ALONE, and the reason is that page's contract rather than a
+         * preference. The floor rule is a property of a RANKED table -- one whose order the
+         * product chose. `/explore` renders the order its own query specifies: `s=` carries a
+         * sort key AND a direction, and where it is absent the query still resolves to one
+         * (`render.ts` falls back to the first selected measure), so either way the rows come
+         * back in the order the permalink encodes. Re-ordering them afterwards would break the
+         * promise that the page shows the query you wrote -- most visibly for
+         * `s=departures_performed` ascending, which is someone explicitly asking to see the
+         * sparsest rows first. See the call site in app/explore/page.tsx. */
+        partition?: boolean;
+      }
+  );
+
+export function DataTable(props: DataTableProps) {
+  const { columns, rows, resolved } = props;
+  const rank = props.rank ?? false;
+  const partition = props.partition ?? true;
   const ordered = orderRows(rows, partition);
   return (
     <div className="table-scroll">

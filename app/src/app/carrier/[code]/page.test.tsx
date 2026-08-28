@@ -739,3 +739,59 @@ describe("/carrier/<code> diff map (#110)", () => {
     expect(container.querySelector('[data-testid="diff-map"]')).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------------------
+// THE FLOOR PARTITION AT THIS PAGE'S THREE CALL SITES (#127, review finding 1). DataTable's own
+// tests prove the component partitions and that the default is on; they cannot prove any given
+// page reaches it with the default intact. Since /explore carries an opt-out, `partition` is a
+// real axis rather than a constant, and a per-call-site `partition={false}` is invisible to
+// every test that does not read THAT page's rendered rows -- verified: adding it to any of the
+// three tables below left all 1,483 tests green before these existed.
+//
+// /carrier is where the change has its largest measured effect: across the trailing 12 months,
+// its Top routes table renders 141 below-floor rows over 24 of 70 carriers, and Top origins 85
+// over 22.
+// ONLY THE TOP ROUTES TABLE IS ASSERTED BEHAVIOURALLY HERE, and that is a fact about the data
+// rather than an omission. A row-order test can only tell partitioned from unpartitioned where
+// some below-floor row out-seats some scored one; measured across the whole trailing-12
+// warehouse, NO carrier's aircraft-type table and NO carrier's Top-origins table has such a
+// pair, so a test written over them would pass against the bug -- the vacuous fixture CLAUDE.md
+// names, and the shape the first draft of this work shipped at three call sites. Those two are
+// pinned on the prop instead, in app/floorPartition.callsites.test.tsx, which states why.
+describe("/carrier/<code> sorts below-floor rows last", () => {
+  /** Below-floor flags for one table's rendered rows, top to bottom. */
+  function flagsOf(container: HTMLElement, tableIndex: number): boolean[] {
+    const table = container.querySelectorAll("table.data-table")[tableIndex];
+    if (table === undefined) throw new Error(`no table ${tableIndex} on this page`);
+    return [...table.querySelectorAll("tbody tr")].map(
+      (tr) => tr.getAttribute("data-below-floor") === "true",
+    );
+  }
+
+  /** A below-floor row may not be followed by a scored one, and the fixture must contain at
+   * least one of each -- otherwise the assertion is vacuous and passes against the bug. */
+  function expectContiguousSuffix(flags: boolean[]) {
+    const first = flags.indexOf(true);
+    expect(first).toBeGreaterThanOrEqual(0); // the fixture still exercises the floor
+    expect(flags.slice(0, first).length).toBeGreaterThan(0); // ...and still has scored rows
+    expect(flags.slice(first).includes(false)).toBe(false);
+  }
+
+  it("sorts the Top routes table's below-floor rows last, and withholds their rank", async () => {
+    // 4W: 25 rows, 14 below floor (measured). MUTANT: `partition={false}` at the Top routes
+    // DataTable -> red here only.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "4W" }) }));
+    expectContiguousSuffix(flagsOf(container, 1));
+    // ...and the rank column agrees with the partition rather than merely counting rows: the
+    // scored block numbers 1..k and every sparse row's cell is the em dash.
+    const table = container.querySelectorAll("table.data-table")[1];
+    const ranks = [...table.querySelectorAll('[data-testid="rank-cell"]')].map(
+      (n) => n.textContent,
+    );
+    const scored = flagsOf(container, 1).filter((f) => !f).length;
+    expect(ranks.slice(0, scored)).toEqual(
+      Array.from({ length: scored }, (_, i) => String(i + 1)),
+    );
+    expect(new Set(ranks.slice(scored))).toEqual(new Set(["—"]));
+  });
+});

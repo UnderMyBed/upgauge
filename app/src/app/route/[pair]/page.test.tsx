@@ -412,3 +412,28 @@ describe("/route/<pair> Open Graph metadata (M9 Task 6b)", () => {
     expect(meta.openGraph).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------------------
+// THE FLOOR PARTITION AT THIS CALL SITE (#127, review finding 1). See /carrier's copy of this
+// block for why a component-level test cannot stand in for one here: `partition` defaults to
+// true but /explore opts out, so a per-call-site opt-out is caught only by a test that reads
+// this page's own rendered rows.
+describe("/route/<pair> sorts below-floor rows last", () => {
+  it("renders the below-floor carriers as one contiguous block at the foot", async () => {
+    // MKE-ORD: 15 carrier rows in the trailing 12, 10 of them below floor, and a scored row
+    // sits below a sparse one under the measure sort (measured) -- so the two orderings
+    // disagree and this can fail for the reason it claims. JFK-LAX cannot be the fixture: every
+    // carrier on it clears the floor by three orders of magnitude.
+    // MUTANT: `partition={false}` at page.tsx's DataTable -> red here only.
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "MKE-ORD" }) }),
+    );
+    const flags = [...container.querySelectorAll("table.data-table tbody tr")].map(
+      (tr) => tr.getAttribute("data-below-floor") === "true",
+    );
+    const first = flags.indexOf(true);
+    expect(first).toBeGreaterThanOrEqual(0);
+    expect(flags.slice(0, first).length).toBeGreaterThan(0);
+    expect(flags.slice(first).includes(false)).toBe(false);
+  });
+});
