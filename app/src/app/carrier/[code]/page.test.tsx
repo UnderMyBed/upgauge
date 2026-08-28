@@ -947,3 +947,99 @@ describe("the foot's quarantine clause comes from the shared rule, with this pag
     expect(arg.seatsAreNull).toBe(false);
   });
 });
+
+describe("/carrier/<code>: the legend rail follows the CHART, not the rows (#123)", () => {
+  // ONE GATE PER CALL SITE, not one per rule. `mixChartDraws` is a single predicate, but each
+  // page decides for itself whether to pass it to `<LegendRail>` -- and reverting any ONE of
+  // those four call sites to `hasMix` is a live defect on that surface alone. A rule-level test
+  // cannot see that: CLAUDE.md's "enumerate the matrix per CALL SITE".
+  //
+  // DATASET-PINNED SUBJECT. W7 files exactly ONE month, 2019-03, 882 seats.
+  //
+  // SAY WHY IT RESOLVES, and it is not that the code is unique -- `dim_carrier` holds TWO `W7`
+  // airline_ids (20078 Western Pacific, 21944 Nealco d/b/a Watermakers Air). What makes
+  // `/carrier/W7` a page rather than the silent-pick refusal is `lookup_carrier_by_code.sql`'s
+  // FACT-PRESENCE clause: only one of the two has rows. That is CLAUDE.md's `/carrier/PA` rule
+  // read the other way round, and a sentence about a CODE here would be a claim the query never
+  // made. DL is the file's standing many-month subject.
+  // If this reddens after a BTS refresh, re-derive a one-month subject rather than deleting the
+  // test: the carrier with `count(DISTINCT year_month) = 1` in `fct_segment_month`.
+  it("renders NO fleet-shading group for a subject whose chart cannot draw", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "W7" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Fleet shading");
+    expect(rail.textContent).not.toContain("COVID is in the window on purpose");
+    // NOT VACUOUS: the rail is mounted and the chart really did decline to draw. Without these
+    // a page that failed to render at all would satisfy both negatives above.
+    expect(rail.textContent).toContain("Gauge rail");
+    expect(container.querySelector(".chart svg[role='img']")).toBeNull();
+  });
+
+  it("DOES render it for a subject whose chart draws", async () => {
+    // The positive control. It passes under the bug -- which is exactly why the absence
+    // assertion above is the one that catches it -- but without it, deleting the group outright
+    // would satisfy every negative in this file.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).toContain("Fleet shading");
+    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+  });
+});
+
+/** Drives the page through a raw-query header, the only way this page admits a filter
+ *  (`app/src/proxy.ts` + #106) -- the same shape as /aircraft's own `filtered`. */
+function filteredCarrier(code: string, rawQuery: string) {
+  vi.mocked(headers).mockResolvedValueOnce(new Headers({ [RAW_QUERY_HEADER]: rawQuery }));
+  return CarrierPage({ params: Promise.resolve({ code }) });
+}
+
+describe("/carrier/<code>: the legend rail's arc group follows the ARCS (#123)", () => {
+  // EVERY ROW IN THAT GROUP DESCRIBES AN ARC -- width by seats, dashed below the load-factor
+  // floor, dotted-muted below the departure floor, and why a cross-panel arc is a straight line.
+  // A map can render with none of them, so "a map was drawn" is the wrong gate: `fetchCarrierTypeNetwork` deliberately returns a map with ZERO
+  // segments when every route of a pair is quarantined, so its disclosure reaches the reader --
+  // `F4 x SHORT360` is that view, pinned at the producer by `carrierTypeNetwork.test.ts`.
+  //
+  // Asserted as an ABSENCE, because the presence form passes under the bug. And per CALL SITE:
+  // each page decides for itself what to pass, so reverting one is a live defect on that surface
+  // alone. Mutant: pass `hasMap` back to `<LegendRail map={...}>` here and this goes red.
+  it("renders NO arc-rendering group when no arc was drawn", async () => {
+    const { container } = render(await filteredCarrier("F4", "type=SHORT360"));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Arc rendering");
+    expect(rail.textContent).not.toContain("width scales with seats");
+    // NOT VACUOUS, and this is the half that matters: the MAP is still mounted -- dropping the
+    // map to satisfy the negative would delete the disclosure this view exists to carry.
+    expect(container.querySelector(".map svg[role='img']")).not.toBeNull();
+    expect(container.querySelectorAll("polyline").length).toBe(0);
+    expect(rail.textContent).toContain("Gauge rail");
+  });
+
+  it("DOES render it when arcs were drawn", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    expect(container.querySelector("aside.legend")!.textContent).toContain("Arc rendering");
+    expect(container.querySelectorAll("polyline").length).toBeGreaterThan(0);
+  });
+
+  it("DOES render it when only the TYPE MAP draws, and the diff map has no panel", async () => {
+    // WHICH HALF OF THE DISJUNCTION REFUSES THIS FIXTURE. `arcsDrawn` on this page is
+    // `typeMap draws || any diff panel draws`, and every other fixture here sits where the
+    // first half cannot be the reason: `F4 x SHORT360` has BOTH halves false, and an unfiltered
+    // `DL` has `typeMap === null`, so only the diff half can ever be true. Delete the type-map
+    // disjunct entirely and all of them stay green -- the guard is deletable, which is CLAUDE.md's
+    // "assert WHICH check refuses a fixture, not that something did".
+    //
+    // WHAT THIS FIXTURE VARIES: a carrier with ZERO diff panels whose filtered type map
+    // nonetheless draws real arcs -- the one combination that isolates the first disjunct. F4
+    // has no diff panel at all (measured), and `F4 x ISLANDER` draws 3 polylines. Seven
+    // fact-present carriers have no diff panel and eight (carrier, type) views on them draw from
+    // the type map alone, so this is a served shape, not a constructed one.
+    //
+    // Mutant: drop `typeMap !== null && segmentArcsDrawn(typeMap)` from `arcsDrawn` and this
+    // goes red -- a page full of arcs with no group explaining them, #123's defect inverted.
+    const { container } = render(await filteredCarrier("F4", "type=ISLANDER"));
+    expect(container.querySelectorAll('[data-testid="diff-panel"]').length).toBe(0);
+    expect(container.querySelectorAll("polyline").length).toBeGreaterThan(0);
+    expect(container.querySelector("aside.legend")!.textContent).toContain("Arc rendering");
+  });
+});

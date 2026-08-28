@@ -625,3 +625,67 @@ describe("an aircraft type that filed nothing in the window states absence too",
     expect(feet).not.toContain("is quarantined");
   });
 });
+
+describe("/aircraft/<name>: the legend rail follows the CHART, not the rows (#123)", () => {
+  // ONE GATE PER CALL SITE, not one per rule. `mixChartDraws` is a single predicate, but each
+  // page decides for itself whether to pass it to `<LegendRail>` -- and reverting any ONE of
+  // those four call sites to `hasMix` is a live defect on that surface alone. A rule-level test
+  // cannot see that: CLAUDE.md's "enumerate the matrix per CALL SITE".
+  //
+  // DATASET-PINNED SUBJECT. aircraft_type 658 (short_name CRJ700, BOMBARDIER BD-700 GLOBAL
+  // EXPRESS) files exactly ONE month, 2019-06, 900 seats, and no other type shares that short
+  // name, so the slug resolves unambiguously. B737-8 is the file's standing many-month subject.
+  // If this reddens after a BTS refresh, re-derive a one-month subject rather than deleting the
+  // test: the type with `count(DISTINCT year_month) = 1` in `fct_segment_month`.
+  it("renders NO fleet-shading group for a subject whose chart cannot draw", async () => {
+    const { container } = render(await AircraftPage({ params: Promise.resolve({ name: "CRJ700" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Fleet shading");
+    expect(rail.textContent).not.toContain("COVID is in the window on purpose");
+    // NOT VACUOUS: the rail is mounted and the chart really did decline to draw. Without these
+    // a page that failed to render at all would satisfy both negatives above.
+    expect(rail.textContent).toContain("Gauge rail");
+    expect(container.querySelector(".chart svg[role='img']")).toBeNull();
+  });
+
+  it("DOES render it for a subject whose chart draws", async () => {
+    // The positive control. It passes under the bug -- which is exactly why the absence
+    // assertion above is the one that catches it -- but without it, deleting the group outright
+    // would satisfy every negative in this file.
+    const { container } = render(await AircraftPage({ params: Promise.resolve({ name: "B737-8" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).toContain("Fleet shading");
+    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+  });
+});
+
+describe("/aircraft/<name>: the legend rail's arc group follows the ARCS (#123)", () => {
+  // EVERY ROW IN THAT GROUP DESCRIBES AN ARC -- width by seats, dashed below the load-factor
+  // floor, dotted-muted below the departure floor, and why a cross-panel arc is a straight line.
+  // A map can render with none of them, so "a map was drawn" is the wrong gate: `fetchCarrierTypeNetwork` returns a map with ZERO segments when a
+  // pair's only filing is same-airport -- `8E x AS350-B2` is that view, pinned at the producer
+  // by `carrierTypeNetwork.test.ts`.
+  //
+  // Asserted as an ABSENCE, because the presence form passes under the bug. And per CALL SITE:
+  // each page decides for itself what to pass, so reverting one is a live defect on that surface
+  // alone. Mutant: pass `hasMap` back to `<LegendRail map={...}>` here and this goes red.
+  it("renders NO arc-rendering group when no arc was drawn", async () => {
+    const { container } = render(await filtered("AS350-B2", "carrier=8E"));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Arc rendering");
+    expect(rail.textContent).not.toContain("width scales with seats");
+    // NOT VACUOUS, and this is the half that matters: the MAP is still mounted -- dropping the
+    // map to satisfy the negative would delete the disclosure this view exists to carry.
+    expect(container.querySelector(".map svg[role='img']")).not.toBeNull();
+    expect(container.querySelectorAll("polyline").length).toBe(0);
+    expect(rail.textContent).toContain("Gauge rail");
+  });
+
+  it("DOES render it when arcs were drawn", async () => {
+    // FILTERED, because this page's map exists only under a `carrier=` filter -- an unfiltered
+    // /aircraft draws no map at all, so it is the wrong control for an arc-group assertion.
+    const { container } = render(await filtered("B737-8", "carrier=DL"));
+    expect(container.querySelector("aside.legend")!.textContent).toContain("Arc rendering");
+    expect(container.querySelectorAll("polyline").length).toBeGreaterThan(0);
+  });
+});

@@ -175,6 +175,14 @@ export function networkDisclosureNotes(input: NetworkMapInput): string[] {
 /**
  * Renders the complete network map for one origin airport as an `<svg>…</svg>` string.
  */
+/** `segmentArcsDrawn`'s hub twin -- same question, same reason, through this map's own
+ *  `networkSegments` + `drawableSegments` pair so it agrees with what the renderer emits. A hub
+ *  map ALWAYS draws its origin disc, so "a map rendered" is never the same claim as "an arc was
+ *  drawn": `/airport/A18` and `/airport/OQZ` render a map with zero polylines. */
+export function networkArcsDrawn(input: NetworkMapInput): boolean {
+  return drawableSegments(networkSegments(input)).length > 0;
+}
+
 export function renderNetworkMap(input: NetworkMapInput): string {
   // Same-airport rows are excluded HERE, from the drawn set -- never upstream, and never by
   // relying on the caller to have already filtered. Their seats are NOT dropped, only the

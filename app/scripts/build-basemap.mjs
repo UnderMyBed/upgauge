@@ -292,7 +292,7 @@ export function round3(n) {
  * over all 9,796 fact-present (airport, window) views: SEVEN fact-present Alaskan airports
  * projected outside `PANEL_RECTS.ak` (ADK, AKB, FQW, IKO, SNP, STG, SYA -- 69 of those views),
  * and THREE of them put the subject's own r=4.5 disc or its right-anchored label off the
- * 960x500 canvas (ADK, AKB, SYA -- 27 views), where `globals.css`'s
+ * canvas (ADK, AKB, SYA -- 27 views), where `globals.css`'s
  * `svg:not(:root) { overflow: hidden }` clips it away. ADK drew at (-3.1, 453.4), AKB at
  * (7.0, 454.5) -- disc on-canvas, label running to x = -19.8, so `/airport/AKB` rendered an
  * unlabelled disc jammed against the left edge -- and SYA at (-35.2, 433.5), so
@@ -345,7 +345,7 @@ export const AK_EXTENT_ANCHORS = [
  * Keys entirely -- so a fit taken over that coastline alone has no extent below them. Measured
  * against the built warehouse over the whole fact-present population: EYW (Key West) projected
  * to (693.6, 428.7) and MTH (Marathon) to (703.4, 424.5), 4.7px and 0.5px below
- * `PANEL_RECTS.us`'s bottom edge of 424. Both stay on the 960x500 canvas, so unlike ADK/AKB/SYA
+ * `PANEL_RECTS.us`'s bottom edge of 424. Both stay on the canvas, so unlike ADK/AKB/SYA
  * nothing was clipped; what they landed in was the drawn CARIBBEAN inset frame.
  *
  * THE FIX IS THE FIT, NOT THE RECT -- the same conclusion #115 reached for `ak`, by the same
@@ -407,16 +407,26 @@ export const AK_EXTENT_ANCHORS = [
  * that reaches it is a deliberate redesign of the Caribbean boundary, not a nudge -- so do not
  * describe the two as mirror images.
  *
- * THE GUARD IS ASYMMETRIC, and a fourth panel's author should know which way is unwatched.
- * An anchor placed too far NORTH is caught twice -- the live containment sweep, and the
- * clearance assertion one step before it. An anchor placed too far SOUTH -- a transcription
- * typo, or an extent that is not in the source at all -- silently SHRINKS the lower 48 and
- * every airport stays comfortably inside its rect; the only thing that moves is the hand-pinned
- * `us` fit constant in `basemap.test.ts`, which the same commit is already updating. That is
- * review catching it, not a gate. Both this constant and `AK_EXTENT_ANCHORS` are hand
- * transcriptions of extrema from a file the repo does not commit and no `make` target fetches,
- * so the transcription itself is unverifiable in CI. Tracked as #128; do not assume it is
- * closed because this comment describes it.
+ * THE GUARD WAS ASYMMETRIC, AND #128 CLOSED THE UNWATCHED SIDE. An anchor placed too far NORTH
+ * is caught by the live containment sweep and by the clearance floor one step before it. An
+ * anchor placed too far SOUTH -- a transcription typo, or an extent that is not in the source at
+ * all -- silently SHRINKS the lower 48 while every airport stays comfortably inside its rect, so
+ * every containment property gets MORE true and nothing objects.
+ *
+ * What now objects is `panelContainment.test.ts`'s "a declared extent anchor sits just outside
+ * the airports it exists to place". It binds each anchor to the BTS airport population rather
+ * than to a second transcription of the same constant: an anchor exists to put a panel's edge
+ * where its outermost airport is, so the two must be within 4px of each other on whichever axis
+ * the anchor is derived to bind. Over-reach by half a degree and that gap goes to 8.30px here
+ * and 4.39px on Attu -- red -- while the containment sweep stays green, which is the divergence
+ * the gate is for. It also refuses an anchor that binds NO axis, which is one doing nothing.
+ *
+ * IF IT GOES RED, RE-DERIVE THE ANCHOR FROM 1:10m. Do not widen the ceiling: `ak` draws 2.4px
+ * per degree of longitude, so a ceiling loose enough to feel safe there cannot catch a
+ * transposed digit. Both constants remain hand transcriptions from a file the repo does not
+ * commit and no `make` target fetches -- that has not changed, and deliberately so: adding a
+ * network dependency to a build step that has none costs more than the class of error it
+ * removes. What has changed is that the error is now caught by a gate instead of by review.
  */
 export const US_EXTENT_ANCHORS = [
   // The Marquesas Keys -- the westernmost of the Florida Keys, and the point of the

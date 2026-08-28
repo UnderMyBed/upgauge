@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { DiffMap } from "@/components/DiffMap";
 import type { CarrierDiff, DiffCategory } from "@/lib/map/carrierDiff";
-import type { SegmentDatum } from "@/lib/map/segmentMap";
+import { segmentMapWindow, type SegmentDatum } from "@/lib/map/segmentMap";
 
 /**
  * Fixtures are PRODUCER-SHAPED, which for this component is the whole ballgame.
@@ -22,6 +22,19 @@ const N = {
   DFW: { code: "DFW", lat: 32.9, lon: -97.04 },
   JFK: { code: "JFK", lat: 40.64, lon: -73.78 },
   DEN: { code: "DEN", lat: 39.86, lon: -104.67 },
+  // Anchorage, so ONE panel of a three-panel set reaches an inset the others do not. That
+  // asymmetry is the entire subject of the shared-window test below; a set whose panels all
+  // reach the same panels cannot fail it.
+  ANC: { code: "ANC", lat: 61.17, lon: -149.99 },
+  // Fairbanks, so a panel can be Alaska-ONLY. `ANC -> FAI` reaches `ak` and nothing else, which
+  // is what makes that panel's own window start at 354 while a conterminous one starts at 12 --
+  // the asymmetry the union's TOP half needs to be pinned against.
+  FAI: { code: "FAI", lat: 64.82, lon: -147.86 },
+  // Bellingham -- the northernmost fact-present `us` airport. It projects to y=21.9, so its node
+  // LABEL (drawn at y+3 in 9px type) reaches above the `us` panel band's own top edge of 18.
+  // That makes it the one fixture whose presence in a panel moves that panel's window without
+  // moving which PANELS it reaches, which is the asymmetry the shared-window test needs.
+  BLI: { code: "BLI", lat: 48.79277778, lon: -122.5375 },
 } as const;
 
 function seg(
@@ -291,6 +304,126 @@ describe("DiffMap", () => {
     // so a panel-level caption saying "trailing" would be false on one panel in three.
     const { container } = render(<DiffMap diffs={DIFFS} quarantinedRoutes={0} carrier="AS" />);
     expect(panels(container)[1].textContent).not.toMatch(/trailing/i);
+  });
+
+  it("takes the TOP from whichever panel reaches highest, not from the first (#123)", () => {
+    // THE HALF OF THE UNION THE OTHER TWO FIXTURES CANNOT PIN. `cropWindow` here is
+    // `{ top: min(...tops), bottom: max(...bottoms) }`, and both existing fixtures place the
+    // extreme TOP on `windows[0]` by accident of ordering -- the ink-split set puts BLI in
+    // `added`, and the Alaska set's `dropped` reaches `us` AND `ak`, so its band top is 18 like
+    // everyone else's and all three tops are 12. Neither varies the top at all, so
+    // `min(...tops) -> windows[0].top` was green in 96 of 96 tests while `max(...bottoms) ->
+    // windows[0].bottom` was caught. One half of one expression pinned, the other not: exactly
+    // the accident CLAUDE.md records for the tie fixture that "broke its tie toward the previous
+    // year's leader" and let a flapping implementation look right.
+    //
+    // WHAT THIS FIXTURE VARIES: the panel that reaches HIGHEST is not index 0. `added` is
+    // Alaska-only, so its own window starts at 354 -- the LOWEST top of the three -- while the
+    // conterminous `dropped` and `downgauged` start at 12. The union must take 12 from a panel
+    // that is not the first one.
+    //
+    // AND IT ASSERTS THE BOX, NOT JUST AGREEMENT. `new Set(boxes).size === 1` is satisfied by
+    // three identically WRONG boxes, which is precisely what the mutant produces: every panel
+    // gets `0 354 960 202` while the dropped panel's own ink sits at y=41, 300px above the
+    // window, erased by `globals.css`'s `svg:not(:root) { overflow: hidden }` -- a panel
+    // captioned "AS dropped" showing nothing but its footer.
+    //
+    // This is the `/carrier/5V` and `/carrier/GV` shape (Everts Air Alaska, Grant Aviation):
+    // added=[ak], dropped=[us,ak], downgauged=[ak]. Not a constructed case.
+    const topSplit = [
+      diff("added", [seg("ANC", "FAI")]),
+      diff("dropped", [seg("JFK", "DEN")]),
+      diff("downgauged", [seg("ORD", "DFW")]),
+    ];
+    const { container } = render(<DiffMap diffs={topSplit} quarantinedRoutes={0} carrier="AS" />);
+    const boxes = panels(container).map((p) =>
+      p.querySelector("svg[role='img']")!.getAttribute("viewBox"),
+    );
+    expect(boxes.length).toBe(3);
+    expect(new Set(boxes).size).toBe(1);
+    expect(boxes[0]).toBe("0 12 960 544");
+
+    // Not vacuous: the first panel really does start lower than the union, so the two differ
+    // before they are unioned and `windows[0].top` is a genuinely different number.
+    const first = segmentMapWindow({ ...topSplit[0].map, title: "AS added" });
+    expect(`windows[0].top ${first.top}, union top 12, differ: ${first.top !== 12}`).toBe(
+      `windows[0].top ${first.top}, union top 12, differ: true`,
+    );
+  });
+
+  it("crops all three panels to ONE window when only one carries edge INK (#123)", () => {
+    // WHAT THIS FIXTURE VARIES, and why the reach-based test beside it structurally cannot see
+    // it: every panel here reaches EXACTLY THE SAME PANELS (`us` alone), so any scheme based on
+    // shared REACH is identical for all three and does nothing. What differs is the INK -- only the added panel
+    // holds BLI, whose node label rides above the `us` band's top edge. The window is the bands
+    // unioned with the ink each map emits, and ink is accumulated inside each render, so sharing
+    // reach is not sharing a window.
+    //
+    // That is the "assert the set, not the geometry" trap: varying which panels a diff reaches
+    // is varying a SET, and the property is a POSITION. Mutant: drop `cropWindow` from the
+    // `<SegmentMap>` call and the boxes come back `0 9 960 453`, `0 12 960 450`,
+    // `0 12 960 450` -- two distinct boxes, different top AND different height.
+    const inkSplit = [
+      diff("added", [seg("BLI", "LAX")]),
+      diff("dropped", [seg("JFK", "DEN")]),
+      diff("downgauged", [seg("ORD", "DFW")]),
+    ];
+    const { container } = render(<DiffMap diffs={inkSplit} quarantinedRoutes={0} carrier="AS" />);
+    const boxes = panels(container).map((p) =>
+      p.querySelector("svg[role='img']")!.getAttribute("viewBox"),
+    );
+    expect(boxes.length).toBe(3);
+    expect(new Set(boxes).size).toBe(1);
+
+    // AND THE UNION IS THE TALLER ONE. Collapsing all three onto the panel that has no BLI would
+    // satisfy the assertion above while clipping the label the union exists to keep -- so assert
+    // the top the ink demands, not merely that the three agree.
+    // 453, not 441: every diff panel carries a TWO-line footer (`diffPanelTitle` always sets a
+    // title), and the crop reserves a line's height for each -- see `footerBand`.
+    expect(boxes[0]).toBe("0 9 960 453");
+
+    // Not vacuous: BLI's label really is above the `us` band, so the two windows genuinely
+    // differ before they are unioned.
+    const bare = segmentMapWindow(inkSplit[0].map);
+    const other = segmentMapWindow(inkSplit[1].map);
+    expect(`${bare.top} vs ${other.top}, differ: ${bare.top !== other.top}`).toBe(
+      `${bare.top} vs ${other.top}, differ: true`,
+    );
+  });
+
+  it("crops all three panels to ONE window, even when only one reaches Alaska (#123)", () => {
+    // A SMALL MULTIPLE IS COMPARED BY POSITION, so its panels must share a frame. #123 crops
+    // each map's canvas to the panels ITS OWN network reaches -- right for a single map, and
+    // wrong here: a dropped-routes panel reaching Alaska would render 532px tall beside an
+    // added-routes panel of 438, stacked under one heading, which reads as a second and
+    // unintended encoding on top of the position one this component already spends.
+    //
+    // THE FIXTURE IS ASYMMETRIC ON PURPOSE. Only the dropped panel reaches `ak`; if all three
+    // reached the same panels their windows would agree whatever the component did, and this
+    // test would pass under the bug. Mutant: drop `cropWindow` from the `<SegmentMap>` call and
+    // the three viewBoxes come back "0 12 960 450", "0 12 960 544", "0 12 960 450" -- red.
+    const mixed = [
+      diff("added", [seg("ORD", "LAX")]),
+      diff("dropped", [seg("SEA", "ANC")]),
+      diff("downgauged", [seg("JFK", "DEN"), seg("ORD", "DFW")]),
+    ];
+    const { container } = render(<DiffMap diffs={mixed} quarantinedRoutes={0} carrier="AS" />);
+    const boxes = panels(container).map((p) =>
+      p.querySelector("svg[role='img']")!.getAttribute("viewBox"),
+    );
+    expect(boxes.length).toBe(3);
+    expect(new Set(boxes).size).toBe(1);
+
+    // AND THE WINDOW IS THE UNION, not the first panel's: it must be tall enough for the
+    // Alaska inset that only one panel draws. Without this, three panels cropped identically to
+    // the CONTERMINOUS window would satisfy the assertion above while clipping that inset.
+    expect(boxes[0]).toBe("0 12 960 544");
+
+    // Widening the window must not widen what is DRAWN. Only the dropped panel reaches Alaska,
+    // so only it may carry the labelled frame -- a shared window leaking into the fit set would
+    // put an empty ALASKA box on all three, the exact lie `fitPanels` omits a fit to prevent.
+    const labelled = panels(container).filter((p) => (p.textContent ?? "").includes("ALASKA"));
+    expect(labelled.length).toBe(1);
   });
 
   it("renders SegmentMap's own disclosure notes rather than a hand-rolled sentence", () => {

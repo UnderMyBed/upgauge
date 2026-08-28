@@ -10,6 +10,19 @@
  * left edge in all 13 of its windows. Both properties below are asserted over the WHOLE
  * fact-present population, so the next one cannot hide behind a hand-written airport list.
  *
+ * EVERY TEST IN THIS FILE NEEDS A BUILT `upgauge.duckdb`, INCLUDING THE ONES THAT LOOK LIKE
+ * THEY DO NOT. The population is loaded by a MODULE-LEVEL await below, so without a warehouse
+ * the file throws while loading and vitest reports `no tests` for it -- it FAILS, loudly, and
+ * nothing here silently skips. Measured, by running it with `UPGAUGE_DB` pointed at a path that
+ * does not exist: `Test Files 1 failed`, `Tests no tests`. That is the desired failure mode and
+ * it is worth stating, because a gate that quietly skips in the environment where it matters is
+ * the one failure CLAUDE.md's `app-smoke` section says this repo cannot tolerate.
+ *
+ * It also means a DB-free property must not be filed here and described as still firing when
+ * the live ones do not -- the module-level await takes the whole file down first, so it would
+ * fire nowhere. #122's structural half is in `albers.test.ts` for exactly that reason: that
+ * file imports nothing but the projection, so it runs in a checkout with no `data/` at all.
+ *
  * A LIVE-DATABASE TEST, deliberately, unlike `basemap.test.ts`'s hand-copied Pacific
  * coordinates. Half of what this guards is a BTS refresh introducing an airport outside a
  * panel's baked extent -- exactly the class that renamed aircraft type 699 out from under the
@@ -139,12 +152,11 @@ describe("every airport this site serves a page for lands where the map says it 
     // the rect only raises k. See `US_EXTENT_ANCHORS` for the 638.6px threshold at which width
     // binds instead, and why that is not a rect anyone would ship.
     //
-    // WHAT THIS DID NOT CLOSE, because the issue's own second clause was false: EYW still
-    // projects inside the drawn CARIBBEAN frame, and so do 16 other conterminous airports --
-    // 17 in total on this side of the change, down from 18 before it, SRQ being the only one
-    // that fell out. MIA is among them at (708.4, 401.0), 22px above EYW. That is `car`'s rect
-    // overlapping the bottom-right of `us`'s, which `basemap.test.ts` already records as
-    // `["FL", "TX"]`, and it is #122. It is not an extent defect and no `us` fit can reach it.
+    // INSIDE ITS OWN RECT IS NOT THE SAME PROPERTY AS OUTSIDE EVERY OTHER PANEL'S FRAME, and
+    // this test only states the first. A `us` airport can satisfy it while being drawn inside a
+    // labelled inset laid over the conterminous panel -- `us` is the one panel with no frame of
+    // its own, so nothing separates it from an inset above it. That second property is asserted
+    // directly below (#122), over this same population, and it is not derivable from this one.
     const outside = placed
       .filter((p) => {
         const [x0, y0, x1, y1] = PANEL_RECTS[p.panel];
@@ -156,9 +168,14 @@ describe("every airport this site serves a page for lands where the map says it 
 
   it("keeps every subject disc AND its label on the canvas", () => {
     // THE USER-VISIBLE DEFECT, and the one the issue's own sweep half-measured. `globals.css`
-    // gives the map `svg:not(:root) { overflow: hidden }`, so anything outside the 960x500
+    // gives the map `svg:not(:root) { overflow: hidden }`, so anything outside the emitted
     // viewBox is CLIPPED, not merely far away. `/airport/SYA?y=2018` rendered a map of a
     // network whose centre was not on it.
+    //
+    // #123's crop did not weaken this, it sharpened the top edge. The window is unioned with
+    // the ink actually emitted, so a mark BELOW the canvas floor now widens the window instead
+    // of being cut off -- but the top is clamped at 0, precisely because this test guarantees
+    // nothing is above it. Break that guarantee and the clamp becomes a clipper.
     //
     // The label box is checked, not just the disc, because that is the difference between
     // catching two airports and catching three: AKB's disc sat at x=7.0, inside the canvas, so
@@ -175,7 +192,11 @@ describe("every airport this site serves a page for lands where the map says it 
     // and a full font-size of ascent above the baseline is more than any glyph in a 3-letter
     // uppercase code uses.
     const WIDTH = 960;
-    const HEIGHT = 500;
+    // 544 since #122 (`segmentMap.ts`'s `HEIGHT`): the bottom tray moved down 44px to clear the
+    // `us` rect and the canvas grew by the same 44 to hold it. Restated rather than imported,
+    // like `albers.test.ts`'s copy and for the same reason -- a bound derived from the thing it
+    // bounds proves nothing.
+    const HEIGHT = 544;
     const R = 4.5;
     const offCanvas = placed
       .filter((p) => {
@@ -242,8 +263,13 @@ describe("the `ak` declared extent (#115)", () => {
     // and the anchor moves to `us`, the `ak` fit collapses back to the coastline's own extent,
     // and ADK/AKB/SYA go off the canvas again -- while the coastline itself still draws exactly
     // as it did, so no path hash, no fit pin and no frame gate would notice. The two live
-    // properties above WOULD go red, but they need the database; this one does not, so it still
-    // fires in an environment where those skip.
+    // properties above WOULD go red on it as well.
+    //
+    // THIS TEST IS NOT A DB-FREE BACKSTOP. Its own assertions need no warehouse, but the
+    // module-level `await placeEveryServedAirport()` above does, and it throws first -- so in a
+    // checkout without one this test does not run at all. Measured, not reasoned about (see the
+    // file header). What it genuinely adds is that a red here names the CAUSE, `-> us` becoming
+    // `-> car`, instead of reporting a moved `k`.
     //
     // Read from the generator's own `AK_EXTENT_ANCHORS` and checked against the generated
     // artifact, which binds the two together rather than trusting either alone.
@@ -263,13 +289,13 @@ describe("the `ak` declared extent (#115)", () => {
 
 describe("the `us` declared extent (#119)", () => {
   it("classifies its anchor as `us`, and carries it in the fit set", () => {
-    // WHY THIS EARNS ITS PLACE, in the order that is actually true. FIRST: it needs no
-    // database, so it fires in an environment where the two containment properties above skip
-    // -- that is the coverage argument, and it is the strong one. SECOND: when `regionOf`
-    // re-files the anchor it names the CAUSE ("-> car") instead of reporting a moved `k`.
-    // It is not the only guard: run the mutant (`lon > -90`) and the `us` and `car` path
-    // hashes and fits in `basemap.test.ts` go red too, because both panels' partitions
-    // change.
+    // WHY THIS EARNS ITS PLACE: when `regionOf` re-files the anchor it names the CAUSE
+    // ("-> car") instead of reporting a moved `k`. It is not the only guard: run the mutant
+    // (`lon > -90`) and the `us` and `car` path hashes and fits in `basemap.test.ts` go red
+    // too, because both panels' partitions change.
+    //
+    // It is NOT a coverage argument: this file's module-level await needs a warehouse, so
+    // nothing in it runs without one. See the file header, where that is measured.
     //
     // The failure it describes is structurally Amatignak's -- `regionOf`'s Caribbean test is
     // `lat < 25 && lon > -70` and this anchor is at lat 24.551, BELOW 25, so only the longitude
@@ -316,6 +342,184 @@ describe("the `us` declared extent (#119)", () => {
       expect(`anchor y ${y.toFixed(4)} vs rect bottom ${bottom}`).toBe(
         `anchor y ${bottom.toFixed(4)} vs rect bottom ${bottom}`,
       );
+    }
+  });
+});
+
+describe("no inset frame is drawn over an airport that belongs to another panel (#122)", () => {
+  // THE DEFECT, STATED OVER THE WHOLE POPULATION RATHER THAN OVER THE PANEL THAT HAD IT.
+  // `renderMapCore` draws an inset's border at rect +/- 6 and its label inside that border, so
+  // a foreign airport projecting into that box is drawn, with its own code beside it, inside a
+  // frame naming somewhere it is not. `car` held 17 of them -- 12 Florida and 5 south Texas,
+  // MIA at (708.4, 401.0) and EYW at (690.7, 423.1) -- on 293 measured (airport, year) views.
+  //
+  // WHY THIS IS NOT THE SAME TEST AS THE CONTAINMENT SWEEP ABOVE. That one asks whether each
+  // airport is inside ITS OWN rect, which every one of those 17 was: they are `us` airports
+  // sitting exactly where the `us` fit puts them. Nothing about their position was wrong. What
+  // was wrong was that a second panel's frame was drawn on top of them. The two properties are
+  // independent, and the sweep is green on both sides of the fix.
+  //
+  // THE FIXTURE IS THE REAL POPULATION, WHICH IS THE POINT. A hand-built fixture of a few
+  // airports could not fail this way -- #122's own brief says so -- because the defect is a
+  // near-miss: it needs MIA, 30px inside the old frame's top edge, or EYW, 0.9px above the `us`
+  // rect's floor. Reading all 1,047 is what makes the fixture contain them without anyone
+  // having to have thought of them.
+  //
+  // AN EXACT SORTED SET, never a count and never a bound, for the reason the sweep above gives:
+  // a NEW violation is red, and so is a REMOVED one, so the exemption cannot be quietly widened.
+  const FRAME_PAD = 6;
+  it.each(["ak", "hi", "pac", "nwhi", "car", "sam"] as const)(
+    "%s's frame holds no airport from another panel",
+    (panel) => {
+      const [x0, y0, x1, y1] = PANEL_RECTS[panel];
+      const inside = placed
+        .filter(
+          (p) =>
+            p.panel !== panel &&
+            p.x >= x0 - FRAME_PAD &&
+            p.x <= x1 + FRAME_PAD &&
+            p.y >= y0 - FRAME_PAD &&
+            p.y <= y1 + FRAME_PAD,
+        )
+        .map((p) => `${p.code}/${p.panel} (${p.x.toFixed(1)}, ${p.y.toFixed(1)})`);
+      expect(`${panel}: ${inside}`).toBe(`${panel}: `);
+    },
+  );
+
+  it("reads a population that actually reaches the frames, so the sweep is not vacuous", () => {
+    // Without this, a `placed` that lost its Florida airports -- or a rect moved off the canvas
+    // -- would make every assertion above pass by having nothing to test. The guard is that the
+    // `car` frame's own NEIGHBOURHOOD is populated: airports exist just above it, which is what
+    // made the old rect's overlap possible in the first place.
+    const [, y0] = PANEL_RECTS.car;
+    const justAbove = placed.filter((p) => p.panel === "us" && p.y > y0 - FRAME_PAD - 60);
+    expect(justAbove.length).toBeGreaterThan(10);
+  });
+});
+
+describe("a declared extent anchor sits just outside the airports it exists to place (#128)", () => {
+  // THE UNGUARDED DIRECTION, AND THE ONLY ONE LEFT. `AK_EXTENT_ANCHORS` (#115) and
+  // `US_EXTENT_ANCHORS` (#119) are hand transcriptions of extrema from Natural Earth 1:10m --
+  // a file this repo does not commit and no `make` target fetches -- so the transcription
+  // itself cannot be checked against its source in CI. The guards around them were one-sided:
+  //
+  //   too far IN  (under-reaching) -> the containment sweep above, and the clearance floor.
+  //   too far OUT (over-reaching)  -> nothing. Every airport moves FURTHER inside its rect, so
+  //                                   every containment property gets MORE true, and the only
+  //                                   artifact that disagrees is the hand-pinned fit constant
+  //                                   in `basemap.test.ts` that the same commit is re-pinning.
+  //
+  // That is review catching it, not a gate.
+  //
+  // WHAT THIS BINDS THE ANCHOR TO, and why it is not a second transcription: the BTS airport
+  // population. An extent anchor exists to make a panel's fit contain the airports at its edge
+  // -- that is the entire reason #115 and #119 added them -- so the anchor and the outermost
+  // airport it protects must be close together on the axis the anchor declares. An anchor typed
+  // a degree too far out lands a long way from that airport while every other gate stays green.
+  // The airport coordinates come from the warehouse, not from this file, so nothing here
+  // restates the constant it is checking.
+  //
+  // THE AXIS IS DERIVED, NOT DECLARED. An anchor governs whichever extreme of its panel's
+  // reference set it attains, so this asks the reference set instead of carrying a table of
+  // "Attu is the western one". Attu attains `minX`, Amatignak and the Marquesas Keys `maxY`.
+  // Requiring that it attains SOMETHING is itself a check: an anchor inside the extent on every
+  // axis is doing nothing at all, which no other gate would report.
+  //
+  // MEASURED TODAY, and every mutant RUN rather than predicted -- anchor edited AND `make
+  // basemap` re-run, which is how a transcription error would actually land:
+  //
+  //   anchor                     gap     +0.5deg out   +1deg out
+  //   Marquesas Keys (us, maxY)  0.86px     8.30px      15.45px
+  //   Attu           (ak, minX)  3.30px     4.39px       5.46px
+  //   Amatignak      (ak, maxY)  1.03px       --          6.65px
+  //
+  // THE CONTAINMENT SWEEP IS GREEN ON EVERY ONE OF THEM. That divergence is the whole point: if
+  // it reddened too, this test would be redundant and the asymmetry would still be open.
+  //
+  // The EYW clearance test is a more interesting case than #128 assumed, and the mutants are
+  // what showed it. On the two `us` mutants its FLOOR stays green -- it reports "clear of zero:
+  // TRUE" -- and it reddens through its IDENTITY clause instead, because rescaling the panel
+  // makes BLI, not EYW, the tightest `us` airport. That is a side effect of a rescale, not a
+  // statement about over-reach: it says nothing on either `ak` mutant, and it would say nothing
+  // about an over-reach that happened to leave the same airport tightest. So the floor is
+  // genuinely one-sided, as #128 says; what this test adds is the other side.
+  //
+  // WHAT THIS DOES NOT CATCH, because it was run and not assumed: Amatignak over-reaching by
+  // 0.2 degrees. `ak` binds on WIDTH, so that anchor governs only the panel's vertical
+  // CENTRING, and 0.2 degrees moves it about 1.1px -- inside the ceiling. It is bounded rather
+  // than open, and the bound is `regionOf`'s own: Amatignak sits at 51.215 against an Alaska
+  // test of `lat > 51`, so it cannot over-reach by more than 0.215 degrees without being
+  // re-filed as `us`, which the `ak` declared-extent test above catches by name. Between the
+  // two, every magnitude that moves the panel more than about a pixel is covered.
+  //
+  // WHEN THIS GOES RED, THE ANSWER IS TO RE-DERIVE THE ANCHOR, NOT TO RAISE THE CEILING.
+  // The margin is deliberately narrow -- Attu measures 3.30px against a 4px ceiling -- because
+  // `ak` draws only 2.4px per degree of longitude, so a ceiling loose enough to feel comfortable
+  // there is a ceiling that cannot catch a transposed digit. The failure message says so, and it
+  // says it where the person who sees the red will read it.
+  //
+  // AND A RED HERE MAY BE TRUE. This gate is deliberately bound to a dataset that moves. If a
+  // BTS refresh drops SYA from the fact-present population, the westernmost `ak` airport jumps
+  // hundreds of pixels east and this goes red -- correctly, because the Attu anchor would then
+  // have no airport left to justify it and the panel's extent needs re-deriving. CLAUDE.md
+  // records a refresh renaming aircraft type 699 out from under an entire fixture set; this is
+  // the same class of event. Read the message before deciding it is a broken test.
+  const CEILING_PX = 4;
+
+  /** Every reference point of one panel, in that panel's own raw-Albers space -- the exact set
+   *  `fitPanels` partitions and fits, so "attains an extreme" here means the same thing it
+   *  means to the fit. */
+  function referenceExtremes(panel: Panel) {
+    const raw = BASEMAP_FIT_POINTS.filter((p) => regionOf(p.lat, normalizeLon(p.lon)) === panel);
+    expect(raw.length).toBeGreaterThan(0);
+    const xs = raw.map((p) => project(p.lat, p.lon, BASEMAP_FITS)[0]);
+    const ys = raw.map((p) => project(p.lat, p.lon, BASEMAP_FITS)[1]);
+    return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+  }
+
+  it.each([
+    ["ak", AK_EXTENT_ANCHORS as { lat: number; lon: number }[]],
+    ["us", US_EXTENT_ANCHORS as { lat: number; lon: number }[]],
+  ] as const)("%s's anchors each bind an axis, within reach of that axis's outermost airport", (panel, anchors) => {
+    const ref = referenceExtremes(panel as Panel);
+    const airports = placed.filter((p) => p.panel === panel);
+    expect(airports.length).toBeGreaterThan(0);
+    const air = {
+      minX: Math.min(...airports.map((p) => p.x)),
+      maxX: Math.max(...airports.map((p) => p.x)),
+      minY: Math.min(...airports.map((p) => p.y)),
+      maxY: Math.max(...airports.map((p) => p.y)),
+    };
+
+    for (const a of anchors) {
+      const [ax, ay] = project(a.lat, a.lon, BASEMAP_FITS);
+      // Exact equality is right here: both sides come from the same `project` call over the same
+      // array, so the anchor's own coordinate IS the extreme when it attains one.
+      const axes = (
+        [
+          ["minX", ax === ref.minX, ax, air.minX],
+          ["maxX", ax === ref.maxX, ax, air.maxX],
+          ["minY", ay === ref.minY, ay, air.minY],
+          ["maxY", ay === ref.maxY, ay, air.maxY],
+        ] as const
+      ).filter(([, attained]) => attained);
+
+      expect(`(${a.lat}, ${a.lon}) binds ${axes.length} axes`).not.toBe(
+        `(${a.lat}, ${a.lon}) binds 0 axes`,
+      );
+
+      for (const [axis, , anchorAt, airportAt] of axes) {
+        const gap = Math.abs(anchorAt - airportAt);
+        expect(
+          `${panel} ${axis} anchor (${a.lat}, ${a.lon}) is ${gap.toFixed(2)}px from the outermost ` +
+            `airport on that axis, within ${CEILING_PX}px: ${gap <= CEILING_PX} ` +
+            `-- if false, RE-DERIVE THIS ANCHOR from Natural Earth 1:10m; do not raise the ceiling`,
+        ).toBe(
+          `${panel} ${axis} anchor (${a.lat}, ${a.lon}) is ${gap.toFixed(2)}px from the outermost ` +
+            `airport on that axis, within ${CEILING_PX}px: true ` +
+            `-- if false, RE-DERIVE THIS ANCHOR from Natural Earth 1:10m; do not raise the ceiling`,
+        );
+      }
     }
   });
 });

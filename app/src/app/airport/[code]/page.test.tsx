@@ -219,6 +219,18 @@ describe("/airport/<code>", () => {
     expect(container.textContent).toMatch(/quarantined row/i);
     expect(container.textContent).toMatch(/never averaged/i);
   });
+
+  it("DOES render the fleet-shading rail group when a chart was drawn (#123)", async () => {
+    // The other side of the #123 gate, and the reason it is here rather than only on A18:
+    // without it, "never render the group" satisfies the absence assertion there and silently
+    // deletes a group four pages need. SEA has many filed months, so the chart draws and the
+    // rail must explain it. Note this direction passes under the BUG too -- that is exactly why
+    // the absence test is the one that catches it, and why both have to exist.
+    const { container } = render(await renderSEA());
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).toContain("Fleet shading");
+    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+  });
 });
 
 // #114, at the page. The unit tests prove the producer counts and the renderer states; this
@@ -237,6 +249,35 @@ describe("/airport/<code> whose whole network is one quarantined route pair", ()
     expect(container.querySelectorAll("polyline").length).toBe(0);
     expect(container.querySelector('[data-testid="network-notes"]')!.textContent).toContain(
       "1 quarantined route not drawn — failed an invariant, never clamped.",
+    );
+  });
+
+  it("renders NO fleet-shading rail group, because no chart was drawn (#123)", async () => {
+    // THE DEFECT STATED AS AN ABSENCE, which is the only form that can fail. A18 has exactly
+    // one filed month, so `AircraftMixChart` takes its `plot === null` branch and draws a line
+    // of text -- while the rail rendered the two gauge swatches and "The shaded months are
+    // 2020-03 to 2021-06. COVID is in the window on purpose", explaining a ramp that is not on
+    // the page. A test asserting the group IS present on a normal page passes under the bug;
+    // `docs/design/system.md` names this failure directly.
+    //
+    // Mutant: put `fleetMix={hasMix}` back on page.tsx's `<LegendRail>` and this goes red on
+    // both assertions, while the SEA test below stays green.
+    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "A18" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Fleet shading");
+    expect(rail.textContent).not.toContain("COVID is in the window on purpose");
+
+    // NOT VACUOUS, and this is the half that keeps the assertion honest: the rail is mounted,
+    // it carries its unconditional groups, and the chart really did decline to draw.
+    expect(rail.textContent).toContain("Gauge rail");
+    expect(container.querySelector(".chart svg[role='img']")).toBeNull();
+    // THE sentence, not merely some sentence. A18's one filed month is ITSELF wholly quarantined,
+    // so `mixAbsenceNote` names that cause rather than the bare month count. Integrating #121 and
+    // #123 moved this string: #123 pinned the note it found here, #121 changed which branch A18
+    // reaches, and neither unit could see the other. The property under test is unchanged -- the
+    // chart declined to draw and said why.
+    expect(container.querySelector(".chart")!.textContent).toContain(
+      "wholly quarantined — every filing failed an invariant",
     );
   });
 
@@ -781,5 +822,33 @@ describe("/airport/<code> sorts below-floor rows last", () => {
     const seatsOf = (below: boolean) =>
       rows.filter((r) => r.belowFloor === below && Number.isFinite(r.seats)).map((r) => r.seats);
     expect(Math.max(...seatsOf(true))).toBeGreaterThan(Math.min(...seatsOf(false)));
+  });
+});
+
+describe("/airport/<code>: the legend rail's arc group follows the ARCS (#123)", () => {
+  // EVERY ROW IN THAT GROUP DESCRIBES AN ARC -- width by seats, dashed below the load-factor
+  // floor, dotted-muted below the departure floor, and why a cross-panel arc is a straight line.
+  // A map can render with none of them, so "a map was drawn" is the wrong gate: a hub map always paints its origin disc, so `/airport/A18` and
+  // `/airport/OQZ` render a map with zero polylines.
+  //
+  // Asserted as an ABSENCE, because the presence form passes under the bug. And per CALL SITE:
+  // each page decides for itself what to pass, so reverting one is a live defect on that surface
+  // alone. Mutant: pass `hasNetwork` back to `<LegendRail map={...}>` here and this goes red.
+  it("renders NO arc-rendering group when no arc was drawn", async () => {
+    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "A18" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail.textContent).not.toContain("Arc rendering");
+    expect(rail.textContent).not.toContain("width scales with seats");
+    // NOT VACUOUS, and this is the half that matters: the MAP is still mounted -- dropping the
+    // map to satisfy the negative would delete the disclosure this view exists to carry.
+    expect(container.querySelector(".map svg[role='img']")).not.toBeNull();
+    expect(container.querySelectorAll("polyline").length).toBe(0);
+    expect(rail.textContent).toContain("Gauge rail");
+  });
+
+  it("DOES render it when arcs were drawn", async () => {
+    const { container } = render(await renderSEA());
+    expect(container.querySelector("aside.legend")!.textContent).toContain("Arc rendering");
+    expect(container.querySelectorAll("polyline").length).toBeGreaterThan(0);
   });
 });

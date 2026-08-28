@@ -17,8 +17,10 @@ import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
+import { networkArcsDrawn } from "@/lib/map/networkMap";
 import { NetworkMap } from "@/components/NetworkMap";
 import { AIRCRAFT_MIX_LIMIT } from "@/lib/chart/aircraftMix";
+import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
 import { fetchAirportNetwork } from "@/lib/map/airportNetwork";
 import { EARLIEST_YEAR, parseYear, yearTrack, yearWindow, type ParsedYear } from "@/lib/year";
 import { encode } from "@/lib/pivot/urlstate";
@@ -259,6 +261,12 @@ export async function AirportView({
   const totals = airportTotals(traffic.rows, airport.id);
   const isEmpty = rows.length === 0;
   const hasMix = mix.rows.length > 0;
+  /** WHETHER THE CHART DREW, which is not whether it has rows (#123). One filed month has rows
+   *  and draws a line of text, so `hasMix` is the right gate for RENDERING `AircraftMixChart`
+   *  -- it is what makes the absence note appear -- and the wrong one for the legend rail's
+   *  fleet-shading group, which would then explain a ramp the reader cannot see. Read from the
+   *  chart's own predicate, never re-derived here. */
+  const chartDrawn = mixChartDraws(mix.rows);
 
   // The range the chart can DRAW, which is not the range it was fetched over -- ISN's history
   // ends in 2019-10. Naming the requested window over a chart that stops five years earlier is
@@ -277,6 +285,11 @@ export async function AirportView({
   const chartWindow = `chart: ${drawsFullWindow ? "the full window · " : ""}${drawnFrom} → ${drawnTo}`;
 
   const hasNetwork = network !== null;
+  /** WHETHER AN ARC WAS DRAWN, which is not whether a map was (#123). A hub map always paints
+   *  its origin disc, so `/airport/A18` and `/airport/OQZ` render a map with zero polylines --
+   *  and the rail's "Arc rendering" group describes three arc encodings and nothing else. Same
+   *  rule as `chartDrawn` above, applied to the group beside it. */
+  const arcsDrawn = network !== null && networkArcsDrawn(network);
   // Same "one string" discipline as `chartWindow` immediately above, and the same reason: a
   // grep over the served bytes (app/smoke.sh), not `textContent`, is what actually proves this
   // survives to production. States which window the MAP drew, which is the table's trailing
@@ -436,15 +449,18 @@ export async function AirportView({
               click from the raw rows that produced it.
             </p>
           </div>
-          {/* The rail describes the encodings THIS page uses and no others. The fleet-shading
-              and map (arc rendering) groups are each asked for only when that element is
-              actually drawn. `hasNetwork` follows the same PATTERN as `hasMix` but not the
-              same VALUES, and an earlier version of this comment said "mirrors `hasMix`
-              exactly", which is false: `hasMix` is over the full window
-              (EARLIEST_MONTH..asOf) while `hasNetwork` is over `mapWindow`, so `?y=<year>`
-              with no filings in that year gives `hasMix && !hasNetwork` -- which is exactly
-              why the branch above renders the chart without the map. */}
-          <LegendRail fleetMix={hasMix} map={hasNetwork} />
+          {/* The rail describes the encodings THIS page uses and no others, and DRAWN is the
+              test -- not "the data for it exists". `chartDrawn`, never `hasMix`: gating on
+              `hasMix` shipped the fleet-shading swatches and the COVID-window sentence beside
+              a one-month airport's line of absence text (#123, measured on A18/JZM/OQZ), which
+              is the stale "how to read this" the rail exists to replace. `hasNetwork` is
+              already the drawn test for the map group -- `NetworkMap` is rendered under the
+              same condition and always paints its origin disc.
+              The two gates follow the same PATTERN and not the same VALUES: the chart is over
+              the full window (EARLIEST_MONTH..asOf) while `hasNetwork` is over `mapWindow`, so
+              `?y=<year>` with no filings in that year gives `chartDrawn && !hasNetwork` --
+              which is exactly why the branch above renders the chart without the map. */}
+          <LegendRail fleetMix={chartDrawn} map={arcsDrawn} />
         </div>
       </main>
     </div>

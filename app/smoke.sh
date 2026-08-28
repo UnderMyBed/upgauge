@@ -886,15 +886,39 @@ check     "airport?y=nonsense: malformed input is the same named error, not a 50
 # route this file ever checked -- the same "green unit tests, mounted on no route at all"
 # shape the mix chart hit before it.
 #
-# The `<svg ... role="img"` needle is anchored on `viewBox="0 0 960 500"` (this map's own fixed
-# WIDTH/HEIGHT, networkMap.ts), not the bare `<svg role="img"` M4c's chart check uses -- that
+# The `<svg ... role="img"` needle is anchored on this map's own `viewBox`, not the bare
+# `<svg role="img"` M4c's chart check uses -- that
 # bare form also matches AircraftMixChart's own SVG (mounted on this same page, M7 Task 3 kept
 # it) and, per the M4d comment two sections up, the per-row sparkline in DataTable. Anchoring on
-# this map's own fixed pixel size is what makes the check a claim about the MAP rather than
+# this map's own pixel size is what makes the check a claim about the MAP rather than
 # about any other SVG this page happens to also render.
+#
+# THE viewBox IS NO LONGER ONE CONSTANT, and that is #123's whole point: the canvas is cropped
+# to the panels a network reaches, so a conterminous page reads `0 12 960 532` while an
+# Alaska-only one reads `0 354 960 190`. Both forms appear below and they are NOT
+# interchangeable -- pasting the conterminous needle onto an Alaskan page would be a check that
+# can only ever fail, and pasting the Alaskan one onto ORD would silently stop asserting the
+# thing this block exists for. Every value here was read off a served build (`next start app`
+# from the REPO ROOT -- from `app/` the SQL directory does not resolve and every page 500s),
+# never computed from source.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/ORD")
 check     "airport map: the network SVG is in the served HTML" "$BODY" \
-  '<svg viewBox="0 0 960 500" width="960" height="500" role="img"'
+  '<svg viewBox="0 12 960 532" width="960" height="532" role="img"'
+# The positive control for A18's two negatives below: on a page whose chart DOES draw, the
+# fleet-shading group and its COVID sentence must both be present. Without this, deleting the
+# group outright would satisfy every negative needle in this file.
+check     "airport map: a page whose chart draws DOES get the fleet-shading rail group" "$BODY" \
+  'Fleet shading'
+# THE SENTENCE ITSELF, not just the group heading, and it is the needle FIVE assertions depend on
+# being matchable: A18's `check_not` below, plus four `not.toContain` in the page tests. A copy
+# edit to this string would turn every one of them silently vacuous while staying green -- the
+# self-defect class `smoke.sh`'s own header says to assume a fourth of. Verified against emitted
+# bytes: React renders it from a JS string literal, so the em dash and apostrophe in the
+# surrounding prose never reach this substring and it needs no entity handling.
+check     "airport map: ...and the COVID-window sentence the A18 negatives are written against" \
+  "$BODY" 'COVID is in the window on purpose'
+check     "airport map: ...and a page that draws arcs DOES get the arc-rendering group" "$BODY" \
+  'Arc rendering'
 # EXACTLY 273, not "at least" and not 274. ORD carries a same-airport row (53 rows / 76,236
 # seats over the trailing 12 -- networkMap.ts's own NetworkMapInput doc) that renderNetworkMap
 # deliberately excludes from the drawn set (a same-airport great circle has zero length and
@@ -980,7 +1004,7 @@ check     "airport map ?y=nonsense: names the offending year" "$BODY" "unknown y
 # brackets but not the plain word between them -- see the ALASKA comment above).
 BODY=$(curl -s --max-time 30 "${BASE}/airport/GUM")
 check     "airport map GUM: the network SVG is in the served HTML" "$BODY" \
-  '<svg viewBox="0 0 960 500" width="960" height="500" role="img"'
+  '<svg viewBox="0 12 960 532" width="960" height="532" role="img"'
 # The label, not just the frame: `pac` was "PACIFIC" until #111 split American Samoa and
 # Midway into their own panels, at which point a panel holding only the Marianas could not
 # keep a name that also covers the two panels beside it.
@@ -1014,13 +1038,17 @@ check_dataset check     "airport map HNL 2021: the Midway gap is disclosed on th
   'The Midway inset has no coastline under its arcs'
 # And the page that would have LOST ITS OWN SUBJECT. Baking a `pac` fit takes `pac` off
 # networkMap.ts's subject-derived fallback; folding Midway in with it would project MDY to
-# (1367.6, -429.7), off a 960x500 canvas, so /airport/MDY?y=2021's origin disc would simply not
+# (1367.6, -429.7), off the canvas, so /airport/MDY?y=2021's origin disc would simply not
 # be drawn while the caption still said only the landmass was missing. The origin disc is
-# r="4.5" (networkMap.ts) and its cx/cy are asserted EXACTLY: a presence check on `<circle`
+# r="4.5" (segmentMap.ts) and its cx/cy are asserted EXACTLY: a presence check on `<circle`
 # passes under that bug, since the destination dot is still emitted.
+#
+# `cy` moved 430.0 -> 474.0 with #122's tray: `nwhi` has no coastline, so its fit is
+# subject-derived and centres Midway in the frame -- move the frame 44px down and the disc
+# follows it exactly. Re-measured off a served build, not adjusted by arithmetic.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/MDY?y=2021")
 check_dataset check     "airport map MDY 2021: Midway's own origin disc is inside its inset" "$BODY" \
-  '<circle cx="388.0" cy="430.0" r="4.5"'
+  '<circle cx="388.0" cy="474.0" r="4.5"'
 
 # 10c. #114 -- a route pair whose every filing was quarantined is COUNTED, never drawn as zero.
 #
@@ -1039,7 +1067,7 @@ check_dataset check     "airport map MDY 2021: Midway's own origin disc is insid
 # Bettles: 16 route-grain rows over the trailing 12, one of them the wholly-quarantined BTT-UMT.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/BTT")
 check_dataset check "airport BTT: the network SVG is in the served HTML" "$BODY" \
-  '<svg viewBox="0 0 960 500" width="960" height="500" role="img"'
+  '<svg viewBox="0 354 960 190" width="960" height="190" role="img"'
 # A COUNT, not a presence check, for the reason ORD's 273 gives one section up: presence cannot
 # distinguish "the quarantined pair was excluded" from "it was drawn as zero". 15 arcs reach the
 # renderer and one is same-airport, so 14 polylines are drawn; before #114 it was 15.
@@ -1057,13 +1085,75 @@ check_dataset check "airport BTT: the quarantined pair is disclosed with a count
 # #114 this page's single arc was the fabricated one.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/A18")
 check_dataset check "airport A18: the map still renders with nothing drawable" "$BODY" \
-  '<svg viewBox="0 0 960 500" width="960" height="500" role="img"'
+  '<svg viewBox="0 354 960 190" width="960" height="190" role="img"'
 check_dataset check_re "airport A18: draws no arc at all" "$(count "$BODY" '<polyline')" '^0$'
 check_dataset check "airport A18: and still says why the map is empty" "$BODY" \
   '1 quarantined route not drawn'
 # The pair's far endpoint must not appear as a destination label -- that is the fabricated arc
 # coming back, and it is the one thing the polyline count alone would not name.
 check_dataset check_not "airport A18: no destination label for the undrawable pair" "$BODY" '>LMA<'
+
+# #123, ON THE SURFACE IT WAS REPORTED ON. Two symptoms of one cause, and both are things only a
+# served build can show: the rail is composed by a Server Component and the canvas size is
+# decided inside the SVG string, so a unit test sees each in isolation and neither in the page.
+#
+# 1. THE RAIL MUST NOT EXPLAIN A CHART THAT WAS NOT DRAWN. A18 has exactly one filed month, so
+#    `AircraftMixChart` takes its `plot === null` branch and prints a line of text -- while the
+#    legend rail rendered the two gauge swatches and the COVID-window sentence beside it. Both
+#    needles are NEGATIVE, because the positive form ("the group is present") passes under the
+#    bug; the positive control is on ORD below, where a chart genuinely draws.
+#    Written in the bytes React EMITS: both strings are plain ASCII in the source with no entity
+#    and no apostrophe, so they survive JSX compilation unchanged -- checked against the served
+#    page, where they occur 0 times here and twice on ORD (once in the HTML, once in the RSC
+#    payload, the same doubling every other text needle in this file sees).
+check_dataset check_not "airport A18: no fleet-shading rail group, because no chart was drawn" \
+  "$BODY" 'Fleet shading'
+check_dataset check_not "airport A18: and no COVID-window sentence about a ramp that is not there" \
+  "$BODY" 'COVID is in the window on purpose'
+# THE SAME RULE, ON THE GROUP NEXT DOOR. Every row of "Arc rendering" describes an ARC, and this
+# page draws none -- a hub map still paints its origin disc, so "a map rendered" is the wrong gate
+# there too. The MAP itself must stay: it carries the quarantine disclosure this whole block exists
+# for, so the repair is to drop the group, never the map.
+check_dataset check_not "airport A18: no arc-rendering rail group either, because no arc was drawn" \
+  "$BODY" 'Arc rendering'
+# NOT VACUOUS: the rail is mounted and carries the groups this page genuinely earns -- a rail
+# that failed to render at all would satisfy all three negatives above. `Gauge rail` is
+# unconditional and its axis IS drawn here (tickless, since the one row's gauge is unknowable).
+check_dataset check "airport A18: the rail is still mounted, with the groups the page does earn" \
+  "$BODY" 'Gauge rail'
+
+# 2. THE CANVAS IS CROPPED TO THE PANELS THAT CARRY POINTS. A18's network is entirely Alaskan,
+#    so the conterminous panel is not in the picture: the viewBox needle above reads
+#    `0 354 960 190` against the `0 12 960 532` a conterminous page serves -- an Alaska-only
+#    network must not spend the lower 48's height on blank canvas above a small ALASKA inset,
+#    which is what #124 reported and #123 absorbed. Asserted as the HEIGHT
+#    ATTRIBUTE as well, because that is the byte the browser lays the element out from
+#    (`globals.css` gives `.map svg` `height: auto`, so the intrinsic ratio is what decides how
+#    much vertical space the page spends).
+check_dataset check "airport A18: the canvas is cropped to the Alaska band, not the full 500" \
+  "$BODY" 'height="190"'
+check_dataset check_not "airport A18: the old full-canvas height is gone" "$BODY" 'height="500"'
+
+# #122, ON A SERVED PAGE, AND THE FIXTURE IS THE DEFECT ITSELF. The Caribbean inset's frame used
+# to be drawn over the bottom-right of the conterminous panel, so 17 fact-present `us` airports
+# projected inside a box labelled CARIBBEAN -- 12 Florida, 5 south Texas. MIA was one of them,
+# and `/airport/MIA` is the page that shows it: MIA files real Puerto Rico service, so its
+# network reaches `car` and the frame is actually drawn, which is the condition the defect needs.
+# A page that never draws the frame (`/airport/EYW` -- no `car` pairing in any year) cannot fail
+# this way, which is why the subject is MIA and not the southernmost airport.
+#
+# THE FRAME'S OWN RECT, read off the served bytes: `renderMapCore` emits it at rect +/- 6, so
+# `PANEL_RECTS.car`'s y of 436 is drawn at 430. MIA's subject disc is at cy="401.0" -- 29px
+# ABOVE that edge. Both needles together are the claim; the frame check alone would pass on a
+# page that drew no map at all, and the disc check alone would pass if the frame moved off
+# somewhere absurd.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/MIA")
+check_dataset check "airport MIA: the CARIBBEAN inset is drawn, so the overlap is testable here" \
+  "$BODY" '<rect x="418" y="430" width="308" height="88"'
+check_dataset check "airport MIA: and the subject disc sits above that frame, not inside it" \
+  "$BODY" '<circle cx="708.4" cy="401.0" r="4.5"'
+
+
 
 # The negative, on a clean network. `quarantined route` is the needle and the stem matters: this
 # page ALREADY says "N quarantined rows excluded from these totals" in the endpoints table, so a
