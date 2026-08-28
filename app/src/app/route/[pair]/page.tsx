@@ -3,6 +3,7 @@ import { cache } from "react";
 import { notFound, permanentRedirect } from "next/navigation";
 import { resolveRoutePair } from "@/lib/routePair";
 import { BASE_URL } from "@/lib/siteUrl";
+import { quarantineClause } from "@/lib/quarantineClause";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
@@ -231,6 +232,23 @@ export async function RouteView({
   // title so the three can never name the pair differently.
   const title = routeTitle(canonical);
 
+  // ONE implementation, in lib/quarantineClause.ts, for all four entity pages. #121 shipped four
+  // copies of this three-branch prose and review found `/carrier`'s could be replaced with
+  // garbage while every test and every served check stayed green -- its wholly-quarantined branch
+  // is unreachable on this warehouse, so nothing but a unit test can reach the string. The three
+  // cases and the wording are asserted there; this page supplies only what differs.
+  //
+  // Still ONE template literal at the render site below: React's SSR emits `<!-- -->` between
+  // ADJACENT expression children, so the `{n} quarantined row{s}` prefix this replaced could not
+  // be reached by a raw-bytes grep in app/smoke.sh. (Its tail was a single static JSX child and
+  // always was greppable -- the prefix is the half that was not.)
+  const quarantineClauseText = quarantineClause({
+    subject: `on ${title}`,
+    counts: "The carrier count is",
+    seatsAreNull: totals.seats === null,
+    quarantinedRows: result.quarantinedRowsOnPage,
+  });
+
   return (
     <div className="wrap">
       <TopBar asOf={asOf} />
@@ -290,9 +308,7 @@ export async function RouteView({
               </p>
             )}
             <p className="foot">
-              {result.quarantinedRowsOnPage} quarantined row
-              {result.quarantinedRowsOnPage === 1 ? "" : "s"} excluded from these totals, never
-              clamped. <span className="deriv">Load factor</span> and{" "}
+              {quarantineClauseText} <span className="deriv">Load factor</span> and{" "}
               <span className="deriv">avg gauge</span> are computed at query time from summed
               passengers, seats and performed departures -- never averaged.
             </p>

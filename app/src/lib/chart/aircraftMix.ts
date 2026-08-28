@@ -1,4 +1,5 @@
 import { runPivot } from "@/lib/db";
+import { addSum, numOrNull, ratio } from "@/lib/nullSum";
 import { displayValue, resolutionKey } from "@/lib/resolve";
 import type { PivotQuery } from "@/lib/pivot/types";
 
@@ -19,8 +20,18 @@ export interface MixRow {
   month: string;
   code: string;
   label: string;
-  seats: number;
-  departures: number;
+  /** NULL, never 0, when every filing behind this (month, band) cell was quarantined. Both
+   * measures are `SUM(x) FILTER (WHERE NOT is_quarantined)`, and a SUM over zero passing rows
+   * returns NULL -- `sql/02_marts/100_fct_route_month.sql:62` states the rule this file was
+   * breaking, in its own comment: "do NOT wrap these in COALESCE(..., 0)".
+   *
+   * Coercing it here drew the cell as a zero-height band, which on a stacked area reads as "this
+   * type flew nothing that month" -- inventing data, the thing this chart's whole gap treatment
+   * exists to refuse. Measured over pairs the chart actually draws (>= 2 filed months): 768 such
+   * cells across 302 route pairs, 55 cells / 8 carriers, 62 cells / 11 aircraft types. Issue
+   * #121. */
+  seats: number | null;
+  departures: number | null;
 }
 
 /** WHAT THE STACK IS BROKEN DOWN BY, and everything a reader has to be told about that choice.
@@ -185,8 +196,10 @@ export async function fetchAircraftMix(
       // in exactly one place, and re-deriving it locally is how the two copies drift --
       // lib/resolve.ts's own header records that having happened once already.
       label: displayValue(result.resolved.get(resolutionKey(dimension.key, code)), code),
-      seats: Number(r.seats ?? 0),
-      departures: Number(r.departures_performed ?? 0),
+      // NOT `?? 0` (#121). `numOrNull` tests the absence BEFORE the conversion, since
+      // `Number(null)` is 0 and would reinstate the coercion one line later.
+      seats: numOrNull(r.seats),
+      departures: numOrNull(r.departures_performed),
     };
   });
 }
@@ -230,11 +243,40 @@ export interface SeriesPoint {
  * month. Erasing a filing is the same class of dishonesty as inventing one, so the renderer
  * draws those runs stroked instead of filled. */
 export interface MonthAxis {
-  /** Every month from the first filing to the last, contiguous, filed or not. */
+  /** Every month from the first FILED month to the last, contiguous, drawable or not -- which
+   * is the window every sentence around the chart names, and since the x domain is pinned to it
+   * (`buildMixPlotConfig`) the window the axis draws too. It is deliberately NOT first->last
+   * DRAWABLE month: a wholly-quarantined month outside that narrower range is still inside the
+   * stated window, and taking the span from the drawable months alone dropped 71 of them across
+   * 58 pairs out of their own counts. */
   span: string[];
-  /** Months in `span` with no filing at all, in order. */
+  /** Months in `span` with no filing at all, in order. NOT filed and NOT quarantined -- nobody
+   * filed anything. */
   gaps: string[];
-  /** month -> id of the contiguous run of filed months it belongs to. Gap months are absent. */
+  /** Months in `span` that WERE filed and whose every filing failed an invariant, so no band's
+   * height can be stated. They break the runs exactly as `gaps` do -- the geometry of an
+   * absence is the same whichever cause it has -- but they are counted separately, because the
+   * sentence a reader gets must not name the wrong cause. A chart saying "3 months with no
+   * filings" about a month that WAS filed is false in the one line a sighted reader reads.
+   *
+   * Measured over pairs the chart draws: 339 such months. They carry zero stateable seats by
+   * construction, so breaking them erases nothing. */
+  unknowable: string[];
+  /** Months that ARE drawn -- at least one band's height is stateable -- but that also carry at
+   * least one cell whose filings all failed an invariant, so the stack UNDERSTATES them by an
+   * amount nobody can state.
+   *
+   * These are not broken, and the measurement is why. 407 such months exist over the pairs this
+   * chart draws, and they hold 11,687,092 stateable seats between them -- the worst single month
+   * (LAS-LAX 2024-11) has 297,295 stateable seats across 12 cells with ONE unknowable. Dropping
+   * the month to avoid understating it would erase all of that, and erasing a filing is the same
+   * class of dishonesty as inventing one. Nor is the understatement bounded near zero: 26 of the
+   * 606 rows behind these cells are `load_factor_gt_1` carrying 19,870 filed seats, not
+   * `zero_seats`. So the month is drawn from what CAN be stated and the shortfall is disclosed,
+   * which is this project's standing answer to dirt -- surface it, never clamp it. */
+  understated: string[];
+  /** month -> id of the contiguous run of drawable months it belongs to. Gap and unknowable
+   * months are absent. */
   run: Map<string, number>;
   /** Run ids covering exactly one month. */
   solo: Set<number>;
@@ -253,13 +295,37 @@ function monthSpan(from: string, to: string): string[] {
   return out;
 }
 
-/** Split the filed months into contiguous runs, and name the months between them. */
-function monthAxis(filed: string[]): MonthAxis {
+/** Split the drawable months into contiguous runs, and name the months between them by CAUSE.
+ *
+ * `filed` is every month with at least one stateable cell -- the months that can be drawn.
+ * `unknowable` is every month that was filed and whose every cell is quarantined, and
+ * `understated` every drawable month carrying at least one such cell. Both are filtered to the
+ * span here rather than by the caller, so a month outside the drawn window is not counted
+ * against a window it is not in -- the same rule the unfiled months have always followed. */
+function monthAxis(filed: string[], unknowable: string[], understated: string[]): MonthAxis {
   // No filings at all: an empty axis rather than a crash on filed[0]. The renderer never gets
   // here (it states the absence in words below two months), but toBands is exported and a
   // caller that hands it nothing deserves an answer, not a TypeError.
-  if (filed.length === 0) return { span: [], gaps: [], run: new Map(), solo: new Set() };
-  const span = monthSpan(filed[0], filed[filed.length - 1]);
+  if (filed.length === 0) {
+    return {
+      span: [],
+      gaps: [],
+      unknowable: [],
+      understated: [],
+      run: new Map(),
+      solo: new Set(),
+    };
+  }
+  // THE SPAN IS THE WINDOW THE READER IS TOLD ABOUT, which is first->last FILED month, not
+  // first->last STATEABLE one. Taken over `filed` alone this excluded any wholly-quarantined
+  // month lying outside the drawable range but inside the stated one -- 71 months across 58
+  // pairs, e.g. /route/ATK-FAI, whose chart said `2015-08 → 2026-05` and `13 months filed but
+  // wholly quarantined` while 2026-05 was a fourteenth, undrawn and unmentioned. The filter
+  // below is what keeps a month outside the stated window out of its count; it cannot also be
+  // what defines the window.
+  const bounds = [...filed, ...unknowable].sort();
+  const span = monthSpan(bounds[0], bounds[bounds.length - 1]);
+  const inSpan = new Set(span);
   const filedSet = new Set(filed);
   const run = new Map<string, number>();
   const size = new Map<number, number>();
@@ -275,9 +341,15 @@ function monthAxis(filed: string[]): MonthAxis {
     size.set(current, (size.get(current) ?? 0) + 1);
     previousFiled = true;
   }
+  const unknowableSet = new Set(unknowable);
   return {
     span,
-    gaps: span.filter((m) => !filedSet.has(m)),
+    // THE TWO CAUSES ARE SPLIT HERE, and `gaps` is the narrower of the two now: a month that
+    // was filed but is wholly quarantined is NOT "no filings", and folding it in would put a
+    // false sentence on the chart. Both still break the runs above.
+    gaps: span.filter((m) => !filedSet.has(m) && !unknowableSet.has(m)),
+    unknowable: unknowable.filter((m) => inSpan.has(m)),
+    understated: understated.filter((m) => inSpan.has(m)),
     run,
     solo: new Set([...size].filter(([, n]) => n === 1).map(([id]) => id)),
   };
@@ -301,7 +373,7 @@ export interface OtherSummary {
    * loud because Other is often not a rounding error: top-5 + Other covers a median 94.7% of
    * seats on multi-type routes, but 1,571 of 4,618 fall below 90% and the worst is 48.2%
    * (measured -- the spec's § "The Other band is not a rounding error"). */
-  seatShare: number;
+  seatShare: number | null;
   series: SeriesPoint[];
 }
 
@@ -309,8 +381,12 @@ export interface OtherSummary {
 interface TypeTotal {
   code: string;
   label: string;
-  seats: number;
-  departures: number;
+  /** NULL when every one of this band's cells was quarantined -- the band exists in the window
+   * and nothing about its size can be stated. Two aircraft types are in that state on this
+   * warehouse (BTS 201 and 489, both filed only by F4 in 2025-08), so `/carrier/F4`'s own mix
+   * chart reaches it. */
+  seats: number | null;
+  departures: number | null;
 }
 
 /** Seats per departure over the whole window, or `null` when nothing was flown.
@@ -321,9 +397,14 @@ interface TypeTotal {
  * a NaN comparator result makes Array.prototype.sort's order implementation-defined. Treating
  * it as 0 instead would be worse than undefined behaviour: it would make an aircraft that flew
  * nothing the LIGHTEST band on the chart, which is a claim about metal size drawn from no
- * evidence. Unknown sorts last, matching DuckDB's own NULLS LAST default for `ORDER BY ASC`. */
+ * evidence. Unknown sorts last, matching DuckDB's own NULLS LAST default for `ORDER BY ASC`.
+ *
+ * `ratio` (lib/nullSum.ts) now owns all three refusals -- an unknowable numerator, an unknowable
+ * denominator, and a measured zero denominator -- so a band whose every filing was quarantined
+ * gets the same "unknown, sorts last" treatment a band that flew nothing already had, rather
+ * than `null / null` evaluating to NaN and making the sort order implementation-defined. */
 function gauge(t: TypeTotal): number | null {
-  return t.departures === 0 ? null : t.seats / t.departures;
+  return ratio(t.seats, t.departures);
 }
 
 /** Ascending, nulls last. */
@@ -340,8 +421,17 @@ function byGaugeAscNullsLast(a: TypeTotal, b: TypeTotal): number {
   return ga - gb || a.code.localeCompare(b.code);
 }
 
-/** Descending, with the same deterministic tiebreak. */
+/** Descending, NULLS LAST, with the same deterministic tiebreak.
+ *
+ * Written out rather than `(b.seats ?? 0) - (a.seats ?? 0)`: a band that measurably flew nothing
+ * and a band whose size is unknowable are different findings, and `?? 0` ties them -- handing the
+ * winner to input order, which is the "right answer by accident of row order" failure this
+ * project has already paid for. An unknowable band must not win a top-5 membership slot it
+ * cannot be shown to deserve. Same shape as `endpoints.ts`'s own `bySeatsDesc`. */
 function bySeatsDesc(a: TypeTotal, b: TypeTotal): number {
+  if (a.seats === null && b.seats === null) return a.code.localeCompare(b.code);
+  if (a.seats === null) return 1;
+  if (b.seats === null) return -1;
   return b.seats - a.seats || a.code.localeCompare(b.code);
 }
 
@@ -374,14 +464,35 @@ export function toBands(rows: MixRow[]): {
   other: OtherSummary;
   axis: MonthAxis;
 } {
-  const months = [...new Set(rows.map((r) => r.month))].sort();
-  const axis = monthAxis(months);
+  // A MONTH IS DRAWABLE WHEN AT LEAST ONE OF ITS CELLS CAN BE STATED, and that is a different
+  // set from "a month with rows" (#121). A stacked area's y is cumulative, so a month with
+  // nothing stateable has no height anywhere and must break the runs; a month with SOME
+  // stateable cells still has real bands to draw and must not be thrown away over them. The two
+  // are counted separately below and disclosed separately, because their causes differ.
+  const stateable = new Set<string>();
+  const filedAtAll = new Set<string>();
+  const hasUnknowableCell = new Set<string>();
+  for (const r of rows) {
+    filedAtAll.add(r.month);
+    if (r.seats === null) hasUnknowableCell.add(r.month);
+    else stateable.add(r.month);
+  }
+  const months = [...stateable].sort();
+  const axis = monthAxis(
+    months,
+    [...filedAtAll].filter((m) => !stateable.has(m)).sort(),
+    [...hasUnknowableCell].filter((m) => stateable.has(m)).sort(),
+  );
 
+  // FOLDED WITH SUM SEMANTICS (lib/nullSum.ts), not `+`: `null + 5` is `5`, so a running total
+  // on `+` re-coerces every NULL the mapper stopped coercing, and a band whose every cell is
+  // unknowable would report a total of 0 -- the lightest gauge and a plausible membership rank,
+  // both invented.
   const totals = new Map<string, TypeTotal>();
   for (const r of rows) {
-    const t = totals.get(r.code) ?? { code: r.code, label: r.label, seats: 0, departures: 0 };
-    t.seats += r.seats;
-    t.departures += r.departures;
+    const t = totals.get(r.code) ?? { code: r.code, label: r.label, seats: null, departures: null };
+    t.seats = addSum(t.seats, r.seats);
+    t.departures = addSum(t.departures, r.departures);
     totals.set(r.code, t);
   }
 
@@ -392,11 +503,13 @@ export function toBands(rows: MixRow[]): {
   // the first sort -- see this function's header.
   const shaded = [...members].sort(byGaugeAscNullsLast);
 
-  // month -> code -> seats, so a band's series is a lookup per month rather than a scan.
-  const byMonth = new Map<string, Map<string, number>>();
+  // month -> code -> seats, so a band's series is a lookup per month rather than a scan. Folded
+  // with `addSum` for the same reason the totals above are, and left `null` where a cell cannot
+  // be stated so the series builder below can tell that apart from a band with no row at all.
+  const byMonth = new Map<string, Map<string, number | null>>();
   for (const r of rows) {
-    const m = byMonth.get(r.month) ?? new Map<string, number>();
-    m.set(r.code, (m.get(r.code) ?? 0) + r.seats);
+    const m = byMonth.get(r.month) ?? new Map<string, number | null>();
+    m.set(r.code, addSum(m.get(r.code) ?? null, r.seats));
     byMonth.set(r.month, m);
   }
 
@@ -404,18 +517,36 @@ export function toBands(rows: MixRow[]): {
     code: t.code,
     label: t.label,
     token: BAND_TOKENS[i],
+    // `months` is the DRAWABLE months, so a wholly-unknowable month contributes no point here
+    // and `axis.run` breaks the area at it -- the same hole an unfiled month leaves.
+    //
+    // Inside a drawable month a `null` cell still resolves to 0, and that is deliberate rather
+    // than an oversight: the stack is cumulative, so omitting one component at one x would leave
+    // every band above it with an uncomputable y and take the whole month down with it. What
+    // that would cost is measured (MonthAxis.understated: 11,687,092 stateable seats over 407
+    // months). The month is drawn from what can be stated and the shortfall is DISCLOSED, on the
+    // chart and in its aria-label -- never silently folded into the "no filings" count.
     series: months.map((month) => ({ month, seats: byMonth.get(month)?.get(t.code) ?? 0 })),
   }));
 
   const otherTypes = [...totals.values()].filter((t) => !memberCodes.has(t.code));
-  const totalSeats = [...totals.values()].reduce((a, t) => a + t.seats, 0);
-  const otherSeats = otherTypes.reduce((a, t) => a + t.seats, 0);
+  const totalSeats = [...totals.values()].reduce<number | null>((a, t) => addSum(a, t.seats), null);
+  const otherSeats = otherTypes.reduce<number | null>((a, t) => addSum(a, t.seats), null);
 
   const other: OtherSummary = {
     typeCount: otherTypes.length,
     // Guarded, not because a route with zero seats is expected, but because the alternative
     // is rendering NaN% in the legend rail under a DATA AS OF badge.
-    seatShare: totalSeats === 0 ? 0 : otherSeats / totalSeats,
+    // `null`, never 0, when the share cannot be stated -- and there are TWO ways it cannot.
+    // The comment this replaces justified `?? 0` against a zero DENOMINATOR only ("the
+    // alternative is rendering NaN%"), and quietly did the same to an unknowable NUMERATOR:
+    // where every type in Other is wholly quarantined `otherSeats` is null, `ratio` correctly
+    // refuses, and `?? 0` restated the refusal as the measurement `0.0% of seats`. Live on
+    // /route/SEA-YAK, ANI-TLT, GAL-HSL and KYU-NUL, in the visible rail AND the aria-label.
+    // NO types in Other is a measured 0%: nothing is in the bucket, which is a fact. An
+    // unknowable share is the different case -- types ARE in the bucket and their seats cannot
+    // be summed -- and only that one gets the em dash.
+    seatShare: otherTypes.length === 0 ? 0 : ratio(otherSeats, totalSeats),
     // Empty, not zero-filled, when there is nothing to aggregate: the renderer gates on
     // `typeCount > 0`, and an all-zero series would otherwise put an invisible band and a
     // "0 other types" legend entry on every chart of a five-type route.

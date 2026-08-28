@@ -5,6 +5,7 @@ import {
   NETWORK_ARC_CAP,
   reachedPanelsFor,
   renderSegmentMap,
+  sameAirportNote,
   TOP_LABEL_COUNT,
   type SegmentDatum,
   type SegmentMapInput,
@@ -672,5 +673,39 @@ describe("NETWORK_ARC_CAP", () => {
     // the same network that capped differently would disagree about what "the whole network"
     // is.
     expect(NETWORK_ARC_CAP).toBe(400);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+/** THE THIRD STATE OF `sameAirportSeats` (#121).
+ *
+ * The field had two meanings and three states. `0` means no seats are withheld; a positive count
+ * names them; and NULL means a same-airport pair IS being withheld whose seats cannot be summed,
+ * because `fct_route_month.seats` is itself `SUM(x) FILTER (WHERE NOT is_quarantined)` and every
+ * filing behind the pair was quarantined. `carrierDiff.ts` collapsed the third into the first
+ * with `?? 0`, so the map said nothing was withheld while something was.
+ *
+ * `sql/02_marts/100_fct_route_month.sql:62` already stated the rule in its own comment -- "do NOT
+ * wrap these in COALESCE(..., 0)" -- which the TypeScript was breaking one layer up. */
+describe("sameAirportNote tells an absent pair from an unstateable one", () => {
+  // MUTANT: `if (seats === null) return null` (treating it like the empty case) -> the one
+  // disclosure this field exists to make disappears on exactly the pages that need it -> red.
+  it("states the withholding even when the amount cannot be given", () => {
+    const note = sameAirportNote(null, "excluded");
+    expect(note).not.toBeNull();
+    expect(note).toContain("cannot be stated");
+    expect(note).toContain("every filing behind them failed an invariant");
+    // It must NOT invent a figure -- "0 same-airport seats" is the claim this replaces.
+    expect(note).not.toContain("0 same-airport seats");
+  });
+
+  // MUTANT: `if (seats <= 0) return null` placed BEFORE the null branch -- `null <= 0` is true
+  // in JS, so the unstateable case would silently take the empty path -> red.
+  it("still says nothing when there is genuinely nothing to withhold", () => {
+    expect(sameAirportNote(0, "excluded")).toBeNull();
+  });
+
+  it("still names the figure when it can be stated", () => {
+    expect(sameAirportNote(1234, "excluded")).toContain("1,234 same-airport seats");
   });
 });

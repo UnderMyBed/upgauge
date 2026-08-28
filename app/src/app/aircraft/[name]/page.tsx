@@ -5,6 +5,7 @@ import { resolveAircraftSlug } from "@/lib/aircraftSlug";
 import { headers } from "next/headers";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { BASE_URL } from "@/lib/siteUrl";
+import { quarantineClause } from "@/lib/quarantineClause";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
@@ -228,6 +229,23 @@ export async function AircraftView({
   // in app/smoke.sh does not. Same trap, same fix, as /route's identically-named value.
   const chartWindow = `chart: ${drawsFullWindow ? "the full window · " : ""}${drawnFrom} → ${drawnTo}`;
 
+  // ONE implementation, in lib/quarantineClause.ts, for all four entity pages. #121 shipped four
+  // copies of this three-branch prose and review found `/carrier`'s could be replaced with
+  // garbage while every test and every served check stayed green -- its wholly-quarantined branch
+  // is unreachable on this warehouse, so nothing but a unit test can reach the string. The three
+  // cases and the wording are asserted there; this page supplies only what differs.
+  //
+  // Still ONE template literal at the render site below: React's SSR emits `<!-- -->` between
+  // ADJACENT expression children, so the `{n} quarantined row{s}` prefix this replaced could not
+  // be reached by a raw-bytes grep in app/smoke.sh. (Its tail was a single static JSX child and
+  // always was greppable -- the prefix is the half that was not.)
+  const quarantineClauseText = quarantineClause({
+    subject: `on the ${type.code}`,
+    counts: "The carrier count is",
+    seatsAreNull: totals.seats === null,
+    quarantinedRows: result.quarantinedRowsOnPage,
+  });
+
   const columns = buildColumns(allowlist, result.columns);
 
   const hasMap = map !== null;
@@ -350,9 +368,7 @@ export async function AircraftView({
               </p>
             )}
             <p className="foot">
-              {result.quarantinedRowsOnPage} quarantined row
-              {result.quarantinedRowsOnPage === 1 ? "" : "s"} excluded from these totals, never
-              clamped. <span className="deriv">Load factor</span> and{" "}
+              {quarantineClauseText} <span className="deriv">Load factor</span> and{" "}
               <span className="deriv">avg gauge</span> are computed at query time from summed
               passengers, seats and performed departures -- never averaged.
             </p>

@@ -1123,6 +1123,10 @@ check_dataset check "airport A18: the gutter carries the quarantine reason, not 
 # `<!-- -->` between adjacent expression children, which `textContent` skips and this does not.
 check_dataset check "airport A18: the foot explains the dashes instead of miscounting them" \
   "$BODY" 'Every filing at A18 in this window is quarantined'
+# /airport states TWO counts, so its tail is the plural one -- the single place the shared clause
+# genuinely varies between pages, and therefore the one worth pinning in the served bytes.
+check_dataset check "airport A18: ...and its tail names both counts" "$BODY" \
+  'The carrier and destination counts are counted from those rows, not net of them.'
 check_dataset check_not "airport A18: ...and does not claim the counts are net of an exclusion" \
   "$BODY" 'excluded from these totals'
 # `1 destination`, singular, on the only prose left explaining five em dashes. The other half of
@@ -1158,6 +1162,241 @@ check     "airport SEA: a healthy page states figures, not absence" "$BODY" \
   '<td class="num">'
 check_not "airport SEA: no measure row is wholly unknowable" "$BODY" \
   '<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>'
+
+# 10e. #121 -- the SAME NULL, on the three pages /airport is not: the stat strip and the card on
+# /route, /carrier and /aircraft, whose totals come from `sumTotals` rather than `airportTotals`.
+#
+# 10c proved the MAP excludes a wholly-quarantined pair and 10d proved the TABLE and strip do on
+# /airport. `sumTotals` was still applying `?? 0` inside a `+` fold, so on /route/A18-LMA the
+# table cell correctly rendered an em dash while the stat strip directly above it -- summing the
+# very same NULL -- reported 0 seats and 0 departures. Both halves of one page, disagreeing,
+# exactly as /airport's map and table did before #118.
+#
+# THE ORDER OF THE STRIP IS THE NEEDLE, NOT THE DASH. Load factor and average gauge have zero
+# denominators here and rendered an em dash under the bug TOO, so a bare `<div class="v">—</div>`
+# needle prints ok forever against a page reading `0 · 0 · — · — · 0`. Only the first five ALL
+# being dashes separates the two. The dash is U+2014 written LITERALLY: lib/format.ts's DASH is a
+# JS string, so React emits the raw code point and a needle copied off an `&mdash;` could never
+# fire. Same for the EN dash U+2013 in the route title below, which `routeTitle` produces.
+#
+# DATASET-PINNED as a block, for 10c's reason: a BTS revision that un-quarantines these must
+# redden this rather than silently stop testing anything. docs/data/invariants.md
+# § A wholly-quarantined group sums to NULL carries the query and the current measurement.
+
+# A18-LMA (Kantishna-Lake Minchumina): ONE filing in the whole trailing 12 -- 2025-06, seats 0
+# against 1 PERFORMED departure, quarantined `zero_seats`. One of the 10 reachable route pages.
+BODY=$(curl -s --max-time 30 "${BASE}/route/A18-LMA")
+check_dataset check "route A18-LMA: the five measures are absence, in order" "$BODY" \
+  '<div class="v">—</div></div><div class="stat"><div class="k">Passengers</div><div class="v">—</div>'
+check_dataset check "route A18-LMA: departures is absence, not a fabricated zero" "$BODY" \
+  '<div class="k">Departures</div><div class="v">—</div>'
+# The COUNTS are real facts about what was filed and must survive -- a page that blanked those
+# too would pass the check_not below vacuously.
+check_dataset check "route A18-LMA: the strip still counts the carrier that filed" "$BODY" \
+  '<div class="k">Carriers</div><div class="v">1</div>'
+check_dataset check "route A18-LMA: ...and still counts the quarantined row" "$BODY" \
+  '<div class="k">Quarantined</div><div class="v">1</div>'
+check_dataset check_not "route A18-LMA: no measure in the strip is a fabricated zero" "$BODY" \
+  '<div class="v">0</div>'
+# THE PROSE THAT EXPLAINS THE DASHES. "1 quarantined row excluded from these totals" is a
+# compound claim whose second clause is false here: there are no totals to have been excluded
+# from, and Carriers is a count OF the excluded row. Built as ONE template literal in page.tsx so
+# this raw-bytes grep can reach its PREFIX. Narrowly: React's SSR emits `<!-- -->` between
+# ADJACENT expression children, so `{n} quarantined row{s}` was unreachable; the tail
+# " excluded from these totals, never clamped." was a single static JSX child and always was
+# greppable. The rewrite is still right -- half a sentence is not a needle.
+check_dataset check "route A18-LMA: the foot explains the dashes instead of miscounting them" \
+  "$BODY" 'Every filing on A18–LMA in this window is quarantined'
+# THE TAIL, which is the half that says what the numbers that SURVIVE actually mean -- and the
+# half nothing checked until review pointed out that garbling it left every gate green. The
+# opening clause alone does not make the sentence honest: "Carriers 1" above five em dashes is
+# derived FROM the quarantined rows, not a count OF them.
+check_dataset check "route A18-LMA: ...and says what the surviving counts mean" "$BODY" \
+  'so no measure above can be summed. The carrier count is counted from those rows, not net of them.'
+check_dataset check_not "route A18-LMA: ...and claims no exclusion that could not have happened" \
+  "$BODY" 'excluded from these totals'
+check_dataset check_not "route A18-LMA: the foot agrees with its own count on the plural" \
+  "$BODY" '1 rows, each having failed'
+
+# THE OTHER ABSENCE. ATL-CAK filed 67 months and nothing since 2022-06; 12,115 route pairs are in
+# that state, against the 10 above. Quarantine had no part in it, and a surface keying on "the sum
+# is null" alone answers the wrong one of the two -- on the 12,115 rather than the 10.
+BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-CAK")
+check_dataset check "route ATL-CAK: an unfiled window is unknowable, not zero traffic" "$BODY" \
+  '<div class="k">Seats</div><div class="v">—</div>'
+check_dataset check "route ATL-CAK: the counts are still stated" "$BODY" \
+  '<div class="k">Quarantined</div><div class="v">0</div>'
+check_dataset check "route ATL-CAK: names which absence it is" "$BODY" 'No scheduled service'
+check_dataset check_not "route ATL-CAK: claims no exclusion that never happened" "$BODY" \
+  'excluded from these totals'
+check_dataset check_not "route ATL-CAK: and does not blame quarantine" "$BODY" 'is quarantined'
+# The derived-measure disclosure is a CLAUDE.md hard rule and must survive an empty clause -- the
+# quarantine sentence and this one share a paragraph.
+check     "route ATL-CAK: still labels the derived measures as computed" "$BODY" 'never averaged'
+
+# /aircraft, the grain issue #121 never measured: BTS 201 has no un-quarantined filing in the
+# window either (F4, 2025-08, 5 performed departures against 0 seats), so the footprint is 12
+# reachable pages and not the 10 the issue states.
+BODY=$(curl -s --max-time 30 "${BASE}/aircraft/TRISLNDR")
+check_dataset check "aircraft TRISLNDR: seats is absence, not a fabricated zero" "$BODY" \
+  '<div class="k">Seats</div><div class="v">—</div>'
+check_dataset check "aircraft TRISLNDR: departures is absence too" "$BODY" \
+  '<div class="k">Departures</div><div class="v">—</div>'
+check_dataset check "aircraft TRISLNDR: the strip still counts the quarantined rows" "$BODY" \
+  '<div class="k">Quarantined</div><div class="v">2</div>'
+check_dataset check_not "aircraft TRISLNDR: no measure in the strip is a fabricated zero" "$BODY" \
+  '<div class="v">0</div>'
+check_dataset check "aircraft TRISLNDR: the foot explains the dashes" "$BODY" \
+  'Every filing on the TRISLNDR in this window is quarantined'
+# The same tail, on the grain that DISPROVED the original wording: this page renders
+# "Carriers 1 · Quarantined 2", so "the carrier count is a count of those rows" was 1 = 2.
+# /airport never surfaced it -- A18, JZM and OQZ are each 1 row, 1 carrier, 1 destination, and so
+# are all ten route pages, which makes the false sentence numerically indistinguishable there.
+check_dataset check "aircraft TRISLNDR: ...and its counts are derived, not equal" "$BODY" \
+  'The carrier count is counted from those rows, not net of them.'
+check_dataset check_not "aircraft TRISLNDR: the foot does not equate the two counts" "$BODY" \
+  'is a count of those rows'
+check_dataset check_not "aircraft TRISLNDR: ...and claims no exclusion" "$BODY" \
+  'excluded from these totals'
+
+# /carrier can reach only the OTHER absence: no carrier's every trailing-12 filing is quarantined
+# on this warehouse. VX has been dormant since 2018-03; 45 carriers are in that state.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX")
+check_dataset check "carrier VX: an unfiled window is unknowable, not zero traffic" "$BODY" \
+  '<div class="k">Seats</div><div class="v">—</div>'
+check_dataset check "carrier VX: the counts are still stated" "$BODY" \
+  '<div class="k">Quarantined</div><div class="v">0</div>'
+check_dataset check_not "carrier VX: claims no exclusion that never happened" "$BODY" \
+  'excluded from these totals'
+check_dataset check_not "carrier VX: and does not blame quarantine" "$BODY" 'is quarantined'
+
+# QUARANTINE BESIDE REAL TRAFFIC, which is what makes the clause's second operand undeletable.
+# Wright Air Service filed 118 quarantined rows in this window AND stateable traffic on 3 aircraft
+# types. Its figures are honest and its foot must claim the ordinary exclusion.
+BODY=$(curl -s --max-time 30 "${BASE}/carrier/8V")
+check_dataset check "carrier 8V: quarantined rows beside real traffic keep the ordinary clause" \
+  "$BODY" '118 quarantined rows excluded from these totals'
+check_dataset check_not "carrier 8V: ...and are not reported as a wholly-quarantined page" "$BODY" \
+  'is quarantined —'
+
+# The negatives, on pages with real traffic. Without these every check_not above could pass
+# against a page that had stopped rendering a stat strip at all.
+BODY=$(curl -s --max-time 30 "${BASE}/route/JFK-LAX")
+check     "route JFK-LAX: a healthy page states figures, not absence" "$BODY" \
+  '<div class="k">Seats</div><div class="v">'
+check_not "route JFK-LAX: its seats are not an em dash" "$BODY" \
+  '<div class="k">Seats</div><div class="v">—</div>'
+check     "route JFK-LAX: and its foot claims the ordinary exclusion" "$BODY" \
+  'excluded from these totals'
+
+# 10f. #121, second half -- the CHART. The stat strip and the card were the first half; the
+# stacked area above them was still coercing the identical NULL.
+#
+# `fetchAircraftMix` applied `?? 0` to `SUM(x) FILTER (WHERE NOT is_quarantined)`, so a
+# (month, band) cell whose every filing failed an invariant was drawn as a zero-height band --
+# "this type flew nothing that month", invented from a value nobody has, on the one surface whose
+# entire gap treatment exists to refuse exactly that. Same defect #114 fixed on the map and #118
+# on the table.
+#
+# TWO SHAPES, TWO SENTENCES, and the two fixtures below are chosen so each carries exactly ONE of
+# them and therefore disproves the other two needles:
+#   DFW-SJU  1 wholly-quarantined month (2020-05, a single B787-9 cell), 0 gaps, 0 understated
+#   HNL-OGG  11 understated months (the ATR-72 quarantined beside real traffic), 0 of the others
+# A single fixture carrying both counts could not tell a merged sentence from two separate ones,
+# which is the whole property under test.
+#
+# THE WORDING IS THE NEEDLE. "with no filings" is FALSE of a month that was filed and wholly
+# quarantined, and both are false of a month that is drawn but understated -- so a merged
+# "N months not drawn" would be true of none of the three. These strings are written in the bytes
+# React EMITS: they carry no entity, apostrophe or angle bracket, and the em dash in the
+# unknowable sentence is U+2014 written literally, since `mixPlotConfig.ts` builds it as a JS
+# string and React emits the raw code point.
+#
+# DATASET-PINNED as a block, for 10c's reason: a BTS revision that un-quarantines these cells must
+# redden this rather than silently stop testing anything.
+BODY=$(curl -s --max-time 30 "${BASE}/route/DFW-SJU")
+check_dataset check "route DFW-SJU: names a filed-but-quarantined month as filed" "$BODY" \
+  '1 month filed but wholly quarantined'
+check_dataset check "route DFW-SJU: ...and says why the stack cannot be drawn there" "$BODY" \
+  'every filing failed an invariant, so the stack cannot be drawn there'
+# The false sentence, which the pre-#121 code would have printed for this month.
+check_dataset check_not "route DFW-SJU: does not call a filed month unfiled" "$BODY" \
+  'month with no filings'
+check_dataset check_not "route DFW-SJU: and does not call it understated -- nothing is drawn" \
+  "$BODY" 'month understated'
+# In the aria-label too, not only on the key: `role="img"` means the label is the ONLY thing a
+# screen reader is given, so a sentence missing there is a hole for every non-sighted reader.
+check_dataset check "route DFW-SJU: the screen reader is told the same thing" "$BODY" \
+  'aria-label="Stacked area'
+check_dataset check_re "route DFW-SJU: ...including the quarantine sentence" \
+  "$(printf '%s' "$BODY" | grep -o 'aria-label="Stacked area[^"]*"')" 'filed but wholly quarantined'
+
+BODY=$(curl -s --max-time 30 "${BASE}/route/HNL-OGG")
+check_dataset check "route HNL-OGG: discloses the months its stack understates" "$BODY" \
+  '11 months understated'
+# The note names the MARK, not just a total. A stacked area's y is cumulative, so an unstateable
+# cell inside a DRAWN month cannot be holed -- it is painted at zero height, and 249 of the 420
+# such cells belong to a top-five MEMBER band across 87 pairs. A reader watching the ATR-72 band
+# flatten on 2020-07 can only recover that from this sentence, so it has to describe the mark.
+check_dataset check "route HNL-OGG: ...and says what the mark actually is" "$BODY" \
+  'a quarantined filing is drawn at zero height there, so its band flattens'
+check_dataset check "route HNL-OGG: ...and that the stack understates the month" "$BODY" \
+  'the stack is lower than the real total by an amount that cannot be stated'
+check_dataset check_not "route HNL-OGG: an understated month is not a gap" "$BODY" \
+  'month with no filings'
+check_dataset check_not "route HNL-OGG: nor is it wholly quarantined" "$BODY" \
+  'wholly quarantined'
+
+# THE 100% CASE, and the one the disclosure could not reach at all. BGR-DAB filed two months,
+# 2020-08 and 2020-09, and BOTH are wholly quarantined. `prepareMixPlot` gated on every FILED
+# month while the axis was built from the STATEABLE ones, so this passed a `>= 2` gate and
+# rendered a frame carrying the COVID band, ZERO `<path>` elements, and an aria-label naming a
+# band ("SF-340/B") drawn nowhere -- under a DATA AS OF badge, with no sentence explaining any of
+# it. The maximum case for the sentence, and the one case it printed nothing.
+BODY=$(curl -s --max-time 30 "${BASE}/route/BGR-DAB")
+check_dataset check "route BGR-DAB: states the finding in words instead of drawing a blank frame" \
+  "$BODY" '2 months of filings in this window, every one wholly quarantined'
+check_dataset check "route BGR-DAB: ...and says why nothing can be drawn" "$BODY" \
+  'every filing failed an invariant, so no aircraft-type seats can be stated'
+# The two sentences that would be FALSE here: filings exist, so "no filings" is wrong, and there
+# are two of them, so "only one month" is wrong. Both are strings this same function can return.
+check_dataset check_not "route BGR-DAB: does not claim nothing was ever filed" "$BODY" \
+  'No aircraft-type filings in this window'
+check_dataset check_not "route BGR-DAB: nor that only one month was filed" "$BODY" \
+  'Only one month of filings'
+# No frame, so no band may be announced to a screen reader.
+check_dataset check_not "route BGR-DAB: announces no band it never drew" "$BODY" \
+  'Bands lightest to darkest'
+
+# THE AXIS MUST COVER THE WINDOW EVERY SENTENCE AROUND IT NAMES. Plot infers its x domain from
+# the marks, and since the quarantine fix the marks carry only DRAWABLE months -- while the
+# window line, the aria-label and both absence counts all name first->last FILED month. Those
+# were the same range until a wholly-quarantined month stopped being plotted.
+#
+# LIT-MOB is filed 2017-05 -> 2024-08 but drawable only to 2019-06, its 2024-08 being wholly
+# quarantined. Before the domain was pinned this page said `chart: 2017-05 → 2024-08` over an
+# axis whose last tick was 2021 -- and the 2021 came from the COVID rect stretching the frame,
+# the very thing that rect's clamp exists to prevent. 38 of its 85 claimed gap months, and the
+# quarantined month itself, were three years off the right edge. 43 of 16,694 drawn route pairs
+# diverged this way. docs/design/system.md states the invariant verbatim.
+BODY=$(curl -s --max-time 30 "${BASE}/route/LIT-MOB")
+check_dataset check "route LIT-MOB: the window line names the filed range" "$BODY" \
+  'chart: 2017-05 → 2024-08'
+# The tick that only exists once the domain is pinned: under the inferred domain the axis stopped
+# at 2021, so no 2024 tick was emitted at all. `>2024<` is a tick label specifically -- the window
+# line and the aria-label both spell the month as `2024-08`, so neither can satisfy this.
+check_dataset check "route LIT-MOB: ...and the axis actually reaches it" "$BODY" '>2024<'
+check_dataset check "route LIT-MOB: ...with the years between it drawn too" "$BODY" '>2022<'
+# The month the legend claims, now inside the frame it is claimed for.
+check_dataset check "route LIT-MOB: the quarantined month it names is on the axis" "$BODY" \
+  '1 month filed but wholly quarantined'
+
+# The negative, on a route with nothing quarantined anywhere in its window. Without it every
+# check_not above could pass against a chart that had stopped printing its key.
+BODY=$(curl -s --max-time 30 "${BASE}/route/JFK-LAX")
+check     "route JFK-LAX: the chart key is still rendered" "$BODY" 'seats per departure'
+check_not "route JFK-LAX: a clean chart claims no quarantined months" "$BODY" 'wholly quarantined'
+check_not "route JFK-LAX: ...and none understated"                    "$BODY" 'months understated'
 
 # 11. /carrier/<code> -- the page has to say what it is counting.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/DL")

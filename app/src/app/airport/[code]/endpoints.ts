@@ -5,6 +5,7 @@ import {
   fetchAircraftMix,
   type MixRow,
 } from "@/lib/chart/aircraftMix";
+import { addSum, numOrNull, ratio } from "@/lib/nullSum";
 import type { PivotQuery } from "@/lib/pivot/types";
 import type { Resolved } from "@/lib/resolve";
 
@@ -81,36 +82,6 @@ export interface EndpointRow {
    * `string_agg(DISTINCT quarantine_reason, ',')` (pivot_segment.sql:21-22), or null where
    * nothing was. The em dash says the sums cannot be stated; this is what says why. */
   quarantineReasons: string | null;
-}
-
-/** A ratio of sums, or null when either input is unknowable or the denominator is zero. Never
- * an average of the rows above, and never 0.0 for "nothing flew" -- absence is not a
- * measurement (lib/format.ts).
- *
- * The null guard is not defensive padding. Typed to `number`, this function reads
- * `null === 0` as false and goes on to evaluate `null / null` -- NaN, which `formatGauge`
- * renders as the literal string "NaN" on a page carrying a DATA AS OF badge. */
-function ratio(numerator: number | null, denominator: number | null): number | null {
-  if (numerator === null || denominator === null || denominator === 0) return null;
-  return numerator / denominator;
-}
-
-/** SUM() semantics, mirroring the aggregate these values came from: a NULL contributes
- * nothing, and the sum of NO known values is NULL rather than 0.
- *
- * THIS FUNCTION IS THE FIX, not the `?? 0` deleted from `toEndpointRows` below. JS `+`
- * coerces null to 0 all by itself -- `null + 5` is `5`, and `[null].reduce((a, b) => a + b, 0)`
- * is `0` -- so a fold left on `+` reinstates the very coercion the mapper stopped doing, and a
- * test on the mapper alone stays green while the page still reads "0 seats". Issue #118.
- *
- * Poisoning a whole carrier row because ONE of its groups was quarantined would be the
- * opposite error: 24 of the 29 pages carrying such a group have it folded in beside real
- * traffic, whose figures are honest and whose excluded filings the gutter and the foot's
- * quarantined count already disclose. */
-function addSum(a: number | null, b: number | null): number | null {
-  if (a === null) return b;
-  if (b === null) return a;
-  return a + b;
 }
 
 /** Seats descending, NULLS LAST -- the ordering `pivot_segment.sql` already returns, since
@@ -194,6 +165,10 @@ export function airportTotals(rows: EndpointRow[], airportId: number): AirportTo
   // Seeded `null`, not 0, and folded with addSum: seeding 0 would make the stat strip of an
   // airport whose every filing was quarantined read "0 seats" -- the page-level form of the
   // same defect (issue #118). The counts below are unaffected; they count what was FILED.
+  //
+  // Folded here rather than through `sumColumn` because these rows are `EndpointRow`s, already
+  // mapped to `number | null` fields by `toEndpointRows`; `sumColumn` takes raw pivot rows and
+  // does the `numOrNull` step itself. Same three functions either way.
   const seats = rows.reduce<number | null>((a, r) => addSum(a, r.seats), null);
   const passengers = rows.reduce<number | null>((a, r) => addSum(a, r.passengers), null);
   const departures = rows.reduce<number | null>((a, r) => addSum(a, r.departures), null);
@@ -265,17 +240,11 @@ function otherEndpoint(row: Record<string, unknown>, airportId: string): unknown
   return String(row.origin_airport_id) === airportId ? row.dest_airport_id : row.origin_airport_id;
 }
 
-/** `null`/`undefined` stay absent; everything else becomes a number. `Number(null)` is 0, so
- * the absence has to be tested before the conversion, not after it. */
-function numOrNull(v: unknown): number | null {
-  return v === null || v === undefined ? null : Number(v);
-}
-
 export function toEndpointRows(rows: Record<string, unknown>[], airportId: string): EndpointRow[] {
   return rows.map((r) => ({
     carrierId: r.op_airline_id,
     endpointId: otherEndpoint(r, airportId),
-    // NOT `?? 0`. See EndpointRow, `addSum`, and issue #118: these three are FILTERed sums
+    // NOT `?? 0`. See EndpointRow, `lib/nullSum.ts`, and issue #118: these three are FILTERed sums
     // that return NULL for a wholly-quarantined group, and restating that as 0 turns "we
     // cannot say" into "nothing flew". `quarantined_rows` keeps its `?? 0` because it is a
     // count, not a measure, and cannot be NULL.

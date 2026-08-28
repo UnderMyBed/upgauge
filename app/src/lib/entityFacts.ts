@@ -1,3 +1,4 @@
+import { ratio, sumColumn } from "@/lib/nullSum";
 import type { AirportRef } from "@/lib/resolve";
 import type { PivotQuery } from "@/lib/pivot/types";
 
@@ -49,8 +50,9 @@ export function trailing12From(asOf: string): string {
 export interface EntityTotals {
   /** `number | null`, because a total over rows whose every filing was quarantined is
    * unknowable rather than zero (docs/data/invariants.md, "A wholly-quarantined group sums to
-   * NULL"). `/airport`'s totals (app/airport/[code]/endpoints.ts) already produce that null and
-   * reach `cardStats` through this type; `sumTotals` below does NOT yet -- see its own note. */
+   * NULL"), and so is a total over no rows at all. Both `sumTotals` below and `/airport`'s
+   * `airportTotals` (app/airport/[code]/endpoints.ts) produce that null, and every consumer --
+   * the four stat strips, `cardStats`, `cardSixthStat` -- reads it through this type. */
   seats: number | null;
   passengers: number | null;
   departures: number | null;
@@ -70,26 +72,36 @@ export interface EntityTotals {
  * weight Sun Country's 186-seat 737-800 equally with Southwest's 175-seat one regardless of how
  * many either flew.
  *
- * `null`, never 0.0, when the denominator is zero: absence is not a measurement (lib/format.ts). */
+ * `null`, never 0.0 and never a fabricated 0, whenever a figure cannot be stated -- an
+ * unknowable sum, an unknowable ratio input, or a zero denominator. Absence is not a
+ * measurement (lib/format.ts's opening rule; lib/nullSum.ts is its arithmetic half). */
 export function sumTotals(rows: Record<string, unknown>[]): EntityTotals {
-  // ISSUE #121, OPEN: `?? 0` here restates an unknowable sum as zero, and the `+` would do it
-  // again even with the `??` removed. Measured over the trailing 12: 11 route pairs have no
-  // un-quarantined filing at all, of which 10 are REACHABLE pages that render three fabricated
-  // zeros in the stat strip and on the card. The eleventh is VEE-VEE, which `lib/routePair.ts`
-  // 404s as a same-airport slug before any lookup -- so 11 is the pair count and 10 is the page
-  // count, and they are not interchangeable. The type above is already `number | null` for
-  // `/airport`'s sake; this function simply never returns one yet, so the widened type is NOT
-  // evidence this is handled.
-  const sum = (k: string) => rows.reduce((a, r) => a + Number(r[k] ?? 0), 0);
-  const seats = sum("seats");
-  const passengers = sum("passengers");
-  const departures = sum("departures_performed");
+  // SUM() SEMANTICS, through `lib/nullSum.ts` -- the same three functions `/airport` folds with,
+  // never a second implementation of the same rule. Each measure is
+  // `SUM(x) FILTER (WHERE NOT is_quarantined)`, so a group whose every filing was quarantined
+  // arrives NULL, and this used to restate that as zero TWICE OVER: `?? 0` in the mapper, and a
+  // `+` fold that would have coerced it anyway. Deleting one and not the other is not a fix.
+  //
+  // Measured over the trailing 12 (2026-05 warehouse), and the page count is the one that
+  // matters: 11 route pairs have no un-quarantined filing at all, of which 10 are REACHABLE
+  // pages -- the eleventh is VEE-VEE, which `lib/routePair.ts` 404s as a same-airport slug
+  // before any lookup. Two aircraft types are in the same state (BTS 201 `/aircraft/TRISLNDR`
+  // and 489 `/aircraft/SHORT360`, both F4 in 2025-08 with 5 and 27 PERFORMED departures against
+  // a filed seat count of 0), which issue #121 did not measure and which is why the footprint
+  // is 12 pages and not 10. No carrier is in that state in this window.
+  const seats = sumColumn(rows, "seats");
+  const passengers = sumColumn(rows, "passengers");
+  const departures = sumColumn(rows, "departures_performed");
   return {
     seats,
     passengers,
     departures,
-    loadFactor: seats === 0 ? null : passengers / seats,
-    avgGauge: departures === 0 ? null : seats / departures,
+    // `ratio`, never `x === 0 ? null : a / b`: typed to `number`, that form reads `null === 0`
+    // as false and evaluates `null / null`, which is NaN -- and `formatGauge(NaN)` is not the
+    // em dash, it is the literal string "NaN" under a DATA AS OF badge. Measured on /airport
+    // during #118.
+    loadFactor: ratio(passengers, seats),
+    avgGauge: ratio(seats, departures),
   };
 }
 

@@ -1,6 +1,6 @@
 import { renderPlotToSvg } from "@/lib/chart/svg";
 import { BY_AIRCRAFT_TYPE, type MixDimension, type MixRow } from "@/lib/chart/aircraftMix";
-import { buildMixPlotConfig, gapNote, mixAbsenceNote, prepareMixPlot } from "@/lib/chart/mixPlotConfig";
+import { buildMixPlotConfig, gapNote, understatedNote, unknowableNote, mixAbsenceNote, prepareMixPlot } from "@/lib/chart/mixPlotConfig";
 
 /** The project's first chart (docs/design/system.md § Charts, and CLAUDE.md's workflow rule
  * that this one is built before the load-factor chart): a stacked area of monthly seats,
@@ -48,7 +48,7 @@ export function AircraftMixChart({
   // (lib/chart/mixPlotConfig.ts). Nothing about gaps, band membership or band shade is decided
   // here any more -- a second copy of that reasoning is what would let a social card and the
   // page it previews draw two different charts from the same rows.
-  const { months, plot } = prepareMixPlot(rows, title, dimension);
+  const { months, stateable, plot } = prepareMixPlot(rows, title, dimension);
 
   // A blank frame under a DATA AS OF badge is the failure /explore and /route already refuse
   // (their empty states state the finding in words). Two cases reach it: nothing filed at
@@ -61,12 +61,12 @@ export function AircraftMixChart({
         {/* `mixAbsenceNote`, not a literal: the OG card renders the same finding and the two
             drifted apart once already (the card said "No filings" about a window this page
             described as one filed month). Shared so a fix reaches both. */}
-        <p className="foot">{mixAbsenceNote(months, dimension)}</p>
+        <p className="foot">{mixAbsenceNote(months, dimension, stateable)}</p>
       </Frame>
     );
   }
 
-  const { args, stack, gaps } = plot;
+  const { args, stack, gaps, unknowable, understated } = plot;
   const svg = withImgRole(renderPlotToSvg(buildMixPlotConfig(args)));
 
   return (
@@ -95,6 +95,14 @@ export function AircraftMixChart({
             to read as "flat and small" rather than "not filed", and the count is per-subject
             so the static legend rail cannot carry it. */}
         {gaps > 0 ? <span className="gnum">{gapNote(gaps)}</span> : null}
+        {/* THE OTHER TWO CAUSES, each in its own sentence (#121). A month that was filed and
+            wholly quarantined is a hole for a different reason than an unfiled one, and a month
+            drawn from only its stateable bands is not a hole at all -- it is a stack that
+            understates itself. One merged "N months not drawn" would be true of none of the
+            three. The visible key carries them because it is the only channel a sighted reader
+            has: the aria-label below repeats them for everyone else. */}
+        {unknowable > 0 ? <span className="gnum">{unknowableNote(unknowable)}</span> : null}
+        {understated > 0 ? <span className="gnum">{understatedNote(understated)}</span> : null}
       </div>
     </Frame>
   );

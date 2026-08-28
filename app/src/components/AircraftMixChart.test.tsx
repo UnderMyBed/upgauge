@@ -539,3 +539,144 @@ describe("AircraftMixChart stacked by operating carrier", () => {
     expect(chart([]).textContent).toContain("No aircraft-type filings");
   });
 });
+
+// ---------------------------------------------------------------------------------------
+/** THE TWO OTHER ABSENCE CAUSES, EACH IN ITS OWN SENTENCE (#121).
+ *
+ * A month whose every filing was quarantined is a hole for a DIFFERENT reason than an unfiled
+ * one, and a month drawn from only its stateable bands is not a hole at all -- it is a stack
+ * that understates itself. One merged "N months not drawn" would be true of none of the three,
+ * and the visible key is the only channel a sighted reader has.
+ *
+ * The bug the merged form would be: a chart saying "3 months with no filings" about a month that
+ * WAS filed and whose filings all failed an invariant. That is the compound-claim-with-one-false-
+ * clause shape `/watch/new-routes` already shipped once. */
+describe("the chart names WHICH absence each month is", () => {
+  const QUARANTINED_MONTH = "2020-06";
+
+  /** The JFK-LAX fleet with one month emptied of stateable cells (every band NULL there), which
+   * is the wholly-quarantined shape: filed, and nothing about it can be stated. */
+  function wholly(): MixRow[] {
+    return FLEET.map((r) =>
+      r.month === QUARANTINED_MONTH ? { ...r, seats: null, departures: null } : r,
+    );
+  }
+
+  /** ...and the mixed shape: ONE band unstateable in that month, the rest real. */
+  function partial(): MixRow[] {
+    const target = FLEET.find((r) => r.month === QUARANTINED_MONTH)!.code;
+    return FLEET.map((r) =>
+      r.month === QUARANTINED_MONTH && r.code === target
+        ? { ...r, seats: null, departures: null }
+        : r,
+    );
+  }
+
+  // MUTANT: fold `unknowable` into `gaps` -> the key reads "1 month with no filings" about a
+  // month that filed -> red. MUTANT: drop the `unknowableNote` line from the key -> red.
+  it("says a wholly-quarantined month was FILED, not unfiled, on the key and to a screen reader", () => {
+    const container = chart(wholly());
+    expect(container.textContent).toContain("1 month filed but wholly quarantined");
+    expect(container.textContent).toContain("every filing failed an invariant");
+    expect(svgOf(container).getAttribute("aria-label")).toContain("filed but wholly quarantined");
+    // The false sentence must NOT appear: this month is not one with no filings.
+    expect(container.textContent).not.toContain("1 month with no filings");
+  });
+
+  // MUTANT: drop `understated` from the key or from `describe()` -> a stack short by an
+  // unstateable amount is drawn with nothing said about it -> red.
+  it("says a partially-quarantined month is understated, and does NOT call it a gap", () => {
+    const container = chart(partial());
+    expect(container.textContent).toContain("1 month understated");
+    // The note names the MARK, not just a total: the unstateable cell is painted at zero height
+    // inside a drawn month (a stacked area's y is cumulative, so one band cannot be holed), and
+    // 249 of the 420 such cells belong to a top-five MEMBER band across 87 pairs. A reader
+    // watching a named band flatten can only recover that from this sentence.
+    expect(container.textContent).toContain("drawn at zero height");
+    expect(container.textContent).toContain("the stack is lower than the real total");
+    expect(svgOf(container).getAttribute("aria-label")).toContain("1 month understated");
+    // It is drawn, so it is neither a gap nor a wholly-quarantined month.
+    expect(container.textContent).not.toContain("wholly quarantined");
+    expect(container.textContent).not.toContain("with no filings");
+  });
+
+  // THE ISOLATION, and the reason both fixtures exist. Neither sentence may appear on a clean
+  // chart -- without this, a component that printed both unconditionally would satisfy the two
+  // tests above.
+  it("says neither on a chart with nothing quarantined", () => {
+    const container = chart(FLEET);
+    expect(container.textContent).not.toContain("wholly quarantined");
+    expect(container.textContent).not.toContain("understated");
+    const label = svgOf(container).getAttribute("aria-label")!;
+    expect(label).not.toContain("wholly quarantined");
+    expect(label).not.toContain("understated");
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+/** THE AXIS COVERS THE WINDOW EVERY SENTENCE AROUND IT NAMES.
+ *
+ * Plot infers its x domain from the marks, and since #121 the marks carry only the months that
+ * can be DRAWN -- while the page's `chart: A → B` line, the aria-label and both absence counts
+ * all name first->last FILED month. Those were the same range until a wholly-quarantined month
+ * stopped being plotted. `/route/LIT-MOB` then said `chart: 2017-05 → 2024-08` over an axis
+ * ending in 2021, with 38 of its 85 claimed gap months and its one wholly-quarantined month off
+ * the frame entirely: `docs/design/system.md`'s "the aria-label name the range actually drawn",
+ * broken. 43 of 16,694 drawn route pairs diverged.
+ *
+ * ASSERT THE DOMAIN, not a tick count: ticks are `"1 year"`, so a chart can lose eighteen months
+ * off its right edge without losing a tick. */
+describe("the drawn x axis spans the window the chart claims", () => {
+  /** The x extent Plot actually laid out, read back off the axis's own tick positions is not
+   * enough (see above) -- this reads the AREA geometry, which is the drawn range itself. */
+  function drawnExtent(container: HTMLElement): [number, number] {
+    const xs = bandPaths(container).flatMap((p) => xsOf(p));
+    return [Math.min(...xs), Math.max(...xs)];
+  }
+
+  // A subject filing 2020-01..2020-06 whose LAST month is wholly quarantined: the drawable range
+  // ends 2020-05, the stated window ends 2020-06.
+  // MUTANT: drop `domain` from the x scale -> Plot fits the marks, the frame ends at 2020-05,
+  // and the month the legend calls "filed but wholly quarantined" is not on the chart -> red.
+  it("reaches the last filed month even when it cannot be drawn", () => {
+    // OUTSIDE THE COVID WINDOW, deliberately. 2020-03..2021-06 gets a `--panel-2` rect clamped
+    // to the last FILED month, and that rect is itself a mark -- so an inferred domain stretches
+    // to cover it and the missing axis is masked. That is the same coupling this fix repairs
+    // (six pairs drew the band past their last drawn month), and a fixture inside the band
+    // cannot fail for the reason it is written for.
+    const filed = ["2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06"];
+    const rows: MixRow[] = filed.flatMap((month): MixRow[] =>
+      month === "2023-06"
+        ? [{ month, code: "442", label: "442", seats: null, departures: null }]
+        : [{ month, code: "614", label: "614", seats: 1000, departures: 5 }],
+    );
+    const container = chart(rows);
+    // The legend claims it, so the axis must contain it.
+    expect(container.textContent).toContain("1 month filed but wholly quarantined");
+
+    const svg = svgOf(container);
+    const [, right] = drawnExtent(container);
+    // The frame's right edge: the plot's own width less MARGIN.right (mixPlotConfig.ts).
+    const frameRight = Number(svg.getAttribute("width")) - 10;
+    // Under the bug the last DRAWN month sits at the frame edge, because the domain stopped
+    // there. With the domain pinned it sits one month short of it.
+    expect(right).toBeLessThan(frameRight - 10);
+  });
+
+  // The negative: a subject whose every filed month is drawable must be unchanged -- its last
+  // month still reaches the right edge, so the assertion above cannot pass by always shrinking.
+  it("still runs to the frame edge when every filed month is drawable", () => {
+    const filed = ["2023-01", "2023-02", "2023-03", "2023-04", "2023-05", "2023-06"];
+    const rows: MixRow[] = filed.map((month) => ({
+      month,
+      code: "614",
+      label: "614",
+      seats: 1000,
+      departures: 5,
+    }));
+    const container = chart(rows);
+    const svg = svgOf(container);
+    const [, right] = drawnExtent(container);
+    expect(right).toBeCloseTo(Number(svg.getAttribute("width")) - 10, 0);
+  });
+});

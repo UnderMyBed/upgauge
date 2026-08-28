@@ -561,3 +561,67 @@ describe("/aircraft/<slug> network map on a type with nothing in the window", ()
     );
   });
 });
+
+/** THE STAT STRIP AND THE FOOT ON AN UNKNOWABLE PAGE (#121), and this surface is the half the
+ * issue never measured: it scoped the wholly-quarantined footprint at route grain only. At
+ * aircraft grain, BTS types 201 and 489 have no un-quarantined filing in the trailing 12
+ * either -- both F4 in 2025-08, 5 and 27 PERFORMED departures against a filed seat count of
+ * zero. `/aircraft/TRISLNDR` and `/aircraft/SHORT360` rendered three fabricated zeros, so the
+ * reachable footprint is 12 pages and not 10.
+ *
+ * The strip is read as an ORDERED LIST, never searched for a dash: load factor and average gauge
+ * rendered `—` under the bug too, so the buggy page read `0 · 0 · — · — · 0`. */
+function statStrip(container: HTMLElement): string[] {
+  return [...container.querySelectorAll(".stats .v")].map((n) => n.textContent ?? "");
+}
+
+describe("an aircraft type whose every filing was quarantined states absence, not zero", () => {
+  // MUTANT: restore `?? 0` inside `sumColumn` -> `["0", "0", "—", "—", "0", ...]` -> red.
+  // MUTANT: remove the `??` and fold on `+` -> identical output -> red.
+  it("renders the five measures as absence and keeps the counts", async () => {
+    const { container } = render(await page("TRISLNDR"));
+    expect(statStrip(container)).toEqual(["—", "—", "—", "—", "—", "1", "2"]);
+  });
+
+  // MUTANT: drop the `totals.seats === null` branch -> the foot claims "2 quarantined rows
+  // excluded from these totals" under five em dashes -> red.
+  it("explains the dashes instead of miscounting them", async () => {
+    const { container } = render(await page("TRISLNDR"));
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).toContain("Every filing on the TRISLNDR in this window is quarantined");
+    expect(feet).toContain("2 rows, each having failed an invariant");
+    expect(feet).not.toContain("excluded from these totals");
+  });
+});
+
+describe("an aircraft type that filed nothing in the window states absence too", () => {
+  // The MD-80 stopped filing in 2023-04. 37 of this dataset's fact-present types are in that
+  // state -- unknowable for a reason quarantine had no part in.
+  // MUTANT: seed `sumColumn` at 0 -> three zeroes -> red.
+  it("renders the measures as absence while still stating the counts", async () => {
+    const { container } = render(await page("MD-80"));
+    expect(statStrip(container)).toEqual(["—", "—", "—", "—", "—", "0", "0"]);
+  });
+
+  // MUTANT: key the clause on `totals.seats === null` alone -> "Every filing on the MD-80 in
+  // this window is quarantined — 0 rows" -> red.
+  it("names neither an exclusion nor quarantine", async () => {
+    const { container } = render(await page("MD-80"));
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).not.toContain("excluded from these totals");
+    expect(feet).not.toContain("is quarantined");
+    expect(feet).toContain("never averaged");
+  });
+
+  // The negative, so neither check above can pass against a page that stopped rendering a strip.
+  // The Caravan additionally carries 75 quarantined rows BESIDE stateable traffic -- 13
+  // carriers' worth -- which is the case that makes the clause's first operand undeletable.
+  it("still states real figures where quarantined rows sit beside stateable traffic", async () => {
+    const { container } = render(await page("CARAVAN"));
+    const strip = statStrip(container);
+    expect(strip.slice(0, 5)).not.toContain("—");
+    const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
+    expect(feet).toContain("excluded from these totals");
+    expect(feet).not.toContain("is quarantined");
+  });
+});
