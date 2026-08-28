@@ -140,11 +140,25 @@ async function renderSource(
   label: string | null,
 ): Promise<RenderedSource> {
   // NO NEW SQL: the value list IS a one-dimension pivot over the same window and the OTHER active
-  // filters, so grain handling, the mainline join and quarantine exclusion all come along without
-  // being restated. The filter on the dimension being LISTED is dropped -- keeping it leaves a
-  // list of one value, the one already chosen, which is not a list.
+  // filters, so grain handling and quarantine exclusion come along without being restated. The
+  // filter on the dimension being LISTED is dropped -- keeping it leaves a list of one value, the
+  // one already chosen, which is not a list.
+  //
+  // `grouping: "operating"`, NEVER the query's own `g`. This list enumerates values you can put
+  // in `f`, and `f` targets the RAW fact column: `sql/03_queries/pivot_mainline_join.sql`'s own
+  // header documents that the {{FILTERS}} token always renders `op_airline_id IN (...)` against
+  // `f.op_airline_id` while `g=ml` rewrites only the SELECT/GROUP BY to
+  // `coalesce(m.parent_airline_id, f.op_airline_id)`. Spreading `...query` therefore RANKED and
+  // LABELLED the list by the rollup while every link it emitted filtered the raw column, so the
+  // page stated a figure its own link could not reproduce. Measured on the live warehouse at
+  // t=2025-05:2026-04, `g=ml`: the AS row displayed 62,663,219 seats and its link returned
+  // 46,551,806 -- HA and VX folded into the number and silently dropped by the link, 25.7% wrong,
+  // under HTML_CACHE. Enumerating on the operating carrier lists AS, HA and VX separately, which
+  // is right: each is a value the filter can actually select. The `g=ml` note in the render below
+  // says so on the page rather than leaving the reader to notice.
   const listQuery = normalizeQuery({
     ...query,
+    grouping: "operating",
     dimensions: [source.key],
     measures: ["seats"],
     sort: "seats",
@@ -284,6 +298,12 @@ export async function FilterListView({ rawQuery, dim }: { rawQuery: string; dim:
               ) : null}
             </div>
           ))}
+          {query.grouping === "mainline" ? (
+            <p className="mp-note">
+              Listed by operating carrier as filed. A filter matches the carrier that operated the
+              metal, so a rolled-up group is not one of the values you can pick here.
+            </p>
+          ) : null}
           {rendered.length > 1 ? (
             <p className="mp-note">
               {entry.label} matches either end of a segment, which no single grouping enumerates.

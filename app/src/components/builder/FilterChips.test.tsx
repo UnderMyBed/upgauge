@@ -4,8 +4,8 @@ import { render } from "@testing-library/react";
 import { FilterChips } from "@/components/builder/FilterChips";
 import { FIXTURE } from "@/lib/pivot/allowlist.fixture";
 import { normalizeQuery, type PivotQuery } from "@/lib/pivot/types";
-import type { Resolved } from "@/lib/resolve";
-import { resolutionKey } from "@/lib/resolve";
+import { loadAllowlist, runPivot } from "@/lib/db";
+import { decodeRequest } from "@/lib/pivot/bounds";
 
 function q(over: Partial<PivotQuery> = {}): PivotQuery {
   return normalizeQuery({
@@ -23,26 +23,87 @@ function q(over: Partial<PivotQuery> = {}): PivotQuery {
   });
 }
 
-const RESOLVED = new Map<string, Resolved>([
-  [resolutionKey("op_airline_id", "19790"), { code: "DL", name: "Delta Air Lines Inc." }],
-  [resolutionKey("op_airline_id", "19393"), { code: "WN", name: "Southwest Airlines Co." }],
-]);
+/**
+ * The resolver payload as `runPivot` ACTUALLY emits it, never hand-built.
+ *
+ * A hand-built map is keyed the way the reader of this component would guess -- by dimension key
+ * -- and `resolveRows` keys by FACT COLUMN. That fixture passed while the shipped page rendered
+ * `Carrier = 19790`, `Route = 12478-12892` and `Airport (either end) = 12892`, which is the exact
+ * shape review found. So every display assertion below runs a real pivot and uses its own map;
+ * the structural assertions (counts, hrefs) stay on the catalog fixture, where no resolver is
+ * involved.
+ */
+async function realResult(rawQuery: string) {
+  const allowlist = await loadAllowlist();
+  const query = decodeRequest(rawQuery, allowlist);
+  const { resolved } = await runPivot(query);
+  return { allowlist, query, resolved };
+}
 
 function hrefs(container: HTMLElement, selector: string): string[] {
   return [...container.querySelectorAll(selector)].map((n) => n.getAttribute("href") ?? "");
 }
 
 describe("FilterChips", () => {
-  it("renders an active filter with its RESOLVED display value, not the raw id", () => {
+  // AGAINST A REAL PIVOT RESULT. `runPivot`'s map is keyed by fact column, so a dimension-keyed
+  // lookup misses and `displayValue` falls back to the raw id -- which is what shipped.
+  it("renders an active filter with its RESOLVED display value, not the raw id", async () => {
+    const { allowlist, query, resolved } = await realResult(
+      "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&f=op_airline_id:19790&s=-seats&n=25&g=op",
+    );
     const { container } = render(
-      <FilterChips
-        query={q({ filters: [["op_airline_id", ["19790"]]] })}
-        allowlist={FIXTURE}
-        resolved={RESOLVED}
-      />,
+      <FilterChips query={query} allowlist={allowlist} resolved={resolved} />,
     );
     expect(container.querySelector(".chip")!.textContent).toContain("DL");
     expect(container.querySelector(".chip")!.textContent).not.toContain("19790");
+  });
+
+  // `route`'s value is COMPOSITE and its two halves resolve under `route_key_low`/`route_key_high`
+  // -- there is no `route` key in the map at all, so this is the case a dimension-keyed lookup
+  // can never get right. 12478-12892 is JFK-LAX.
+  it("renders a composite filter as its two resolved codes", async () => {
+    const { allowlist, query, resolved } = await realResult(
+      "v=1&k=route&d=route&m=seats&t=2025-05:2026-04&f=route:12478-12892&s=-seats&n=25&g=op",
+    );
+    const { container } = render(
+      <FilterChips query={query} allowlist={allowlist} resolved={resolved} />,
+    );
+    const label = container.querySelector(".chip")!.textContent!;
+    expect(label).toContain("JFK\u2013LAX");
+    expect(label).not.toContain("12478");
+  });
+
+  // `endpoint_airport_id` names TWO columns and its value is ONE id sitting in either of them,
+  // so the lookup has to try both. 12892 is LAX; the pivot groups by origin, so the hit is under
+  // `origin_airport_id` and a `dest_airport_id`-only lookup would miss it.
+  it("renders an either-end filter from whichever column carries the id", async () => {
+    const { allowlist, query, resolved } = await realResult(
+      "v=1&k=seg&d=origin_airport_id&m=seats&t=2025-05:2026-04&f=endpoint_airport_id:12892&s=-seats&n=25&g=op",
+    );
+    const { container } = render(
+      <FilterChips query={query} allowlist={allowlist} resolved={resolved} />,
+    );
+    const label = container.querySelector(".chip")!.textContent!;
+    expect(label).toContain("LAX");
+    expect(label).not.toContain("12892");
+  });
+
+  // THE HALF THE KEYING FIX CANNOT REACH, pinned so it is a known degradation rather than a
+  // surprise. `runPivot` resolves only ids present in its ROWS, so filtering on a dimension you
+  // do not group by resolves nothing -- measured here as `resolved.size === 0`. The chip must
+  // then show the raw id, never a dash: absence of a NAME is not absence of DATA. The page that
+  // mounts this component has to resolve its filter values itself (see the component docstring).
+  it("falls back to the raw id when the filtered dimension is not also grouped", async () => {
+    const { allowlist, query, resolved } = await realResult(
+      "v=1&k=seg&d=year_month&m=seats&t=2025-05:2026-04&f=op_airline_id:19790&s=-seats&n=25&g=op",
+    );
+    expect(resolved.size).toBe(0);
+    const { container } = render(
+      <FilterChips query={query} allowlist={allowlist} resolved={resolved} />,
+    );
+    const label = container.querySelector(".chip")!.textContent!;
+    expect(label).toContain("19790");
+    expect(label).not.toContain("—");
   });
 
   it("an active filter's link REMOVES it", () => {
@@ -50,7 +111,7 @@ describe("FilterChips", () => {
       <FilterChips
         query={q({ filters: [["op_airline_id", ["19790"]]] })}
         allowlist={FIXTURE}
-        resolved={RESOLVED}
+        resolved={new Map()}
       />,
     );
     expect(container.querySelector("a.chip")!.getAttribute("href")).not.toContain(
@@ -66,7 +127,7 @@ describe("FilterChips", () => {
       <FilterChips
         query={q({ filters: [["op_airline_id", ["19790", "19393"]]] })}
         allowlist={FIXTURE}
-        resolved={RESOLVED}
+        resolved={new Map()}
       />,
     );
     // The FIRST `.chip-row` is the active-filter half; the second is inside `.filter-list`.
@@ -129,7 +190,7 @@ describe("FilterChips", () => {
       <FilterChips
         query={q({ grain: "route", dimensions: ["route"], filters: [["op_airline_id", ["19790"]]] })}
         allowlist={FIXTURE}
-        resolved={RESOLVED}
+        resolved={new Map()}
       />,
     );
     const href = container.querySelector(".filter-list a")!.getAttribute("href")!;

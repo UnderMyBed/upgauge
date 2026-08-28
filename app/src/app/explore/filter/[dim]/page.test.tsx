@@ -7,7 +7,9 @@ import {
   readValue,
   valueSources,
 } from "@/app/explore/filter/[dim]/page";
-import { loadAllowlist } from "@/lib/db";
+import { loadAllowlist, runPivot } from "@/lib/db";
+import { decodeRequest } from "@/lib/pivot/bounds";
+import { formatSeats } from "@/lib/format";
 import { filterableDimensions } from "@/lib/pivot/builder";
 import type { Resolved } from "@/lib/resolve";
 import { resolutionKey } from "@/lib/resolve";
@@ -118,6 +120,40 @@ describe("/explore/filter/[dim]", () => {
       (a) => a.getAttribute("href")!,
     );
     expect(nowHrefs.some((h) => h.includes("f=op_airline_id:21167"))).toBe(false);
+  });
+
+  // THE ASSERTION WHOSE ABSENCE SHIPPED A 25.7%-WRONG PAGE. Both original fixtures were `g=op`,
+  // where the mainline rollup and the raw column agree, so nothing could see it. Under `g=ml`
+  // `renderPivot` GROUP BYs `coalesce(m.parent_airline_id, f.op_airline_id)` while the `f` clause
+  // it builds targets the RAW `op_airline_id` (sql/03_queries/pivot_mainline_join.sql documents
+  // that gap) -- so spreading `...query` displayed AS at 62,663,219 seats and linked to a query
+  // returning 46,551,806, with HA and VX folded into the figure and dropped by the link.
+  //
+  // The check is not "the figure looks right": it FOLLOWS the emitted href and re-runs it. A
+  // hardcoded expected number would rot with the next BTS refresh and would not test the
+  // relationship that actually broke.
+  it("under g=ml, every listed figure equals what its own link returns", async () => {
+    const ML = "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=ml";
+    const { container } = await renderList("op_airline_id", ML);
+    const allowlist = await loadAllowlist();
+    const anchors = [...container.querySelectorAll(".mp-list a")].slice(0, 5);
+    expect(anchors.length).toBe(5);
+    for (const anchor of anchors) {
+      const shown = anchor.querySelector(".mp-seats")!.textContent!;
+      const target = anchor.getAttribute("href")!.split("?")[1];
+      const result = await runPivot(decodeRequest(target, allowlist));
+      const returned = result.rows.reduce((a, r) => a + Number(r.seats ?? 0), 0);
+      expect(shown, `listed figure for ${anchor.textContent}`).toBe(formatSeats(returned));
+    }
+  });
+
+  it("says so when the query is mainline-grouped but the list is not", async () => {
+    const ML = "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=ml";
+    const { container } = await renderList("op_airline_id", ML);
+    expect(container.textContent).toContain("Listed by operating carrier as filed");
+    // And NOT on an operating-grouped query, or the note is decoration rather than a disclosure.
+    const op = await renderList("op_airline_id");
+    expect(op.container.textContent).not.toContain("Listed by operating carrier as filed");
   });
 
   it("renders a composite dimension as a resolved pair and filters on <low>-<high>", async () => {
