@@ -13,6 +13,16 @@ vi.mock("@/lib/db", async (importOriginal) => {
   return { ...actual, runPivot: vi.fn(actual.runPivot) };
 });
 
+// Same partial-mock idiom, same reason: wraps the REAL exploreHref so every other test in this
+// file still gets its real return value, but the empty-state "wider window" test below can see
+// which arguments actually reached it -- the only way to tell "routed through the centralised
+// helper" apart from "a second hand-spelled `/explore?${encode(...)}` that happens to produce the
+// same string today", which is exactly the drift Finding 4 named.
+vi.mock("@/lib/pivot/builder", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/pivot/builder")>();
+  return { ...actual, exploreHref: vi.fn(actual.exploreHref) };
+});
+
 import { ExploreView, FALLBACK_QUERY } from "@/app/explore/page";
 import { dataAsOf, loadAllowlist, runPivot } from "@/lib/db";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
@@ -450,6 +460,42 @@ describe("/explore mounts the builder on every state, not just the populated one
   it("offers a recovery query the server actually admits", async () => {
     const allowlist = await loadAllowlist();
     expect(() => decodeRequest(encode(FALLBACK_QUERY), allowlist)).not.toThrow();
+  });
+});
+
+// FINDING 4: `widerWindowHref` used to hand-spell `` `/explore?${encode(...)}` `` while the four
+// entity pages centralised the identical link onto `exploreHref`. Byte-identical output today, so
+// a string-equality check cannot tell the two apart -- only whether `exploreHref` itself was
+// actually CALLED for this link can. The top-of-file mock wraps the real `exploreHref` in a spy
+// without changing its behaviour (same idiom as the `runPivot` mock above), so this only adds
+// visibility, and the fixture below is chosen so nothing ELSE this render produces (WindowControl's
+// "Full window" preset and its 2015 year chip both also target `timeFrom: EARLIEST_MONTH`) can
+// coincidentally satisfy the same predicate: `t=2020-01:2020-12` keeps `timeTo` away from both
+// `asOf` (Full window's `to`) and "2015-12" (the 2015 year chip's `to`).
+describe("/explore's empty-state 'wider window' link", () => {
+  it("routes through exploreHref, not a second hand-spelled encode() call", async () => {
+    const allowlist = await loadAllowlist();
+    const raw = qs({ ...OK, f: "op_airline_id:999999999", t: "2020-01:2020-12" });
+    const query = decodeRequest(raw, allowlist);
+
+    vi.mocked(exploreHref).mockClear();
+    const { container } = render(await ExploreView({ rawQuery: raw }));
+    expect(container.querySelector(".empty-state")).not.toBeNull();
+    const link = container.querySelector(".empty-state a")!;
+    expect(link).not.toBeNull();
+
+    // The exact call `widerWindowHref` must make: the same query, floored to EARLIEST_MONTH.
+    // `encode`'s own hand-spelled form would never register here, since it bypasses this spy.
+    const wideCall = vi.mocked(exploreHref).mock.calls.find(
+      ([q]) =>
+        q.timeFrom === "2015-01" &&
+        q.timeTo === query.timeTo &&
+        JSON.stringify(q.filters) === JSON.stringify(query.filters) &&
+        JSON.stringify(q.dimensions) === JSON.stringify(query.dimensions) &&
+        q.grouping === query.grouping,
+    );
+    expect(wideCall).toBeDefined();
+    expect(link.getAttribute("href")).toBe(exploreHref(wideCall![0]));
   });
 });
 

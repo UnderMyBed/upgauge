@@ -34,6 +34,21 @@ describe("Chip", () => {
     expect(span.getAttribute("title")).toBe("not available at route grain");
   });
 
+  // `title` reaches a mouse only -- neither a keyboard user (the span stays non-focusable, by
+  // design) nor a screen reader gets it from `title` alone. The reason must also be in the DOM
+  // text a screen reader actually reads. Named for the mutant that keeps `title` but drops the
+  // sr-only text: that bug leaves the test above green, since it only checks the title attribute.
+  it("states the inert reason in text a screen reader reads, not only in title", () => {
+    const { container } = render(
+      <Chip href={null} label="Aircraft type" reason="not available at route grain" />,
+    );
+    const span = container.querySelector(".chip-off")!;
+    expect(span.textContent).toContain("not available at route grain");
+    // Still not focusable and not interactive -- an inert option stays a non-anchor.
+    expect(span.tagName).toBe("SPAN");
+    expect(span.getAttribute("tabindex")).toBeNull();
+  });
+
   it("marks a derived measure so it is distinguishable from an additive one", () => {
     const { container } = render(<Chip href="/x" label="Load factor" derived />);
     expect(container.querySelector(".chip-derived")).not.toBeNull();

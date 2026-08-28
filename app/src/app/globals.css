@@ -51,6 +51,22 @@ body { background: var(--panel); color: var(--ink); }
 
 :focus-visible { outline: 2px solid var(--signal); outline-offset: 1px; }
 
+/* Content for a screen reader only -- e.g. an inert chip's stated reason, otherwise carried
+   solely by `title`, which a keyboard user and a screen reader both miss (Chips.tsx). Clips to
+   nothing rather than `display: none`/`visibility: hidden`, which would pull it out of the
+   accessibility tree along with the viewport. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* ---------- the data table (docs/design/mockups/table.html) ---------- */
 /* Column order is fixed: gutter, identifiers, additive measures, derived measures, counts,
    gauge rail. Identifiers left, everything numeric right. No card containers, no rounded
