@@ -376,7 +376,7 @@ signature element; it does not own these.
   The lag is our credibility.
 - **Density over whitespace.** Sparklines in rows, hairline rules. No card soup.
 - **URL-encoded query state on every view.** Permalinks are the entire growth mechanic.
-- **Dimension cells link to entity pages; that is the only drill.** No row-level drill to filed rows exists.
+- **Every insight row is one click from the raw rows that produced it** — `/watch` per row (`Raw rows`), the four entity pages per page. `/explore`'s own table is the exception: dimension cells link to entity pages, not to filed rows.
 - Derived measures labeled as computed. Quality floor: responsive, visible keyboard focus,
   reduced-motion honored.
 
