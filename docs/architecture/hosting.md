@@ -1994,18 +1994,22 @@ about it are easy to get wrong, and all four matter here:
   fixture: `starts_with(path, "/route/JFK-LAX")` satisfies every assertion the known pair makes
   while bounding none of the 404 family the clause exists for, and `ends_with(<any suffix the
   fixtures share>)` fails the same way from the other side. #117 established this on `/route/`;
-  the other five clauses carried one fixture each until #129, and across those five, **71
-  single-literal substitutions dropped part of what the clause they replaced matched, and passed
-  every test in the file** — `ends_with("/pivot")` for `/api/`, `ends_with("A")` for `/airport/`,
+  the other five clauses carried one fixture each until #129. **Measured against those
+  pre-#129 tables — not against the tables as they now stand — 71 single-literal substitutions
+  dropped part of what the clause they replaced matched and passed every test in the file** —
+  `ends_with("/pivot")` for `/api/`, `ends_with("A")` for `/airport/`,
   `ends_with("L")` for `/carrier/`, `ends_with("8")` for `/aircraft/`. Each leaves the origin
   exposed on what the real prefix covers and the literal does not.
 
-  **They are LOSSY, and only 16 of them are "strictly less".** The other **55 are incomparable**
-  — they drop part of the clause's family *and* pick up paths it never matched, so
+  **They were LOSSY, and only 16 of those 71 were "strictly less".** The other **55 were
+  incomparable** — they drop part of the clause's family *and* pick up paths it never matched, so
   `ends_with("/pivot")` also answers for `/anything/pivot`. All four named above are in the 55.
   The conclusion is identical for both groups, because the axis that matters is what a
-  substitution DROPS; the distinction is kept because calling all 71 subsets is a claim about
-  the other 55 that is simply false.
+  substitution DROPS; the distinction is kept because calling them all subsets is a claim about
+  the other 55 that is simply false. Those three counts describe the state #129 closed and are
+  kept only as the evidence for the two-fixture rule; **they are not a current measurement, and
+  the current one is not written down because the test computes it** — every lossy substitution
+  over the tables as they stand is refused, and a single escape reddens it.
 
   So each prefix now carries two rows that diverge immediately after it **and** end in different
   characters — `/api/health` beside `/api/pivot`, `/airport/ZZZZ` beside `/airport/SEA`,
@@ -2136,13 +2140,34 @@ about it are easy to get wrong, and all four matter here:
   *under*.
 
   **And `success: true` is not agreement.** The API applies what it recognises and drops the
-  rest without an error — measured on this very endpoint, where a PUT updated the description and
-  rules and ignored `name`. Every other gate here constrains what we SEND; the script now diffs
-  every scalar it sent against the ruleset the response echoes back, which costs no extra request
-  and names any dropped or altered field by path. The tunnel PUT is deliberately excluded: its
-  response envelope differs from a ruleset's and this repo has not established it, so asserting
-  against a guess would pass vacuously or fail an apply for the wrong reason. The DNS read-back
-  below covers what matters most about the tunnel.
+  rest without an error — measured on the `http_ratelimit` entrypoint, where a PUT updated the
+  description and rules and ignored `name`. Every other gate here constrains what we SEND; the
+  script now walks every scalar it sent and looks it up in the ruleset the response echoes back,
+  which costs no extra request. Four things about that comparison are deliberate:
+
+  - **It reports dropped-or-altered, never added.** Paths are enumerated from what was sent, so a
+    field Cloudflare *adds* (`id`, `version`, a defaulted `ratelimit` member) is invisible to it.
+    Forbidding unknown fields is the send side's job, by key-set equality. Two different questions.
+  - **`name` is exempt.** The zone freezes a ruleset's name at creation and ignores it on every
+    later PUT, so a divergence is not fixable by editing the file. Flagging it would halt the
+    deploy with a remedy that cannot converge — and `cache-rules.json` is PUT first, against an
+    entrypoint where nothing has been measured. It is reported as a note instead.
+  - **`characteristics` is compared as a set**, because it is set-valued at the edge while `rules`
+    is order-significant. Index comparison would turn a harmless reordering into two spurious
+    drifts; comparing it whole is also the one place an *added* member is caught.
+  - **Drift accumulates and fails once, at the end.** Exiting inside the PUT loop would halt at
+    whichever file tripped — and the ordering makes that worst-case, since `cache-rules.json`
+    goes first and carries no security control while `rate-limit.json` is second. The PUTs are
+    idempotent, so applying all of them and failing once is strictly better than stopping half
+    way. It reuses the DNS block's own `fail=0` … `[ $fail -eq 0 ]` shape.
+
+  The tunnel PUT is excluded, and the honest reason is narrower than "a different envelope":
+  the comparator enumerates paths from what was sent, so extra keys are tolerated by construction
+  and four scalar leaves cannot pass vacuously. The reason is that nobody has established *where*
+  that endpoint echoes the applied config — if `.result` is the configuration rather than an
+  object containing `.config`, a correct apply reports four drifts. **The DNS check below is not
+  a substitute:** it establishes that the hostname resolves to this tunnel and is proxied, and
+  says nothing about what the tunnel routes it to.
 
 - **Every path group shares ONE counter, not one each.** A rate-limiting rule counts per
   (rule, characteristics), and this is a single rule keyed on `(ip.src, cf.colo.id)` — so

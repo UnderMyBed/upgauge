@@ -313,9 +313,10 @@ def _path_disjunction(expression: str) -> str:
 
     `_covered` models the expression as a pure disjunction of path clauses. A narrowing conjunct
     silently falsifies that model, so the evaluator is handed this slice rather than the whole
-    expression, and `test_rate_limit_expression_narrows_only_outside_its_path_disjunction`
-    proves no later conjunct reads the path. Those two together are what keep the coverage and
-    exclusion tests sound now that a narrowing is expressible at all."""
+    expression, and `test_rate_limit_expression_is_a_path_disjunction_narrowed_only_by_negated_
+    edge_signals` proves no later conjunct reads the path (that test was renamed and this
+    citation was left pointing at a name no `def` in this repo carries). Those two together are
+    what keep the coverage and exclusion tests sound now that a narrowing is expressible at all."""
     return _unwrap(_split_top_level(expression, _AND)[0])
 
 
@@ -616,7 +617,8 @@ def test_the_og_cards_stay_covered_by_their_own_clause_when_the_entity_prefixes_
         for f in cards.rglob("opengraph-image.*")
         # The EXACT filename, because that is what Next matches: `opengraph-image.test.tsx` is a
         # sibling unit test, not a fifth route, and a `.suffix` check alone counts it as one.
-        if f.name in {f"opengraph-image{ext}" for ext in (".js", ".jsx", ".ts", ".tsx")}
+        if f.is_file()
+        and f.name in {f"opengraph-image{ext}" for ext in (".js", ".jsx", ".ts", ".tsx")}
     )
     assert card_dirs == ["aircraft", "airport", "carrier", "route"], (
         f"the card routes on disk are {card_dirs}, not the four entity prefixes this clause is "
@@ -920,7 +922,11 @@ def _matcher_patterns(source: str) -> list[str]:
         depth += {"[": 1, "]": -1}.get(source[i], 0)
         i += 1
     assert not depth, "proxy.ts's matcher array is unterminated"
-    return re.findall(r'"([^"]+)"', source[start.end() : i - 1])
+    # Routes only. Every quoted string inside the span was returned before, so Next's object
+    # form (`{ source: "/x", has: [{ type: "header", key: "x-foo" }] }`) would yield `header` and
+    # `x-foo` as if they were paths -- dormant today, and precisely the shape the bracket-depth
+    # parse above was written to accept. A matcher entry is a path and starts with `/`.
+    return [p for p in re.findall(r'"([^"]+)"', source[start.end() : i - 1]) if p.startswith("/")]
 
 
 # The ONE matcher path deliberately outside both the expression and UNCOVERED. `/search` is
@@ -1074,8 +1080,23 @@ def _classify(source: str) -> str:
             quote, start = char, i
             i += 1
             while i < n and source[i] != quote:
-                # A `"` or `'` literal cannot span a newline; a template literal can.
-                if quote != "`" and source[i] == "\n":
+                # EVERY string ends at the newline here, TEMPLATE LITERALS INCLUDED, and that is
+                # the fix for a live blind spot rather than a simplification. A template
+                # legitimately spans lines, so an unpaired backtick -- inside a regex literal,
+                # say, `const FENCE = /`{3}\w*/g;` -- opened a bogus string that swallowed
+                # everything to the next incidental backtick. Measured: with that line between
+                # two imports, a real `next/font/local` import on the far side vanished and
+                # `set(modules) == {"next/font/google"}` stayed GREEN, which is exactly the
+                # `.ttf` family this check exists to catch. A `"` or `'` literal has a natural
+                # bail at end-of-line and that is what made the documented regex case harmless;
+                # the backtick had none.
+                #
+                # The cost is a genuine multi-line template whose later lines look like code,
+                # which is read as code and can only ADD an import -- a red someone investigates,
+                # never a silent pass. Block comments keep their multi-line state below, because
+                # misreading a comment as code is the direction that hides nothing but invents
+                # something, and prose is what this scanner exists to refuse.
+                if source[i] == "\n":
                     break
                 i += 2 if source[i] == "\\" else 1
             i = min(i + 1, n)
@@ -1578,7 +1599,7 @@ def test_the_cache_rule_carries_these_fields_and_no_others():
     #132's reasoning is about the script, not about one file: `--data @"$file"` sends the bytes,
     so every key in every one of them ships. Gating `rate-limit.json` and stopping there is the
     per-file version of the mistake CLAUDE.md names -- enumerate the matrix per CALL SITE, and
-    `put()` has three. Measured before this existed, each leaving all 840 tests green:
+    `put()` has three. Measured before this existed, each leaving the whole suite green:
     `rules[0].enabled = false` turns edge HTML caching off site-wide, sending every published
     URL to the origin (the count is gated and stated in docs/architecture/hosting.md, and is not
     repeated here -- `test_stated_counts.py` caught this docstring doing exactly that); the
@@ -1657,6 +1678,47 @@ def test_tunnel_ingress_routes_the_production_host_to_the_app_service():
     )
 
 
+# `cloudflare-apply.sh`, read as CODE. Every check below agrees with a real call site or a real
+# comparison, never with a substring that happens to appear somewhere in the file -- which is the
+# defect the checks themselves were written to avoid and then committed anyway.
+_SHELL_COMMENT = re.compile(r"(?<!\$)#.*$", re.MULTILINE)
+
+
+def _shell_code(source: str) -> str:
+    """The script with comments blanked, INCLUDING mid-line ones.
+
+    `startswith("#")` per line only reaches comments that begin a line, so a trailing `# ...`
+    stayed in the text every check below searches -- and the read-back's own call-site check was
+    satisfied partly by such a comment. `${...#...}` and `$#` are the shell's own syntax rather
+    than comments, so a `#` preceded by `$` is left alone; that is over-conservative and fails
+    toward keeping text, which for a search that must not be satisfied by prose is the direction
+    that can only add false REDS, never false greens."""
+    return _SHELL_COMMENT.sub("", source)
+
+
+def _put_calls(code: str) -> dict[str, list[str]]:
+    """Every `put` INVOCATION in the script, as {basename: [args after the url]}.
+
+    Counting a substring over the whole file cannot tell a call site from the function that
+    defines it. Measured: `readback` appears five times, three of them inside `put()` itself, so
+    `code.count("readback") >= 3` held with the argument removed from BOTH call sites -- the
+    read-back never ran on either file and nothing in this suite noticed. Same shape as
+    `card_dirs` agreeing with the routes on disk and `_matcher_patterns` agreeing with the real
+    matcher array: read the thing, do not grep near it."""
+    calls: dict[str, list[str]] = {}
+    # Line continuations first, so a call split across lines reads as one.
+    for line in code.replace("\\\n", " ").splitlines():
+        line = line.strip()
+        if not line.startswith("put "):
+            continue
+        words = line.split()
+        target = next((w for w in words if ".json" in w), None)
+        if target is None:
+            continue
+        calls[target.strip('"').rsplit("/", 1)[-1]] = words[words.index(target) + 1 :]
+    return calls
+
+
 def test_cloudflare_apply_verifies_the_dns_record_points_at_the_tunnel():
     """MEASURED 2026-08-19: `make cloudflare-apply` reported "desired state applied" while
     `dig upgauge.shipman.dev` returned nothing. The script PUT cache rules, the rate limit and
@@ -1668,35 +1730,64 @@ def test_cloudflare_apply_verifies_the_dns_record_points_at_the_tunnel():
     properties matter and each fails differently: a missing record does not resolve, a record
     aimed somewhere other than <tunnel>.cfargotunnel.com resolves to the wrong origin, and an
     unproxied record bypasses the cache rule and the rate limit entirely while still serving
-    the site -- the silent one."""
-    # Executable lines only. A needle that also matches the script's own explanatory comments
-    # certifies prose, which is how two other checks in this repo passed while broken.
-    code = "\n".join(
-        ln
-        for ln in (CLOUDFLARE.parent / "cloudflare-apply.sh").read_text().splitlines()
-        if not ln.lstrip().startswith("#")
-    )
+    the site -- the silent one.
+
+    EVERY ASSERTION HERE AGREES WITH A COMPARISON, NOT WITH A MENTION, and that is a correction
+    rather than a style. Three of these checks were satisfied by text that does no checking:
+    `"proxied" in code` by the `read -r type content proxied` destructuring and a jq format
+    string; the target check by the now-dead `want=` assignment; and -- worst -- deleting
+    `[ $fail -eq 0 ]` left the suite green while the script printed all three DNS failures and
+    then `ok dns ...` and exited 0. That is verbatim the incident above: a green banner over a
+    broken deploy, which is the one thing this test exists to refuse."""
+    code = _shell_code((CLOUDFLARE.parent / "cloudflare-apply.sh").read_text())
     assert "dns_records" in code, "cloudflare-apply.sh never queries DNS"
     # The target is BUILT from the tunnel id, never matched loosely: a bare-domain check would
-    # accept a record pointing at someone else's <other-id>.cfargotunnel.com.
-    assert "${CLOUDFLARE_TUNNEL_ID}.cfargotunnel.com" in code, (
+    # accept a record pointing at someone else's <other-id>.cfargotunnel.com. Asserted as the
+    # COMPARISON, so the assignment alone no longer satisfies it.
+    assert 'want="${CLOUDFLARE_TUNNEL_ID}.cfargotunnel.com"' in code, (
         "it does not construct the expected target from the tunnel id"
     )
-    # The READ-BACK. Every other gate in this repo constrains what we SEND; this is the only
-    # thing comparing that to what the zone KEPT, and the class it catches is measured rather
-    # than hypothetical -- a PUT to a ruleset entrypoint returns `success: true` while silently
-    # ignoring `name` (test_rate_limit_keeps_the_name_the_zone_actually_holds). The response
-    # already echoes the applied ruleset, so it costs no extra request.
-    assert "paths(scalars)" in code, (
-        "cloudflare-apply.sh does not compare what it PUT against what came back. `success: "
-        "true` is not agreement: the API applies what it recognises and drops the rest without "
-        "an error, so the committed file can stop describing the zone with every test green"
+    assert '[ "$content" = "$want" ]' in code, (
+        "it builds the expected target and never compares the record against it"
     )
-    assert code.count("readback") >= 3, (
-        "the read-back is defined but not passed to both ruleset PUTs -- an argument nothing "
-        "supplies is a gate that never runs"
-    )
-    assert "proxied" in code, (
+    assert '[ "$proxied" = "true" ]' in code, (
         "it does not check the record is PROXIED -- an unproxied record still serves the site "
         "but silently bypasses the cache rule and the rate limit"
+    )
+    assert '[ "$type" = "CNAME" ]' in code, "it does not check the record type"
+    # The gate that makes the three checks above mean anything. Without it the script reports
+    # every failure and exits 0.
+    assert "[ $fail -eq 0 ]" in code, (
+        "nothing makes the DNS failures above exit non-zero -- the script would print FAIL "
+        "three times and then `ok`, which is the 2026-08-19 incident this test names"
+    )
+    # THE READ-BACK, agreed with the real call sites. `success: true` is not agreement: the API
+    # applies what it recognises and drops the rest without an error, so without this the
+    # committed file can stop describing the zone with every test here green.
+    assert "paths(scalars)" in code, (
+        "cloudflare-apply.sh does not compare what it PUT against what came back"
+    )
+    calls = _put_calls(code)
+    assert set(calls) == {"cache-rules.json", "rate-limit.json", "tunnel-config.json"}, (
+        f"the script PUTs {sorted(calls)}; this test knows about three files and must be "
+        "updated deliberately, not silently, when that changes"
+    )
+    for name in ("cache-rules.json", "rate-limit.json"):
+        assert calls[name] == ["readback"], (
+            f"the `put` of {name} passes {calls[name]} -- the read-back is a parameter nothing "
+            "supplies, so it never runs on a ruleset entrypoint. Counting the word over the "
+            "whole file cannot see this: three of its occurrences are in `put()` itself"
+        )
+    # And the tunnel deliberately does NOT get one, for a reason the script states. Pinned so
+    # that turning it on is a deliberate edit here rather than a quiet one there.
+    assert calls["tunnel-config.json"] == [], (
+        "the tunnel PUT now carries a read-back. That may well be right -- but the comparator "
+        "resolves its paths against an envelope nobody has established, so a correct apply can "
+        "report four drifts. Establish the shape, write it down, then change this line"
+    )
+    # A drift must not exit inside put(): cache-rules is applied FIRST and carries no security
+    # control, so an early exit leaves the edge rate limit and the tunnel unapplied.
+    assert "DRIFTED=" in code and '[ -z "$DRIFTED" ]' in code, (
+        "read-back drift is not accumulated and judged once at the end, so a trip on the first "
+        "file halts the deploy before the rate limit is applied"
     )
