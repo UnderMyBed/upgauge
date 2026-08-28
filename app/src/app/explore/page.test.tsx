@@ -13,10 +13,13 @@ vi.mock("@/lib/db", async (importOriginal) => {
   return { ...actual, runPivot: vi.fn(actual.runPivot) };
 });
 
-import { ExploreView } from "@/app/explore/page";
+import { ExploreView, FALLBACK_QUERY } from "@/app/explore/page";
 import { dataAsOf, loadAllowlist, runPivot } from "@/lib/db";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 import { trailing12From } from "@/lib/entityFacts";
+import { exploreHref } from "@/lib/pivot/builder";
+import { decodeRequest } from "@/lib/pivot/bounds";
+import { encode } from "@/lib/pivot/urlstate";
 import { PivotError } from "@/lib/pivot/types";
 
 const OK = {
@@ -48,8 +51,11 @@ function qs(params: Record<string, string>): string {
 
 describe("/explore", () => {
   it("renders a table from a valid permalink", async () => {
-    render(await ExploreView({ rawQuery: qs(OK) }));
-    expect(screen.getByText("Seats")).toBeDefined();
+    // Scoped to `thead`, not `screen.getByText("Seats")`: the builder's `m` row now renders a
+    // chip carrying the same catalog label, so an unscoped lookup finds two nodes and throws.
+    // The claim here is about the TABLE's header, so that is where it is asserted.
+    const { container } = render(await ExploreView({ rawQuery: qs(OK) }));
+    expect(container.querySelector("thead")?.textContent).toContain("Seats");
     expect(screen.getAllByRole("row").length).toBeGreaterThan(1);
   });
 
@@ -374,5 +380,203 @@ describe("/explore renders the visitor's order, below-floor rows in place", () =
     const firstBelow = flags.indexOf(true);
     expect(firstBelow).toBeGreaterThanOrEqual(0);
     expect(flags.slice(firstBelow).includes(false)).toBe(true);
+  });
+});
+
+// =======================================================================================
+// THE BUILDER, MOUNTED (epic #6, Task 6). Three states, and the two defects that live in the
+// WIRING rather than in any of the seven controls: which state gets a builder at all, and where
+// the filter chips' display values come from.
+// =======================================================================================
+
+/** The active-filter chip for a dimension, by its catalog label. `DimensionChips` renders a chip
+ *  whose text is exactly "Carrier" and `FilterChips`'s add-half one reading "Carrier →", so the
+ *  " = " is what identifies the filter chip among the three. */
+function filterChip(container: HTMLElement, label: string): Element | undefined {
+  return [...container.querySelectorAll(".builder .chip")].find((n) =>
+    n.textContent?.startsWith(`${label} =`),
+  );
+}
+
+describe("/explore mounts the builder on every state, not just the populated one", () => {
+  it("renders it on a populated result, between the stat strip and the body", async () => {
+    const { container } = render(await ExploreView({ rawQuery: qs(OK) }));
+    const builder = container.querySelector(".builder");
+    expect(builder).not.toBeNull();
+    // Position, not mere presence: "assert the ordering, never the set of things present"
+    // (CLAUDE.md). `compareDocumentPosition` & FOLLOWING === 4.
+    const stats = container.querySelector(".stats")!;
+    const body = container.querySelector(".body")!;
+    expect(stats.compareDocumentPosition(builder!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(4);
+    expect(builder!.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(4);
+  });
+
+  // THE VIEW THAT MOST NEEDS ADJUSTING MUST NOT BE THE ONE WITHOUT CONTROLS. An implementation
+  // that renders the builder inside the populated branch passes the test above and fails here.
+  it("renders it on the empty state, where adjusting the query is the whole job", async () => {
+    const { container } = render(await ExploreView({ rawQuery: qs(NO_SUCH_CARRIER) }));
+    expect(container.querySelector(".empty-state")).not.toBeNull();
+    expect(container.querySelector(".builder")).not.toBeNull();
+  });
+
+  // THE STATE A "RENDER IT ABOVE THE TABLE" IMPLEMENTATION SILENTLY SKIPS: `decode()` threw, so
+  // there is no `query` to mutate and no table to sit above. It is also the state a builder is
+  // worth the most -- the reader is holding a permalink they cannot fix by hand.
+  it("renders it on the error state, seeded from the query the escape link offers", async () => {
+    const { container } = render(await ExploreView({ rawQuery: qs({ ...OK, d: "nope" }) }));
+    expect(screen.getByText(/unknown dimension/i)).toBeDefined();
+    expect(container.querySelector(".builder")).not.toBeNull();
+    // One constant behind both, so the link and the chips beside it cannot describe different
+    // queries. A mutant that re-spells either literal separates them and turns this red.
+    const escape = container.querySelector(".error-page a")!;
+    expect(escape.getAttribute("href")).toBe(exploreHref(FALLBACK_QUERY));
+  });
+
+  // The recovery query is spelled by hand as a bare href in six other files (`search/page.tsx`,
+  // four `not-found.tsx`, `explore/filter/[dim]/page.tsx`). This pins the constant against that
+  // exact string, so a codec change or an edit to FALLBACK_QUERY is red HERE rather than
+  // discovered as a dead recovery link -- and it is the canary for those six copies too.
+  it("encodes FALLBACK_QUERY to the string the rest of the app spells by hand", () => {
+    expect(exploreHref(FALLBACK_QUERY)).toBe(
+      "/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op",
+    );
+  });
+
+  // `bounds.test.ts` scans every page for hardcoded `/explore?` literals and asserts the server
+  // still ADMITS each one -- "a permalink this product has already shipped must not become
+  // unreadable". Turning this one into a constant put it out of that scan's reach by
+  // construction, so its coverage moves here rather than being lost: the recovery link offered
+  // to someone whose permalink did not parse must itself parse.
+  it("offers a recovery query the server actually admits", async () => {
+    const allowlist = await loadAllowlist();
+    expect(() => decodeRequest(encode(FALLBACK_QUERY), allowlist)).not.toThrow();
+  });
+});
+
+// `/explore/filter/:dim` shipped in Task 5 with NOTHING linking to it -- reachable only by typing
+// the URL. CLAUDE.md: "A new top-level route is not shipped until something already-reachable
+// links to it. Neither `sitemap.ts` nor `proxy.ts`'s matcher counts." `/watch` shipped that way
+// one milestone after a review existed to prevent it, which is why this is a test and not a note.
+describe("/explore is the inbound link that ends /explore/filter's island", () => {
+  it("emits real anchors into the value-list route", async () => {
+    const { container } = render(await ExploreView({ rawQuery: qs(OK) }));
+    const links = [...container.querySelectorAll("a")]
+      .map((a) => a.getAttribute("href") ?? "")
+      .filter((h) => h.startsWith("/explore/filter/"));
+    expect(links.length).toBeGreaterThan(0);
+    // Each carries the current query, so the list it opens is scoped to this window and these
+    // filters -- a bare `/explore/filter/op_airline_id` would render, and rank against a query
+    // nobody asked for. `Chip` renders href="" as a live empty anchor, so "an anchor exists" is
+    // weaker than it looks (Chips.tsx).
+    expect(links.every((h) => h.includes("?v=1&k=seg&"))).toBe(true);
+    expect(links.some((h) => h.startsWith("/explore/filter/endpoint_airport_id?"))).toBe(true);
+  });
+});
+
+// =======================================================================================
+// THE SHELL RESOLVES ITS OWN FILTER VALUES. `runPivot` resolves only the ids present in the rows
+// it RETURNED, and `FilterChips` is synchronous by design, so neither can reach this: the page
+// has to ask. FilterChips.test.tsx pins the degraded half ("falls back to the raw id when the
+// filtered dimension is not also grouped", measured there as `resolved.size === 0`); this is the
+// other end of that same measurement, at the mount that closes it.
+// =======================================================================================
+describe("/explore resolves filter values the pivot's own rows never carry", () => {
+  // THE ONLY SHAPE THAT DISCRIMINATES: filtered on `op_airline_id`, grouped by `year_month`. A
+  // query that also GROUPS by the filtered dimension gets its ids resolved by `runPivot` for
+  // free, so it passes with or without the merge and proves nothing.
+  const GROUPED_ELSEWHERE =
+    "v=1&k=seg&d=year_month&m=seats&t=2025-05:2026-04&f=op_airline_id:19790&s=-seats&n=25&g=op";
+
+  it("shows a carrier filter as its code when the query groups by something else", async () => {
+    const { container } = render(await ExploreView({ rawQuery: GROUPED_ELSEWHERE }));
+    const chip = filterChip(container, "Carrier");
+    expect(chip).toBeDefined();
+    // MUTANT: pass `result.resolved` instead of the merged map -> "Carrier = 19790".
+    expect(chip!.textContent).toContain("DL");
+    expect(chip!.textContent).not.toContain("19790");
+  });
+
+  // The control that keeps the test above honest: the raw id is still in the permalink bar and
+  // in the chip's own href, so a page-wide `not.toContain("19790")` would be asserting something
+  // false. `f` targets the BTS id and must keep doing so -- `dim_carrier` carries the CURRENT
+  // code (CLAUDE.md), so a code-valued filter would change meaning across a rebuild.
+  it("keeps the raw id in the URL while showing the code", async () => {
+    const { container } = render(await ExploreView({ rawQuery: GROUPED_ELSEWHERE }));
+    expect(container.querySelector(".permalink code")!.textContent).toContain(
+      "f=op_airline_id:19790",
+    );
+    expect(filterChip(container, "Carrier")!.getAttribute("href")).not.toContain("19790");
+  });
+
+  // The composite shape, resolved from a query that groups by neither half. `route`'s value is
+  // '<low>-<high>' across two fact columns, so this is the case a single-column merge gets wrong
+  // -- 12478-12892 is JFK-LAX.
+  it("resolves a composite route filter into two codes", async () => {
+    const raw =
+      "v=1&k=route&d=year_month&m=seats&t=2025-05:2026-04&f=route:12478-12892&s=-seats&n=25&g=op";
+    const { container } = render(await ExploreView({ rawQuery: raw }));
+    const chip = filterChip(container, "Route");
+    expect(chip!.textContent).toContain("JFK–LAX");
+    expect(chip!.textContent).not.toContain("12478");
+  });
+
+  // THE FILTER EVERY ENTITY PAGE'S "Open in the Explorer" LINK ACTUALLY EMITS. `endpoint_airport_id`
+  // is `either`-mode: ONE id that may sit in either of two fact columns, and it is `filter_only`,
+  // so a query can never group by it -- which makes "filtered but not grouped" its PERMANENT state,
+  // not an edge case. 12892 is LAX.
+  it("resolves an either-end airport filter, which no query can ever group by", async () => {
+    const raw =
+      "v=1&k=seg&d=year_month&m=seats&t=2025-05:2026-04&f=endpoint_airport_id:12892&s=-seats&n=25&g=op";
+    const { container } = render(await ExploreView({ rawQuery: raw }));
+    const chip = filterChip(container, "Airport (either end)");
+    expect(chip!.textContent).toContain("LAX");
+    expect(chip!.textContent).not.toContain("12892");
+  });
+
+  // An id no dimension carries resolves to nothing, and the chip must then show the raw value --
+  // never a dash. Absence of a NAME is not absence of DATA (lib/format.ts). This is also the
+  // guard against a merge that throws or blanks on a miss.
+  it("degrades a filter value that resolves to nothing to its raw id, not a dash", async () => {
+    const { container } = render(await ExploreView({ rawQuery: qs(NO_SUCH_CARRIER) }));
+    const chip = filterChip(container, "Carrier");
+    expect(chip!.textContent).toContain("999999999");
+    expect(chip!.textContent).not.toContain("—");
+  });
+});
+
+// =======================================================================================
+// D4, THE MAINLINE/OPERATING DISCLOSURE. Gated on BOTH operands. Keyed on the grouping alone it
+// fires on every mainline view; keyed on the filter alone it fires on every carrier-filtered
+// operating view. `cardSixthStat` shipped as the one-operand form, which is why CLAUDE.md carries
+// the rule -- and why the negative case below is two fixtures, one per operand.
+// =======================================================================================
+describe("/explore discloses a mainline rollup filtered on the operating carrier", () => {
+  const MAINLINE_FILTERED = qs({ ...OK, g: "ml", f: "op_airline_id:19790", n: "25" });
+  const MAINLINE_UNFILTERED = qs({ ...OK, g: "ml", n: "25" });
+  const OPERATING_FILTERED = qs({ ...OK, f: "op_airline_id:19790", n: "25" });
+
+  it("says so when the rollup and the carrier filter are both active", async () => {
+    const { container } = render(await ExploreView({ rawQuery: MAINLINE_FILTERED }));
+    expect(container.querySelector(".foot")!.textContent).toContain(
+      "rolled-up row can show more seats",
+    );
+  });
+
+  it("says nothing about the rollup when only one of the two conditions holds", async () => {
+    for (const raw of [MAINLINE_UNFILTERED, OPERATING_FILTERED]) {
+      const { container } = render(await ExploreView({ rawQuery: raw }));
+      expect(container.querySelector(".foot")!.textContent).not.toContain("rolled-up row");
+    }
+  });
+
+  // Neither negative fixture may be vacuous: both must reach the `.foot` at all. A permalink that
+  // errored would satisfy the `not.toContain` above without exercising the gate, which is the
+  // half-disguised vacuous fixture CLAUDE.md names.
+  it("both negative fixtures actually render a result foot", async () => {
+    for (const raw of [MAINLINE_UNFILTERED, OPERATING_FILTERED]) {
+      const { container } = render(await ExploreView({ rawQuery: raw }));
+      expect(container.querySelector(".foot")!.textContent).toContain("quarantined row");
+      expect(container.querySelectorAll("tbody tr").length).toBeGreaterThan(0);
+    }
   });
 });
