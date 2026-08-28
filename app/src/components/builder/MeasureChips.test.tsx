@@ -17,6 +17,21 @@ describe("MeasureChips", () => {
   it("renders all twelve catalog measures", () => {
     const { container } = render(<MeasureChips query={q()} allowlist={FIXTURE} />);
     expect(container.querySelectorAll(".chip").length).toBe(12);
+
+    // A COUNT ALONE CANNOT SEE THE BUG THIS TEST IS NAMED FOR: a hardcoded array of the same
+    // twelve measures is exactly twelve long. Rendering a catalog the hand-written version could
+    // not have known about is the only assertion that separates them. Cloned, never mutated --
+    // FIXTURE is a shared module singleton.
+    const widened = { ...FIXTURE, meas: new Map(FIXTURE.meas) };
+    widened.meas.set("synthetic_measure", {
+      key: "synthetic_measure", label: "Synthetic measure", isAdditive: true,
+      expr: "SUM(synthetic) FILTER (WHERE NOT is_quarantined)",
+    });
+    const grown = render(<MeasureChips query={q()} allowlist={widened} />);
+    expect(grown.container.querySelectorAll(".chip").length).toBe(13);
+    expect(
+      [...grown.container.querySelectorAll(".chip")].map((n) => n.textContent),
+    ).toContain("Synthetic measure");
   });
 
   it("marks a derived measure as derived and an additive one as not", () => {

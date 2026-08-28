@@ -87,7 +87,7 @@ Current gates (`app-check`/`app-smoke` measured 2026-08-28, `verify`/`goldens` 2
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 49 skip without `data/` |
-| `make app-check` | 1,766 app tests · without a built `upgauge.duckdb` only 1,750 are COLLECTED and 626 of those fail — the two figures count different sets, so "N of the total fail" was never the sentence it read as |
+| `make app-check` | 1,769 app tests · without a built `upgauge.duckdb` only 1,753 are COLLECTED and 628 of those fail — the two figures count different sets, so "N of the total fail" was never the sentence it read as |
 | `make app-smoke` | 740 served-build checks |
 | `make image-smoke` | the host set less the 10 host-only gap checks, which print as skipped — **338 when last measured (2026-08-10); NOT re-measured since — the host set has grown by 392 checks since, so 338 is a floor and not the current figure — and it needs Docker plus the pinned release asset** — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
 | `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
@@ -376,7 +376,7 @@ signature element; it does not own these.
   The lag is our credibility.
 - **Density over whitespace.** Sparklines in rows, hairline rules. No card soup.
 - **URL-encoded query state on every view.** Permalinks are the entire growth mechanic.
-- **Every insight row is one click from the raw rows that produced it.**
+- **Dimension cells link to entity pages; that is the only drill.** No row-level drill to filed rows exists.
 - Derived measures labeled as computed. Quality floor: responsive, visible keyboard focus,
   reduced-motion honored.
 

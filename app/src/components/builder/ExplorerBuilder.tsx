@@ -10,8 +10,15 @@ import type { PivotQuery } from "@/lib/pivot/types";
 import type { Resolved } from "@/lib/resolve";
 
 /**
- * The `.builder` block: every control, in URL-key order (`k` `g` `d` `m` `t` `f` `s` `n`), so a
- * reader learns the permalink format from the interface (docs/design/system.md § The Explorer).
+ * The `.builder` block: every control, one labelled row per URL key.
+ *
+ * THE ROW ORDER IS THIS BLOCK'S OWN, NOT THE PERMALINK'S, and the docstring says so because the
+ * shorter claim ("in URL-key order") is false: `encode()` writes `v k d m t f s n g`
+ * (urlstate.ts:114-127), so `g` is LAST in the string and second here, `v` has no control at all,
+ * and `t` and `f` each own two rows. The order below is a reading order -- coarsest shape first,
+ * refinements after -- and `ExplorerBuilder.test.tsx` pins it as an ORDER rather than a set, so a
+ * reshuffle is a deliberate edit. What a row teaches is which KEY it writes; the string's own
+ * order is right there in the permalink bar (docs/design/system.md § The Explorer).
  *
  * PURE COMPOSITION AND DELIBERATELY SYNCHRONOUS. Nothing here queries, decides or repairs -- each
  * control owns its own vocabulary and its own refusals, and every href it emits is built through

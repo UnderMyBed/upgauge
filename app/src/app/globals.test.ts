@@ -179,15 +179,34 @@ describe("globals.css covers every bespoke class a component renders", () => {
     }
   });
 
+  it("gives chips tabular figures, since LimitControl and the year track render numerics", () => {
+    // CLAUDE.md: all numerics monospaced AND tabular-figure. `.chip` set the mono family and
+    // stopped there, while LimitControl renders 25/50/100/250/1000 and WindowControl a year
+    // track -- proportional digits inside a mono family, so the track shifts as the year moves.
+    // Asserted on the `.chip` rule specifically: a page-wide search for the property would be
+    // satisfied by any of the five other blocks that already set it.
+    const css = withoutComments(readFileSync(path.join(SRC, "app", "globals.css"), "utf8"));
+    const rule = /\.chip\s*\{([^}]*)\}/.exec(css);
+    expect(rule).not.toBeNull();
+    expect(rule![1]).toMatch(/font-variant-numeric\s*:[^;]*\btabular-nums\b/);
+  });
+
   it("distinguishes an unreachable chip by more than colour", () => {
-    const css = readFileSync(path.join(SRC, "app", "globals.css"), "utf8");
+    // COMMENTS STRIPPED, like the grid gate two tests below and for the same reason: this file's
+    // rules are quoted as prose in its own comments, so a `.chip-off { ... }` block described in
+    // a comment satisfies the regex while the live rule carries nothing. A stylesheet gate that
+    // a comment can spoof is not a gate.
+    const css = withoutComments(readFileSync(path.join(SRC, "app", "globals.css"), "utf8"));
     const rule = /\.chip-off\s*\{([^}]*)\}/.exec(css);
     expect(rule).not.toBeNull();
-    // Asserts the VALUE, not merely that the property is declared: `text-decoration: none`
-    // still matches a bare `text-decoration\s*:` and would remove the only non-colour
-    // channel this rule exists to guarantee, which is exactly what this test's own name
-    // forbids.
-    expect(rule![1]).toMatch(/text-decoration\s*:\s*line-through/);
+    // Asserts the VALUE, not merely that the property is declared: `text-decoration: none` still
+    // matches a bare `text-decoration\s*:` and would remove the only non-colour channel this rule
+    // exists to guarantee, which is exactly what this test's own name forbids.
+    //
+    // `text-decoration-line` is accepted too. The longhand is the identical guarantee, and a gate
+    // that fails a correct refactor teaches people to delete the gate -- the strictness that is
+    // worth keeping is on the VALUE (`line-through`), not on which of two spellings sets it.
+    expect(rule![1]).toMatch(/text-decoration(-line)?\s*:[^;]*\bline-through\b/);
   });
 
   it("bounds every grid track, so a wide table can never widen the page body", () => {

@@ -1115,11 +1115,14 @@ cannot drift from the allowlist the server validates against, and a dimension ad
 catalog appears without a front-end change.
 
 The builder is the `.builder` block between the stat strip and the results body
-(`components/builder/`), one labelled row per URL key in the order the permalink writes them.
+(`components/builder/`), one labelled row per URL key. **The row order is the builder's own, not
+the permalink's** — `encode()` writes `v k d m t f s n g`, so `g` is last in the string and second
+in the block, `v` has no control at all, and `t` and `f` each own two rows. What a row teaches is
+which KEY it writes; the string's own order is read off the permalink bar.
 
 - Each builder row is labelled with **its URL key** (`k` `g` `d` `m` `t` `f` `s` `n`), so a
-  reader learns the permalink format from the interface. Hand-editing a link is what this
-  audience does.
+  reader learns which keys exist and what each one does by using the interface. Hand-editing a
+  link is what this audience does.
 - **Every control is a real anchor, never a button or an input.** A native form GET cannot emit
   this permalink format, and every view here is server-rendered and visible with JS off. An
   option the current query cannot reach is rendered **inert with its reason**, never omitted —
