@@ -1415,16 +1415,20 @@ check     "carrier?type: the 308 keeps the project Cache-Control"    "$HDRS" "$H
 # never produces a dash -- its rows carry `t12_departures_performed`, never `departures_performed`,
 # so no preset row ever claims the floor.
 #
-# The needle is a raw U+2014, which is what React EMITS for the `"\u2014"` string literal in
-# DataTable's rank cell -- verified by hexdump against this served build (`e2 80 94`), not copied
-# from the source. That is the check CLAUDE.md's "bytes React emits" rule exists for: a needle
-# written as `&mdash;` here would print `ok` forever without ever matching anything.
+# The needle is a LITERAL U+2014 -- what React EMITS for the `"\u2014"` string literal in
+# DataTable's rank cell, verified by hexdump against this served build (`e2 80 94`), not copied
+# from the source. That is the check CLAUDE.md's "bytes React emits" rule exists for, and this
+# one earned it twice: written first as the ERE escape `\xe2\x80\x94`, it FAILED, because
+# `grep -E` has no such escape and was matching the literal characters `x`, `e`, `2`. Had the
+# polarity been `check_not_re`, that same mistake would have printed `ok` forever -- the exact
+# self-defect this file has produced three times. Do not "escape" this dash; it is one
+# character on purpose.
 #
 # 2O, dataset-pinned: 25 Top routes, 2 below floor, and its sparse rows genuinely interleave under
 # the measure sort (a 179-seat below-floor row out-seats scored rows at 176, 169 and 168).
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/2O")
 check_dataset check_re "carrier/2O: a below-floor row's rank cell is the em dash" \
-  "$BODY" '<td[^>]*rank[^>]*>\xe2\x80\x94</td>'
+  "$BODY" '<td[^>]*rank[^>]*>—</td>'
 # The positive control. An implementation that dashed EVERY rank cell -- which is exactly what
 # `orderRows` does when the partition is off -- satisfies the check above on its own.
 check_dataset check_re "carrier/2O: ...while the scored block still numbers from 1" \
@@ -1435,8 +1439,13 @@ check_dataset check_re "carrier/2O: ...while the scored block still numbers from
 check     "carrier: the legend rail says what a rank dash means" \
   "$BODY" 'in the rank column: below the floor, so not ranked'
 # ...and it is OPT-IN, so a page with no rank column does not explain one. This is the half that
-# distinguishes "the rail was given the line" from "the rail states it unconditionally".
-BODY=$(curl -s --max-time 30 "${BASE}/explore")
+# distinguishes "the rail was given the line" from "the rail states it unconditionally", and it
+# has to be fetched with a FULL QUERY like every other /explore call in this file: a bare
+# `/explore` is not canonical, so proxy.ts 307s it and `curl` without `-L` hands back an EMPTY
+# body -- on which `check_not` passes having compared nothing. Caught by mutating LegendRail to
+# render the row unconditionally and watching this check stay green; it now goes red.
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op")
+check     "explore: the query renders a table to carry a legend at all" "$BODY" 'class="legend"'
 check_not "explore: no rank-column legend on a page with no rank column" \
   "$BODY" 'in the rank column'
 
