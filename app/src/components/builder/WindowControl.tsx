@@ -26,6 +26,15 @@ export function WindowControl({ query, asOf }: { query: PivotQuery; asOf: string
     ["Trailing 24", monthsBefore(asOf, 24), asOf],
     ["Full window", EARLIEST_MONTH, asOf],
   ];
+  const isPreset = (from: string, to: string) => query.timeFrom === from && query.timeTo === to;
+  // Whenever `asOf`'s month is December, Trailing 12's window IS the asOf year's own calendar
+  // window -- both predicates fire on their own chip, and two `aria-current="page"` chips in one
+  // control tells a screen reader two different things are the current view. The rows are made
+  // mutually exclusive, preset wins: the presets are the coarser, more prominent control and the
+  // year track only refines them, so "Trailing 12" is the more informative statement of what the
+  // query is. Not reachable with today's `asOf` (2026-04), which is exactly why this needs its
+  // own December-fixture test rather than trusting the trailing-12/current-year test above.
+  const anyPresetCurrent = presets.some(([, from, to]) => isPreset(from, to));
 
   return (
     <>
@@ -34,7 +43,7 @@ export function WindowControl({ query, asOf }: { query: PivotQuery; asOf: string
           <Chip
             key={label}
             label={label}
-            current={query.timeFrom === from && query.timeTo === to}
+            current={isPreset(from, to)}
             href={exploreHref(setWindow(query, from, to, asOf))}
           />
         ))}
@@ -51,7 +60,9 @@ export function WindowControl({ query, asOf }: { query: PivotQuery; asOf: string
             <Chip
               key={year}
               label={partial ? `${year}*` : String(year)}
-              current={query.timeFrom === clamped.timeFrom && query.timeTo === clamped.timeTo}
+              current={
+                !anyPresetCurrent && query.timeFrom === clamped.timeFrom && query.timeTo === clamped.timeTo
+              }
               href={exploreHref(clamped)}
             />
           );

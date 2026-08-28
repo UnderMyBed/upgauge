@@ -48,4 +48,18 @@ describe("WindowControl", () => {
     const rows = [...container.querySelectorAll(".chip-row")];
     expect(rows[1].querySelectorAll(".chip").length).toBe(12);
   });
+
+  it("marks only the preset current when a December asOf makes Trailing 12 and the year coincide", () => {
+    // Whenever asOf's month is December, Trailing 12's window IS the asOf year's own calendar
+    // window -- both predicates fire on their own chip. Two aria-current="page" chips in one
+    // control claims two different things are the current view; the preset row must win. Not
+    // reachable with the ASOF fixture above (month 04), which is exactly why the earlier bug
+    // shipped uncaught -- this fixture is deliberately a December asOf to pin the case.
+    const DEC_ASOF = "2026-12";
+    const query = q({ timeFrom: "2026-01", timeTo: "2026-12" });
+    const { container } = render(<WindowControl query={query} asOf={DEC_ASOF} />);
+    const current = [...container.querySelectorAll('[aria-current="page"]')];
+    expect(current).toHaveLength(1);
+    expect(current[0].textContent).toBe("Trailing 12");
+  });
 });
