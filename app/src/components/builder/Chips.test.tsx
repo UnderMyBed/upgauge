@@ -16,6 +16,15 @@ describe("Chip", () => {
     expect(container.querySelector("a")!.getAttribute("aria-current")).toBe("page");
   });
 
+  it("leaves aria-current absent on an option that is not current", () => {
+    // Named for the mutant that hard-codes aria-current="page" unconditionally: that bug
+    // left the test above green, since nothing checked the negative case. .chip[aria-current
+    // ="page"] is the CSS's only hook for --signal plus the weight change, so a chip that
+    // always carries the attribute would make every option look active.
+    const { container } = render(<Chip href="/explore?v=1" label="Route" />);
+    expect(container.querySelector("a")!.getAttribute("aria-current")).toBeNull();
+  });
+
   it("renders an inert option as a non-anchor carrying its stated reason", () => {
     const { container } = render(
       <Chip href={null} label="Aircraft type" reason="not available at route grain" />,
@@ -28,6 +37,13 @@ describe("Chip", () => {
   it("marks a derived measure so it is distinguishable from an additive one", () => {
     const { container } = render(<Chip href="/x" label="Load factor" derived />);
     expect(container.querySelector(".chip-derived")).not.toBeNull();
+  });
+
+  it("does not mark an additive measure as derived", () => {
+    // Named for the mutant that hard-codes className = "chip chip-derived" unconditionally:
+    // that bug left the test above green, since nothing checked the negative case.
+    const { container } = render(<Chip href="/x" label="Seats" />);
+    expect(container.querySelector(".chip-derived")).toBeNull();
   });
 });
 
