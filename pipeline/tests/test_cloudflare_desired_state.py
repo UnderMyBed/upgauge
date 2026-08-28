@@ -281,11 +281,11 @@ def _covered(expression: str, path: str) -> bool:
 # path, so UNCOVERED refuses it.
 #
 # #117 established the rule on `/route/`; #129 applied it to the other five, which had one
-# fixture each. Measured across those five clauses before the second rows existed: 71
-# single-literal substitutions matched strictly less than the clause they replaced and passed
-# every test in this file. `test_no_single_literal_substitution_can_narrow_a_clause_of_the_
-# expression` now holds the property for every clause, rather than leaving it to whoever adds
-# the next one.
+# fixture each. `test_no_single_literal_substitution_can_make_a_clause_lossy` now holds the
+# property for every clause rather than leaving it to whoever adds the next one, and it states
+# the measurement -- how many substitutions walked through, and why "lossy" is the right word
+# for them and "strictly less" is not -- in ONE place, its own header. Do not restate the figure
+# here: an unbound number written twice is two numbers that must stay true.
 COVERED = (
     ("/api/pivot", "a DuckDB aggregation, and the residual `f` axis rides the 30-day cache"),
     (
@@ -316,6 +316,15 @@ COVERED = (
     # BTS knows that filed no segment row, and the ambiguous slug the cacheability allow-list
     # exists to keep out of a shared cache. A fixture that is real is one a future reader can
     # check; an invented one only ever agrees with itself.
+    #
+    # WHICH pin, precisely, because the two available ones are not equally strong.
+    # `proxy.test.ts:180-188` asserts only `Cache-Control === "no-store"` for all three, and the
+    # degraded-data branch returns exactly that -- so those assertions are satisfied whether the
+    # slug 404s for the reason named here or because no database is present. What distinguishes
+    # is each page test's `NEXT_HTTP_ERROR_FALLBACK;404` digest -- airport `page.test.tsx:351`,
+    # carrier `:334`, aircraft `:262` -- and those NEED a built `upgauge.duckdb`. Cite the digest
+    # assertion, not the header one, and know that it is among the app tests that do not run
+    # without the warehouse.
     (
         "/airport/ZZZZ",
         "the unknown-code 404 -- `no-store`, and it names which way it failed "
@@ -365,6 +374,30 @@ COVERED = (
 # hashes (`chunks/0cz1d0mv5g_q7.js`), so pinning one would rot on the next build with nothing
 # forcing a re-measure. What is load-bearing is the segment and the extension, which is all a
 # path predicate can read.
+#
+# WHAT ENFORCES EACH ROW, stated because the two halves of this table are not equally held and
+# a uniform justification would be false for half of them. MEASURED by deleting each row and
+# running the file:
+#
+#   * The three `/_next/` rows are individually NECESSARY --
+#     `test_the_excluded_asset_families_agree_with_the_app_that_emits_them` binds each family to
+#     an authority outside this file (`app/smoke.sh`'s served needle, `next/font` in app/src),
+#     so deleting any one of them is red.
+#   * `/`, `/watch/gauge`, `/sitemap.xml`, `/robots.txt` and `/favicon.ico` are DELETABLE with
+#     this file green. Each is one cached document rather than a family, and no in-repo
+#     authority binds it the way the asset families are bound -- the obvious candidate, "every
+#     route the app serves that the expression does not match belongs here", is wrong, because
+#     `/search` is deliberately outside BOTH the expression and this table (hosting.md names it
+#     rather than implying it). They are held by review, and this comment is the honest form of
+#     that rather than a necessity claim they do not satisfy.
+#
+# The `/_next/` rows carry a second requirement on top of necessity:
+# `test_each_excluded_asset_row_is_isolated_by_its_own_segment_or_extension` requires each to be
+# separated from its neighbours by a path SEGMENT or an EXTENSION -- the only two things a path
+# predicate can read. That is what stops a fourth row from being another `chunks/*.js` that looks
+# like coverage and adds none. It does NOT apply to the five non-asset rows: `/` has no extension
+# and no segment but the one every row shares, and loosening the candidate space to fit it makes
+# the property vacuous for everything (a measured mutant -- see that test).
 UNCOVERED = (
     ("/", "static, and the entry point every real visitor lands on"),
     ("/watch/gauge", "four closed slugs, so the whole surface is four cacheable documents"),
@@ -453,7 +486,12 @@ def test_rate_limit_does_not_reach_the_cached_pages_or_the_static_assets():
     it must never shrink to nothing, and the three `/_next/` rows must never leave it -- they are
     one per SUBRESOURCE FAMILY, `chunks/*.js`, `chunks/*.css` and `media/*.woff2`, because a path
     predicate reads a segment and an extension and those are the only two axes it has. One
-    fixture per tree is what let three separate narrowings through (#131); see the table."""
+    fixture per tree is what let three separate narrowings through (#131).
+
+    "Must never leave" is ENFORCED for those three rather than asked for --
+    `test_the_excluded_asset_families_agree_with_the_app_that_emits_them` binds each family to an
+    authority outside this file. It is not enforced for the other five rows, and the table's own
+    header says which those are instead of implying the whole list is held."""
     expression = _rate_limit_expression()
     for path, why in UNCOVERED:
         assert not _covered(expression, path), f"{path} must not be rate limited: {why}"
@@ -512,8 +550,17 @@ def test_the_og_cards_stay_covered_by_their_own_clause_when_the_entity_prefixes_
 
 
 # THE SUBSTITUTION SWEEP (#129). The two tables above are fixtures, and a fixture proves a
-# clause only if no NARROWER clause satisfies it. That is a property of the TABLES, it is
+# clause only if no LOSSIER clause satisfies it. That is a property of the TABLES, it is
 # decidable, and checking it by hand is what nobody did for five milestones.
+#
+# LOSSY is the word, not "strictly less". `_covers_at_least` decides whether the new clause
+# covers everything the old one did; what fails that test is not always a subset. Of the 71
+# substitutions that passed this file before #129, 16 were strict subsets and 55 were
+# INCOMPARABLE -- they dropped part of the clause's family AND picked up paths it never matched
+# (`ends_with("/pivot")` also matches `/anything/pivot`). Every named exemplar is in the
+# incomparable 55. The sweep's conclusion is the same for both, because the axis it is about is
+# what a substitution DROPS; only the description differs, and calling all 71 subsets would be a
+# claim about the other 55 that is simply false.
 
 
 def _affixes(path: str) -> set[str]:
@@ -530,17 +577,32 @@ def _candidate_literals() -> list[str]:
 
 
 def _rebuild(clauses: list[tuple[str, str]]) -> str:
-    return "(" + " or ".join(f'{op}(http.request.uri.path, "{lit}")' for op, lit in clauses) + ")"
+    """Unparenthesised, because the only thing it is compared against is `_path_disjunction`'s
+    return value, and that has already had `_unwrap` strip the expression's outer pair."""
+    return " or ".join(f'{op}(http.request.uri.path, "{lit}")' for op, lit in clauses)
 
 
-def _matches_everything(new: tuple[str, str], old: tuple[str, str]) -> bool:
+def _matches(clause: tuple[str, str], path: str) -> bool:
+    """One clause against one path, on the PARSED pair rather than the string. `_covered`
+    re-masks and re-parses its expression once per path, which is right for a handful of
+    assertions and wrong for the ~200k this sweep makes -- so the sweep parses once and the test
+    below pins this evaluator to `_covered` on every fixture, on the real expression."""
+    op, literal = clause
+    return path.startswith(literal) if op == "starts_with" else path.endswith(literal)
+
+
+def _covers(clauses: list[tuple[str, str]], path: str) -> bool:
+    return any(_matches(clause, path) for clause in clauses)
+
+
+def _covers_at_least(new: tuple[str, str], old: tuple[str, str]) -> bool:
     """Does clause `new` match every path `old` matches? Decidable, and the cases are NOT
     symmetric. A suffix family never contains a prefix family -- the path `"zz" + literal` ends
     the right way and starts however it likes -- and the reverse fails the same way, so an
-    OPERATOR SWAP is always a narrowing unless the new literal is empty, which matches
-    everything. Getting this backwards would reclassify every escape as a widening and leave the
-    sweep green on a table that bounds nothing, so the two special cases are explicit rather
-    than folded into the string test."""
+    OPERATOR SWAP never covers at least, unless the new literal is empty and matches everything.
+    Getting this backwards would reclassify every escape as a widening and leave the sweep green
+    on a table that bounds nothing, so the two special cases are explicit rather than folded into
+    the string test."""
     (new_op, new_literal), (old_op, old_literal) = new, old
     if new_literal == "":
         return True
@@ -551,129 +613,267 @@ def _matches_everything(new: tuple[str, str], old: tuple[str, str]) -> bool:
     return old_literal.endswith(new_literal)
 
 
-def _fixture_tables_refuse(expression: str) -> bool:
-    """COVERED and UNCOVERED alone -- no provenance, no shape, no strike-out."""
-    return any(not _covered(expression, path) for path, _ in COVERED) or any(
-        _covered(expression, path) for path, _ in UNCOVERED
+def _swept_clauses(expression: str) -> list[tuple[str, str]]:
+    """The clause list the sweep reads, and the round-trip that makes it the RULE rather than a
+    model of it. One helper, called by the sweep AND by its admitted-narrowing fixtures, so a
+    future edit that reverts it to the raw string is caught by those fixtures instead of only by
+    whoever next ships the narrowing. Two separate correct calls would not do that: the fixture
+    would keep its own `_path_disjunction` and pass while the sweep read the wrong bytes."""
+    disjunction = _path_disjunction(expression)
+    clauses = _PATH_CLAUSE.findall(disjunction)
+    assert _rebuild(clauses) == disjunction, (
+        "the sweep rebuilds the path disjunction from the clauses it parsed, and the result is "
+        f"not what it was handed -- so something in it is not a path clause:\n  {disjunction!r}"
+        f"\n  {_rebuild(clauses)!r}"
+    )
+    return clauses
+
+
+def _tables_refuse(clauses: list[tuple[str, str]]) -> bool:
+    """COVERED and UNCOVERED read against the WHOLE disjunction -- no provenance, no shape."""
+    return any(not _covers(clauses, path) for path, _ in COVERED) or any(
+        _covers(clauses, path) for path, _ in UNCOVERED
     )
 
 
-def _card_strike_out_refuses(expression: str) -> bool:
-    """What `test_the_og_cards_stay_covered_...` asks, as a predicate: strike the entity
-    prefixes out of the expression and re-ask whether the four cards are still covered."""
-    cards_only = " or ".join(
-        f'ends_with(http.request.uri.path, "{literal}")'
-        for op, literal in _PATH_CLAUSE.findall(expression)
-        if op == "ends_with"
-    )
-    if not cards_only:
-        return True
-    cards = [path for path, _ in COVERED if path.endswith("/opengraph-image")]
-    return any(not _covered(cards_only, path) for path in cards)
+def test_no_single_literal_substitution_can_make_a_clause_lossy():
+    """No clause can be swapped for one that drops part of its family while this file stays green.
 
+    This is #129 stated as a property instead of as five more fixtures. The fixtures do the
+    refusing, but nothing FORCED a clause to bring a suffix-disjoint pair with it, so five of the
+    six prefixes never got the rule #117 wrote down -- `ends_with("/pivot")` for `/api/`,
+    `ends_with("A")` for `/airport/`, `ends_with("L")` for `/carrier/`, `ends_with("8")` for
+    `/aircraft/`, each leaving the origin exposed on what the real prefix covers and the literal
+    does not, with every test green. A seventh clause added without its pair now fails here, on
+    the substitution that proves it, rather than in whatever milestone next runs the search.
 
-def test_no_single_literal_substitution_can_narrow_a_clause_of_the_expression():
-    """No clause can be swapped for one matching strictly less while this file stays green.
+    IT SWEEPS THE PATH DISJUNCTION, NOT THE RAW STRING, and that is not a detail. The rule is
+    `<path disjunction> [and not <edge signal>]*`, and `and not cf.client.bot` is the one
+    narrowing #126 exists to keep available (ADMITTED_NARROWINGS says so in as many words).
+    Rebuilding a flat disjunction and comparing it to the whole shipped string makes that edit a
+    hard red whose message says the expression is malformed -- and the cheapest way out of that
+    red is to delete the byte-identity assertion, which is the thing keeping this sweep about the
+    rule rather than about a model of it. `_path_disjunction` is the slice this file already
+    hands `_covered` for exactly this reason, and it is sound because
+    `test_rate_limit_expression_is_a_path_disjunction_narrowed_only_by_negated_edge_signals`
+    proves no later conjunct carries a path predicate. Every admitted narrowing is swept as a
+    fixture below, so shipping one cannot regress this.
 
-    This is #129 stated as a property instead of as five more fixtures. The fixtures are what do
-    the refusing, but nothing FORCED a clause to bring a suffix-disjoint pair with it, so five of
-    the six prefixes never got the rule #117 wrote down: measured across those five, 71
-    single-literal substitutions matched strictly less than the clause they replaced and passed
-    every test in this file -- `ends_with("/pivot")` for `/api/`, `ends_with("A")` for
-    `/airport/`, `ends_with("L")` for `/carrier/`, `ends_with("8")` for `/aircraft/`. Each would
-    leave the origin exposed on everything the real prefix covers and the literal does not,
-    green. A seventh clause added without its pair now fails here, on the substitution that
-    proves it, rather than in whatever milestone next runs the search by hand.
-
-    WIDENINGS ARE NOT ESCAPES and are not asserted against. A literal matching MORE than the
-    clause it replaces cannot leave the origin exposed; if it reaches an excluded asset, the
-    UNCOVERED half catches it, which is a different property and already has a test. What is
-    swept here is the direction where the expression quietly stops covering something.
+    WIDENINGS ARE NOT ESCAPES and are not asserted against. A clause matching MORE than the one
+    it replaces cannot leave the origin exposed; if it reaches an excluded asset the UNCOVERED
+    half catches it, which is a different property with its own test.
 
     WHICH CHECK REFUSES IS ASSERTED PER CLAUSE, not "something refused it" -- otherwise every
-    guard but one is deletable with the suite green, which is the failure #126 hit three times in
-    this same file. The split is not cosmetic, and it is not the same on both sides:
+    guard but one is deletable with the suite green, the failure #126 hit three times in this
+    same file. The two checks are the whole-expression tables and the per-clause rule that a
+    clause must keep covering the COVERED paths IT matches. Which one carries a clause is read
+    off the FIXTURES, never off its operator:
 
-      * For each of the six `starts_with` clauses the FIXTURE TABLES refuse every narrowing, and
-        the card strike-out refuses NONE of them. Substituting a prefix clause can only ADD an
-        `ends_with` clause to the struck-out expression, which widens it, so the strike-out can
-        never fire there. The tables stand alone, and deleting a fixture is immediately red.
+      * A clause with COVERED paths that no other clause matches is held by the TABLES alone --
+        dropping one of its paths breaks the coverage table outright. All six prefixes are here.
 
-      * For `ends_with("/opengraph-image")` it is the other way round: the STRIKE-OUT refuses
-        every narrowing and the tables refuse only a minority of them. All four card paths sit
-        under an entity prefix, so a narrowed card clause still leaves them covered and the
-        tables see nothing wrong. That clause is held by one check and one check only, on a
-        clause the coverage table structurally cannot speak about.
-
-    The expression is rebuilt from its parsed clauses and asserted BYTE-IDENTICAL to the shipped
-    string first. Without that, the sweep would be a statement about a model of the rule rather
-    than about the rule, and a clause this file cannot parse would be swept as though absent."""
+      * A clause whose every COVERED path is ALSO matched by another clause is invisible to the
+        tables: narrow it and the paths stay covered by the others. `ends_with("/opengraph-image")`
+        is here, because all four cards sit under an entity prefix, and the per-clause rule is
+        the only thing that can see it. Keying that on `ends_with` instead would encode today's
+        expression as a law -- a second suffix clause (`/twitter-image`, with its own fixtures)
+        is perfectly boundable and must not be refused for the operator it uses."""
     expression = _rate_limit_expression()
-    clauses = _PATH_CLAUSE.findall(expression)
-    assert _rebuild(clauses) == expression, (
-        "the sweep rebuilds the expression from the clauses it parsed, and the result is not the "
-        f"shipped string -- so something in it is not a path clause:\n  {expression!r}\n  "
-        f"{_rebuild(clauses)!r}"
+    clauses = _swept_clauses(expression)
+    # The fast evaluator, pinned to the real one on the real expression. Everything below runs on
+    # parsed pairs for speed; if the two ever disagree, the speed is bought with a different
+    # question being answered.
+    for path, _ in COVERED + UNCOVERED:
+        assert _covers(clauses, path) == _covered(expression, path), (
+            f"`_matches` and `_covered` disagree about {path!r}, so the sweep is not evaluating "
+            "the expression this file's other tests evaluate"
+        )
+    # Shipping the one narrowing #126 keeps available must not perturb any of the above.
+    for narrowing in ADMITTED_NARROWINGS:
+        narrowed = f"{expression} {narrowing}"
+        assert _swept_clauses(narrowed) == clauses, (
+            f"appending {narrowing!r} changed the clause list this sweep reads. That edit is "
+            "admissible by design (ADMITTED_NARROWINGS), so it must leave the disjunction alone"
+        )
+        for path, _ in COVERED + UNCOVERED:
+            assert _covers(clauses, path) == _covered(narrowed, path), (
+                f"with {narrowing!r} shipped, the sweep and `_covered` disagree about {path!r}"
+            )
+
+    # PRECONDITION, and it is the difference between a useful red and a misleading one. Every
+    # judgement below is relative to the tables, so if the UNMUTATED expression already fails
+    # them, `_tables_refuse` is true for every substitution and the per-clause split degenerates
+    # -- the sweep then reddens on whichever diagnostic trips first and sends the reader to the
+    # wrong clause. Measured: adding `ends_with(".css")` to the disjunction failed here on the
+    # CARD clause's "the per-clause rule is redundant" message, which has nothing to do with the
+    # defect. The coverage and exclusion tests own that failure; this one says so and stops.
+    assert not _tables_refuse(clauses), (
+        "the shipped expression does not satisfy COVERED/UNCOVERED, so this sweep cannot say "
+        "anything about which check refuses what -- every substitution would be refused for the "
+        "reason the expression ALREADY fails. Fix "
+        "`test_rate_limit_covers_every_surface_that_can_reach_the_origin_uncached` and "
+        "`test_rate_limit_does_not_reach_the_cached_pages_or_the_static_assets` first; they name "
+        "the path"
     )
 
     literals = _candidate_literals()
     for index, old in enumerate(clauses):
-        narrowings, by_tables, by_strike_out, escapes = 0, 0, 0, []
+        others = [clause for position, clause in enumerate(clauses) if position != index]
+        own = [path for path, _ in COVERED if _matches(old, path)]
+        uniquely_own = [path for path in own if not _covers(others, path)]
+        assert own, (
+            f'no COVERED path is matched by {old[0]}("{old[1]}"), so nothing says what that '
+            "clause is for and no substitution for it can be judged. Every clause needs at "
+            "least one fixture under it -- see COVERED's header"
+        )
+
+        lossy, by_tables, by_own_rule, escapes = 0, 0, 0, []
         for op in ("starts_with", "ends_with"):
             for literal in literals:
                 new = (op, literal)
-                if _matches_everything(new, old):
+                if _covers_at_least(new, old):
                     continue
-                narrowings += 1
+                lossy += 1
                 mutated = list(clauses)
                 mutated[index] = new
-                candidate = _rebuild(mutated)
-                tables = _fixture_tables_refuse(candidate)
-                strike_out = _card_strike_out_refuses(candidate)
+                tables = _tables_refuse(mutated)
+                own_rule = not all(_matches(new, path) for path in own)
                 by_tables += tables
-                by_strike_out += strike_out
-                if not (tables or strike_out):
+                by_own_rule += own_rule
+                if not (tables or own_rule):
                     escapes.append(new)
 
+        label = f'{old[0]}("{old[1]}")'
         shown = ", ".join(f'{o}("{lit}")' for o, lit in escapes[:6])
         assert not escapes, (
-            f'{len(escapes)} literals matching strictly less than {old[0]}("{old[1]}") pass '
-            f"every fixture in this file: {shown}. Each one leaves the origin exposed on "
-            "everything the real clause covers and the literal does not. The fix is a second "
-            "fixture under that clause which diverges immediately after it AND ends in a "
-            "different character -- see COVERED's header."
+            f"{len(escapes)} literals that drop part of what {label} matches pass every fixture "
+            f"in this file: {shown}. Each leaves the origin exposed on what the real clause "
+            "covers and the literal does not. The fix is a second fixture under that clause "
+            "which diverges immediately after it AND ends in a different character -- see "
+            "COVERED's header."
         )
-        assert narrowings, (
-            f'no substitution for {old[0]}("{old[1]}") was classified as a narrowing, so this '
-            "clause was not swept at all -- `_matches_everything` is inverted, or the candidate "
-            "space collapsed"
+        assert lossy, (
+            f"no substitution for {label} was classified as lossy, so this clause was not swept "
+            "at all -- `_covers_at_least` is inverted, or the candidate space collapsed"
         )
-        if old[0] == "starts_with":
-            assert by_tables == narrowings, (
-                f'{narrowings - by_tables} narrowings of {old[0]}("{old[1]}") are refused by '
-                "something other than COVERED/UNCOVERED. The fixture tables are supposed to be "
-                "load-bearing alone for a prefix clause; if they are not, deleting a fixture "
-                "leaves this suite green"
-            )
-            assert by_strike_out == 0, (
-                f"the card strike-out refused {by_strike_out} narrowings of {old[0]}"
-                f'("{old[1]}"). It cannot fire on a prefix substitution -- that only ever adds '
-                "an `ends_with` clause to the struck-out expression, which widens it -- so this "
-                "means the strike-out predicate no longer asks what its test asks"
+        if uniquely_own:
+            assert by_tables == lossy, (
+                f"{lossy - by_tables} lossy substitutions for {label} are refused by something "
+                f"other than the coverage tables, though {uniquely_own[0]} is matched by no "
+                "other clause -- so dropping it should break COVERED outright. If the tables do "
+                "not stand alone here, deleting a fixture leaves this suite green"
             )
         else:
-            assert by_strike_out == narrowings, (
-                f'{narrowings - by_strike_out} narrowings of {old[0]}("{old[1]}") are not '
-                "refused by the card strike-out, which is the only check that can see them: the "
-                "four cards sit under the entity prefixes, so the coverage table stays green "
-                "however this clause is narrowed"
+            assert by_tables < lossy, (
+                f"the tables refuse every lossy substitution for {label}, which would make the "
+                "per-clause rule redundant on the one clause it exists for -- and a redundant "
+                "guard is the one the next widening retires by accident. Check whether this "
+                "clause's COVERED paths are still matched by another clause too"
             )
-            assert by_tables < narrowings, (
-                "the fixture tables refuse every narrowing of the card clause, which would make "
-                "`test_the_og_cards_stay_covered_when_the_entity_prefixes_are_struck_out` "
-                "redundant -- and a redundant guard is the one the next widening retires by "
-                "accident. Check that all four card paths still sit under an entity prefix"
+            assert by_own_rule > by_tables, (
+                f"the per-clause rule is not what carries {label}. Every COVERED path it matches "
+                "is matched by another clause as well, so the tables cannot see it narrow; if "
+                "the per-clause rule does not either, nothing in this file does"
             )
+
+
+def test_each_excluded_asset_row_is_isolated_by_its_own_segment_or_extension():
+    """The `/_next/` rows must differ on the two axes a path predicate can READ, not merely be
+    different strings.
+
+    #131's finding was that one `/_next/` fixture stands for a whole tree, and the fix was one
+    row per family. "Family" has to mean something checkable or the next row added is a second
+    `.js` chunk that looks like coverage and adds none. The checkable meaning is the axes: a
+    path predicate reads a leading SEGMENT or a trailing EXTENSION and has no third thing to
+    look at, so each row must be isolated from its neighbours by one of those.
+
+    THE CANDIDATE SPACE IS WHY THIS TEST IS NOT VACUOUS, and the first version of it was.
+    Allowing arbitrary affixes lets any two distinct paths isolate each other -- `ends_with(
+    "other.js")` separates `other.js` from `main.js` -- so the property was satisfiable by
+    construction and could only ever have failed on an EXACT duplicate. Measured: a
+    `/_next/static/chunks/other.js` row passed it. Restricted to segment boundaries and dotted
+    extensions, that same row fails, because every segment prefix it has is shared with
+    `main.js` and so is `.js`. The mutant is recorded because the difference between the two
+    versions is invisible in the assertion and total in what it proves.
+
+    Scope is the asset rows only, and deliberately. `/` has no extension and no segment prefix
+    but `/`, which every row shares -- the axes do not apply to a single document, and stretching
+    the rule to cover it would mean loosening the candidate space back to the vacuous form. The
+    non-asset rows are held by review, and UNCOVERED's header says so rather than implying this
+    test covers them."""
+    rows = [path for path, _ in UNCOVERED if path.startswith("/_next/")]
+    assert len(rows) >= 3, (
+        f"only {len(rows)} `/_next/` rows: the families this test exists to keep distinct are "
+        "gone, and `test_the_excluded_asset_families_agree_with_the_app_that_emits_them` should "
+        "have said so first"
+    )
+    for path in rows:
+        segments = [path[: i + 1] for i, char in enumerate(path) if char == "/"]
+        extensions = [path[i:] for i, char in enumerate(path) if char == "."]
+        candidates = [("starts_with", literal) for literal in segments]
+        candidates += [("ends_with", literal) for literal in extensions]
+        isolating = [
+            candidate
+            for candidate in candidates
+            if [row for row, _ in UNCOVERED if _matches(candidate, row)] == [path]
+        ]
+        assert isolating, (
+            f"no path SEGMENT and no EXTENSION separates {path} from the other excluded rows, "
+            f"so it stands for no family of its own -- its segments are {segments} and its "
+            f"extensions are {extensions}, each of which some other row shares. A row that "
+            "differs from its neighbours only in filename adds no coverage: a path predicate "
+            "cannot read a filename apart from the segment and extension around it"
+        )
+
+
+def test_the_excluded_asset_families_agree_with_the_app_that_emits_them():
+    r"""The `/_next/` rows are a claim about what the app EMITS, so they are bound to it.
+
+    One fixture per subresource family only holds while the families are what they were measured
+    to be, and nothing forced a NEW family into the table -- the gap this closes. Both authorities
+    are in-repo and neither is this file:
+
+      * `app/smoke.sh` greps the SERVED html for the stylesheet's href and pins
+        `^/_next/static/chunks/.+\.css$`. That is a second, independent vantage point on the
+        finding that css and js share `chunks/` -- there is no `/_next/static/css/` -- which is
+        what makes segment and extension two axes rather than one.
+
+      * `next/font/google` is what puts `.woff2` under `/_next/static/media/`. The font family is
+        the load-bearing one (four per page view, so `ends_with(".woff2")` alone would make a
+        page view five slots) and it is the one with NO smoke-check equivalent, which is exactly
+        why it is asserted here.
+
+    Both halves are asserted in both directions, so neither can go dormant: if the app stops
+    importing `next/font` the first assertion fails and tells you to remove the fixture with it,
+    rather than leaving a row asserting an exclusion for a family that no longer exists."""
+    smoke = (ROOT / "app" / "smoke.sh").read_text()
+    assert r"^/_next/static/chunks/.+\.css$" in smoke, (
+        "app/smoke.sh no longer pins the served stylesheet's path shape, so the `.css` row below "
+        "is this repo's only claim about where a stylesheet lives -- re-measure against a served "
+        "build before trusting it"
+    )
+    font_importers = sorted(
+        str(source.relative_to(ROOT))
+        for source in (ROOT / "app" / "src").rglob("*.tsx")
+        if "next/font" in source.read_text()
+    )
+    assert font_importers, (
+        "nothing under app/src imports `next/font`, so the `/_next/static/media/*.woff2` family "
+        "no longer exists -- remove its UNCOVERED row and this assertion together, rather than "
+        "leaving a fixture that excludes a family the app does not emit"
+    )
+    families = {
+        r"/_next/static/chunks/.+\.js": "the script chunks",
+        r"/_next/static/chunks/.+\.css": "the stylesheet, per app/smoke.sh's served needle",
+        r"/_next/static/media/.+\.woff2": f"the faces {font_importers[0]} pulls via next/font",
+    }
+    excluded = [path for path, _ in UNCOVERED]
+    for pattern, what in families.items():
+        assert any(re.fullmatch(pattern, path) for path in excluded), (
+            f"UNCOVERED carries no fixture matching {pattern} -- {what}. A path predicate reads "
+            "a segment and an extension, so a family with neither represented in this table is "
+            "one a single clause can drag into the rate limit with this file green"
+        )
 
 
 def test_rate_limit_keeps_the_name_the_zone_actually_holds():

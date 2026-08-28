@@ -1936,12 +1936,41 @@ it are easy to get wrong and both matter here:
   right-hand column passed **every** test in that file while pulling a real visitor's asset
   fetches into the 10-per-10 s bucket; `ends_with(".woff2")` alone makes a page view **five**
   slots, which falsifies the one-slot arithmetic this section's affordability argument rests on.
-  Mutants run per fixture: each turns the exclusion test red and the failure names the fixture
-  that caught it; drop that fixture and the same mutant goes green.
+
+  **The mutant, stated so it reproduces.** Adding one of those clauses to the disjunction turns
+  the *exclusion test* red, and the failure names the fixture that caught it. Drop that fixture
+  and re-run the same mutant and the *exclusion test* goes green — that, and not a claim about
+  the suite, is what makes the row necessary. The suite does not go green: the substitution sweep
+  reddens on the same expression for its own reason, because a clause with no `COVERED` fixture
+  under it is unbounded whatever it excludes. Two tests, two properties; do not collapse them
+  into "drop the fixture and the mutant passes", which is false and is falsifiable in one
+  command.
 
   Filenames in the fixtures are **structural, not measurements** — the real ones are per-build
   content hashes (`chunks/0cz1d0mv5g_q7.js`), so a pinned hash would rot on the next build with
   nothing forcing a re-measure. The segment and the extension are the load-bearing part.
+
+  **Each asset family is bound to an authority outside the fixture table, so a NEW family cannot
+  go unnoticed.** `app/smoke.sh` greps the served HTML for the stylesheet's href and pins
+  `^/_next/static/chunks/.+\.css$` — an independent, served-vantage confirmation that css and js
+  share `chunks/`. The fonts have **no** smoke equivalent, which is why the same test asserts the
+  other direction instead: something under `app/src` imports `next/font`, therefore the
+  `media/*.woff2` family exists, therefore the table must carry a row for it. Both halves are
+  asserted, so if the app stops importing `next/font` the test says to remove the row with it
+  rather than leaving a fixture excluding a family nothing emits.
+
+  > ⚠️ **Half this table is enforced and half is held by review — which half, measured by
+  > deleting each row and running the file.** The three `/_next/` rows are individually
+  > necessary. `/`, `/watch/gauge`, `/sitemap.xml`, `/robots.txt` and `/favicon.ico` are
+  > **deletable with the file green**: each is one cached document rather than a family, and the
+  > obvious binding — "every route the app serves that the expression does not match belongs
+  > here" — is wrong, because `/search` is deliberately outside both the expression and the
+  > The three asset rows carry one requirement more: each must be separated from its neighbours
+  > by a path **segment** or an **extension**, the only two things a path predicate reads, so a
+  > fourth row cannot be another `chunks/*.js` that looks like coverage and adds none. That
+  > restriction is the whole test — allowing arbitrary affixes makes it satisfiable by any two
+  > distinct strings, which is measured and recorded. The table says which rows are enforced
+  > rather than giving all eight the same justification.
 
   **A fixture for a PREFIX must differ in the SUFFIX too, and every prefix needs two.** The same
   rule on the coverage side. One fixture under a prefix does not bound the prefix, it bounds that
@@ -1949,10 +1978,17 @@ it are easy to get wrong and both matter here:
   while bounding none of the 404 family the clause exists for, and `ends_with(<any suffix the
   fixtures share>)` fails the same way from the other side. #117 established this on `/route/`;
   the other five clauses carried one fixture each until #129, and across those five, **71
-  single-literal substitutions matched strictly less than the clause they replaced and passed
+  single-literal substitutions dropped part of what the clause they replaced matched, and passed
   every test in the file** — `ends_with("/pivot")` for `/api/`, `ends_with("A")` for `/airport/`,
   `ends_with("L")` for `/carrier/`, `ends_with("8")` for `/aircraft/`. Each leaves the origin
-  exposed on everything the real prefix covers and the literal does not.
+  exposed on what the real prefix covers and the literal does not.
+
+  **They are LOSSY, and only 16 of them are "strictly less".** The other **55 are incomparable**
+  — they drop part of the clause's family *and* pick up paths it never matched, so
+  `ends_with("/pivot")` also answers for `/anything/pivot`. All four named above are in the 55.
+  The conclusion is identical for both groups, because the axis that matters is what a
+  substitution DROPS; the distinction is kept because calling all 71 subsets is a claim about
+  the other 55 that is simply false.
 
   So each prefix now carries two rows that diverge immediately after it **and** end in different
   characters — `/api/health` beside `/api/pivot`, `/airport/ZZZZ` beside `/airport/SEA`,
