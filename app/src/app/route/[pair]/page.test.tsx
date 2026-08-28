@@ -140,7 +140,11 @@ describe("/route/<pair>", () => {
     // Both codes resolve; nobody flies between them. That is data, not an error.
     render(await RoutePage({ params: Promise.resolve({ pair: "BNH-JFK" }) }));
     expect(screen.getByText(/no scheduled service/i)).toBeDefined();
-    expect(screen.getByRole("link", { name: /2015-01/ })).toBeDefined();
+    const widened = screen.getByRole("link", { name: /2015-01/ });
+    expect(widened).toBeDefined();
+    // The accessible NAME is static JSX text ("...2015-01...") regardless of the actual
+    // href -- only reading the attribute proves the link really carries the widened window.
+    expect(widened.getAttribute("href")).toContain("t=2015-01:");
   });
 
   it("names the airports in the empty state in the same order as the header, not id order", async () => {
