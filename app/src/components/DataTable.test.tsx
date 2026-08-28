@@ -641,9 +641,9 @@ describe("orderRows", () => {
     // position among scored rows IN THE ORDER THE PRODUCT CHOSE; with no partition there is no
     // such order, so there is no rank to state.
     //
-    // MUTANT: `rank: belowFloor ? null : ++scored` (the pre-review form) -> [1, null, 2], a
-    // column reading 1, —, 2 down the page. Red here, and invisible to every other test in this
-    // repo, because the component's props now make that pair unwritable in JSX.
+    // MUTANT: `rank: belowFloor ? null : ++scored` (the pre-review form) -> [1, null, 2], which
+    // is what a ranked unpartitioned table used to render. Red here, and invisible to every other
+    // test in this repo, because the component's props now make that pair unwritable in JSX.
     expect(orderRows(rows, false).map((r) => [r.row.id, r.belowFloor, r.rank])).toEqual([
       ["a", false, null],
       ["b", true, null],
@@ -666,16 +666,25 @@ describe("orderRows", () => {
   it("reads an absent, null or NaN departure count as no claim about the floor", () => {
     // The #118 matrix, pinned at the function. `Number(null)` is 0, so the absence has to be
     // tested before the conversion; a row that never queried the count is SCORED, not sparse.
+    //
+    // NaN IS IN THE FIXTURE, because the name says so. It reaches here as `Number()` of a value
+    // the warehouse could not make a number of, and it is a real third case: the guard is
+    // `departures < DEPARTURE_FLOOR`, and every comparison against NaN is false, so NaN falls
+    // scored. MUTANT: write the guard as `!(departures >= DEPARTURE_FLOOR)` -- the same rule to
+    // read, De Morgan's law away -- and NaN flips to below floor while every other row in this
+    // repo's suites behaves identically. This is the only assertion that would notice.
     const probe = [
       { id: "absent" },
       { id: "null", departures_performed: null },
       { id: "undef", departures_performed: undefined },
+      { id: "nan", departures_performed: Number("not a number") },
       { id: "zero", departures_performed: 0 },
     ];
     expect(orderRows(probe, true).map((r) => [r.row.id, r.belowFloor])).toEqual([
       ["absent", false],
       ["null", false],
       ["undef", false],
+      ["nan", false],
       ["zero", true],
     ]);
   });
@@ -688,8 +697,8 @@ describe("DataTable: a ranked table cannot decline the partition", () => {
     // directive and `make app-check` goes red. Verified as a mutant -- collapsing the props
     // union back to two independent optional booleans makes this file stop compiling.
     //
-    // The pair is not merely unused: it renders a rank column reading 1, —, 2 down the page,
-    // because rank counts scored rows and nothing has gathered them.
+    // The pair is not merely unused: with no partition there is no order to rank, so `orderRows`
+    // ranks nothing and the column comes out em dashes end to end -- width spent to say nothing.
     const forbidden = (
       // @ts-expect-error -- `rank` requires the partition; see DataTableProps.
       <DataTable columns={FLOOR_COLUMNS} rows={FLOOR_ROWS} rank partition={false} />

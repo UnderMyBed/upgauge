@@ -8,15 +8,27 @@
 // to every test that does not look at THAT call site -- measured: adding it to any of the five
 // non-/airport partitioned sites left all 1,483 tests green.
 //
-// The obvious fix -- assert each page's rendered row order -- CANNOT WORK on three of them, and
-// that is a property of the data, not of the test. A behavioural assertion can only distinguish
-// partitioned from unpartitioned where some below-floor row out-seats some scored row, i.e.
-// where the two orderings disagree. Measured across the whole trailing-12 warehouse, that is
-// true for `/airport` and `/route` and for NO carrier's aircraft-type table, NO carrier's Top
-// origin airports table, and NO aircraft type's carrier table: seats and departures correlate
-// tightly enough within those groupings that the sparse rows are already last. Writing a
-// row-order test there anyway would be the vacuous-fixture defect CLAUDE.md names -- it would
-// pass against the bug, which is exactly what the first draft of this work did.
+// A behavioural row-order test is the better instrument WHERE ONE CAN BE WRITTEN, and on two
+// call sites one cannot. It can only distinguish partitioned from unpartitioned where the two
+// orderings disagree -- where, in the pivot's own order, a SCORED row appears after a below-floor
+// one. Re-swept over all 114 fact-present carriers and 110 aircraft short names through the real
+// queries and limits:
+//
+//     CARRIER-TYPETABLE        6 below-floor rows over  4 pages -- 0 disagreements
+//     CARRIER-TOPROUTES      141 below-floor rows over 24 pages -- 2 (2O, F4)
+//     CARRIER-TOPORIGINS      85 below-floor rows over 22 pages -- 1 (F4)
+//     AIRCRAFT-CARRIERTABLE    6 below-floor rows over  6 pages -- 0 disagreements
+//
+// So /airport, /route and BOTH of /carrier's Top-N tables carry row-order tests, and only the
+// aircraft-type table and /aircraft's carrier table rest on this file alone.
+//
+// AN EARLIER REVISION OF THIS COMMENT CLAIMED Top origins was untestable too, and deleted a test
+// on that basis. The claim came from a proxy -- "some below-floor row out-seats some scored one"
+// -- which cannot see the case that actually occurs on `/carrier/F4`: `seats DESC` is NULLS LAST,
+// so a scored row whose seats are NULL (every filing quarantined) sorts BELOW a below-floor row
+// holding a stated 0. Zero does not out-seat NULL and the orderings disagree anyway. Asserting
+// through a proxy that the buggy case also satisfies is this project's signature failure; it is
+// written here rather than quietly corrected because the proxy is what was seductive.
 //
 // So those call sites are pinned on the PROP instead: render the real page and read back what it
 // actually handed the component. This is a pinned CALL SITE, not a pinned function -- it invokes
@@ -114,8 +126,8 @@ describe("every DataTable call site declares the floor partition it means", () =
 
   it("/aircraft takes the partition", async () => {
     // MUTANT: `partition={false}` at aircraft/[name]/page.tsx's DataTable -> red here. No
-    // row-order test can catch it: no aircraft type in the warehouse has a below-floor carrier
-    // out-seating a scored one, so both orderings agree on every page this route can serve.
+    // row-order test can catch it: on every one of the 110 aircraft short names the two orderings
+    // agree, so this file is the only thing standing under this call site.
     const ps = await partitionsOf(() => aircraft("AS350-B2"));
     expect(ps.length).toBeGreaterThan(0);
     expect(ps.every(partitioned)).toBe(true);
@@ -126,9 +138,9 @@ describe("every DataTable call site declares the floor partition it means", () =
     // CLAUDE.md's enumerate-per-CALL-SITE rule, and the shape that caught a gate shipped on one
     // call site with its ungated twin one file over, inside one commit.
     //
-    // MUTANT: `partition={false}` at ANY of the three -> red here. Only the Top routes table has
-    // a row-order test that can also see it; the type table and Top origins have no
-    // discriminating data anywhere in the warehouse.
+    // MUTANT: `partition={false}` at ANY of the three -> red here. Both Top-N tables also carry
+    // a row-order test of their own (carrier/[code]/page.test.tsx, on 2O and F4); the
+    // aircraft-type table has no discriminating page in the warehouse and rests on this.
     const ps = await partitionsOf(() => carrier("4W"));
     expect(ps.length).toBe(3);
     expect(ps.every(partitioned)).toBe(true);

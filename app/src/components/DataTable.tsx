@@ -148,8 +148,10 @@ function partitionByFloor(rows: Record<string, unknown>[]): Record<string, unkno
  * `—`: docs/design/system.md says such a row is "sorted below scored rows, excluded from
  * ranking", and a number printed against it would be neither its position by measure nor a
  * withheld one. Measured on the real warehouse, this is not hypothetical -- `/carrier`'s Top
- * routes table renders 141 below-floor rows across 24 of 70 carriers, four of them mid-table
- * (`TJ` 3 of 15, `V8` 9 of 21, `4W` 12 of 25, `AN` 15 of 25).
+ * routes table renders 141 below-floor rows across 24 of 70 carriers. On 20 of those 24 a
+ * below-floor row sits above the last row rather than only at the foot; the four carrying ten
+ * or more such rows, by the position of their FIRST one, are `TJ` (3 of 15, 13 below), `V8`
+ * (9 of 21, 13), `4W` (12 of 25, 14) and `AN` (15 of 25, 11).
  *
  * `partition` is the rule, and `false` is the exception one caller asks for -- see the
  * component's own `partition` note. Defaulted ON there so a sixth table surface inherits the
@@ -203,10 +205,11 @@ interface DataTableBaseProps {
  * illegal pair unwritable rather than merely unused.
  *
  * `rank` is a row's position among scored rows in the order the product chose; `partition` is
- * what arranges that order. Ranking an unpartitioned table renders a column reading 1, —, 2 down
- * the page -- monotonic nowhere, and a defect a reader sees before any test does. No caller
- * writes that pair today, which is exactly why a comment saying "don't" would not hold: the
- * type is what still refuses it after everyone who read the comment has moved on.
+ * what arranges that order, so ranking an unpartitioned table asks for a position in an order
+ * nothing established. `orderRows` answers that honestly -- it ranks nothing at all -- so the
+ * pair renders a rank column of em dashes end to end: a column that costs its width and says
+ * nothing. No caller writes it today, which is exactly why a comment saying "don't" would not
+ * hold: the type is what still refuses it after everyone who read the comment has moved on.
  *
  * - a ranked table takes the partition (`rank` implies `partition` is on or omitted);
  * - an unranked table may decline it -- `/explore` is the one that does.
