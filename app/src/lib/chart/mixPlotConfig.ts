@@ -416,11 +416,16 @@ function minDate(a: Date, b: Date): Date {
  *
  * `stateable` is the subset of `months` carrying at least one summable cell. Passing both, rather
  * than deriving one, is what keeps this function's answer tied to the same set `prepareMixPlot`
- * gates on -- the two disagreeing about which months they meant is exactly the defect above. */
+ * gates on -- the two disagreeing about which months they meant is exactly the defect above.
+ *
+ * REQUIRED, not defaulted to `months`. A default is a silent fifth caller getting the pre-#121
+ * sentence with nothing red, on the axis that has no per-call-site enumeration; `CardInput`'s
+ * `unknowable`/`understated` are required for the same reason and that is what forced all four
+ * OG routes to wire them. Here the typechecker is the gate. */
 export function mixAbsenceNote(
   months: string[],
   dimension: MixDimension,
-  stateable: string[] = months,
+  stateable: string[],
 ): string {
   if (months.length === 0) return `No ${dimension.absent} filings in this window.`;
   if (stateable.length === 0) {

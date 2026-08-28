@@ -1350,7 +1350,8 @@ check_dataset check_not "aircraft TRISLNDR: ...and claims no exclusion" "$BODY" 
   'excluded from these totals'
 
 # /carrier can reach only the OTHER absence: no carrier's every trailing-12 filing is quarantined
-# on this warehouse. VX has been dormant since 2018-03; 45 carriers are in that state.
+# on this warehouse. VX has been dormant since 2018-03. 45 `airline_id`s are; 44 of them have a
+# page. This is a page-grain sentence, so 44 is its number.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX")
 check_dataset check "carrier VX: an unfiled window is unknowable, not zero traffic" "$BODY" \
   '<div class="k">Seats</div><div class="v">—</div>'

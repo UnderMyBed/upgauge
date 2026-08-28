@@ -20,7 +20,7 @@ API=https://api.cloudflare.com/client/v4
 DRIFTED=""
 
 put() { # put <url> <file> [readback]
-  local url="$1" file="$2" readback="${3:-}" out
+  local url="$1" file="$2" readback="${3:-}" out this_drifted=0
   out=$(curl -sS -X PUT "$url" \
         -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
         -H "Content-Type: application/json" \
@@ -90,9 +90,14 @@ put() { # put <url> <file> [readback]
       echo "  DRIFT $(basename "$file"): the API reported success and did not keep what it was sent." >&2
       printf '%s' "$drift" | jq -r '.[] | "        dropped or altered: \(.)"' >&2
       DRIFTED="${DRIFTED}$(basename "$file") "
+      this_drifted=1
     fi
   fi
-  echo "  ok   $(basename "$file")"
+  # Only when this file actually round-tripped. Printing `ok` under a DRIFT line is the
+  # green-banner-over-a-broken-deploy shape `test_cloudflare_desired_state.py` exists to
+  # refuse -- the run still fails at the end, but the per-file line said otherwise.
+  [ "$this_drifted" -eq 0 ] && echo "  ok   $(basename "$file")"
+  return 0
 }
 
 put "${API}/zones/${CLOUDFLARE_ZONE_ID}/rulesets/phases/http_request_cache_settings/entrypoint" \

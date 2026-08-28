@@ -625,8 +625,14 @@ export async function CarrierView({
             </p>
           </div>
           {/* The rail describes the encodings THIS page uses and no others; the fleet-shading
-              group is asked for only when a chart is actually drawn. */}
-          <LegendRail fleetMix={chartDrawn} map={arcsDrawn} ranked />
+              group is asked for only when a chart is actually drawn, and the rank group only
+              where a rank column exists. `ranked` shipped as a literal when #127's partition and
+              #123's rail gating were merged, and the integration gap pass caught it: 44 of the
+              114 carrier pages file nothing in the trailing 12, so `isEmpty` suppresses the main
+              table and BOTH ranked tables, and the rail explained a column the page did not
+              render. `hasRoutes || hasOrigins` is the same gate those two tables already use
+              below -- the capability existed; the rail was the one consumer ignoring it. */}
+          <LegendRail fleetMix={chartDrawn} map={arcsDrawn} ranked={hasRoutes || hasOrigins} />
         </div>
       </main>
     </div>

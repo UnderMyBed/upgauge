@@ -159,9 +159,9 @@ describe("cardChart's absence note", () => {
     // The drift this exists to make impossible: two literals that agree today.
     // MUTANT: give cardChart its own copy of either string -> red.
     expect(cardChart([month("2025-06")], "A18").note).toBe(
-      mixAbsenceNote(["2025-06"], BY_AIRCRAFT_TYPE),
+      mixAbsenceNote(["2025-06"], BY_AIRCRAFT_TYPE, ["2025-06"]),
     );
-    expect(cardChart([], "A18").note).toBe(mixAbsenceNote([], BY_AIRCRAFT_TYPE));
+    expect(cardChart([], "A18").note).toBe(mixAbsenceNote([], BY_AIRCRAFT_TYPE, []));
   });
 
   /** The same fixture with a cell the warehouse cannot state. */

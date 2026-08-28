@@ -254,7 +254,7 @@ describe("/carrier/<code> aircraft-mix chart", () => {
 });
 
 // Virgin America: airline_id 21171, 4,275 filed rows over 2015-01..2018-03 and nothing since
-// (measured). 45 of this database's 114 fact-present carriers last filed before the current
+// (measured). 45 of this database's 115 fact-present `airline_id`s last filed before the current
 // trailing-12 window -- 39%, so a resolvable carrier with an empty table is a normal case here,
 // not an oddity, and the chart is the only panel with anything in it.
 describe("/carrier/<code> with nothing in the trailing 12 months", () => {
@@ -288,6 +288,31 @@ describe("/carrier/<code> with nothing in the trailing 12 months", () => {
     const text = content(container);
     expect(text).toMatch(/no marketing-carrier field/i);
     expect(text).toMatch(/current identity/i);
+  });
+
+  it("does not explain a rank column on a page that renders none", async () => {
+    // FOUND BY THE INTEGRATION GAP PASS, on a line resolved by hand when #127's `ranked` was
+    // merged onto #123's rail gating: `ranked` shipped as a literal while `fleetMix` and `map`
+    // beside it were live values. A dormant carrier renders no main table (`isEmpty`) and
+    // neither ranked table (`hasRoutes`/`hasOrigins` both false), so there is no rank column on
+    // the page at all -- and the rail still said "in the rank column: below the floor, so not
+    // ranked". 44 of the 114 carrier pages file nothing in the trailing 12.
+    //
+    // MUTANT: `ranked` back to a literal -> red here, and the SEA control below stays green.
+    // The control is the half that keeps this honest: the rail IS mounted and does carry its
+    // unconditional groups, so this is not asserting an absent rail.
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
+    const rail = container.querySelector("aside.legend")!;
+    expect(rail).not.toBeNull();
+    expect(rail.textContent).toContain("Row marks");
+    expect(container.querySelectorAll("td.rank, th.rank").length).toBe(0);
+    expect(rail.textContent).not.toContain("rank column");
+  });
+
+  it("does explain it on a carrier that renders one", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    expect(container.querySelectorAll("td.rank").length).toBeGreaterThan(0);
+    expect(container.querySelector("aside.legend")!.textContent).toContain("rank column");
   });
 });
 
@@ -892,7 +917,8 @@ function statStrip(container: HTMLElement): string[] {
 }
 
 describe("a carrier that filed nothing in the window states absence, not zero", () => {
-  // VX has been dormant since 2018-03; 45 of this dataset's carriers are in that state.
+  // VX has been dormant since 2018-03. 45 `airline_id`s are, of which 44 have a `dim_carrier`
+  // row and therefore a page -- state the grain, because these are counted at two of them.
   // MUTANT: seed `sumColumn` at 0 -> `["0", "0", "—", "—", "0", "0", "0"]` -> red.
   it("renders the measures as absence while still stating the counts", async () => {
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
