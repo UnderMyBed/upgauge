@@ -23,7 +23,7 @@ import { AIRCRAFT_MIX_LIMIT } from "@/lib/chart/aircraftMix";
 import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
 import { fetchAirportNetwork } from "@/lib/map/airportNetwork";
 import { EARLIEST_YEAR, parseYear, yearTrack, yearWindow, type ParsedYear } from "@/lib/year";
-import { encode } from "@/lib/pivot/urlstate";
+import { exploreHref } from "@/lib/pivot/builder";
 import { EARLIEST_MONTH, trailing12From } from "@/lib/entityFacts";
 import { quarantineClause } from "@/lib/quarantineClause";
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
@@ -101,10 +101,6 @@ function endpointQuery(airportId: number, timeFrom: string, timeTo: string): Piv
     limit: 50,
     grouping: "operating",
   };
-}
-
-function exploreHref(query: PivotQuery): string {
-  return `/explore?${encode(query)}`;
 }
 
 /** Zero rows in the trailing 12 months is data, not an error: the airport resolved, the query

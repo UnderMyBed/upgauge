@@ -5,6 +5,7 @@ import { airportSlugFromPath, AIRPORT_PREFIX } from "@/lib/airport";
 import { carrierSlugFromPath, CARRIER_PREFIX } from "@/lib/carrier";
 import { aircraftSlugFromPath, AIRCRAFT_PREFIX } from "@/lib/aircraftSlug";
 import { presetSlugFromPath } from "@/lib/watch";
+import { FILTER_PREFIX } from "@/lib/pivot/builder";
 
 /** One canonical KEY SET per cacheable URL.
  *
@@ -159,6 +160,22 @@ export const QUERY_ROWS: ReadonlyArray<QueryRow> = [
   {
     matcher: "/explore",
     matches: (p) => p === "/explore",
+    keys: ALLOWED_KEYS,
+    repeatable: EXPLORE_REPEATABLE,
+  },
+  {
+    // THE SAME keys as `/explore`, for the reason `/api/pivot`'s row states: this page hands the
+    // identical raw string to the identical `decodeRequest`. `filterListHref` carries the whole
+    // query verbatim so the value list can scope itself to the reader's own window and filters,
+    // so a narrower key set here would 307 away the very thing the page reads.
+    //
+    // A prefix test, not `filterDimFromPath(p) !== null`: this row must claim every pathname
+    // under the prefix that `config.matcher` forwards, and a row claiming slightly MORE than the
+    // matcher sends costs nothing (nothing ever evaluates it) where a row claiming LESS silently
+    // drops a path out of query protection -- rule 1's `clean` default. It does not collide with
+    // `/explore` above, whose predicate is an equality.
+    matcher: "/explore/filter/:dim",
+    matches: (p) => p.startsWith(FILTER_PREFIX),
     keys: ALLOWED_KEYS,
     repeatable: EXPLORE_REPEATABLE,
   },
@@ -340,7 +357,7 @@ export type Canonical =
  *
  * The walk itself lives in `applyRules` below, taking an already-resolved `row` rather than
  * re-finding it. `queryVerdict` and `canonicalize` each match `QUERY_ROWS` exactly once per call
- * -- sixteen `matches` predicates, nine of them `startsWith` + `decodeURIComponent`, are not free,
+ * -- seventeen `matches` predicates, nine of them `startsWith` + `decodeURIComponent`, are not free,
  * and this path is the one every gated request runs. Before this split, `canonicalize` found its
  * own row AND called `queryVerdict`, which found it again: two walks of `QUERY_ROWS` per gated
  * request for one answer. */

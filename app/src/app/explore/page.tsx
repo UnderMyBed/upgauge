@@ -1,13 +1,15 @@
 import { headers } from "next/headers";
 import { encode, UrlStateError } from "@/lib/pivot/urlstate";
 import { decodeRequest } from "@/lib/pivot/bounds";
-import { PivotError } from "@/lib/pivot/types";
+import { normalizeQuery, PivotError } from "@/lib/pivot/types";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { formatCount } from "@/lib/format";
-import { resolutionKey, displayValue, type Resolved } from "@/lib/resolve";
+import { resolutionKey, displayValue, resolveFilterValues, type Resolved } from "@/lib/resolve";
 import { routeHrefFromCodes } from "@/lib/entityLink";
+import { ExplorerBuilder } from "@/components/builder/ExplorerBuilder";
+import { exploreHref } from "@/lib/pivot/builder";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import type { PivotQuery } from "@/lib/pivot/types";
@@ -113,6 +115,33 @@ function routeHref(
 // nearest broader window" (docs/design/system.md, empty-result state) widens to.
 const EARLIEST_MONTH = "2015-01";
 
+/**
+ * The query the error state offers as a way out, and the query its builder is seeded from.
+ *
+ * ONE CONSTANT, because the escape link and the builder beside it have to be the same query. Two
+ * literals drift, and the drift is invisible: an anchor whose href no longer matches the chips
+ * under it still looks right. `page.test.tsx` pins `encode(FALLBACK_QUERY)` against the exact
+ * string this app has been spelling by hand, so a change to the codec or to this constant is red
+ * here rather than discovered as a dead recovery link on the one page a reader reaches while
+ * already stuck.
+ *
+ * `sort: "seats"` with `sortDesc` -- i.e. `s=-seats` -- rather than a null sort: this is the query
+ * offered to someone whose permalink did not parse, so every key it demonstrates should be one
+ * they can see the effect of and edit.
+ */
+export const FALLBACK_QUERY: PivotQuery = normalizeQuery({
+  grain: "segment",
+  dimensions: ["op_airline_id"],
+  measures: ["seats"],
+  timeFrom: "2025-05",
+  timeTo: "2026-04",
+  filters: [],
+  sort: "seats",
+  sortDesc: true,
+  limit: 25,
+  grouping: "operating",
+});
+
 /** A measure the KIND override map does not name still has to render as a numeric. Additive
  * measures are whole counts; non-additive ones are the computed ratios, which `gauge` and
  * `loadFactor` both format to fixed decimals -- `gauge` is the safe general choice since it
@@ -143,10 +172,16 @@ function describeQuery(query: PivotQuery, allowlist: Allowlist): string {
 }
 
 /** The permalink for the same query widened to the full 2015-2026 window, or null when the
- * query already starts at EARLIEST_MONTH -- there is no broader window left to offer. */
+ * query already starts at EARLIEST_MONTH -- there is no broader window left to offer.
+ *
+ * Routed through `exploreHref`, the same function the four entity pages' identical widened-window
+ * link already centralised onto -- not a second hand-spelled `` `/explore?${encode(...)}` ``,
+ * which is byte-identical today but pure drift risk: a future change to `exploreHref` (or to what
+ * a valid `/explore` permalink requires) would update those four call sites and silently miss the
+ * one still spelled out here. */
 function widerWindowHref(query: PivotQuery): string | null {
   if (query.timeFrom <= EARLIEST_MONTH) return null;
-  return `/explore?${encode({ ...query, timeFrom: EARLIEST_MONTH })}`;
+  return exploreHref({ ...query, timeFrom: EARLIEST_MONTH });
 }
 
 function Stat({ label, value, derived }: { label: string; value: string; derived?: boolean }) {
@@ -223,12 +258,23 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
             <p role="alert">{e.message}</p>
             <p>
               Nothing was guessed from it. Fix the offending key above and reload, or start
-              from{" "}
-              <a href="/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op">
-                a known-valid query
-              </a>
-              .
+              from <a href={exploreHref(FALLBACK_QUERY)}>a known-valid query</a>.
             </p>
+            {/* THE STATE A BUILDER IS WORTH THE MOST, and the one an "insert it above the
+                results table" implementation skips without noticing: `decode()` threw, so there
+                is no `query` to mutate and nothing to render a table from. Seeded from
+                FALLBACK_QUERY -- the same constant the escape link above encodes -- so every chip
+                here is a working way out of a permalink the reader cannot fix by hand, not just
+                the single one that link offers.
+
+                `resolved` is empty and that is exact, not a shortcut: FALLBACK_QUERY carries no
+                filters, so there is no id to resolve and no query to run for one. */}
+            <ExplorerBuilder
+              query={FALLBACK_QUERY}
+              allowlist={allowlist}
+              asOf={asOf}
+              resolved={new Map()}
+            />
           </main>
         </div>
       );
@@ -238,6 +284,39 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
 
   const permalink = encode(query);
   const isEmpty = result.rows.length === 0;
+
+  // THE FILTER CHIPS' IDS ARE THIS PAGE'S JOB, not the component's. `runPivot` resolves only the
+  // ids present in the rows it RETURNED, so a filter on a dimension this query does not GROUP by
+  // -- `d=year_month&f=op_airline_id:19790`, or the either-endpoint filter every entity page's
+  // "Open in the Explorer" link emits -- arrives with nothing resolved for it, and the chip reads
+  // `Carrier = 19790`. `FilterChips` is synchronous by design and cannot reach a warehouse;
+  // `resolveFilterValues` asks for exactly those ids and nothing else, running no query at all
+  // when no filtered dimension joins a dim table.
+  //
+  // The pivot's own map goes in LAST so it wins where the two overlap: both are keyed by fact
+  // column and agree on any shared id, but the pivot's map is derived from the rows actually on
+  // the page, which is the stronger claim about what this render shows.
+  //
+  // AFTER `runPivot`, AND THAT ORDERING IS LOAD-BEARING -- this call sits outside the try/catch,
+  // so anything it throws is an unhandled 500 under a Cache-Control the proxy has already
+  // committed to. It cannot throw here because `renderPivot` has already run `checkFilterValue`
+  // over every value, including each PART of a composite (render.ts:174, :204, :271) -- so an
+  // integer-typed dimension's value is a canonical in-range whole number by the time it reaches a
+  // resolver's bound parameter. Hoisting this above `runPivot` reopens that: `f=route:JFK-LAX`
+  // clears `decode()`'s structural check and would reach `airport_id IN ('JFK','LAX')` as a raw
+  // DuckDB conversion error rather than the named PivotError this page renders.
+  const builderResolved = new Map([
+    ...(await resolveFilterValues(query.filters, allowlist)),
+    ...result.resolved,
+  ]);
+
+  // Gated on BOTH operands, and the two-case test beside it is what keeps it that way. Keyed on
+  // the grouping alone this fires on every mainline view, which has no carrier filter to be
+  // inconsistent with; keyed on the filter alone it fires on every carrier-filtered OPERATING
+  // view, where the rollup it warns about is not happening. `cardSixthStat` shipped as the
+  // one-operand form and is why CLAUDE.md carries the rule.
+  const mainlineRollupFiltered =
+    query.grouping === "mainline" && query.filters.some(([k]) => k === "op_airline_id");
 
   // `route`'s catalog entry names two columns (route_key_low, route_key_high) that both
   // resolve through dim_airport -- collapse them into one synthetic `__route` column so the
@@ -303,6 +382,19 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
           <Stat label="Rows" value={formatCount(result.rows.length)} />
           <Stat label="Quarantined" value={formatCount(result.quarantinedRowsOnPage)} />
         </div>
+        {/* BETWEEN THE STAT STRIP AND THE BODY, which puts it on the EMPTY state too -- the two
+            share this one return, and the view that most needs its query adjusted must not be the
+            one without the controls to adjust it. This is also what ends `/explore/filter/:dim`'s
+            island: nothing linked to that route until `FilterChips`'s "add filter" half did, and
+            neither `sitemap.ts` nor `proxy.ts`'s matcher counts as an inbound link (CLAUDE.md --
+            `/watch` shipped with zero, one milestone after a review existed to catch exactly
+            that). page.test.tsx asserts the anchor, and smoke.sh asserts it in the served bytes. */}
+        <ExplorerBuilder
+          query={query}
+          allowlist={allowlist}
+          asOf={asOf}
+          resolved={builderResolved}
+        />
         <div className="body">
           <div>
             {isEmpty ? (
@@ -342,6 +434,14 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
               these totals, never clamped. <span className="deriv">Load factor</span> and{" "}
               <span className="deriv">gauge</span> are computed at query time from summed
               passengers, seats and performed departures -- never averaged.
+              {mainlineRollupFiltered ? (
+                <>
+                  {" "}
+                  Grouped by <strong>mainline</strong> but filtered on the{" "}
+                  <strong>operating</strong> carrier, so a rolled-up row can show more seats than
+                  the filter selected.
+                </>
+              ) : null}
             </p>
             <div className="permalink">
               <span className="label">Permalink</span>

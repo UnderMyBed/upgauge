@@ -16,7 +16,7 @@ import { AircraftMixChart } from "@/components/AircraftMixChart";
 import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
 import { fetchCarrierDiff } from "@/lib/map/carrierDiff";
-import { encode } from "@/lib/pivot/urlstate";
+import { exploreHref } from "@/lib/pivot/builder";
 import {
   CARRIER_TYPE_LIMIT,
   EARLIEST_MONTH,
@@ -178,10 +178,6 @@ function Stat({ label, value, derived }: { label: string; value: string; derived
   );
 }
 
-function exploreHref(query: PivotQuery, timeFrom?: string): string {
-  return `/explore?${encode(timeFrom === undefined ? query : { ...query, timeFrom })}`;
-}
-
 /** OPERATING CARRIER IS THE GRAIN AND THE TRUTH (CLAUDE.md's hard rule), said on the page
  * whose entire subject is one carrier.
  *
@@ -225,7 +221,8 @@ function identityNote(carrier: CarrierRef): string {
  * a real history, which the chart above this state is drawing. State the finding in words and
  * offer the widened permalink, never a blank panel. */
 function CarrierEmptyState({ query, carrier }: { query: PivotQuery; carrier: CarrierRef }) {
-  const wider = query.timeFrom > EARLIEST_MONTH ? exploreHref(query, EARLIEST_MONTH) : null;
+  const wider =
+    query.timeFrom > EARLIEST_MONTH ? exploreHref({ ...query, timeFrom: EARLIEST_MONTH }) : null;
   return (
     <div className="empty-state">
       <p>

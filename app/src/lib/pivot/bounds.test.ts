@@ -428,8 +428,18 @@ describe("no permalink this app has shipped becomes unreadable", () => {
 
   it("finds the hardcoded permalinks at all -- a scan matching nothing passes vacuously", () => {
     // Pinned so a refactor that moves these hrefs out of reach of the scan fails HERE, loudly,
-    // rather than turning the test below into an empty loop that reports ok.
-    expect(hardcodedPermalinks().length).toBe(8);
+    // rather than turning the test below into an empty loop that reports ok. Nine files carry
+    // the same "start from a known-valid query" literal: `/search`, `/explore/filter/:dim` and
+    // its 404, and the five entity and `/watch` 404s.
+    //
+    // `/explore`'s own error state is DELIBERATELY NOT among them: it builds that href from
+    // `FALLBACK_QUERY` through `exploreHref`, because the same query also seeds the builder
+    // rendered beside it and two literals would drift. An interpolated href is out of this
+    // scan's reach by construction, so the property this test guarantees for a literal is
+    // guaranteed for that constant by `app/explore/page.test.tsx` instead -- it pins the encoding
+    // against this exact string AND asserts `decodeRequest` accepts it. Moving another of the
+    // nine to a constant must move its coverage the same way, not merely decrement this number.
+    expect(hardcodedPermalinks().length).toBe(9);
   });
 
   it("accepts every hardcoded /explore permalink the app serves", () => {

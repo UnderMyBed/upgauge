@@ -506,6 +506,63 @@ BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&
 check_not "explore: no false below-floor marking without a departure count" "$BODY" 'data-below-floor="true"'
 check "explore: DATA AS OF is present" "$BODY" 'DATA AS OF'
 
+# 4b. The Explorer builder (epic #6, Task 6) -- composed onto all three states of /explore.
+#
+# EVERY NEEDLE BELOW IS WRITTEN IN THE BYTES REACT EMITS, not the bytes page.tsx contains, and the
+# difference bites twice here: `className` is emitted as `class`, and `&` inside an href attribute
+# is emitted as `&amp;` -- so a needle copied from a permalink literal (`?v=1&k=seg`) can never
+# fire on an anchor. Each was mutation-run before it was allowed to count as coverage.
+BUILDER_Q='v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op'
+BODY=$(curl -s --max-time 15 "${BASE}/explore?${BUILDER_Q}")
+check     "explore: renders the builder"           "$BODY" 'class="builder"'
+check     "explore: labels a row with its URL key" "$BODY" 'class="chip-key">d<'
+# Real anchors only. A <button> would be inert in the served HTML -- every view here works with
+# JS off, and a native form GET cannot emit this permalink format at all.
+#
+# SCOPED TO THE BUILDER, and that is not a nicety: `TopBar` renders a real search form on every
+# page, so `<button` and `<input` are BOTH present in this body legitimately. Run against `$BODY`
+# these two report FAIL for the right page -- measured, not predicted. `between` cuts from the
+# builder's own class to the `.body` div that follows it. If the builder were missing entirely
+# the cut would start at the top of the document and sweep the top bar's form back in, so the
+# absence checks go RED rather than vacuously green; the positive check below pins that the
+# region extracted really is the builder.
+BUILDER=$(between "$BODY" 'class="builder"' 'class="body"')
+check     "explore: the extracted region really is the builder" "$BUILDER" 'class="chip-key"'
+check_not "explore: the builder emits no button"   "$BUILDER" '<button'
+check_not "explore: the builder emits no input"    "$BUILDER" '<input'
+
+# THE INBOUND LINK THAT ENDS /explore/filter's ISLAND. Task 5 shipped that route with nothing
+# linking to it; CLAUDE.md's rule is that neither sitemap.ts nor proxy.ts's matcher counts, and
+# `/watch` shipped exactly this way one milestone after a review existed to prevent it. Asserted
+# on the SERVED bytes, because that is the only place "a visitor can reach it" is actually true.
+check     "explore: links into the filter value list" \
+  "$BODY" 'href="/explore/filter/op_airline_id?v=1&amp;k=seg'
+check     "explore: offers the either-end filter too" \
+  "$BODY" 'href="/explore/filter/endpoint_airport_id?v=1&amp;'
+
+# The ERROR state gets one too -- the state a "render it above the results table" implementation
+# skips, because decode() threw and there is no table for it to sit above.
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=nope&m=seats&t=2025-05:2026-04&n=5&g=op")
+check     "explore: the error state still gets a builder" "$BODY" 'class="builder"'
+
+# A filter chip shows the RESOLVED value, not the raw BTS id. `d=year_month` groups by month, so
+# runPivot resolves NOTHING for op_airline_id -- the page has to resolve its own filter values or
+# this reads `Carrier = 19790`.
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=year_month&m=seats&t=2025-05:2026-04&f=op_airline_id:19790&s=-seats&n=25&g=op")
+check     "explore: a filter chip resolves its id to a code" "$BODY" 'Carrier = DL'
+
+# D4, gated on BOTH operands, and the three bodies are the check: keyed on the grouping alone the
+# disclosure fires on the second, keyed on the filter alone it fires on the third.
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&f=op_airline_id:19790&s=-seats&n=25&g=ml")
+check     "explore: discloses a mainline rollup filtered on the operating carrier" \
+  "$BODY" 'rolled-up row can show more seats'
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=ml")
+check_not "explore: no rollup disclosure on an unfiltered mainline view" "$BODY" 'rolled-up row'
+check     "explore: ...and that mainline view really rendered its foot" "$BODY" 'quarantined row'
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&f=op_airline_id:19790&s=-seats&n=25&g=op")
+check_not "explore: no rollup disclosure on a filtered operating view" "$BODY" 'rolled-up row'
+check     "explore: ...and that operating view really rendered its foot" "$BODY" 'quarantined row'
+
 # 5. The caching header is the cost control, so it is a test, not a hope.
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=5&g=op")
 check "explore: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
@@ -513,6 +570,75 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/api/pivot?v=1&k=seg&d=op
 check "api: sets the project Cache-Control" "$HDRS" "$CACHE_EXPECTED"
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/api/pivot?v=1&bogus=1")
 check "api: does not cache an error" "$HDRS" "no-store"
+
+# 5b. /explore/filter/:dim -- the Explorer builder's value list (epic #6).
+#
+# THE ONLY GATE THAT CAN SEE ANY OF THIS. proxy.test.ts calls proxy() directly and never crosses
+# Next's routing layer, so a route missing from `config.matcher` keeps every unit test green
+# while shipping uncached, with no raw-query header, and with its 404 reduced to Next's error
+# shell (docs/architecture/hosting.md § "What omitting one actually costs" has the measurement).
+EXPLORE_Q='v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op'
+ROUTE_Q='v=1&k=route&d=route&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op'
+
+BODY=$(curl -s --max-time 15 "${BASE}/explore/filter/op_airline_id?${EXPLORE_Q}")
+check "filter: lists resolved values"          "$BODY" '>WN<'
+check "filter: links back into the Explorer"   "$BODY" 'f=op_airline_id:19393'
+check "filter: DATA AS OF is present"          "$BODY" 'DATA AS OF'
+
+# The either-end dimension is filter_only, so `renderPivot` refuses it as a grouping key -- an
+# implementation that grouped by it 500s, and the proxy has already committed to an hour of
+# public cache by then. Both ends must be listed, and both must write the either-end filter.
+BODY=$(curl -s --max-time 15 "${BASE}/explore/filter/endpoint_airport_id?${EXPLORE_Q}")
+check "filter: either-end explains its two lists" "$BODY" 'either end'
+check "filter: either-end writes its own key"     "$BODY" 'f=endpoint_airport_id:'
+check_not "filter: either-end did not 500"        "$BODY" 'Application error'
+
+HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore/filter/op_airline_id?${EXPLORE_Q}")
+check     "filter: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+# Not redundant with the line above, and the same discriminator `/` uses: Next's own
+# force-dynamic fallback CONTAINS the substring "no-store", so a positive HTML_CACHE check plus a
+# negative "no-store" check would BOTH stay green under a "remove this route from the matcher"
+# mutant. `must-revalidate` is the one token in Next's fallback that no header proxy.ts sets has.
+check_not "filter: is not Next's own force-dynamic fallback (proves proxy.ts ran)" \
+  "$HDRS" "must-revalidate"
+
+# TWO WAYS TO 404, AND THE PROBE MUST DECLINE THE CACHE FOR BOTH. `isFilterListCacheable`
+# returning a bare `true` -- or gating on `allowlist.dims.has(dim)` instead of on the grain --
+# leaves these long-cached, and the dataset is rebuilt monthly, so a cached 404 outlives the
+# condition that caused it. The bodies are checked too: a missing matcher entry keeps the 404
+# STATUS and destroys the MESSAGE, which is the failure mode no header check can see.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore/filter/not_a_dimension?${EXPLORE_Q}")
+HDRS=$(curl -s -o /dev/null -D -             --max-time 15 "${BASE}/explore/filter/not_a_dimension?${EXPLORE_Q}")
+BODY=$(curl -s                               --max-time 15 "${BASE}/explore/filter/not_a_dimension?${EXPLORE_Q}")
+check     "filter: an unknown dimension is a 404"       "$CODE" '404'
+check     "filter: an unknown dimension is not cached"  "$HDRS" 'no-store'
+check     "filter: the 404 names the slug"              "$BODY" 'not_a_dimension'
+check     "filter: the 404 names WHICH way it failed"   "$BODY" 'No such dimension'
+
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore/filter/aircraft_type?${ROUTE_Q}")
+HDRS=$(curl -s -o /dev/null -D -             --max-time 15 "${BASE}/explore/filter/aircraft_type?${ROUTE_Q}")
+BODY=$(curl -s                               --max-time 15 "${BASE}/explore/filter/aircraft_type?${ROUTE_Q}")
+check     "filter: a wrong-grain dimension is a 404"      "$CODE" '404'
+check     "filter: a wrong-grain dimension is not cached" "$HDRS" 'no-store'
+# A DIFFERENT sentence from the unknown-slug one, and the pairing is the point: this dimension is
+# real, so the page must not say it is not a dimension.
+check     "filter: the wrong-grain 404 says so"           "$BODY" 'Not filed at this grain'
+check_not "filter: the wrong-grain 404 is not the unknown-slug sentence" \
+  "$BODY" 'is not a dimension'
+# And the SAME slug against the segment permalink renders -- without this the two checks above
+# are satisfied by a page that 404s aircraft_type unconditionally.
+BODY=$(curl -s --max-time 15 "${BASE}/explore/filter/aircraft_type?${EXPLORE_Q}")
+check     "filter: the same slug renders at the grain that carries it" "$BODY" 'f=aircraft_type:'
+
+# The QUERY_ROWS entry, from the served side. Without it rule 1's `clean` default applies and
+# `?x=1..N` is an unbounded family of distinct CDN keys on a page that runs a live pivot.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore/filter/op_airline_id?${EXPLORE_Q}&bogus=1")
+HDRS=$(curl -s -o /dev/null -D -             --max-time 15 "${BASE}/explore/filter/op_airline_id?${EXPLORE_Q}&bogus=1")
+check "filter: a junk key is a 307"        "$CODE" '307'
+check "filter: a junk key is not cached"   "$HDRS" 'no-store'
+# Totality, the axis that 500ed every matcher path once: `proxy.ts` strips ONE leading `?`.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore/filter/op_airline_id??${EXPLORE_Q}")
+check "filter: a doubled question mark redirects rather than 500ing" "$CODE" '307'
 
 # 6. The front door is ours, not the scaffold's.
 #

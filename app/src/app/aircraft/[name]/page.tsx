@@ -20,7 +20,7 @@ import { fetchCarrierTypeNetwork } from "@/lib/map/carrierTypeNetwork";
 import { rawFilterValue, resolveCarrierFilter } from "@/lib/map/mapFilter";
 import { pickerOptions } from "@/lib/map/picker";
 import type { SegmentMapInput } from "@/lib/map/segmentMap";
-import { encode } from "@/lib/pivot/urlstate";
+import { exploreHref } from "@/lib/pivot/builder";
 import {
   AIRCRAFT_CARRIER_LIMIT,
   EARLIEST_MONTH,
@@ -96,20 +96,14 @@ function Stat({ label, value, derived }: { label: string; value: string; derived
   );
 }
 
-/** The permalink for the identical query against the Explorer, widened to `EARLIEST_MONTH` when
- * asked -- shared by the Explorer link and the empty state's widened-window offer, so both
- * always agree on what "the same query" means. */
-function exploreHref(query: PivotQuery, timeFrom?: string): string {
-  return `/explore?${encode(timeFrom === undefined ? query : { ...query, timeFrom })}`;
-}
-
 /** "Nobody flew this type last year" is DATA, not an error: the type resolved, the query is
  * valid, and zero rows is the honest answer. It is also the interesting answer here -- the
  * MD-80 filed 68 months and stopped in 2023-04 (measured), so this state IS the retirement, and
  * the chart above it is the story. Mirrors /route's and /explore's empty states: state the
  * finding in words, offer the widened-to-2015 permalink, never a blank panel. */
 function AircraftEmptyState({ query, type }: { query: PivotQuery; type: AircraftRef }) {
-  const wider = query.timeFrom > EARLIEST_MONTH ? exploreHref(query, EARLIEST_MONTH) : null;
+  const wider =
+    query.timeFrom > EARLIEST_MONTH ? exploreHref({ ...query, timeFrom: EARLIEST_MONTH }) : null;
   return (
     <div className="empty-state">
       <p>

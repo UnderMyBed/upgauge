@@ -12,6 +12,7 @@ import { aircraftSlugFromPath, resolveAircraftSlug, AIRCRAFT_PREFIX } from "@/li
 import { presetSlugFromPath, presetBySlug } from "@/lib/watch";
 import { parseYear } from "@/lib/year";
 import { decodeRequest } from "@/lib/pivot/bounds";
+import { FILTER_PREFIX, filterDimFromPath, filterableDimensions } from "@/lib/pivot/builder";
 import {
   rawFilterValue,
   resolveCarrierFilter,
@@ -285,6 +286,25 @@ export async function proxy(request: NextRequest) {
     response.headers.set(
       "Cache-Control",
       (await isExploreCacheable(rawQuery)) ? HTML_CACHE : NO_STORE,
+    );
+    return response;
+  }
+  // `/explore/filter/:dim` (epic #6). Kept beside `/explore`'s branch because it is the same
+  // question with one more input, not because order matters -- `/explore`'s test is
+  // `pathname === "/explore"`, which this pathname never satisfies.
+  //
+  // TWO inputs, AND-ed, never a negation: the permalink must decode AND the slug must name a
+  // dimension filterable at that grain. This is the same shape as the `/airport` and `/carrier`
+  // branches below, and for the same reason CLAUDE.md states as a rule -- an unknown slug 404s,
+  // and a 404 pinned in a shared cache outlives the condition that caused it, because this
+  // dataset is rebuilt monthly. `startsWith`, not `filterDimFromPath(...) !== null`, so that any
+  // pathname under this prefix the matcher does forward gets an answer from this file rather
+  // than falling through to none at all; the probe declines the cache for the ones the page
+  // will 404.
+  if (pathname.startsWith(FILTER_PREFIX)) {
+    response.headers.set(
+      "Cache-Control",
+      (await isFilterListCacheable(pathname, rawQuery)) ? HTML_CACHE : NO_STORE,
     );
     return response;
   }
@@ -587,6 +607,39 @@ async function isExploreCacheable(rawQuery: string): Promise<boolean> {
   }
 }
 
+/** `/explore/filter/:dim`'s equivalent of `isExploreCacheable`, and it needs the extra input for
+ * the same reason `/airport`'s branch needs `parseYear`: this page has TWO ways to 404 and the
+ * permalink's validity only answers one of them.
+ *
+ * Requires BOTH that the permalink decodes AND that the slug names a dimension filterable at
+ * that grain. `filterableDimensions` -- NOT `groupableDimensions` and not a bare
+ * `allowlist.dims.has(dim)`: `endpoint_airport_id` is `filter_only`, so it is a legitimate value
+ * list and a `groupable` test would `no-store` the one filter this product has that no other
+ * T-100 tool expresses; and `aircraft_type` at `k=route` is in the catalog but not offered at
+ * that grain, so a bare `has()` would pin its 404 in a shared cache. The dataset is rebuilt
+ * monthly, so a cached 404 outlives the condition that caused it.
+ *
+ * Costs no database query beyond the `loadAllowlist()` this branch already makes as its probe --
+ * `filterableDimensions` is a filter over the in-memory catalog. It does NOT extend to
+ * `runPivot()` throwing after `decodeRequest()` has succeeded: that is the residual gap
+ * `docs/architecture/hosting.md` § "The gap" documents for `/explore` and `/watch/:preset`, and
+ * this route joins it rather than closing it.
+ *
+ * Everything is inside the try, including `decodeURIComponent` (via `filterDimFromPath`).
+ * `canonicalize()` once threw on a leading `?` that "only a wiring bug could produce" and 500ed
+ * every matcher path; nothing on this spine may throw, and any failure here is `false`. */
+async function isFilterListCacheable(pathname: string, rawQuery: string): Promise<boolean> {
+  try {
+    const dim = filterDimFromPath(pathname);
+    if (dim === null) return false;
+    const allowlist = await loadAllowlist();
+    const query = decodeRequest(rawQuery, allowlist);
+    return filterableDimensions(allowlist, query.grain).some((e) => e.key === dim);
+  } catch {
+    return false;
+  }
+}
+
 /** `/`'s fail-safe probe, and deliberately NOT `isDataLayerHealthy()`.
  *
  * The two probes read different objects, and only this one reads what the front door depends on:
@@ -882,10 +935,11 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 //
 // THIS LIST AND `ENTITY_ROUTES` (plus `OG_ROUTES`, which owns the four `opengraph-image`
 // entries) MUST AGREE -- but `ENTITY_ROUTES` IS NO LONGER THE MAIN MECHANISM, and an author
-// adding a fifth entity page must not read it as one. There are now FOUR carve-outs:
+// adding a fifth entity page must not read it as one. There are now FIVE carve-outs:
 // `/airport/:code` (the `y` query param, M7 Task 9), `/carrier/:code` and `/aircraft/:name`
-// (the `type`/`carrier` map filters, #106), and `/watch`/`/watch/:preset` (a live
-// `mart_route_health` read). Each stays in THIS list but has its own `if` branch above rather
+// (the `type`/`carrier` map filters, #106), `/watch`/`/watch/:preset` (a live
+// `mart_route_health` read), and `/explore/filter/:dim` (epic #6 -- the permalink AND the slug's
+// grain). Each stays in THIS list but has its own `if` branch above rather
 // than a row in `ENTITY_ROUTES`, because each has a cacheability question the generic table
 // cannot express -- the table's `isCacheable(entity, slug)` has exactly ONE input slot.
 // `/route/:pair` is the only row left in it.
@@ -932,10 +986,18 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // without an entry each card ships `public, max-age=0, must-revalidate` (`ImageResponse`'s own
 // default, measured on a served build) -- uncacheable at the CDN, on 23,780 URLs whose entire
 // traffic is crawlers re-fetching them.
+//
+// SEVENTEEN as of epic #6 -- `/explore/filter/:dim`, the Explorer builder's value list. It is a
+// dynamic segment, the sixth one here, and like `/watch/:preset` it has its own `if` branch
+// rather than an `ENTITY_ROUTES` row: its cacheability takes TWO inputs (the permalink AND the
+// slug), which the table's one `isCacheable(entity, slug)` slot cannot express. It is also the
+// second page route (after `/explore`) whose `keys` are `ALLOWED_KEYS` rather than a short list
+// or none, because it reads the identical permalink through the identical `decodeRequest`.
 export const config = {
   matcher: [
     "/",
     "/explore",
+    "/explore/filter/:dim",
     "/api/pivot",
     "/route/:pair",
     "/airport/:code",

@@ -625,12 +625,13 @@ being invisible to whoever added a route:
 > answer (a row in `ENTITY_ROUTES` if the slug is the page's ONLY cacheability input, its own
 > `if` branch otherwise — see below), and *both* a header assertion and a `no-store` assertion
 > in `app/smoke.sh`.
-> **The matcher holds sixteen entries**: `/`, `/explore`, `/api/pivot`, the four entity pages
+> **The matcher holds seventeen entries**: `/`, `/explore`, `/explore/filter/:dim`, `/api/pivot`,
+> the four entity pages
 > (`/route/:pair`, `/airport/:code`, `/carrier/:code`, `/aircraft/:name`), those four pages'
 > `opengraph-image` children (§ The OG cards, below), `/search`,
-> `/sitemap.xml`, `/robots.txt`, `/watch` and `/watch/:preset`. Only the four entity pages, their
-> four card routes and `/watch/:preset` are dynamic segments; the rest are exact paths with no
-> per-slug resolution.
+> `/sitemap.xml`, `/robots.txt`, `/watch` and `/watch/:preset`. Ten are dynamic segments — the
+> four entity pages, their four card routes, `/watch/:preset` and `/explore/filter/:dim`; the rest
+> are exact paths with no per-slug resolution.
 > The rule is the same for all of them: a route absent from the matcher gets
 > no `Cache-Control` from this file at all, which for `/search` happens to be harmless (Next's
 > own `no-store` for `dynamic = "force-dynamic"` covers the gap) but for `/sitemap.xml` and
@@ -661,7 +662,16 @@ being invisible to whoever added a route:
 > a fixed catalog query the way `/sitemap.xml`/`/robots.txt` do). An unknown preset — `known`
 > false — is `no-store` regardless of the probe, same as every other 404 in this file.
 >
-> **A route can be *structurally* wrong — missing a required page-level export, not merely a
+> **`/explore/filter/:dim` (epic #6) is the fifth carve-out, and its cacheability takes TWO
+> inputs**: the permalink must decode AND the slug must name a dimension *filterable at that
+> query's grain*. `isFilterListCacheable` is the branch, sitting beside `isExploreCacheable` and
+> AND-ing `filterableDimensions(allowlist, query.grain)` onto it. Neither half alone is the rule.
+> A `groupableDimensions` test would `no-store` `endpoint_airport_id`, which is `filter_only` and
+> is a legitimate value list; a bare `allowlist.dims.has(dim)` would long-cache
+> `/explore/filter/aircraft_type` at `k=route`, a page that 404s because T-100 files no aircraft
+> type on a route-grain row. Both are the "cacheability is an AND of two allow-lists, never a
+> negation" rule the `/airport` and `/carrier` branches already state. The route runs a live
+> pivot after the header is committed, so it joins § "The gap" below rather than closing it.
 > matcher row — and stay invisible to every gate but one.** `app/src/app/sitemap.ts` and
 > `app/src/app/robots.ts` carry `export const dynamic = "force-dynamic"`, the same export every
 > other DB-touching route has. Without it Next tries to prerender them at `next build` time, and
@@ -697,6 +707,17 @@ server log with a digest. **A 404 that has lost its entire message, on every unk
 nothing red anywhere else.** That is worse than the 500 the reports expected, because a 500 is
 loud. `app/smoke.sh`'s per-page 404-body checks are what catch it; the three matcher-removal
 mutants below each turned exactly those checks red.
+
+**A page that reads `RAW_QUERY_HEADER` itself fails louder, and that difference is worth knowing
+before reading the table above as universal.** The four entity pages take their slug from route
+params, so only their `not-found.tsx` needs a header and only the 404 degrades. `/explore` and
+`/explore/filter/:dim` read the raw query on the SUCCESS path, so a missing matcher entry throws
+`MissingRawQueryError` out of the page itself. Measured on a served build with
+`/explore/filter/:dim` removed from the matcher (epic #6's mutant 4): **500** on every request,
+`private, no-cache, no-store, max-age=0, must-revalidate`, an `__next_error__` shell for a body,
+and fourteen red checks in `app/smoke.sh` — against **one** red unit test (`canonicalQuery.test
+.ts`'s three-lists-agree case, which sees the missing entry but nothing downstream of it). The
+rule is unchanged; only the symptom is, and this one is the easier of the two to notice.
 
 ## `proxy.ts` is load-bearing — both query entry points break without it
 
@@ -1584,17 +1605,18 @@ guaranteed origin miss. Measured on a served build at `4aa8087`, before the gate
 `4aa8087` it had not yet joined `proxy.ts`'s matcher and returned Next's own
 `private, no-cache, no-store, max-age=0, must-revalidate` unconditionally, so a junk query on it
 changed nothing — there was no long-cached response yet for one to corrupt. Once Task 1 landed,
-`/` joined the same exposure the seven rows above demonstrate, for **fourteen** paths the proxy
-gates (the seven shown, plus `/aircraft/:name`, `/watch/:preset` and the four `opengraph-image`
-routes, all the identical mechanism as a row already shown). `/api/pivot` is a **fifteenth**
+`/` joined the same exposure the seven rows above demonstrate, for **fifteen** paths the proxy
+gates (the seven shown, plus `/aircraft/:name`, `/watch/:preset`, `/explore/filter/:dim` and the
+four `opengraph-image`
+routes, all the identical mechanism as a row already shown). `/api/pivot` is a **sixteenth**
 cacheable path — its own successful responses
 take the identical `PROJECT_CACHE` value `/sitemap.xml` and `/robots.txt` do — and it is closed by
 its own handler rather than by the proxy (§ `/api/pivot` closes its own, below). `/search` alone is
-never cacheable, gated or not, which makes sixteen matcher entries in all.
+never cacheable, gated or not, which makes seventeen matcher entries in all.
 
 `app/src/lib/canonicalQuery.ts` declares the legitimate query keys for every matcher path — the
 third list, alongside `ENTITY_ROUTES`, that the app's cacheable surface depends on. Only agreement
-with `config.matcher` is asserted by its own test (`canonicalQuery.test.ts`): `QUERY_ROWS` (16
+with `config.matcher` is asserted by its own test (`canonicalQuery.test.ts`): `QUERY_ROWS` (17
 rows, one per matcher entry) is a strict superset of `ENTITY_ROUTES` (**1 row** — `/route/:pair`,
 the only entity page whose cacheability is still answered by its slug alone; `/airport` left in
 M7 Task 9 and `/carrier`/`/aircraft` in #106, each for a second cacheability input the table's
@@ -1668,7 +1690,7 @@ trailing `&`, `&&`, `&&&` and a *leading* `&` all returned 200 under
 this path exactly as on `/explore` and not closed by any of this.
 
 So `exempt` now means only **"the proxy does not redirect this path"**. The rules apply to every
-row: `queryVerdict()` evaluates them for all sixteen, and `canonicalize()` — the proxy's entry point
+row: `queryVerdict()` evaluates them for all seventeen, and `canonicalize()` — the proxy's entry point
 and only that — answers `clean` for an exempt row. `app/api/pivot/route.ts` calls `queryVerdict()`
 itself and answers **400 + `no-store`**, the same as it already does for an unknown key. It does
 not 307: a redirect is a worse answer to an XHR than a named error, and that ruling is unchanged.

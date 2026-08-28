@@ -54,11 +54,123 @@ export function displayValue(hit: Resolved | undefined, rawId: unknown): string 
   return hit.code;
 }
 
+/**
+ * The display string for ONE `f` VALUE, which is a different lookup from a cell's.
+ *
+ * `resolveRows` keys its map by the FACT COLUMN -- `resolutionKey(column, r.id)`, below -- and
+ * never by the dimension key. So the obvious `resolved.get(resolutionKey(filterKey, value))` is
+ * a guaranteed MISS for every dimension whose key differs from its column and for every
+ * composite one, and `displayValue` then correctly falls back to the raw BTS id. That is how a
+ * filter chip renders `Route = 12478-12892` and `Carrier = 19790` against a real pivot result
+ * while a hand-built fixture keyed the other way shows `DL` -- the fixture cannot exercise the
+ * payload shape the resolver actually emits.
+ *
+ * Three shapes, all read from the catalog rather than branched on a name:
+ *   - one column       -> that column's lookup
+ *   - `pair` (route)   -> split on '-', one lookup per column, joined with an en dash
+ *   - `either`         -> ONE id that may sit in either column; first hit wins (both columns of
+ *                         an `either` dimension resolve through the same dim table, so they
+ *                         cannot disagree -- render.ts asserts the shared type at the catalog)
+ *
+ * An id absent from the map renders as itself, never a dash: absence of a NAME is not absence of
+ * DATA, and `resolved` only carries ids present in the rows this page actually rendered.
+ */
+export function filterValueDisplay(
+  entry: DimensionEntry,
+  value: string,
+  resolved: Map<string, Resolved>,
+): string {
+  const columns = columnsFor(entry);
+  if (columns.length === 1) {
+    return displayValue(resolved.get(resolutionKey(columns[0], value)), value);
+  }
+  if (entry.filterMode === "either") {
+    for (const column of columns) {
+      const hit = resolved.get(resolutionKey(column, value));
+      if (hit !== undefined) return displayValue(hit, value);
+    }
+    return displayValue(undefined, value);
+  }
+  // `pair`: one value encodes the WHOLE composite as '<low>-<high>' (render.ts's composite
+  // branch). A value that is not that shape is not one this app emitted, so it renders as
+  // itself rather than being half-resolved into something that reads like a real pair.
+  const parts = value.split("-");
+  if (parts.length !== columns.length) return displayValue(undefined, value);
+  return parts
+    .map((part, i) => displayValue(resolved.get(resolutionKey(columns[i], part)), part))
+    .join("\u2013");
+}
+
 /** The row columns a dimension occupies. Every dimension is its own key EXCEPT `route`,
  * whose column_expr names two columns that both resolve through dim_airport. Read from the
  * catalog, not hardcoded -- Task 1 exists so this can be data. */
 function columnsFor(entry: DimensionEntry): string[] {
   return entry.columnExpr.split(",").map((c) => c.trim());
+}
+
+/**
+ * SYNTHETIC ROWS THAT PUT EVERY `f` VALUE WHERE `collectIds` WILL LOOK FOR IT.
+ *
+ * The gap this closes, measured rather than assumed: `runPivot` resolves only the ids present in
+ * the rows it RETURNED, so a query that filters on a dimension it does not group by --
+ * `d=year_month&f=op_airline_id:19790` -- comes back with `resolved.size === 0`, and the filter
+ * chip then renders `Carrier = 19790` instead of `Carrier = DL`. Nothing inside a synchronous
+ * component can reach that; the mount has to ask for these ids itself. `FilterChips`'s docstring
+ * states the same precondition from the consuming end.
+ *
+ * A FILTER VALUE IS A URL STRING, AND IT STAYS ONE. `f=op_airline_id:19790` binds "19790" as a
+ * VARCHAR against an INTEGER fact column and DuckDB casts at the comparison -- verified against
+ * the real warehouse for all four resolvers (dim_carrier, dim_airport, dim_city_market,
+ * dim_aircraft_type), which hand back `id` as a number for the three integer keys, so
+ * `resolutionKey`'s `String(id)` lands on the same key the URL string produced. Coercing here
+ * would be the CLAUDE.md aircraft-type bug: `aircraft_type` is VARCHAR carrying zero-padded codes
+ * ('079'), and int-parsing breaks that join silently.
+ *
+ * The three catalog shapes are the same three `filterValueDisplay` reads back, and they are read
+ * from `column_expr` rather than branched on a name, so the two halves cannot disagree about where
+ * a value lives:
+ *   - one column     -> that column
+ *   - `pair` (route) -> '<low>-<high>' split across the two columns, in catalog order
+ *   - `either`       -> ONE id that may sit at EITHER end, so it is asked for in BOTH columns.
+ *
+ * THE SECOND `either` COLUMN IS DELIBERATE REDUNDANCY AND NO TEST KILLS IT -- stated here rather
+ * than left for someone to discover as dead code. `filterValueDisplay` returns the FIRST hit
+ * across the same columns, and both ends of an `either` dimension resolve through one dim table
+ * (`dim_airport`), so filling either column alone resolves every value: the mutant that fills only
+ * `columns[0]` survives the whole suite. It is kept because the alternative couples this producer
+ * to that consumer's iteration order and to which end an id happens to occupy -- neither of which
+ * is this function's to know, and both of which are free to change at the catalog.
+ *
+ * A dimension with no `join_dim` (`origin_state`, `year_month`, `distance_group`) is skipped: its
+ * value is already the readable thing, and `collectIds` would ignore the row anyway.
+ */
+export function filterValueRows(
+  filters: [string, string[]][],
+  allowlist: Allowlist,
+): Record<string, unknown>[] {
+  const rows: Record<string, unknown>[] = [];
+  for (const [key, values] of filters) {
+    const entry = allowlist.dims.get(key);
+    if (entry === undefined || entry.joinDim === null || entry.joinKey === null) continue;
+    const columns = columnsFor(entry);
+    for (const value of values) {
+      if (columns.length === 1) {
+        rows.push({ [columns[0]]: value });
+        continue;
+      }
+      if (entry.filterMode === "either") {
+        rows.push(Object.fromEntries(columns.map((c) => [c, value])));
+        continue;
+      }
+      // `pair`. A value that is not '<low>-<high>' is not one this app emitted -- render.ts
+      // refuses it before a query runs -- so it is dropped here rather than half-resolved into
+      // something that reads like a real pair.
+      const parts = value.split("-");
+      if (parts.length !== columns.length) continue;
+      rows.push(Object.fromEntries(columns.map((c, i) => [c, parts[i]])));
+    }
+  }
+  return rows;
 }
 
 /** Column name -> { dim table, distinct ids present across the page }. Pulled out of
@@ -407,4 +519,16 @@ export async function resolveRows(
   }
 
   return resolved;
+}
+
+/** Display values for a query's FILTER values, which `runPivot` does not resolve (above).
+ *  Returns an empty map -- and runs no query -- for a query with no joinable filter, which is the
+ *  common case and the error page's seeded query. Merge it UNDER the pivot's own map at the
+ *  mount: both are keyed by fact column and agree wherever they overlap, but the pivot's is
+ *  derived from the rows actually rendered, so it is the one that describes the page. */
+export async function resolveFilterValues(
+  filters: [string, string[]][],
+  allowlist: Allowlist,
+): Promise<Map<string, Resolved>> {
+  return resolveRows(filterValueRows(filters, allowlist), allowlist);
 }
