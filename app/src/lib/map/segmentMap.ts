@@ -1026,8 +1026,9 @@ export function disclosureNotes(input: SegmentMapInput): string[] {
  *
  * NODE EMISSION ORDER IS IMPOSED HERE, NOT INHERITED. `tallyNodes` returns airports in the
  * order the caller happened to list their segments, and that order is not reproducible
- * upstream -- the pivot's `ORDER BY seats DESC` carries no tiebreak column, so tied seats are
- * SQL-unspecified and two runs over the same data can list them differently. Sorting ascending
+ * upstream: `tallyNodes` follows the caller's segment array, and this module must not depend on how
+ * that array was produced. (#136 gave the pivot its own tiebreak, so a query-fed caller is now
+ * reproducible as well -- defence in depth, not a reason to drop this.) Sorting ascending
  * by summed seats (tiebreak `code`) makes the rendered bytes a function of the DATA rather than
  * of the array, and it is the same rule the arcs already follow: heaviest last, so the busiest
  * airport's label paints over a quieter one rather than under it.

@@ -23,6 +23,21 @@ SELECT
 FROM fct_segment_month AS f{{MAINLINE_JOIN}}
 WHERE year_month BETWEEN $time_from AND $time_to
   AND ({{FILTERS}})
+--
+-- The ORDER BY repeats the grouping keys as a tiebreak. The sort token names ONE measure
+-- column, so rows tying on it AT THE LIMIT BOUNDARY were returned in DuckDB's
+-- aggregation-merge order -- a Top-N permalink could render a different row set across
+-- redeploys with no data change (#136). The grouping key set is unique per output row by
+-- definition of GROUP BY, so appending it makes the ordering total. It is a SUFFIX: the
+-- requested sort still ranks, the tiebreak only decides who wins a tie.
+--
+-- It is a SEPARATE token from the grouping one, carrying the identical string, and that is
+-- load-bearing. Python's str.replace substitutes EVERY occurrence; JavaScript's
+-- String.replace with a string pattern substitutes only the FIRST. One token used twice
+-- would render correctly in pipeline/pivot.py and leave a literal token in the SQL
+-- app/src/lib/pivot/render.ts sends to DuckDB. Both files rely on every token appearing
+-- exactly once -- which is also why no real token is spelled with its braces in these
+-- comments.
 GROUP BY {{GROUP_BY}}
-ORDER BY {{SORT}}
+ORDER BY {{SORT}}, {{TIEBREAK}}
 LIMIT $limit

@@ -79,8 +79,10 @@ export interface PickerOption {
  * Ordering is by seats descending and is a REAL property, not incidental: the set of options is
  * identical under a dropped sort, so picker.test.ts asserts the sequence. The tiebreak on
  * `value` is load-bearing for the same reason `segmentMap.ts` imposes one on node emission --
- * the pivot's `ORDER BY seats DESC` carries no tiebreak column, so tied rows are SQL-unspecified
- * and two loads of one page could otherwise disagree about the order of its own picker.
+ * this order is a function of the DATA, never of the array a producer handed over. Since #136 the
+ * pivot's own `ORDER BY` carries a tiebreak, so a query-fed caller is stable too -- that is a
+ * second line of defence, not a reason to drop this one. A pure comparator is assertable with no
+ * warehouse round trip and keeps the picker correct for every caller, not just that query.
  *
  * Values stay STRINGS. `AIRCRAFT_TYPE` 079 becomes 79 if int-parsed and the join breaks
  * silently (CLAUDE.md, Data gotchas).

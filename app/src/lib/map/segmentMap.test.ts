@@ -157,9 +157,9 @@ describe("renderSegmentMap", () => {
 
   it("renders the same bytes whatever order the segments arrive in", () => {
     // The whole render is a pure function of the segment SET, never of the array -- which is
-    // what the HUB map cannot claim: its bytes follow `runPivot`'s array, and that array comes
-    // from an `ORDER BY seats DESC` with no tiebreak column, so two runs over the same data can
-    // legitimately differ. Shuffling the segments here must not move a single byte.
+    // what the HUB map cannot claim: its bytes follow `runPivot`'s array rather than the segment
+    // SET, which `networkMap.ts` explains is deliberate and stays true now that #136 has made
+    // that array reproducible. Shuffling the segments here must not move a single byte.
     //
     // Mutant that kills this: drop `segmentOrder`'s sort (verified red). It is NOT killed by
     // dropping the NODE sort, and that is a property of the design rather than a gap: node
@@ -293,9 +293,9 @@ describe("renderSegmentMap", () => {
 
   it("breaks a seats tie by code, on BOTH endpoints, not by array position", () => {
     // F19 measured a seats tie at exactly the 400th row in 31 of the 36 capped views -- DL x
-    // type 614 has 164 route pairs all tied at 160.0 seats at the cut. `ORDER BY seats DESC`
-    // carries no tiebreak column, so without one here which of them draws on top is whatever
-    // order the array arrived in, and that is not reproducible between runs.
+    // type 614 has 164 route pairs all tied at 160.0 seats at the cut. Without a tiebreak HERE,
+    // which of them draws on top is whatever order the array arrived in -- a property of this
+    // function alone, independent of how a caller sorted (#136 gave the pivot its own).
     //
     // Equal seats means equal stroke WIDTH, so width cannot tell the two apart -- the dash does.
     // Both halves are asserted separately because dropping only one tiebreak leaves the other
