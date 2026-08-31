@@ -125,6 +125,12 @@ def test_the_three_null_reasons_account_for_every_unscored_row():
         + m["route_health_no_schedule"]
         - m["route_health_null_overlap"]
         == m["route_health_null_score"]
+    ), (
+        "the two live NULL reasons no longer account for every unscored pair. The likeliest "
+        "cause is not a broken measure: docs/data/model.md warns that the THIRD reason -- a "
+        "prior window that is present but filed zero seats and zero departures -- is empty "
+        "today as a property of which 24 months are current, not structurally. If it has "
+        "reappeared, this identity needs its third term, not a fix."
     )
 
 

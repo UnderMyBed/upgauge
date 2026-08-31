@@ -179,7 +179,7 @@ With Cloudflare's free tier in front, near-zero repeat traffic touches the box r
 `stale-while-revalidate` keeps serving from the edge while either value revalidates.
 
 **Leaderboard precompute was specified for three milestones and is retired, not deferred**
-(#14). Measured 2026-08-30 at `fa78094`, against a served build on that commit's warehouse, not
+(#14). Measured 2026-08-30 at `9b358aa`, against a served build on that commit's warehouse, not
 argued: `mart_route_health` is 5,611 rows, and the four `/watch` preset queries cost
 **1.9-2.3 ms** each at a warm median (fresh read-only connection per preset, median of ten
 runs), **3.8 ms** at the cold worst case (`watch_gauge`; the other three cold runs were

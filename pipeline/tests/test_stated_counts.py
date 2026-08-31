@@ -202,7 +202,6 @@ STATED: dict[str, tuple[str, ...]] = {
     "route_health_pairs": ("docs/data/model.md",),
     "route_health_scored": (
         "docs/data/model.md",
-        "pipeline/tests/test_route_health.py",
         "pipeline/tests/test_route_health_real_data.py",
         "sql/02_marts/200_mart_route_health.sql",
     ),
@@ -250,9 +249,13 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
         ("docs/product/scope.md", "{v} of {sitemap_routes} pairs"),
         ("sql/03_queries/sitemap_routes.sql", "{v} of {sitemap_routes} pairs"),
     ),
-    # mart_route_health's sub-1,000 figures (#146, #148). Every needle carries the NOUN as well
-    # as the number, so the grain rule is pinned by the same gate that pins the count: a sweep
-    # that swapped 373 into a sentence still saying "routes" reddens here.
+    # mart_route_health's sub-1,000 figures (#146, #148). WHERE a needle carries a grain noun
+    # beside the number, the grain rule is pinned by the same gate that pins the count -- a sweep
+    # that swapped 373 back into a sentence saying "routes" reddens here, and that is proved by
+    # mutation. Every SERVED-COPY site is of that kind, which is where #146's defect was visible.
+    # The rest pin only the number in whatever phrase carries it; claiming otherwise (an earlier
+    # revision of this comment said "every needle") would be a false universal inside the gate
+    # whose whole job is catching false statements about figures.
     "route_health_null_score": (
         ("app/src/app/watch/[preset]/page.test.tsx", "{v} of {route_health_rows}"),
         (
@@ -260,6 +263,11 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
             "{v} of {route_health_rows} carrier-route pairs",
         ),
         ("docs/data/model.md", "{v} of {route_health_rows} rows"),
+        # This file used to be registered for `route_health_scored` and state "76 of the 5,238
+        # scored" -- a true count against a population those 76 are not in, since every one of
+        # them is unscored BECAUSE completion_factor is NULL. Registered here now, on the figure
+        # the sentence actually uses.
+        ("pipeline/tests/test_route_health.py", "{v} UNSCORED carrier-route pairs"),
         ("docs/product/features.md", "{v} of the mart's {route_health_rows} rows"),
         (
             "sql/03_queries/watch_death_watch.sql",

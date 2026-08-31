@@ -62,7 +62,13 @@ const REGISTRY: ReadonlyMap<PresetSlug, Preset> = new Map([
     {
       slug: "empty-planes",
       title: "Empty Planes",
-      frame: "Real airliner metal, flown often, with the seats going out empty.",
+      // "flown often" until #148, which deleted this preset's `t12_departures_performed >=
+      // 360` predicate and left the claim standing with nothing behind it -- 11 of the 25
+      // rendered rows fall below 360, and rank 1 flew 65 departures across 2 months. The
+      // frame now states the property the mart's gate actually enforces, which is a RATE
+      // and not a trailing-12 total. app/smoke.sh pins both halves in the served bytes;
+      // nothing pinned the old sentence, which is why it went false silently.
+      frame: "Real airliner metal, at 30+ departures a month flown, with the seats going out empty.",
       sqlFile: "watch_empty_planes",
       directions: [{ heading: "Emptiest", direction: "asc" }],
     },

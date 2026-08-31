@@ -39,13 +39,21 @@ from pipeline.tests.test_marts import _warehouse
 #   N       t12_departures_scheduled = 0, everything else known -> completion_factor alone NULL.
 #   G       p12_departures_performed = 0 with p12 seats filed -> gauge_p12 and the frequency
 #           ratio alone NULL (lf_p12 is still computable from seats and passengers).
+#   L       no t12 passengers total -> lf_t12, and so lf_delta, alone NULL.
+#   S       60 departures over 12 months flown. Clears a flat `>= 30` and fails the rate, which
+#           is the ONLY shape that tells the two forms apart -- see the floor test below.
 #
-# WHAT THIS DELIBERATELY CANNOT ISOLATE, stated so nobody hunts for it: z_lf on its own, and
-# z_gauge and z_freq separately from each other. lf_delta only goes NULL when a seats total does,
-# and `zero_seats` (normalize_t100_segment.sql) quarantines every row with seats = 0 and
-# departures > 0, so a seats-less-but-flown window cannot reach the mart. gauge_p12 and the
-# frequency ratio share p12_departures_performed as their denominator, so nulling one nulls both.
-# They are killable as a PAIR, and the tests below say so rather than claiming more.
+# WHAT THIS CANNOT ISOLATE, stated so nobody hunts for it: z_gauge and z_freq separately from
+# each other. gauge_p12 and the frequency ratio share p12_departures_performed as their
+# denominator, so nulling one nulls both; they are killable as a PAIR and the test says so
+# rather than claiming more.
+#
+# z_lf IS isolable, via pair L, and an earlier revision of this comment claimed otherwise on a
+# reason that was wrong twice over: lf_delta nulls when a PASSENGERS total nulls, not only a
+# seats total, and the appeal to `zero_seats` did not apply here at all -- this helper writes
+# Parquet straight into the Hive tree with `is_quarantined = FALSE`, so
+# normalize_t100_segment.sql never runs over these rows and no quarantine rule constrains what
+# they can encode.
 _ADVERSARIAL = """
 COPY (
     WITH m(idx) AS (SELECT * FROM generate_series(1, 12)),
@@ -61,7 +69,12 @@ COPY (
         (99993, 'Z3', 10005, 10006, 2015,  0.0, 60.0, 6600.0, 3300.0),
         -- G: filed a p12 schedule and flew none of it -> gauge and frequency alone are NULL
         (99994, 'Z4', 10007, 10008, 2014, 60.0,  0.0, 6000.0, 3000.0),
-        (99994, 'Z4', 10007, 10008, 2015, 60.0, 60.0, 6600.0, 3300.0)
+        (99994, 'Z4', 10007, 10008, 2015, 60.0, 60.0, 6600.0, 3300.0),
+        -- L: carried no passengers total in t12 -> lf_delta alone is NULL
+        (99995, 'Z5', 10009, 10010, 2014, 60.0, 60.0, 6000.0, 3000.0),
+        (99995, 'Z5', 10009, 10010, 2015, 60.0, 60.0, 6600.0,   NULL),
+        -- S: 60 departures over 12 months FLOWN = 5 a month. Clears a flat 30, fails the rate.
+        (99996, 'Z6', 10011, 10012, 2015,  5.0,  5.0,  500.0,  250.0)
     )
     SELECT
         spec.yr || '-' || lpad(m.idx::VARCHAR, 2, '0')          AS year_month,
@@ -364,7 +377,7 @@ def test_windows_are_global_and_do_not_overlap(con):
 
 def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
     """Fix round 1: the original version of this test checked parity against `lf_delta`
-    alone, which is FALSE on real data -- 76 of the 5,238 scored carrier-route pairs have a
+    alone, which is FALSE on real data -- 76 of the 373 UNSCORED carrier-route pairs have a
     fully-populated prior window (so lf_delta, gauge_delta, capacity_delta and frequency_delta
     are all known)
     but `completion_factor` is NULL anyway, because they filed zero scheduled departures
@@ -460,6 +473,72 @@ def test_the_completion_clamp_alone_is_null_safe(adversarial_con):
     assert frequency_delta is not None
     assert completion_factor is None, "this pair must be NULL on completion and nothing else"
     assert health_score is None, "the z_completion clamp let a NULL axis through as 3"
+
+
+def test_the_load_factor_clamp_alone_is_null_safe(adversarial_con):
+    """The z_lf isolation, which an earlier revision of this module said was unreachable.
+
+    Pair L carries no t12 passengers total, so lf_t12 -- and with it lf_delta -- is NULL while
+    gauge, frequency and completion are all known. Remove the z_lf CASE alone and L is scored:
+    this test, and only this one, goes red.
+
+    The wrong reason is worth naming because it is the kind that survives review: lf_delta was
+    said to null only when a SEATS total does, guarded by `zero_seats`. It also nulls on a
+    passengers total, and `zero_seats` never runs on this fixture at all -- the helper writes
+    Parquet directly, so nothing in normalize_t100_segment.sql constrains these rows."""
+    row = adversarial_con.execute("""
+        SELECT lf_delta, gauge_delta, frequency_delta, completion_factor, health_score
+        FROM mart_route_health WHERE op_airline_id = 99995
+    """).fetchone()
+    assert row is not None, "the lf-only-NULL pair is missing from the mart"
+    lf_delta, gauge_delta, frequency_delta, completion_factor, health_score = row
+    assert lf_delta is None, "this pair must be NULL on lf_delta and nothing else"
+    assert gauge_delta is not None
+    assert frequency_delta is not None
+    assert completion_factor is not None
+    assert health_score is None, "the z_lf clamp let a NULL axis through as 3"
+
+
+def test_a_pair_below_the_monthly_rate_is_rejected_though_it_clears_a_flat_thirty(
+    adversarial_con,
+):
+    """THE test the fixture could not previously carry, and the reason the floor had no
+    pytest-level guard at all.
+
+    The committed fixture admits exactly one row, and it flew 1 month -- so `30 * 1 == 30` and
+    the flat and rate forms are NUMERICALLY IDENTICAL on the only row that exists. Reverting the
+    mart's gate to a flat `>= 30` left 21 of 22 tests green, and the one that caught it caught it
+    by matching TEXT, not behaviour: a mutant written as
+
+        WHERE t12_months_flown > 0 AND t12_departures_performed >= 30 * t12_months_flown
+           OR t12_departures_performed >= 30
+
+    restores #134's exact leniency defect through operator precedence while preserving the
+    substring the textual binding matches, and passed everything.
+
+    Pair S is the discriminator: 60 departures over 12 months FLOWN, i.e. 5 a month. It clears a
+    flat 30 and fails the rate, so it is admitted by the old form, by the `OR` mutant, and by
+    anything else that stops dividing -- and rejected by the rule as written. The two assertions
+    after the membership check are what make that concrete rather than asserted: without them a
+    pair that failed BOTH forms would satisfy this test while proving nothing."""
+    admitted = adversarial_con.execute(
+        "SELECT count(*) FROM mart_route_health WHERE op_airline_id = 99996"
+    ).fetchone()[0]
+    assert admitted == 0, (
+        "a carrier-route pair flying 5 departures a month is in the scored universe -- the gate "
+        "is comparing a trailing-12 sum against a monthly floor again"
+    )
+
+    departures, months_flown = adversarial_con.execute("""
+        WITH w AS (SELECT DISTINCT t12_start_month AS s, t12_end_month AS e
+                   FROM mart_route_health)
+        SELECT sum(r.departures_performed),
+               count(DISTINCT r.year_month) FILTER (WHERE r.departures_performed > 0)
+        FROM fct_route_month r, w
+        WHERE r.op_airline_id = 99996 AND r.year_month BETWEEN w.s AND w.e
+    """).fetchone()
+    assert departures >= 30, "S no longer clears a flat 30, so it cannot tell the forms apart"
+    assert departures < 30 * months_flown, "S no longer fails the rate, so this proves nothing"
 
 
 def test_the_gauge_and_frequency_clamps_are_null_safe(adversarial_con):

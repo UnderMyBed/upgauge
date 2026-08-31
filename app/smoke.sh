@@ -2420,6 +2420,14 @@ check_not "watch/empty-planes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
 # of real seat counts contains "360" by coincidence, the same trap the "50" mutant already
 # sprang on this preset (task-6-report.md).
 check     "watch/empty-planes: discloses the mart's departure floor" "$BODY" '30 performed departures per month flown'
+# THE FRAME, both halves. #148 deleted this preset's `t12_departures_performed >= 360` predicate
+# and left the frame saying "flown often" -- a trailing-12 frequency claim with nothing behind
+# it, on a leaderboard whose rank 1 flew 65 departures across 2 months and 11 of whose 25 rows
+# fall below 360. NOTHING pinned that sentence, which is exactly why it went false silently: the
+# /watch/new-routes shape CLAUDE.md records twice, a compound claim losing one clause to a
+# paraphrase no grep would catch. Both directions now, so the replacement cannot rot the same way.
+check     "watch/empty-planes: the frame states the rate the mart enforces" "$BODY" '30+ departures a month flown'
+check_not "watch/empty-planes: ...and no longer claims a frequency nothing floors" "$BODY" 'flown often'
 check_not "watch/empty-planes: no longer claims a flat 360 annual total" "$BODY" '360 performed departures'
 check_re     "watch/empty-planes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/empty-planes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'

@@ -710,12 +710,15 @@ warehouse — the reason a per-axis clamp exists at all, not just an overall cap
 >
 > **That rule governs the SHARED fixture — the one every mart test reads — and it stands.**
 > `pipeline/tests/test_route_health.py` also builds a separate `adversarial_con` warehouse whose
-> rows are synthetic, and the split is what keeps both correct. It is read by the four
-> `least`/`greatest` NULL-safety tests and nothing else, and every shape it encodes is an
-> ABSENCE rather than traffic: a trailing window with no filed schedule, a prior window that
-> filed one and flew none of it. No test asserts a measured quantity against those rows, so they
-> cannot make a real figure wrong — which is exactly what fabricated rows in the shared fixture
-> would do. Anything standing in for a real filing still comes from `data/raw/`.
+> rows are synthetic, and the split is what keeps both correct. It is read only by the mart tests
+> that need a shape the committed sample cannot produce. It DOES fabricate traffic — two of its
+> pairs are fully populated controls carrying invented departures and seats, and they are
+> load-bearing, because every z-score is `stddev_samp(...) OVER ()` and a single value or
+> identical ones make the axis NULL through `nullif`. The clause the exception
+> rests on is narrower and is the one to check: **no test asserts a measured quantity against
+> those rows.** They are read only for which components are NULL and whether a row was admitted,
+> so they cannot make a real figure wrong — which is exactly what fabricated rows in the shared
+> fixture would do. Anything standing in for a real filing still comes from `data/raw/`.
 
 ### `distance` is not additive
 

@@ -1,5 +1,12 @@
--- Empty Planes. Lowest trailing-12 load factor among routes actually flown on real airliner
--- metal, at a meaningful trailing-12 frequency.
+-- Empty Planes. Lowest trailing-12 load factor among carrier-route pairs flown on real
+-- airliner metal at the mart's rate floor.
+--
+-- NOT "at a meaningful trailing-12 frequency", which this header said until #148 while the
+-- predicate behind it was being deleted. No trailing-12 frequency floor survives anywhere:
+-- the mart admits on a per-month RATE, which a two-month operation clears trivially. 11 of
+-- the 25 rendered rows fall below 360 trailing-12 departures and the leader flew 65 across 2
+-- months -- both true and both fine, but only under a sentence that does not promise
+-- frequency.
 --
 -- gauge_t12 >= 50 (the CRJ-200's seat count, same boundary watch_death_watch.sql uses) is the
 -- floor THIS PRESET owns, and the reason it needs one: without it the leaderboard is Alaska
