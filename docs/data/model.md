@@ -707,6 +707,15 @@ warehouse — the reason a per-axis clamp exists at all, not just an overall cap
 > rows from `data/raw/`, never fabricated ones — see the CGQ precedent in
 > [`sql/01_staging/dim_city_market.sql`](../../sql/01_staging/dim_city_market.sql) and the
 > two-aircraft-type rows added for `test_distance_is_not_summed`.
+>
+> **That rule governs the SHARED fixture — the one every mart test reads — and it stands.**
+> `pipeline/tests/test_route_health.py` also builds a separate `adversarial_con` warehouse whose
+> rows are synthetic, and the split is what keeps both correct. It is read by the four
+> `least`/`greatest` NULL-safety tests and nothing else, and every shape it encodes is an
+> ABSENCE rather than traffic: a trailing window with no filed schedule, a prior window that
+> filed one and flew none of it. No test asserts a measured quantity against those rows, so they
+> cannot make a real figure wrong — which is exactly what fabricated rows in the shared fixture
+> would do. Anything standing in for a real filing still comes from `data/raw/`.
 
 ### `distance` is not additive
 
