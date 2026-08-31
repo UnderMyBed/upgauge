@@ -4,6 +4,7 @@ import { dataAsOf } from "@/lib/db";
 import { search, SEARCH_RESULT_CAP, type SearchGroup } from "@/lib/search";
 import { formatCount } from "@/lib/format";
 import { TopBar } from "@/components/TopBar";
+import { RECOVERY_HREF } from "@/lib/pivot/recovery";
 
 // Same reasoning as every other page here: this page's content depends on live warehouse
 // state (dataAsOf(), and the resolution itself -- a code that's ambiguous today might not be
@@ -19,12 +20,6 @@ export const dynamic = "force-dynamic";
 // Task 5 keeps this page out of the sitemap; Task 8 gives it `Disallow` in robots.txt and
 // `no-store` on the response -- this file owns only the tag.
 export const metadata: Metadata = { robots: { index: false } };
-
-// The same known-valid Explorer permalink every other empty/404 state in this product offers
-// (explore/page.tsx, and each entity page's not-found.tsx) -- one shared "start over" link
-// rather than a fifth slightly different one.
-const EXPLORER_EXAMPLE =
-  "/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op";
 
 /** `q` was never typed -- not an error, and not the same as "no match" (`NoneState` below).
  * Renders what the omnibox actually searches, with one worked example per resolvable shape,
@@ -78,7 +73,7 @@ function NoneBody({ query }: { query: string }) {
       <h1>No matches</h1>
       <p role="alert">{sentence}</p>
       <p>
-        Start from <a href={EXPLORER_EXAMPLE}>a known-valid query</a> in the Explorer instead.
+        Start from <a href={RECOVERY_HREF}>a known-valid query</a> in the Explorer instead.
       </p>
     </div>
   );

@@ -10,8 +10,16 @@ import { TopBar } from "@/components/TopBar";
 // classes that stopped resolving when Task 3 deleted the dark block from globals.css.
 export const dynamic = "force-dynamic";
 
-// One real query, not a placeholder: the same permalink /explore's error page offers as its
-// known-valid starting point, so the two can never drift into recommending different things.
+// One real query, not a placeholder -- and DELIBERATELY NOT the recovery query the product's
+// dead ends offer (`lib/pivot/recovery.ts`). That one selects seats alone; this one selects four
+// measures, because the prose below promises the gauge rail and the reason-code gutter and a
+// single-measure query renders neither. The front door is a showcase, not an escape hatch, so
+// the two are allowed to differ -- an earlier note here claimed they were the same permalink,
+// which they have never been.
+//
+// It is also the LAST hand-spelled permalink literal under `app/src/app`, and `bounds.test.ts`
+// pins that count at one: anything that moves this constant must move that pin with it, and a
+// second literal appearing anywhere in this tree reddens it.
 const SAMPLE =
   "/explore?v=1&k=seg&d=op_airline_id&m=seats,departures_performed,load_factor,avg_gauge" +
   "&t=2025-05:2026-04&s=-seats&n=25&g=op";

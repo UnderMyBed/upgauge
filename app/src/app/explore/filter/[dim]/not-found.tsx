@@ -9,6 +9,7 @@ import {
   setGrain,
 } from "@/lib/pivot/builder";
 import { decodeRequest } from "@/lib/pivot/bounds";
+import { RECOVERY_HREF } from "@/lib/pivot/recovery";
 import { GRAINS, type Grain, type PivotQuery } from "@/lib/pivot/types";
 import { rawPathFromHeaders } from "@/lib/rawPath";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
@@ -172,7 +173,7 @@ export async function NotFoundView({
         ) : null}
         <p>
           Start from{" "}
-          <a href="/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op">
+          <a href={RECOVERY_HREF}>
             the Explorer
           </a>
           .

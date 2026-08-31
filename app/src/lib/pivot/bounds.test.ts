@@ -427,19 +427,30 @@ describe("no permalink this app has shipped becomes unreadable", () => {
   }
 
   it("finds the hardcoded permalinks at all -- a scan matching nothing passes vacuously", () => {
-    // Pinned so a refactor that moves these hrefs out of reach of the scan fails HERE, loudly,
-    // rather than turning the test below into an empty loop that reports ok. Nine files carry
-    // the same "start from a known-valid query" literal: `/search`, `/explore/filter/:dim` and
-    // its 404, and the five entity and `/watch` 404s.
+    // ONE literal is left in this tree, and this pin is what refuses a second.
     //
-    // `/explore`'s own error state is DELIBERATELY NOT among them: it builds that href from
-    // `FALLBACK_QUERY` through `exploreHref`, because the same query also seeds the builder
-    // rendered beside it and two literals would drift. An interpolated href is out of this
-    // scan's reach by construction, so the property this test guarantees for a literal is
-    // guaranteed for that constant by `app/explore/page.test.tsx` instead -- it pins the encoding
-    // against this exact string AND asserts `decodeRequest` accepts it. Moving another of the
-    // nine to a constant must move its coverage the same way, not merely decrement this number.
-    expect(hardcodedPermalinks().length).toBe(9);
+    // Eight of the nine were the SAME recovery permalink, hand-spelled: `/search`,
+    // `/explore/filter/:dim` and its 404, and the five entity and `/watch` 404s. #140 moved
+    // them onto `lib/pivot/recovery.ts`, which puts them out of this scan's reach -- an
+    // interpolated href is skipped by construction -- so their coverage MOVED rather than being
+    // decremented, exactly as the note this comment replaces required:
+    //
+    //   `recovery.test.ts`          pins both hrefs to their exact strings and asserts
+    //                               `decodeRequest` admits them -- what this scan did.
+    //   `recoveryLink.callsites`    renders every dead-end surface and asserts each emits the
+    //                               constant -- the drift this scan could NEVER see, because a
+    //                               call site can diverge to a different query that still
+    //                               decodes perfectly well.
+    //
+    // The survivor is the front door's SAMPLE, a genuinely different query (four measures, to
+    // show the gauge rail its prose promises) with a different job -- a showcase, not an escape
+    // hatch. Driving it through the constant too would take this count to zero and make the loop
+    // below vacuous, which is the failure this test exists to name.
+    //
+    // So this number now guards ONE thing, and it is a real thing: a ninth hand-spelled
+    // permalink appearing anywhere under `app/src/app` takes it to 2. Reverting any of the eight
+    // to its literal -- byte-identical, invisible to every render test -- reddens HERE.
+    expect(hardcodedPermalinks().length).toBe(1);
   });
 
   it("accepts every hardcoded /explore permalink the app serves", () => {

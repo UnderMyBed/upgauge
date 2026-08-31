@@ -4,6 +4,7 @@ import { dataAsOf, runPivot } from "@/lib/db";
 import { rawPathFromHeaders } from "@/lib/rawPath";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
 import { encode } from "@/lib/pivot/urlstate";
+import { AIRCRAFT_RECOVERY_HREF } from "@/lib/pivot/recovery";
 import { displayValue, resolutionKey } from "@/lib/resolve";
 import { TopBar } from "@/components/TopBar";
 
@@ -152,7 +153,7 @@ export async function NotFoundView({ pathname }: { pathname: string }) {
               `prefetch={false}` is load-bearing here, not style -- TopBar.tsx's own note
               has the why in full, and prefetchPolicy.test.ts enforces it repo-wide. */}
           Try <Link href="/aircraft/B737-8" prefetch={false}>B737-8</Link>, or start from{" "}
-          <a href="/explore?v=1&k=seg&d=aircraft_type&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op">
+          <a href={AIRCRAFT_RECOVERY_HREF}>
             the Explorer
           </a>
           .
