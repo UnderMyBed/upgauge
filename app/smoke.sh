@@ -235,6 +235,106 @@ check_not_re() {
   fi
 }
 
+# The DATA rows of one extracted table body, one per line. The header row is dropped by
+# selecting on `<td class="num">`: its cells are `<th>`, so it carries none. `awk` rather than
+# `grep` for the filter -- awk exits 0 on no match, so a table that extracted to nothing reaches
+# the count check below instead of poisoning a `pipefail` pipeline on the way there.
+data_rows() { # data_rows <table-html>
+  printf '%s' "$1" | sed 's|<tr|\n<tr|g' | awk '/<td class="num">/'
+}
+
+# The Δ Gauge column of one extracted /watch table, one value per line -- the column both Gauge
+# Watch tables are ordered by, and the input to `check_gauge_sorted` below.
+#
+# `gauge_delta` is the FOURTH `<td class="num">` cell of a data row: DataTable emits three
+# leading `id` cells (route, carrier, health score -- watch/[preset]/page.tsx's `buildColumns`)
+# and then MEASURE_COLUMNS in order -- lf_t12, lf_delta, gauge_t12, gauge_delta. That position is
+# read off the SERVED bytes, never off page.tsx, per this file's own standing rule about the
+# bytes React EMITS: `<td class="num">72.5</td>` is the fourth num cell on /watch/gauge's rank-1
+# row. `formatGauge` is `v.toFixed(1)` (lib/format.ts), so the value is plain ASCII with a
+# hyphen-minus, one decimal and no thousands separator -- awk compares it numerically as it
+# stands -- and the em-dash a NULL would render cannot appear in this column at all, since
+# watch_gauge.sql filters `gauge_delta IS NOT NULL`.
+gauge_delta_column() { # gauge_delta_column <table-html>
+  data_rows "$1" | awk '
+    {
+      c = 0
+      s = $0
+      while (match(s, /<td class="num">[^<]*<\/td>/)) {
+        c++
+        if (c == 4) {
+          cell = substr(s, RSTART, RLENGTH)
+          sub(/^<td class="num">/, "", cell)
+          sub(/<\/td>$/, "", cell)
+          print cell
+          next
+        }
+        s = substr(s, RSTART + RLENGTH)
+      }
+    }'
+}
+
+# THE ORDERING OF A /watch TABLE, asserted as an ordering. CLAUDE.md's rule: when the property
+# is an ordering or a position, assert the ordering or the position, never the set of things
+# that happen to be present. A membership needle over a 25-row body ("this route appears") is
+# green under a reversed sort; this is not.
+#
+# It pins NO fixture, which is the point. #147 replaced a "leads with AS LAX-OGG" label whose
+# check was a substring test, and the obvious repair -- extract row 1 and keep the named
+# carrier-route -- was measured and rejected: replaying mart_route_health's own window over the
+# last 24 monthly rebuilds, the rank-1 pair changed in 4 of 23 steps upgauging and 7 of 23
+# downgauging, so a rank pin on both tables survives a BTS refresh roughly 58% of the time. This
+# check is instead true of EVERY warehouse, which is also why it is not `check_dataset`-gated:
+# unlike the four pinned needles in section 14b it still runs under SMOKE_DATASET_PINNED=0,
+# where those skip and the page's ordering would otherwise be unasserted entirely.
+#
+# THE SERVED ROW ORDER IS THE QUERY'S ORDER, and that is a dependency rather than a given.
+# DataTable's `rank` prop implies `partition`, and `orderRows` moves below-floor rows to the END
+# -- which would break monotonicity on a page that is entirely correct. It cannot here:
+# mart_route_health's own admission gate is `t12_departures_performed >= 30 * t12_months_flown`
+# (200_mart_route_health.sql), the SAME rule lib/floor.ts applies, so every row it emits is on or
+# above the floor. Measured: 0 of 5,611 mart rows are below floor, and the two rendered tables
+# bottom out at 34.75 and 31.22 departures/month. If that gate and floor.ts ever diverge this
+# goes red -- correctly, because a ranked leaderboard would then be reordering itself under the
+# reader.
+#
+# NON-VACUITY LIVES INSIDE THIS CHECK, not in a second check beside it. Sortedness over an empty
+# list is trivially true, so an extractor that silently matched nothing would print `ok` forever
+# -- this file's self-defect #1 (a `check_not` reporting a silent ok for a string that WAS
+# present) in a new costume. So the value count must equal the DATA-ROW count and be at least 2,
+# and a mismatch is a FAIL naming both numbers.
+#
+# The comparison is NON-strict. The column is rounded to one decimal for display and real ties
+# survive that -- the upgauge table renders 35.5 twice and 32.2 twice on the current warehouse.
+# Rounding is order-preserving, so a correctly ordered query cannot produce a violation here,
+# but a strict comparison would red-flag those ties on a correct page.
+check_gauge_sorted() { # check_gauge_sorted <name> <table-html> <desc|asc>
+  local name="$1" html="$2" want="$3" nrows vals nvals bad
+  nrows=$(data_rows "$html" | awk 'END { print NR }')
+  vals=$(gauge_delta_column "$html")
+  nvals=$(printf '%s\n' "$vals" | awk 'NF { n++ } END { print n + 0 }')
+  if [ "$nvals" -lt 2 ] || [ "$nvals" != "$nrows" ]; then
+    printf '  FAIL %s\n       read %s values from %s data rows -- expected one per row, min 2.\n' \
+      "$name" "$nvals" "$nrows"
+    printf '       The extractor missed the column; the sort test below would be vacuous.\n'
+    FAILED=1
+    return
+  fi
+  bad=$(printf '%s\n' "$vals" | awk -v want="$want" '
+    NF == 0 { next }
+    NR > 1 && want == "desc" && ($1 + 0) > (prev + 0) { print "rows " NR - 1 " -> " NR ": " prev " then " $1 }
+    NR > 1 && want == "asc"  && ($1 + 0) < (prev + 0) { print "rows " NR - 1 " -> " NR ": " prev " then " $1 }
+    { prev = $1 }')
+  if [ -n "$bad" ]; then
+    printf '  FAIL %s\n       %s of %s rows are out of %s order:\n' \
+      "$name" "$(printf '%s\n' "$bad" | awk 'END { print NR }')" "$nvals" "$want"
+    printf '%s\n' "$bad" | sed 's/^/       /'
+    FAILED=1
+  else
+    printf '  ok   %s\n' "$name"
+  fi
+}
+
 # The one check in this file that reads BYTES instead of a text haystack, because an OG card is
 # a PNG. Every helper above takes a body that has already been through `$( )`, which mangles a
 # binary payload (NUL bytes dropped, trailing newlines stripped), so a card can only be asserted
@@ -2375,12 +2475,26 @@ check_re     "watch/gauge: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td
 check_not_re "watch/gauge: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
 
 # The falsifiable pair itself (measured against the real warehouse, mart_route_health, current
-# window). AS LAX-OGG is the single largest upgauge, gauge_delta +72.46. FIVE carriers fly that
-# airport pair and UA is downgauging it at -1.76, so the `check_not` below passes on MARGIN, not
-# because the pair is one-sided: UA LAX-OGG ranks 1,114th by descending downgauge against a
-# 25-row cutoff of -29.09. That is a real but weaker guarantee than the pair below it, and it is
-# stated rather than implied -- an earlier revision of this comment claimed no carrier downgauges
-# LAX-OGG, which is false.
+# window). AS LAX-OGG is one of the upgauge table's 25 rows, and MEMBERSHIP IS ALL THIS ASSERTS:
+# `check` is a substring test over the whole extracted body, so a rank claim on this line would
+# be a label the check does not earn. It read "leads with AS LAX-OGG" until #147 -- true at the
+# time, and still an overstatement of what fires, which is the same correction #148 had already
+# made to the downgauge half below.
+#
+# RANK IS DELIBERATELY NOT PINNED TO A FIXTURE HERE, and that is a measurement rather than a
+# preference. Replaying mart_route_health's own window over the last 24 monthly rebuilds, the
+# rank-1 carrier-route changed in 4 of 23 steps upgauging and 7 of 23 downgauging, so a rank pin
+# on both tables survives a BTS refresh only ~58% of the time. AS LAX-OGG does lead today, by
+# 1.93 gauge points -- the SMALLEST rank1-rank2 margin in all 24 rebuilds -- and its lead has
+# collapsed 30.60 -> 13.43 -> 5.42 -> 1.93 over four consecutive rebuilds while AS HNL-LAX holds
+# flat behind it. Pinning that is a coin flip the gate would lose on its own schedule. The
+# ordering is asserted directly instead, by `check_gauge_sorted` below, which names no route.
+#
+# FIVE carriers fly that airport pair and UA is downgauging it at -1.76, so the `check_not`
+# below passes on MARGIN, not because the pair is one-sided: UA LAX-OGG ranks 1,114th by
+# descending downgauge against a 25-row cutoff of -29.09. That is a real but weaker guarantee
+# than the pair below it, and it is stated rather than implied -- an earlier revision of this
+# comment claimed no carrier downgauges LAX-OGG, which is false.
 #
 # THE DOWNGAUGE HALF CANNOT USE ITS LEADER, and the reason is this repo's own grain rule. The
 # largest downgauge is HA HNL-PDX at -64.49, but AS flies the SAME airport pair upgauging at
@@ -2399,12 +2513,43 @@ check_not_re "watch/gauge: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td
 # reaches the response -- the exact dark-guard class M4c shipped (`can&rsquo;t be read`,
 # smoke.sh's own note above). Verified against the actual served bytes before writing this,
 # not assumed from the source.
+#
+# WHICH IS WHY THE POSITIVE NEEDLES CARRY THEIR MARKUP -- `>LAX–OGG</a>`, never a bare
+# `LAX–OGG`. The route cell emits BOTH spellings in one `<td>`: `<a href="/route/LAX-OGG">LAX–OGG</a>`,
+# the href from `routeCellHref` being hyphenated. A bare needle therefore matches the HREF in
+# that same cell, and the dash it is written with decides nothing -- measured by mutant (#147):
+# against the bare form, swapping the U+2013 for an ASCII hyphen left the check GREEN, which made
+# the paragraph above a claim about the response's bytes that no assertion here actually held.
+# Anchored between `>` and `</a>` it pins the RENDERED cell text; the ASCII spelling appears
+# nowhere on the page, so that mutant now dies.
+#
+# The two `check_not`s stay BARE on purpose, and that is not an inconsistency: absence of the
+# bare form IMPLIES absence of the anchored one, so the loose needle is the stronger refutation
+# -- it also catches the pair leaking into the wrong table as a bare href, or in any other
+# spelling the cell might take.
 UP_TABLE=$(between "$BODY" '<h2>Upgauging</h2>' '<h2>Downgauging</h2>')
 DOWN_TABLE=$(between "$BODY" '<h2>Downgauging</h2>' '<aside class="legend">')
-check_dataset check     "watch/gauge: the upgauge table leads with AS LAX-OGG"   "$UP_TABLE"   'LAX–OGG'
+check_dataset check     "watch/gauge: the upgauge table carries AS LAX-OGG"     "$UP_TABLE"   '>LAX–OGG</a>'
 check_dataset check_not "watch/gauge: ...which is not in the downgauge table"    "$DOWN_TABLE" 'LAX–OGG'
-check_dataset check     "watch/gauge: the downgauge table carries B6 DAB-JFK"  "$DOWN_TABLE" 'DAB–JFK'
+check_dataset check     "watch/gauge: the downgauge table carries B6 DAB-JFK"  "$DOWN_TABLE" '>DAB–JFK</a>'
 check_dataset check_not "watch/gauge: ...which is not in the upgauge table"     "$UP_TABLE"   'DAB–JFK'
+
+# THE ORDERING, which the four needles above do not touch: each is a substring test over a
+# 25-row body, so all four stay green under a reversed sort. `check_gauge_sorted` (top of file)
+# reads the Δ Gauge column out of every data row and asserts the direction the query asked for
+# -- no fixture, no carrier, no route, so nothing here rots when BTS advances. That is also why
+# these two are NOT check_dataset-gated: they hold on every warehouse, so they keep running
+# under SMOKE_DATASET_PINNED=0, where the four above skip and this page's ordering would
+# otherwise be unasserted on the production-image path entirely.
+#
+# What they catch: {{DIRECTION}} failing to substitute so both tables render one direction --
+# the defect watch.ts's `substituteDirection` comment records, where JS replace() hits only the
+# FIRST occurrence and neither single-direction preset can see it; the two `directions` registry
+# entries being swapped; and any re-sort introduced between the query and the render. Each is
+# independently falsifiable -- a direction swap reddens each on its own -- so neither is
+# deletable-green behind the other.
+check_gauge_sorted "watch/gauge: the upgauge table is ordered by descending Δ Gauge"  "$UP_TABLE"   desc
+check_gauge_sorted "watch/gauge: the downgauge table is ordered by ascending Δ Gauge" "$DOWN_TABLE" asc
 
 # 14c. /watch/empty-planes -- one table, lowest load factor at a real-airliner gauge floor.
 BODY=$(curl -s --max-time 15 "${BASE}/watch/empty-planes")
