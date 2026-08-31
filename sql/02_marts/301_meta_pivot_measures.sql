@@ -17,6 +17,11 @@
 -- see 100_fct_route_month.sql's identical reasoning). One expr, shared by both grains'
 -- templates -- fct_route_month exposes a structural `FALSE AS is_quarantined` (its sums are
 -- already clean) purely so this FILTER is a no-op there instead of a missing column.
+--
+-- THE VALUES ROW ORDER BELOW IS THE CURATED ORDER -- additive first, derived after -- and it is
+-- what MeasureChips renders. sql/03_queries/catalog_measures.sql carries it as an explicit ordinal
+-- and orders by it, bound to the text below by a test. Same rule, same reasons, as
+-- 300_meta_pivot_dimensions.sql states in full.
 SELECT * FROM (VALUES
     ('departures_scheduled', 'Dep. scheduled', TRUE,  'SUM(departures_scheduled) FILTER (WHERE NOT is_quarantined)'),
     ('departures_performed', 'Dep. performed', TRUE,  'SUM(departures_performed) FILTER (WHERE NOT is_quarantined)'),

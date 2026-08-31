@@ -18,7 +18,7 @@ import duckdb
 import pytest
 
 from pipeline import pivot
-from pipeline.marts import build_database
+from pipeline.marts import MARTS_DIR, build_database
 from pipeline.pivot import QUERIES_DIR
 from pipeline.tests.test_marts import _warehouse
 
@@ -432,3 +432,110 @@ def test_every_other_dimension_is_groupable(con):
     dims, _ = pivot.load_allowlist(con)
     filter_only = {k for k, v in dims.items() if v["filter_only"]}
     assert filter_only == {"endpoint_airport_id"}
+
+
+# ---------------------------------------------------------------------------- catalog row order
+# Row order is part of the catalog's contract, not an incidental property of it. loadAllowlist()
+# (app/src/lib/db.ts) builds its Map in row order; app/src/components/builder/ renders the
+# dimension and measure chip rows in that order, and groupableDimensions(a, grain)[0]
+# (app/src/lib/pivot/builder.ts) is the dimension a grain switch LANDS ON when nothing in the
+# current selection survives. Neither catalog query used to order its rows at all.
+#
+# These two tests are the only thing standing between the authored order and the served one, so
+# they are built to fail for the right reason. Reading the real view cannot do that: probed
+# directly across threads = 1, 2, 4, 8, 16, the planner emits the authored order every time, so a
+# test over the real view is green with the ORDER BY and green without it. The source view is
+# therefore REPLAYED in a different physical order first -- which makes the ORDER BY the only
+# thing that can produce the curated sequence, and makes the no-ORDER-BY mutant die on any box.
+
+
+def _curated_key_order(mart_filename: str) -> list[str]:
+    """The curated order as AUTHORED: the VALUES row order in the mart's own file text.
+
+    Parsed from the TEXT, never from the built view, because the built view's row order is
+    precisely the thing that is not a guarantee -- deriving the expectation from it would compare
+    the catalog against itself and pass regardless.
+    """
+    text = (MARTS_DIR / mart_filename).read_text()
+    body = text[text.index("SELECT * FROM (VALUES") :]
+    keys = re.findall(r"^\s*\('([a-z_]+)',", body, re.MULTILINE)
+    assert keys, f"{mart_filename}: parsed no keys from the VALUES block -- has its layout changed?"
+    return keys
+
+
+def _through_a_reordered_source(con, view: str, query_filename: str) -> tuple[list[str], list[str]]:
+    """Run a catalog query against a source view whose rows arrive in a DIFFERENT physical order.
+
+    Returns (physical order of the stand-in source, key order the query returned).
+
+    The stand-in `fct_segment_month` is created EMPTY, from the real DESCRIBE: catalog_dimensions
+    joins duckdb_columns(), which answers out of the catalog and never opens a row. The dimension
+    rows are the real ones, re-inserted descending by key, so nothing about the vocabulary is
+    invented here -- only its arrival order.
+    """
+    mem = duckdb.connect()
+    try:
+        fact = con.execute("DESCRIBE fct_segment_month").fetchall()
+        mem.execute(
+            "CREATE TABLE fct_segment_month (" + ", ".join(f'"{c[0]}" {c[1]}' for c in fact) + ")"
+        )
+        cols = con.execute(f"DESCRIBE {view}").fetchall()
+        mem.execute("CREATE TABLE src (" + ", ".join(f'"{c[0]}" {c[1]}' for c in cols) + ")")
+        rows = con.execute(f"SELECT * FROM {view} ORDER BY key DESC").fetchall()
+        mem.executemany(f"INSERT INTO src VALUES ({', '.join('?' * len(cols))})", rows)
+        mem.execute(f"CREATE VIEW {view} AS SELECT * FROM src")
+
+        physical = [r[0] for r in mem.execute(f"SELECT key FROM {view}").fetchall()]
+        got = [r[0] for r in mem.execute((QUERIES_DIR / query_filename).read_text()).fetchall()]
+        return physical, got
+    finally:
+        mem.close()
+
+
+def _assert_ordered_like(curated: list[str], physical: list[str], got: list[str], where: str):
+    """The three claims, asserted separately so each names which one refused the fixture."""
+    # A key in the mart but not in the query's ordinal list is DROPPED by the INNER JOIN. This is
+    # the assertion that catches the duplication this design creates: the curated sequence is
+    # authored in the mart and restated in the query, and only this binds one to the other.
+    missing = [k for k in curated if k not in got]
+    assert not missing, (
+        f"{missing} appears in the mart's VALUES but not in {where}'s ordinal list, so the "
+        f"INNER JOIN drops it and the Explorer silently loses it. Add it to the VALUES list in "
+        f"sql/03_queries/{where}."
+    )
+    extra = [k for k in got if k not in curated]
+    assert not extra, f"{extra} is ordered by {where} but is not in the mart's VALUES"
+    # Vacuity guard on the harness itself: if the replayed source happened to arrive in the
+    # curated order, this test would pass with or without the ORDER BY and prove nothing.
+    assert physical != curated, (
+        "the replayed source is already in curated order, so this test cannot distinguish an "
+        "ordered query from an unordered one"
+    )
+    assert got == curated, (
+        f"{where} returned rows in a different order than the mart authors them. The chip rows "
+        f"and the grain-switch landing dimension follow this order."
+    )
+
+
+def test_catalog_dimensions_returns_the_curated_order_not_the_join_order(con):
+    """Catches: catalog_dimensions.sql not ordering its rows, so the dimension chip row and the
+    grain-switch landing dimension are whatever the join emitted.
+
+    Also catches a dimension added to 300_meta_pivot_dimensions.sql and not to the query's
+    ordinal list -- the INNER JOIN drops it, and `missing` names it.
+    """
+    curated = _curated_key_order("300_meta_pivot_dimensions.sql")
+    physical, got = _through_a_reordered_source(
+        con, "meta_pivot_dimensions", "catalog_dimensions.sql"
+    )
+    _assert_ordered_like(curated, physical, got, "catalog_dimensions.sql")
+
+
+def test_catalog_measures_returns_the_curated_order_not_the_scan_order(con):
+    """Catches: catalog_measures.sql not ordering its rows, so MeasureChips renders the scan
+    order. A bare scan of a VALUES-backed view is not a guarantee: through a source whose rows
+    arrive descending by key, the unordered query returned seats, rpm, passengers, mail, ...
+    """
+    curated = _curated_key_order("301_meta_pivot_measures.sql")
+    physical, got = _through_a_reordered_source(con, "meta_pivot_measures", "catalog_measures.sql")
+    _assert_ordered_like(curated, physical, got, "catalog_measures.sql")

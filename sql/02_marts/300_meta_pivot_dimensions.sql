@@ -26,6 +26,14 @@
 -- Consequence accepted knowingly: make verify now covers a product decision, not only data.
 -- That is the price of the vocabulary being impossible to drift.
 --
+-- THE VALUES ROW ORDER BELOW IS THE CURATED ORDER, and it is a product decision: `year` before
+-- `op_airline_id` is what the Explorer's dimension chip row renders and what a grain switch lands
+-- on when nothing in the current selection survives. A view cannot promise a reader its own row
+-- order -- a scan or a join is free to emit them in any -- so the sequence is carried as an
+-- explicit ordinal by sql/03_queries/catalog_dimensions.sql, which orders by it, and
+-- pipeline/tests/test_pivot_allowlist.py binds that ordinal to the text below. Add a row here
+-- without adding it there and the row is DROPPED, loudly, rather than landing somewhere arbitrary.
+--
 -- `filter_only`: the dimension is accepted in a FILTER and REJECTED as a grouping
 -- dimension. Exactly one row uses it, and it is not a style choice. `endpoint_airport_id`
 -- means "this airport at EITHER end", so grouping by it puts one segment row (ORD->LAX)
