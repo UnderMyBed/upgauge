@@ -228,10 +228,64 @@ describe("resolveCarrierFilter", () => {
 describe("the value bounds against the live catalog", () => {
   // The `MAX_SLUG_SEPARATORS` discipline (`aircraftSlug.ts:50-58`) applied to a bound whose
   // whole job is to be NARROWER than the data it admits. A bound derived from a guess refuses
-  // real entities on served pages and nothing says so; these two sweep the catalog so that a
+  // real entities on served pages and nothing says so; these three sweep the catalog so that a
   // BTS refresh shipping a four-character carrier code, or a short name carrying a character
   // the pattern omits, fails HERE instead. Exercised through the resolver rather than by
   // re-stating the regex, so widening the pattern without widening reality cannot pass either.
+  //
+  // RESOLVED CONCURRENTLY, not one `await` at a time (#135). Sequentially awaiting 114 then 112
+  // then ~50-60 single-code resolves -- 226+ round trips through a fresh DuckDB connection each
+  // (`db.ts:97-109`'s documented per-call connection) -- put each of these three tests' own
+  // runtime a few hundred ms under Vitest's default 5,000 ms ceiling on an idle box, and
+  // measurably over it under concurrent load: three isolated runs of this file measured 3.09s,
+  // 5.72s, 6.53s, and under load the "admits every fact-present carrier code" test alone was
+  // seen at 5,003ms -- 3ms past the timeout, roughly one run in three. The runtime scaled with
+  // `sitemap_carriers` + the fact-present aircraft-type count, both of which grow with every
+  // BTS refresh, so the margin only shrinks. `Promise.all` over the same per-code resolver
+  // calls -- still `resolveCarrierFilter`/`resolveTypeFilter`, one call per code, so the
+  // property under test and its coverage are unchanged -- turns 226+ sequential round trips
+  // into concurrent ones.
+  //
+  // Measured on this box, idle (mean of 3 runs each): the carrier sweep dropped from ~560ms to
+  // ~226ms, the aircraft sweep from ~594ms to ~272ms, the separator sweep from ~405ms to
+  // ~203ms -- roughly 2-2.5x, because the sequential form's cost is dominated by one-at-a-time
+  // round-trip/IPC overhead that concurrency amortizes across cores.
+  //
+  // Measured under 8-way concurrent load (8 full copies of this file launched at once, A/B'd
+  // back-to-back on the same box state, mean of 8 runs each) that improvement shrinks a lot:
+  // carrier 1832ms -> 1698ms, aircraft 2399ms -> 2190ms, separator 1632ms -> 1353ms -- roughly
+  // 10-20%, not 2-2.5x. Once the box is CPU-saturated by concurrent processes, the bottleneck
+  // stops being "how many round trips does one process serialize" and becomes "how much CPU is
+  // there to go around", which fanning out within one process cannot manufacture more of. Say so
+  // plainly: this is a real improvement, not a restated one, but it is a smaller one than the
+  // idle number would suggest, and neither figure crossed the 5,000ms ceiling in either form on
+  // this box (worst observed here: sequential, 3,408ms).
+  //
+  // NOT measured here: a real CI runner, which is typically 2 vCPU rather than this box's core
+  // count, and unpooled `Promise.all` opens all 114 (then 112, then the separator subset)
+  // DuckDB connections for a sweep at once rather than the sequential form's one at a time -- a
+  // different resource shape, not just a faster one. `db.ts` pools or caps nothing (confirmed by
+  // reading it -- `connect()` is a bare `getInstance().connect()` per call, no pool, no limiter),
+  // so there is nothing here for this fan-out to exceed, but this file's own measurement does
+  // not reach a small-CPU runner under real CI concurrency -- CI green on the PR built from this
+  // commit is the evidence for that case, not this comment.
+  //
+  // TIMEOUT, BOUND TO THE GATED COUNT, not Vitest's flat 5,000ms default and not a second round
+  // number chosen to feel safe -- the same failure mode the issue named for the original 5,000ms
+  // ("goes stale the same way the original 5s did"). PER_SLUG_BUDGET_MS is derived from the
+  // worst PER-SLUG rate measured above, not the idle one: idle this box resolved at ~2-2.7ms per
+  // slug, but the worst single 8-way-concurrent-load run measured ~2,318ms / 112 aircraft codes
+  // and ~2,002ms / 114 carrier codes -- both ~17.6-20.7ms/slug. 100ms/slug is that worst rate
+  // with roughly 5x headroom for a real CI runner this file's own measurement does not reach
+  // (typically 2 vCPU against this box's larger core count, per the paragraph above). Multiplied
+  // by each test's own gated count -- `EXPECTED_CARRIER_COUNT` / `EXPECTED_AIRCRAFT_COUNT`, the
+  // same numbers the assertions below already pin -- the ceiling grows exactly as the workload
+  // does on a future BTS refresh, rather than going stale silently the way a flat number would.
+  // NOT a timing assertion: nothing here asserts a duration, so a fast box still just passes fast
+  // -- this only bounds how long a genuinely hung resolve is allowed to block the suite.
+  const PER_SLUG_BUDGET_MS = 100;
+  const EXPECTED_CARRIER_COUNT = 114;
+  const EXPECTED_AIRCRAFT_COUNT = 112;
 
   it("admits every fact-present carrier code, and refuses the NULL carrier group", async () => {
     // 115 groups, not 114: T-100 carries rows with NO `AIRLINE_ID` at all -- 51 of them over
@@ -248,26 +302,28 @@ describe("the value bounds against the live catalog", () => {
 
     const codes = groups.filter((g) => g !== "null");
     // 114, matching `sitemap_carriers` -- the count of carriers this site gives a page to.
-    expect(codes.length).toBe(114);
+    expect(codes.length).toBe(EXPECTED_CARRIER_COUNT);
+    const results = await Promise.all(codes.map((code) => resolveCarrierFilter(code)));
     const refused: string[] = [];
-    for (const code of codes) {
-      if ((await resolveCarrierFilter(code)).kind !== "ok") refused.push(code);
-    }
+    codes.forEach((code, i) => {
+      if (results[i].kind !== "ok") refused.push(code);
+    });
     expect(refused).toStrictEqual([]);
-  });
+  }, PER_SLUG_BUDGET_MS * EXPECTED_CARRIER_COUNT);
 
   it("admits every fact-present aircraft-type slug, CE-180 excepted", async () => {
     const names = await factPresentDisplayValues("aircraft_type");
-    expect(names.length).toBe(112);
+    expect(names.length).toBe(EXPECTED_AIRCRAFT_COUNT);
+    const results = await Promise.all(names.map((name) => resolveTypeFilter(slugFor(name))));
     const refused: string[] = [];
-    for (const name of names) {
-      const kind = (await resolveTypeFilter(slugFor(name))).kind;
+    names.forEach((name, i) => {
+      const kind = results[i].kind;
       if (kind !== "ok") refused.push(`${slugFor(name)}:${kind}`);
-    }
+    });
     // CE-180 twice: it is the one slug two fact-present BTS codes share, so it is `ambiguous`
     // by design rather than admitted, and it appears once per code in this enumeration.
     expect(refused).toStrictEqual(["CE-180:ambiguous", "CE-180:ambiguous"]);
-  });
+  }, PER_SLUG_BUDGET_MS * EXPECTED_AIRCRAFT_COUNT);
 
   it("admits the separator-bearing slugs a `[A-Z0-9]`-only bound would silently drop", async () => {
     // The 15 short names carrying a `/` or a space become slugs carrying an extra `-`. They are
@@ -282,11 +338,17 @@ describe("the value bounds against the live catalog", () => {
     const names = await factPresentDisplayValues("aircraft_type");
     const separated = names.filter((n) => slugFor(n).includes("-"));
     expect(separated.length).toBeGreaterThan(50);
+    const results = await Promise.all(separated.map((name) => resolveTypeFilter(slugFor(name))));
     const refused: string[] = [];
-    for (const name of separated) {
-      const kind = (await resolveTypeFilter(slugFor(name))).kind;
+    separated.forEach((name, i) => {
+      const kind = results[i].kind;
       if (kind !== "ok") refused.push(`${slugFor(name)}:${kind}`);
-    }
+    });
     expect(refused).toStrictEqual(["CE-180:ambiguous", "CE-180:ambiguous"]);
-  });
+    // `separated` has no fixed expected count of its own (`toBeGreaterThan(50)` above is a
+    // floor, not a pin), but it is always a SUBSET of `names` -- `names.filter(...)` cannot
+    // exceed `names.length` -- so EXPECTED_AIRCRAFT_COUNT is a safe, structurally-true upper
+    // bound for its timeout rather than a second hand-maintained constant that could drift
+    // from the real (currently 75) count.
+  }, PER_SLUG_BUDGET_MS * EXPECTED_AIRCRAFT_COUNT);
 });
