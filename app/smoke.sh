@@ -2375,8 +2375,12 @@ check_re     "watch/gauge: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td
 check_not_re "watch/gauge: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
 
 # The falsifiable pair itself (measured against the real warehouse, mart_route_health, current
-# window). AS LAX-OGG is the single largest upgauge, gauge_delta +72.46, and no carrier flies
-# LAX-OGG downgauging, so it serves both halves.
+# window). AS LAX-OGG is the single largest upgauge, gauge_delta +72.46. FIVE carriers fly that
+# airport pair and UA is downgauging it at -1.76, so the `check_not` below passes on MARGIN, not
+# because the pair is one-sided: UA LAX-OGG ranks 1,114th by descending downgauge against a
+# 25-row cutoff of -29.09. That is a real but weaker guarantee than the pair below it, and it is
+# stated rather than implied -- an earlier revision of this comment claimed no carrier downgauges
+# LAX-OGG, which is false.
 #
 # THE DOWNGAUGE HALF CANNOT USE ITS LEADER, and the reason is this repo's own grain rule. The
 # largest downgauge is HA HNL-PDX at -64.49, but AS flies the SAME airport pair upgauging at

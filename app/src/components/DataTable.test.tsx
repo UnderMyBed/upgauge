@@ -14,7 +14,9 @@ import { resolutionKey } from "@/lib/resolve";
 // it), rather than silently becoming a claim about a rate. The rows that exercise the WINDOW
 // grain -- where a twelve-month sum and a monthly rate genuinely disagree -- live in their own
 // describe block at the foot of this file, and a row with NO month count (which makes no claim
-// at all, as /watch's mart-fed rows do not) is asserted there too.
+// at all) is asserted there too. That last shape is no longer what /watch produces -- since
+// #148 its rows carry `active_months` from the mart's `t12_months_flown` -- but it stays
+// covered here because any pivot that did not select a departure count still reaches it.
 const COLUMNS: ColumnSpec[] = [
   { key: "route", label: "Route", kind: "identifier" },
   { key: "seats", label: "Seats", kind: "seats" },
@@ -779,9 +781,10 @@ describe("DataTable reads the floor per month flown, not per window", () => {
   });
 
   it("claims nothing about the floor when the row carries no active-month count", () => {
-    // /watch's rows: mart_route_health carries a twelve-month departure sum and no month count
-    // beside it, so the presets abstain -- now by the settled rule rather than by refusing to
-    // alias the field.
+    // A departure count with no month count beside it. This was /watch's shape until #148 gave
+    // mart_route_health a `t12_months_flown` column for the presets to alias; it is now reached
+    // by any producer that emits a departure count without a month count, which the pivot
+    // templates never do and a future one might.
     const { container } = render(
       <DataTable columns={COLS} rows={[{ route: "EEE–FFF", seats: 900, departures_performed: 30 }]} />,
     );

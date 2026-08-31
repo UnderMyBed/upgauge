@@ -62,8 +62,9 @@ describe("absence makes no claim about the floor, in either direction", () => {
   });
 
   it("makes no claim when the active-month count is absent", () => {
-    // /watch's rows carry neither: its presets read mart_route_health, whose
-    // `t12_departures_performed` is a twelve-month sum this floor cannot be applied to.
+    // NOT /watch any more (#148): mart_route_health carries `t12_months_flown` and the presets
+    // alias it, so their rows divide for real. This branch guards any OTHER producer that hands
+    // over a departure count with no month count beside it.
     expect(belowFloor(30, undefined)).toBe(false);
     expect(belowFloor(30, null)).toBe(false);
   });

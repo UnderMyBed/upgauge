@@ -118,13 +118,18 @@ function isZeroPax(row: Record<string, unknown>): boolean {
  * a dashed, muted row and an `n` glyph in every gutter cell, asserting something false about
  * the data on the surface the design system calls the trust moment. A row whose departure
  * count was never queried makes no claim about the floor either way, and neither does one
- * carrying no month count -- which is how /watch's mart-fed rows correctly abstain.
+ * carrying no month count.
  *
  * `num()` for departures and a separate `undefined` check for the months, because the two
  * absences are not the same shape: a queried departure count can be NULL (a wholly-quarantined
  * group's FILTERed sum), whereas `active_months` is a COUNT that is either present or was
  * never emitted. `belowFloor` collapses both to "no claim" -- see its own docstring for why
- * that is not a swallowed error. */
+ * that is not a swallowed error.
+ *
+ * /watch IS NOT AN ABSTAINER ANY MORE (#148). Its presets alias `t12_months_flown` as
+ * `active_months` beside the departure sum, so this really divides on those rows; it comes out
+ * false because mart_route_health's own admission gate IS the floor, not because the count is
+ * missing. */
 function isBelowFloor(row: Record<string, unknown>): boolean {
   return belowFloor(num(row.departures_performed), num(row.active_months));
 }

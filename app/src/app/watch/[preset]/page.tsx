@@ -41,8 +41,10 @@ function prior12Window(asOf: string): { from: string; to: string } {
   return { from: monthsBefore(asOf, 23), to: monthsBefore(asOf, 12) };
 }
 
-/** Rows per direction. Every preset's SQL already floors and filters heavily (a gauge floor, a
- * departures floor, a NULL-score exclusion) before this file ever sees a row, so 25 is a
+/** Rows per direction. Every preset's SQL already filters heavily before this file ever sees a
+ * row -- the departure floor is mart_route_health's own admission gate rather than any preset's
+ * WHERE clause (#148), and on top of that Empty Planes and Death Watch floor on gauge, Death
+ * Watch excludes NULL scores, and Route Birth Tracker takes only empty prior windows -- so 25 is a
  * "top of" limit in the same spirit as topn.ts's TOPN_LIMIT, not a truncation boundary -- no
  * disclosure paragraph, matching that precedent. */
 const ROWS_PER_TABLE = 25;
@@ -211,7 +213,8 @@ function buildColumns(
  * "nothing is marked" outcome came from `belowFloor` abstaining on an absent month count, which
  * meant `page.test.tsx`'s pin on it could not fail for the reason it claimed. It is now real:
  * reverting the mart's gate to `t12_departures_performed >= 30` puts 2,454 sub-floor pairs back
- * into the table and reddens that test on Gauge Watch and Death Watch.
+ * into the table and reddens that test on Gauge Watch, Empty Planes and Death Watch -- measured,
+ * not predicted, and Route Birth Tracker stays green because it ranks by seats.
  *
  * `t12_months_present` is still NOT the field to use: it counts months FILED, while the floor's
  * denominator is months FLOWN. Using it would put a second, subtly different definition of
@@ -254,7 +257,8 @@ function SameAirportNote() {
 function GaugeFloorNote() {
   return (
     <p className="foot">
-      Routes below 50 seats of trailing-12 gauge are excluded from this leaderboard: without the
+      Carrier&ndash;route pairs below 50 seats of trailing-12 gauge are excluded from this
+      leaderboard: without the
       floor, tiny bush and sightseeing operators dominate with trivial absolute swings rather
       than a genuinely underperforming mainline route (gauge_t12 &gt;= 50, the CRJ-200&rsquo;s
       seat count).
@@ -364,7 +368,9 @@ function DirectionTable({
     return (
       <section>
         <h2>{heading}</h2>
-        <p className="empty-state">No routes currently meet this preset&rsquo;s criteria.</p>
+        <p className="empty-state">
+          No carrier&ndash;route pairs currently meet this preset&rsquo;s criteria.
+        </p>
       </section>
     );
   }

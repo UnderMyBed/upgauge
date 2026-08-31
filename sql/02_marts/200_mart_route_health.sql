@@ -102,7 +102,7 @@ derived AS (
     -- `t12_months_flown > 0` is load-bearing, not a guard against a case that cannot happen.
     -- A carrier-route that filed and never flew has months_flown = 0 and a departure sum of
     -- 0, so the comparison below reads `0 >= 0` and ADMITS it -- 7 rows on the real
-    -- warehouse. floor.ts:74 rules the same case the same way: no months flown is BELOW the
+    -- warehouse. floor.ts:77 rules the same case the same way: no months flown is BELOW the
     -- floor, never a division to be skipped. (A wholly-quarantined window sums to NULL
     -- instead, and NULL fails both arms on its own.)
     --

@@ -76,9 +76,11 @@
 --   dropped                  5,959           219
 --   downgauged               5,012         2,033
 --
--- At the mart's floor the panel labelled "dropped" would draw 19 of Delta's 573 dropped
--- carrier-routes and the panel labelled "added" 25 of its 780. A map that renders 3% of the
--- thing its label names is a worse false claim than one that includes a route flown five times
+-- At the mart's floor -- the SAME "mart floor" predicate as the column above, not the `flew`
+-- rule evaluated at a higher threshold, which is a third rule again and gives 25 and 19 -- the
+-- panel labelled "dropped" would draw 6 of Delta's 573 dropped carrier-routes and the panel
+-- labelled "added" 10 of its 780. A map that renders 1% of the thing its label names is a
+-- worse false claim than one that includes a route flown five times
 -- -- and the mart's floor guts the two categories the map exists for while leaving the third
 -- mostly intact, breaking panel comparability in the other direction.
 --

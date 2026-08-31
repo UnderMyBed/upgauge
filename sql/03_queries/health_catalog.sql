@@ -67,6 +67,11 @@ WITH required(object_name, column_name) AS (
         ('map_mainline_group',     'effective_from'),
         ('mart_route_health',      'op_airline_id'),
         ('mart_route_health',      'health_score'),
+        -- #148. All four watch_*.sql SELECT this by name, so a database whose mart
+        -- predates the rate floor binds-errors on every preset while this manifest
+        -- reported ok. Adding a served column here is the documented manual step this
+        -- file's header describes -- the column half of the catalog is not derived.
+        ('mart_route_health',      't12_months_flown'),
         ('meta_pivot_dimensions',  'key'),
         ('meta_pivot_dimensions',  'column_expr'),
         ('meta_pivot_measures',    'key'),

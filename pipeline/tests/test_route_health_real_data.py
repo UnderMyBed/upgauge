@@ -249,8 +249,11 @@ def test_the_floor_is_a_monthly_rate_not_a_trailing_12_sum(con):
     everywhere else.
 
     Named witness, not a count: `20330 10241-10304` filed 30 departures across 12 months
-    flown, exactly 2.5 a month. It is the single most lenient row the old gate admitted.
-    Reverting the gate to `>= 30` puts it back and reddens THIS test.
+    flown, exactly 2.5 a month -- the most lenient rate the old gate admitted, TIED with
+    `20331 15478-15794` at the same 30 over the same 12. "The single most lenient row" would be
+    wrong; either witness serves, and naming the tie is what stops a future edit from picking the
+    other one and thinking it found a discrepancy. Reverting the gate to `>= 30` puts both back
+    and reddens THIS test.
 
     The dense control is not decoration -- it is what stops the assertion from passing on a
     mart that admits nothing at all, which a broken floor could easily produce. `20455
