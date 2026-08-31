@@ -89,9 +89,15 @@ describe("each repair, named", () => {
     expect(setGrain(before, "route", FIXTURE).filters).toEqual([["op_airline_id", ["19790"]]]);
   });
 
-  it("setGrain never empties d, even when every dimension was segment-only", () => {
+  it("setGrain lands on the catalog's FIRST groupable dimension when none survives", () => {
+    // `length > 0` was all this asserted before #139, and that is satisfied by landing on ANY
+    // dimension -- including whichever one a reordered catalog happened to put first. The
+    // landing dimension is a product decision (`year_month` is the first row of
+    // 300_meta_pivot_dimensions.sql), so name it: this is the assertion that makes catalog
+    // ORDER load-bearing here rather than merely catalog CONTENT. Still proves the original
+    // property -- an empty `d` is a server rejection, and ["year_month"] is not empty.
     const after = setGrain(q({ dimensions: ["aircraft_type"] }), "route", FIXTURE);
-    expect(after.dimensions.length).toBeGreaterThan(0);
+    expect(after.dimensions).toEqual(["year_month"]);
   });
 
   it("setGrain never throws, even against a catalog with nothing groupable at the new grain", () => {

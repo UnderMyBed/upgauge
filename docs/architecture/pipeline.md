@@ -255,7 +255,7 @@ be two of them, drifting, one of them security-relevant.
 |---|---|
 | `sql/03_queries/pivot_segment.sql`, `pivot_route.sql` | The templates. `{{TOKENS}}` for identifiers, `$params` for values. |
 | `sql/02_marts/300_meta_pivot_dimensions.sql`, `301_meta_pivot_measures.sql` | The allowlist, **as catalog objects** — the server already opens the database, so there is no extra artifact to ship and `make build` regenerates it. |
-| `sql/03_queries/catalog_dimensions.sql`, `catalog_measures.sql`, `data_as_of.sql` | The reads of those catalog objects (and the freshness stamp), **as `.sql` files** rather than string literals, so the server's TypeScript reads the identical files. |
+| `sql/03_queries/catalog_dimensions.sql`, `catalog_measures.sql`, `data_as_of.sql` | The reads of those catalog objects (and the freshness stamp), **as `.sql` files** rather than string literals, so the server's TypeScript reads the identical files. The two catalog reads also **order** their rows — see below. |
 | `sql/03_queries/goldens/pivot.json` | Golden fixtures: query state → expected SQL/params. The TypeScript renderer must reproduce them byte-for-byte. One validator semantics, two runtimes, proven to agree. |
 | `sql/03_queries/goldens/urlstate.json` | Golden fixtures: URL round-trips — the permalink contract. Includes `filter_value_encodeuricomponent_divergence`, pinning that Python's `quote(v, safe="")` percent-encodes `! * ' ( )` while JS's `encodeURIComponent` does not: a naive TS port using the JS default passes every other golden and still diverges (119 `unique_carrier_code` values carry BTS's `(1)` suffix; 163 airport names carry an apostrophe). |
 | Python reference implementation (`pipeline/pivot.py`, `pipeline/urlstate.py`) | Legitimately in `pipeline/`: it *generates and verifies* the goldens in CI and never serves a request. |
@@ -263,6 +263,28 @@ be two of them, drifting, one of them security-relevant.
 The allowlist is **curated, not introspected** — which dimensions we offer is a product
 decision, not a schema fact. A test cross-checks it against `duckdb_columns()` so a renamed
 column fails loudly instead of silently dropping a dimension.
+
+**The allowlist's ROW ORDER is part of the contract, and the catalog queries guarantee it.**
+`loadAllowlist()` builds its `Map` in row order; `app/src/components/builder/` renders the
+dimension and measure chip rows in that order, and `groupableDimensions(a, grain)[0]` is the
+dimension a grain switch lands on when nothing in the current selection survives. The order is a
+product decision — `year` before `op_airline_id` — authored as the `VALUES` row order in
+`300_meta_pivot_dimensions.sql` / `301_meta_pivot_measures.sql`, so `ORDER BY key` is the wrong
+fix: it replaces that decision with the alphabet.
+
+The ordinal is carried in the **query**, joined by key, never as a column on the view — same
+deployment fact that puts `value_type` there. A view-side column exists only in a warehouse asset
+rebuilt after the change, and the asset republishes only when BTS advances a month, while
+`sql/` ships with the code; `ORDER BY d.sort_order` against an already-published asset raises
+`Binder Error: Values list "d" does not have a column named "sort_order"`. The join is an INNER
+join for the same reason the `duckdb_columns()` one is: a dimension added to the view and left out
+of the ordinal list is DROPPED and the tests name it, where `list_position` would return `NULL`,
+sort it last, and ship it silently at the end of the chip row.
+
+A test binds the ordinal to the mart's own `VALUES` text so the two statements of the order cannot
+drift, and it asserts through a source view whose rows arrive in a **different physical order** —
+reading the real view cannot tell an ordered query from an unordered one, because the planner
+happens to emit the authored order anyway (probed at `threads` 1, 2, 4, 8 and 16).
 
 Consequence to accept knowingly: `make verify` covers a product decision (the Explorer's
 vocabulary), not only data. That is the price of the allowlist being un-driftable.

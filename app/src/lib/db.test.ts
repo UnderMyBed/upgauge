@@ -186,6 +186,22 @@ describe("allowlist.fixture.ts stays in sync with the real catalog", () => {
     expect(Object.fromEntries(live.meas)).toEqual(Object.fromEntries(FIXTURE.meas));
   });
 
+  // #139. The comparison above runs through Object.fromEntries, which is blind to key ORDER --
+  // and order is load-bearing downstream: DimensionChips and MeasureChips render
+  // [...allowlist.dims.values()] / [...meas.values()] verbatim, and groupableDimensions(a,
+  // grain)[0] is the dimension a grain switch lands on. So the fixture could carry the right
+  // 26 entries in the wrong sequence, every chip row would render in that wrong sequence, and
+  // nothing here would say so. Arrays, not objects, is the whole difference.
+  //
+  // The served order is itself guaranteed at the query (sql/03_queries/catalog_*.sql order by an
+  // explicit ordinal), and pipeline/tests/test_pivot_allowlist.py binds that ordinal to the
+  // curated VALUES text in sql/02_marts/. This closes the last hop: catalog -> fixture.
+  it("matches the catalog's ORDER, which Object.fromEntries above cannot see", async () => {
+    const live = await loadAllowlist();
+    expect([...live.dims.keys()]).toEqual([...FIXTURE.dims.keys()]);
+    expect([...live.meas.keys()]).toEqual([...FIXTURE.meas.keys()]);
+  });
+
   it("covers every catalog entry, so the comparison above cannot pass vacuously", async () => {
     const live = await loadAllowlist();
     expect(live.dims.size).toBeGreaterThan(0);
