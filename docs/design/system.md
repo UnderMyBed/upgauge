@@ -137,12 +137,16 @@ the data (that a query against it would answer nothing), so it keeps the full to
 than treating a 404 as chrome-free.
 
 **The wordmark is a link home**, and it carries `prefetch={false}` — which is load-bearing, not
-tidiness. It is the product's only `next/link` (every other internal link is a plain `<a>`; this
-one is a `Link` only because `@next/next/no-html-link-for-pages` fires on a statically-resolvable
-`href="/"`), it sits above the fold on all ten pages, and `Link`'s default prefetches on
-viewport entry. `/` is `force-dynamic` and absent from `proxy.ts`'s matcher, so it carries
-`no-store` and the CDN cannot absorb that prefetch — the default would buy one uncached origin
-request per page view on a box whose whole cost control is the caching.
+tidiness. **`next/link` is used only where `@next/next/no-html-link-for-pages` forces it** — on a
+statically-resolvable internal href, as `href="/"` is here; every other internal link in this
+product is a plain `<a>`, and an href carrying a query string is not flagged at all. **Every
+`<Link>` that does exist carries `prefetch={false}`**, and `app/src/prefetchPolicy.test.ts`
+enforces that repo-wide as an exact set that may only ever shrink — so this is a gate, not a
+convention, and no count of the sites belongs here. The wordmark sits above the fold on every
+page, and `Link`'s default prefetches on viewport entry. `/` is `force-dynamic` and absent from
+`proxy.ts`'s matcher, so it carries `no-store` and the CDN cannot absorb that prefetch — the
+default would buy one uncached origin request per page view on a box whose whole cost control is
+the caching.
 
 ### The data table
 
