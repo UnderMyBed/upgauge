@@ -288,12 +288,12 @@ product decision — `year` before `op_airline_id` — authored as the `VALUES` 
 `300_meta_pivot_dimensions.sql` / `301_meta_pivot_measures.sql`, so `ORDER BY key` is the wrong
 fix: it replaces that decision with the alphabet.
 
-The ordinal is carried in the **query**, joined by key, never as a column on the view — same
-deployment fact that puts `value_type` there. A view-side column exists only in a warehouse asset
-rebuilt after the change, and the asset republishes only when BTS advances a month, while
-`sql/` ships with the code; `ORDER BY d.sort_order` against an already-published asset raises
-`Binder Error: Values list "d" does not have a column named "sort_order"`. The join is an INNER
-join for the same reason the `duckdb_columns()` one is: a dimension added to the view and left out
+The ordinal is carried in the **query**, joined by key, never as a column on the view — the same
+reasoning that puts `value_type` there (`../data/model.md`). The order is a property of how the
+Explorer presents its vocabulary, not of the warehouse, and the `VALUES` row order in the mart is
+already its one authored statement; a `sort_order` column would be a second, hand-kept copy of a
+list that file already spells out in order. The join is an INNER join for the same reason the
+`duckdb_columns()` one is: a dimension added to the view and left out
 of the ordinal list is DROPPED and the tests name it, where `list_position` would return `NULL`,
 sort it last, and ship it silently at the end of the chip row.
 
@@ -576,6 +576,18 @@ does nothing else.
 and runs `data-contract`, `check`, `app-check`, `smoke` and `goldens`. `make verify` is nightly
 (`verify.yml`) because it needs the 232 MB raw+parquet pair and rebuilds twice. The `actions`
 job is the exception that takes no `needs:` and no warehouse — see below.
+
+**Every one of them rebuilds the marts from this commit's `sql/` first, and that is a correctness
+requirement rather than a refresh.** The step is in `.github/actions/setup`, after the restore and
+before any gate, so a job cannot be added that skips it. The release asset carries a copy of
+`upgauge.duckdb` frozen at publish time, and `warehouse.yml` republishes only when BTS advances a
+month — so a mart tested straight out of the asset is whatever `sql/02_marts/` looked like on
+publish day, not what this commit says. `mart_route_health` and the other nine objects are a pure
+function of `data/parquet` plus `sql/02_marts/` (`pipeline/marts.py`'s `build_database` reads the
+existing database not at all), which is what makes rebuilding them cheap: ~1 s against the full
+2015–2026 window, against an asset that keeps carrying the Parquet. The image does the same thing
+in its `warehouse` builder stage (`hosting.md` § The Dockerfile), so CI and the container agree
+about which SQL produced what they test and serve.
 
 **The nightly asserts the data contract too, because `ci.yml` triggers only on human activity.**
 `data-contract` is the gate whose entire purpose is catching the upstream dataset moving, and the

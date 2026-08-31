@@ -218,11 +218,75 @@ one producer for CI, the image, and the portability test.
 
 ### The Dockerfile
 
-Four stages: `warehouse` (fetches and unpacks the published release asset), `deps` (full
+Five stages: `uvbin` (the pinned `uv` binary and nothing else), `warehouse` (fetches and unpacks
+the published release asset, then rebuilds the marts from `sql/`), `deps` (full
 `npm ci`, for the build only), `build` (`next build`; touches no `data/` and no `sql/`, so it
 runs concurrently with `warehouse`), `runtime` (`npm ci --omit=dev` plus the warehouse output
 copied in). `runtime` runs as `USER node` — confirmed: `docker run --rm upgauge:local id` →
 `uid=1000(node) gid=1000(node) groups=1000(node)`. No `output: "standalone"` (§ above).
+
+**The image rebuilds the marts; the asset does not carry them.** `mart_route_health` and the
+other nine database objects are a pure function of `data/parquet` plus `sql/02_marts/` —
+`pipeline/marts.py`'s `build_database` reads the existing `upgauge.duckdb` not at all, it builds
+a staging file and renames over it — while the release asset carries a copy frozen at publish
+time and `warehouse.yml` republishes only when BTS advances a month. Shipping the asset's copy
+therefore froze the served schema to whichever commit happened to be `main` on publish day, and
+the failure it produces is the worst shape this file names: a mart column the app reads but the
+asset lacks 500s **every** `/watch/<preset>` under `HTML_CACHE` — the proxy commits that header
+before the page runs — while `/api/health` keeps reporting **ok**, because `health_catalog.sql`
+asks that table for only `op_airline_id` and `health_score`. The rebuild is `RUN make build
+MISE=` at the end of the `warehouse` stage; `Makefile`'s own `MISE ?=` comment declares that
+override for this case, so there is one definition of building the marts rather than two that
+drift. CI does the same after every warehouse restore
+([pipeline.md](pipeline.md)), so the container and the gates agree about which SQL produced what
+they serve and test.
+
+**The toolchain that does it is BUILDER-ONLY, and that is not a preference.** CLAUDE.md:
+`pipeline/` is "Python 3.12 + uv. CI only, never runs in prod." So `uv`, the interpreter,
+`pyproject.toml`, `uv.lock` and `pipeline/` all enter the `warehouse` stage, which is discarded;
+`runtime` stays `node:*-slim` and copies only `upgauge.duckdb` and `data/parquet` out of it.
+
+**That "only" is asserted as an ALLOW-LIST, because a blacklist provably cannot hold it.**
+`pipeline/tests/test_mart_rebuild.py` names what may cross — `/w/upgauge.duckdb` and
+`/w/data/parquet` from `warehouse`, `/build/app/.next` from `build` — and refuses every other
+source and every other source stage. Measured against the blacklist form it replaced: six ways
+of putting the toolchain into the shipped image all passed, and the worst of them is
+`COPY --from=warehouse /w/pipeline ./pipeline`, spelled exactly like the two COPYs the runtime
+stage already has, which a rule normalising `./pipeline` to `pipeline` never sees. Also passing:
+`COPY --from=warehouse /opt/venv /opt/venv`, which ships CPython *and* duckdb;
+`COPY --from=warehouse /usr/local/bin/uv`; `RUN /opt/venv/bin/python -m pipeline.marts`, whose
+interpreter is preceded by a `/` rather than a space; and `ENV PATH=/opt/venv/bin:$PATH`, which
+copies nothing and runs nothing. So the file also refuses any instruction that merely NAMES a
+builder-only path. All six now die, each on a named assertion.
+
+The check is **per stage**, and that is the property rather than the string: every path and
+token it refuses is deliberately true of `warehouse`, so a whole-file form of the same test is
+red against a correct Dockerfile (run, and confirmed red).
+
+**It is still an INSTRUCTION-level guard.** It proves no instruction introduces Python, not that
+the built image lacks it — a base image that started shipping an interpreter would satisfy every
+assertion above. Closing that means asserting it on the artifact, in `make image-smoke`'s
+container mode, and the open reason it is not there yet is a counting one rather than a
+mechanical one: the `docker exec` idiom fits, but a container-only check breaks the
+"host set less the ten host-only gap checks" arithmetic this file and CLAUDE.md both state, and
+the replacement total cannot be measured without Docker.
+
+**Three pins, one source.** `NODE_VERSION`, `PYTHON_VERSION` and `UV_VERSION` each restate a
+`mise.toml` pin, and all three are asserted equal to it. Until the mart rebuild landed, the
+`NODE_VERSION` equality was claimed in prose by this file, by the Dockerfile's own comment and by
+`image-contract.yml`'s `mise.toml` path entry, and tested nowhere. It matters more now than it
+did: `UV_VERSION` and `PYTHON_VERSION` decide which uv resolves `uv.lock` and which interpreter
+runs `pipeline.marts` inside the image, so a drift there means the container's marts were built
+by a toolchain no gate in this repo ran under. `uv` arrives by `COPY --from` of its own pinned
+image — `node:*-slim` carries no Python to `pip install uv` with, and a curl-pipe-to-shell is the
+wrong trade for a build that already pins everything else. `UV_MANAGED_PYTHON` makes uv fetch
+the exact CPython rather than resolve `>=3.12,<3.13` against whatever it finds, and
+`uv sync --frozen --no-dev --no-install-project` is what pins DuckDB to `uv.lock`'s.
+
+**The `curl`/`tar` layers stay ahead of every `COPY` the rebuild needs.** They depend only on
+`WAREHOUSE_TAG`, so an edit to `sql/` or `pipeline/` invalidates from `COPY sql` downward and
+does **not** re-download the release asset. Ordering, not tidiness: reversed, every mart-SQL
+change would re-fetch the tarball.
 
 **The WORKDIR contract above is asserted at BUILD time, not left for the first query to
 discover.** `warehouse`'s extraction is followed by three `test` assertions — `upgauge.duckdb`
@@ -243,8 +307,11 @@ if a future page ever needs one (most likely `/srv/upgauge/app/.next/cache`), ad
 `--mount type=tmpfs,destination=/srv/upgauge/app/.next/cache` to the run command rather than
 dropping `--read-only`.
 
-**The base image is TAG-pinned, not digest-pinned, and that bounds every size figure in this
-section.** `node:24.19.0-slim` is a moving target: Debian security rebuilds re-push the same tag, so
+**Two independent things make an image from an identical tree non-reproducible, and the size
+figures in this section are bounded by both.**
+
+The first is that the base image is TAG-pinned, not digest-pinned.
+`node:24.19.0-slim` is a moving target: Debian security rebuilds re-push the same tag, so
 two `make image` runs from an identical tree can produce different images — the opposite of the
 reproducibility argument the Makefile makes for `WAREHOUSE_TAG` a few lines from it, and it
 invalidates the `.Size` and layer counts below whenever it happens. Accepted deliberately: a digest
@@ -253,6 +320,18 @@ policy decision, not a Dockerfile tidy-up. Keep `ARG NODE_VERSION` equal to `mis
 (24.19.0 today) so the container runs the Node the gates ran against. **Open follow-up**, not a
 finding: if this ever ships behind an SLA, decide digest-pin-plus-renovation versus tag-pin
 explicitly.
+
+**The second is the mart rebuild, and it is new.** `upgauge.duckdb` is not byte-stable — the
+repo's own reproducibility gate says so and hashes each object's exported Parquet instead of the
+file (`pipeline/marts.py`'s `_digest_object`). Measured: three consecutive `make build` runs on
+an identical tree produced three different file sha256s while every one of the ten objects stayed
+content-identical. Before the rebuild landed, that file arrived from the release tarball
+byte-identical on every build, so the `COPY --from=warehouse /w/upgauge.duckdb` layer had a fixed
+digest; now it moves on every cache-cold build. **Nothing gates on an image digest** — `image.yml`
+keys on `<warehouse-tag>-<sha>` and `image-smoke` asserts identity from `/api/health`'s
+`build.sha`, neither of which reads a layer hash — so the impact is confined to the `.Size` and
+layer figures above, exactly as the tag pin's is. What the container SERVES is unaffected: the
+objects are identical, which is the property `make verify` was always asserting.
 
 **The build context must contain only tracked files, or the image depends on what this host has
 run.** `app/tsconfig.tsbuildinfo` and `app/next-env.d.ts` are generated, gitignored and untracked;
@@ -265,6 +344,13 @@ directions: with the `.dockerignore` entries in place, appending a byte to
 removed, the same append re-runs the stage and changes `.Size`. **No delta is quoted for that
 second half on purpose** — it is whatever two `next build` runs happened to differ by, so it is a
 property of one pair of builds and re-measuring it yields a different number, not a broken rule.
+
+**`**/__pycache__` joins them for the first reason, and only became load-bearing when the
+`warehouse` stage grew its `COPY pipeline ./pipeline`.** Before that, `pipeline/` sat in the
+context and no instruction read it, so whether this host had run pytest changed nothing. It now
+decides that layer's digest, which is the same host-dependence the two entries above exist to
+remove — one level down, in a builder, where the cost is a spuriously busted build cache rather
+than a different image. Nothing in the image reads a `.pyc`; `python -m` recompiles.
 
 **`app/smoke.sh` is `.dockerignore`d too, and it is TRACKED — the second reason a file leaves the
 context is that the build does not need it.** The gate script runs on the *host* in both modes

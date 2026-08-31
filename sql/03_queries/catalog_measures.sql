@@ -14,8 +14,8 @@
 -- too. The ordinal below restates that sequence and pipeline/tests/test_pivot_allowlist.py binds
 -- the two file texts. INNER JOIN and a query-side ordinal, both for the reasons
 -- catalog_dimensions.sql states in full: a measure added to the view and forgotten here drops out
--- loudly, and an ordinal stored on the view would not bind against an already-published warehouse
--- asset.
+-- loudly, and an ordinal on the view would be a second, hand-kept copy of an order the mart's own
+-- VALUES text already authors.
 SELECT m.key, m.label, m.is_additive, m.expr
 FROM meta_pivot_measures m
 JOIN (VALUES

@@ -28,10 +28,8 @@ name: Image contract
 # it asserts the coupling rather than restating that two stale values match.
 on:
   pull_request:
-    # Every entry is read by `make image` or `make image-smoke`. Deliberately NOT `app/src/**`
-    # or `sql/**`: those are served BEHAVIOUR, already covered on every PR by ci.yml's
-    # `make app-smoke`, and including them would fire a 30-minute container build on nearly
-    # every PR in the repo -- the every-run cost this scoping exists to avoid.
+    # Every entry is read by `make image` or `make image-smoke`. What is deliberately absent,
+    # and why, is stated at the bottom of the list beside the entries it sits next to.
     #
     # test_every_path_the_gate_filters_on_exists asserts each of these resolves to a real file.
     # A typo here does not fail; it silently matches nothing, and a gate that never fires
@@ -45,6 +43,18 @@ on:
       - app/package.json    # deps stage, runtime stage, and smoke.sh's own next-version check
       - app/package-lock.json
       - app/next.config.ts  # copied into the runtime stage
+      # The `warehouse` stage rebuilds the marts, so the Python toolchain is an image input now:
+      # uv.lock decides which DuckDB builds them, pyproject.toml decides which interpreter is
+      # admissible, and marts.py is the builder itself. All three are low-churn, unlike the two
+      # deliberately absent below.
+      - pyproject.toml
+      - uv.lock
+      - pipeline/marts.py
+      # STILL NOT `sql/**`, and still not `app/src/**`. Both are served BEHAVIOUR, covered on
+      # every PR by ci.yml -- which since #158 rebuilds the marts before every gate, so a mart
+      # SQL change is exercised there rather than only here. Adding `sql/**` would fire a
+      # 30-minute container build on nearly every PR in the repo, which is the every-run cost
+      # this scoping exists to avoid.
       - .github/workflows/image-contract.yml
   # Load-bearing, not a convenience. A PR opened with GITHUB_TOKEN starts no `pull_request`
   # runs (image.yml's `on:` comment documents the rule), so warehouse.yml's bump-pin job

@@ -134,11 +134,11 @@ def _catalog_rows(con):
     """The allowlist as the SERVER sees it -- through sql/03_queries/catalog_dimensions.sql.
 
     `value_type` is computed by THAT query, not stored on meta_pivot_dimensions, so a test that
-    reads the view directly cannot see it at all. The split is a deployment fact: a column on the
-    view exists only in a warehouse asset rebuilt after the change, and the asset is republished
-    only when BTS advances a month, so a view-side column made new app code unrunnable against
-    every already-published asset. Reading through the query here is also what keeps these tests
-    honest about the thing production actually executes.
+    reads the view directly cannot see it at all. The split is about what KIND of fact a column's
+    width is -- a schema fact, which `duckdb_columns()` reads off the built catalog rather than
+    anyone restating it (sql/03_queries/catalog_dimensions.sql states it in full). Reading through
+    the query here is also what keeps these tests honest about the thing production actually
+    executes.
     """
     sql = (QUERIES_DIR / "catalog_dimensions.sql").read_text()
     cols = [d[0] for d in con.execute(sql).description]

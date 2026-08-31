@@ -26,3 +26,8 @@ app/smoke.sh
 # The build does not need it: deploy/ is desired state applied to the box, never copied into
 # the image. No COPY covers it today, so this is convention rather than load-bearing.
 deploy
+# Generated, gitignored and NOT tracked -- the same rule as the two entries above, and newly
+# load-bearing: the `warehouse` stage now does `COPY pipeline ./pipeline` to rebuild the marts,
+# so whether this host has run pytest would otherwise decide that layer's digest and bust the
+# builder cache for nothing. Nothing in the image reads a .pyc; `python -m` recompiles.
+**/__pycache__

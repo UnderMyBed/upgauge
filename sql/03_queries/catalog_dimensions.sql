@@ -10,15 +10,17 @@
 -- `String(undefined) === "undefined"` for column_expr -- a query-time SQL error rather than a
 -- clear one. Naming them here makes this file the contract both readers actually share.
 --
--- `value_type` is INTROSPECTED HERE, not stored on the view, and the distinction is a
--- deployment fact rather than a style choice. A column added to meta_pivot_dimensions exists
--- only in a warehouse asset REBUILT after that change -- but the asset is published only when
--- BTS advances a month (warehouse.yml's guard), and the container copies a prebuilt one
--- (Dockerfile, WAREHOUSE_TAG). So a view-side column makes new app code unrunnable against
--- every already-published asset: measured, `Binder Error: Referenced column "value_type" not
--- found in FROM clause!` from CI against warehouse-2026.05. Computing it in the QUERY makes the
--- schema part of the code, which is what it is. duckdb_columns() reflects whatever fct tables
--- the asset actually carries, so this resolves against any of them.
+-- `value_type` is INTROSPECTED HERE, not stored on the view, and the distinction is about what
+-- KIND of fact it is rather than about what a deployment can carry. Which dimensions we offer is
+-- a product decision; a column's WIDTH is a schema fact, and a hand-copied schema fact rots.
+-- Computing it in the QUERY makes the schema part of the code, which is what it is, and
+-- duckdb_columns() reads whatever fct tables the built catalog actually carries -- so the bound
+-- tracks the column instead of anyone's memory of it, and resolves against any of them.
+--
+-- The deployment used to decide this too, and no longer does: marts are rebuilt from
+-- sql/02_marts/ after every warehouse restore in CI and inside the image's `warehouse` builder
+-- stage, so a view-side column is shippable now. The reasons above are what keep it here anyway.
+-- See docs/data/model.md and docs/architecture/hosting.md.
 --
 -- Resolved against fct_segment_month, which carries every offered column (the five
 -- segment-only dimensions exist nowhere else, and every 'both' dimension is propagated to
@@ -43,12 +45,10 @@
 -- ordinal below restates that sequence, and pipeline/tests/test_pivot_allowlist.py binds the two
 -- file texts against each other so the restatement cannot drift from what it restates.
 --
--- The ordinal is computed HERE rather than stored on the view for the same deployment reason
--- `value_type` is: measured, `ORDER BY d.sort_order` against a warehouse asset built before that
--- column existed raises `Binder Error: Values list "d" does not have a column named
--- "sort_order"`. CI restores a prebuilt asset and the container copies one (Dockerfile takes sql/
--- from the code and upgauge.duckdb from the release), so a view-side ordinal is unrunnable
--- against every asset already published.
+-- The ordinal is computed HERE rather than stored on the view for the same kind of reason
+-- `value_type` is: the order is a property of how the Explorer presents its vocabulary, not of
+-- the warehouse, and the VALUES text above is already its one authored statement -- a
+-- `sort_order` column would be a second, hand-kept copy of a list that file spells out in order.
 --
 -- INNER JOIN, and the asymmetry against the compact alternative IS the argument: a dimension
 -- added to the view and forgotten here DROPS OUT, and the allowlist count tests fail loudly.
