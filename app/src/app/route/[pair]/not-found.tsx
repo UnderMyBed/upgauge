@@ -4,7 +4,7 @@ import { dataAsOf } from "@/lib/db";
 import { rawPathFromHeaders, routeSlugFromPath } from "@/lib/rawPath";
 import { resolveRoutePair } from "@/lib/routePair";
 import { TopBar } from "@/components/TopBar";
-import { RECOVERY_HREF } from "@/lib/pivot/recovery";
+import { recoveryHref } from "@/lib/pivot/recovery";
 
 // Same reasoning as page.tsx's own export of this constant: DATA AS OF must never be frozen
 // at build time, even on the 404 path -- a statically-cached 404 would keep serving a stale
@@ -71,14 +71,13 @@ export async function NotFoundView({ pathname }: { pathname: string }) {
           )}
         </p>
         <p>
-          {/* eslint-plugin-next flags a literal <a href="/route/..."> against this exact
-              dynamic route ([pair]) as "use next/link instead" -- it does NOT flag the
-              Explorer link below, whose href carries a query string, so only this one needed
-              the swap.
-              `prefetch={false}` is load-bearing here, not style -- TopBar.tsx's own note
-              has the why in full, and prefetchPolicy.test.ts enforces it repo-wide. */}
+          {/* This `Link` is required and the Explorer links here are not: TopBar.tsx's note
+              has the full rule and the two mechanisms behind it. Carrying a query string is
+              NOT what exempts them -- the rule strips the query before matching.
+              `prefetch={false}` is load-bearing here, not style -- same note, and
+              prefetchPolicy.test.ts enforces it repo-wide. */}
           Try <Link href="/route/JFK-LAX" prefetch={false}>JFK–LAX</Link>, or start from{" "}
-          <a href={RECOVERY_HREF}>
+          <a href={recoveryHref(asOf)}>
             the Explorer
           </a>
           .

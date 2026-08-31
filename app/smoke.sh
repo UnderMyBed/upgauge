@@ -3248,6 +3248,95 @@ check "responsive: the wide grid still carries content + 214px rail" "$CSS_BODY"
 check_not "responsive: no bare 1fr .body track survives the build" "$CSS_BODY" \
   '.body{grid-template-columns:1fr}'
 
+# 15e. #145: the recovery window and the front door's sample are the LIVE trailing 12.
+#
+# WHY THIS IS A RELATIONSHIP AND NOT A NEEDLE. Both windows used to be frozen in source
+# (`t=2025-05:2026-04`), which is a defect no gate could see: the window stayed INSIDE the
+# dataset, so it kept decoding, kept rendering, and kept being cached under the project header --
+# it merely stopped being "the trailing 12 months", which is what the prose beside it says it is.
+# Measured when this shipped: the served window ended 2026-04 against a warehouse whose newest
+# month was 2026-05.
+#
+# A needle pinned to the window's BYTES would catch that once and then rot on the next ingest --
+# the exact failure mode WAREHOUSE_TAG's own note describes, and the reason these are NOT
+# check_dataset calls. So both sides are read out of the SAME response: the served `DATA AS OF`
+# badge, and the `t=` of the permalink that response emitted. Both move with the dataset, so this
+# cannot rot, and it stays correct in container mode against a pinned asset.
+#
+# This is the only place the derivation is exercised in a PRODUCTION build, which is where
+# __dirname, decodeURIComponent and query normalization all hid from a green unit suite.
+#
+# `date -u -d` does the month arithmetic rather than restating trailing12From: 11 months back
+# from asOf, inclusive of asOf, is 12 months (mart_route_health's own `end_m - INTERVAL 11 MONTH`).
+#
+# The asOf extraction tolerates React's `<!-- -->` separator between adjacent text and expression
+# children -- `<span className="asof">DATA AS OF {asOf}</span>` is exactly that shape, and a
+# needle written in the bytes the SOURCE contains rather than the bytes React EMITS is this
+# file's own self-defect #2.
+asof_of() { # asof_of <body> -- the DATA AS OF month this response actually served
+  printf '%s' "$1" \
+    | grep -oE 'DATA AS OF (<!-- -->)?[0-9]{4}-[0-9]{2}' \
+    | head -1 | grep -oE '[0-9]{4}-[0-9]{2}'
+}
+first_permalink() { # first_permalink <body> -- the first /explore? href, &amp; decoded
+  printf '%s' "$1" | grep -o 'href="/explore?[^"]*"' | head -1 \
+    | sed 's/^href="//; s/"$//; s/&amp;/\&/g'
+}
+
+# The recovery permalink, on a real dead end -- and NOT one of the five 404s, which cannot carry
+# this check at all. MEASURED, not assumed: a thrown `notFound()` is served as Next's
+# `<html id="__next_error__">` shell, whose body contains no `<h1>`, no `class="asof"` and no
+# `href="/explore?..."` -- the whole page exists only inside the RSC flight payload, `&` spelled
+# `\u0026`. `/carrier/ZZ` is 12,387 bytes with zero `<h1>`; `/watch/nope` is 9,760 the same way.
+# That is pre-existing framework behaviour, not this section's business, but it means a needle
+# written against a 404's HTML would be looking for bytes that are not there.
+#
+# `/search`'s no-match state is the dead end that IS server-rendered: a 200, real HTML, the same
+# `DATA AS OF` badge and the same recovery permalink every 404 offers. `q` is deliberately junk --
+# `/search` is `no-store` unconditionally, so this mints no cache entry.
+BODY=$(curl -s --max-time 15 "${BASE}/search?q=zzzznotarealthing9999")
+R_ASOF=$(asof_of "$BODY")
+R_HREF=$(first_permalink "$BODY")
+# Both extractions are anti-vacuity guards, and neither is optional: an empty $R_ASOF makes the
+# computed needle 't=:' -- which `check` would then look for and not find, reporting FAIL for the
+# wrong reason -- while an empty $R_HREF would let a `check` against "" pass having compared
+# nothing the moment the needle were ever empty too.
+check_re "recovery: /search no-match serves a DATA AS OF month"   "$R_ASOF" '^[0-9]{4}-[0-9]{2}$'
+check_re "recovery: /search no-match emits an Explorer permalink" "$R_HREF" '^/explore\?v=1&k='
+R_T12=$(date -u -d "${R_ASOF}-01 -11 months" +%Y-%m)
+check    "recovery: its window is the trailing 12 ending at the DATA AS OF it served" \
+  "$R_HREF" "t=${R_T12}:${R_ASOF}&"
+# ...and it really is the RECOVERY query, not some other Explorer link that happens to be on the
+# page. Without this the check above would pass for any permalink carrying the right window.
+#
+# TWO NEEDLES, because the title names two properties and ONE needle can only assert one of them:
+# `d=op_airline_id&m=seats&t=` fixes the dimension and the single measure, and says nothing at all
+# about the limit -- rewriting the served `n=25` to `n=50` left the single-needle form `ok`. A
+# label that overstates what it asserts is the defect class of #147; the fix is to assert the
+# second property, not to soften the label. The `n` needle carries its neighbours on both sides so
+# it cannot match a different key's value.
+check    "recovery: ...and it is the recovery query itself (m=seats)" \
+  "$R_HREF" "d=op_airline_id&m=seats&t="
+check    "recovery: ...and it asks for 25 rows, not some other limit" \
+  "$R_HREF" "&s=-seats&n=25&g=op"
+
+# The front door's sample -- a DIFFERENT query (four measures, for the gauge rail its prose
+# promises), same rule. This is the one sentence a first-time visitor reads, and it is the one
+# that said "over the trailing 12 months" above a window that was not.
+BODY=$(curl -s --max-time 15 "${BASE}/")
+H_ASOF=$(asof_of "$BODY")
+H_HREF=$(first_permalink "$BODY")
+check_re "home: the front door serves a DATA AS OF month"   "$H_ASOF"  '^[0-9]{4}-[0-9]{2}$'
+check_re "home: the front door emits an Explorer permalink" "$H_HREF"  '^/explore\?v=1&k='
+H_T12=$(date -u -d "${H_ASOF}-01 -11 months" +%Y-%m)
+check    "home: the sample window is the trailing 12 ending at the DATA AS OF it served" \
+  "$H_HREF" "t=${H_T12}:${H_ASOF}&"
+# ...and it is still the SHOWCASE, not the escape hatch: the four measures the sentence beside it
+# promises. A sweep collapsing it onto the single-measure recovery query leaves a working link
+# under prose that has quietly stopped being true.
+check    "home: the sample still selects the four measures its prose promises" \
+  "$H_HREF" 'm=seats,departures_performed,load_factor,avg_gauge'
+
 # ---------------------------------------------------------------------------------------------
 # 16. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.
 #

@@ -4,7 +4,7 @@ import { dataAsOf } from "@/lib/db";
 import { search, SEARCH_RESULT_CAP, type SearchGroup } from "@/lib/search";
 import { formatCount } from "@/lib/format";
 import { TopBar } from "@/components/TopBar";
-import { RECOVERY_HREF } from "@/lib/pivot/recovery";
+import { recoveryHref } from "@/lib/pivot/recovery";
 
 // Same reasoning as every other page here: this page's content depends on live warehouse
 // state (dataAsOf(), and the resolution itself -- a code that's ambiguous today might not be
@@ -57,6 +57,12 @@ function EmptyBody() {
  * and the namespaces checked -- CLAUDE.md's empty-result rule ("state the query in words,
  * never a blank panel") applied to free text instead of a pivot.
  *
+ * `asOf` IS A PROP HERE, and it is the whole cost of #145 at this call site -- the only one of
+ * the nine that did not already hold it. The recovery permalink's window is the trailing 12
+ * ending at the dataset's newest month, so it needs the same `asOf` the top bar is already
+ * stamped with; `SearchView` has it awaited two components up. Reading it again here would be a
+ * second warehouse query on a page that has already answered "nothing matched".
+ *
  * ONE template string for the alert sentence, not adjacent JSX text/expression children.
  * React's SSR emits `<!-- -->` between two adjacent TEXT-ish children with no element between
  * them, which would put comment markers inside the sentence in the served HTML -- every unit
@@ -64,7 +70,7 @@ function EmptyBody() {
  * the served bytes would stop matching (CLAUDE.md, `/carrier`'s `grainNote`). Curly quotes are
  * literal Unicode characters, not `&lsquo;`/`&rsquo;` entities -- entities only decode in JSX
  * text, not inside a plain JS string. */
-function NoneBody({ query }: { query: string }) {
+function NoneBody({ query, asOf }: { query: string; asOf: string }) {
   const sentence =
     `Nothing named, coded, or paired with ‘${query}’ -- checked airport codes, ` +
     "carrier codes, aircraft-type short names, route pairs, and names across all three.";
@@ -73,7 +79,7 @@ function NoneBody({ query }: { query: string }) {
       <h1>No matches</h1>
       <p role="alert">{sentence}</p>
       <p>
-        Start from <a href={RECOVERY_HREF}>a known-valid query</a> in the Explorer instead.
+        Start from <a href={recoveryHref(asOf)}>a known-valid query</a> in the Explorer instead.
       </p>
     </div>
   );
@@ -176,7 +182,7 @@ export async function SearchView({ q }: { q: string }) {
         {result.kind === "empty" ? (
           <EmptyBody />
         ) : result.kind === "none" ? (
-          <NoneBody query={result.query} />
+          <NoneBody query={result.query} asOf={asOf} />
         ) : (
           <ResultsBody q={q} groups={result.groups} truncated={result.truncated} />
         )}

@@ -381,10 +381,9 @@ describe("bare decode() is untouched -- the port stays an exact port", () => {
  * already SHIPPED would break links that are, by this project's own framing, the entire growth
  * mechanic and are already sitting in forum posts.
  *
- * Two corpora, both derived rather than restated. The goldens are the frozen codec contract;
- * the hardcoded hrefs are what the app actually serves to a reader today -- found by scanning
- * the source, not by copying eight strings into this file, because a copy rots silently the
- * moment someone edits a page and this test would then guard a URL nobody serves. */
+ * Two corpora, both derived rather than restated. The goldens are the frozen codec contract; the
+ * scan below is what the app actually spells by hand today -- found by walking the source, not by
+ * copying strings into this file, because a copy rots silently the moment someone edits a page. */
 describe("no permalink this app has shipped becomes unreadable", () => {
   const REPO = path.resolve(__dirname, "../../../..");
   const urlstateGoldens = JSON.parse(
@@ -398,64 +397,92 @@ describe("no permalink this app has shipped becomes unreadable", () => {
     }
   });
 
-  /** Every `/explore?...` literal in a page or component, with adjacent-string concatenation
-   * (`"a" + "b"`, which the front door's SAMPLE uses) rejoined first -- without that the scan
-   * silently truncates that one to its first half and "passes" against a URL it never tested. */
-  function hardcodedPermalinks(): string[] {
-    const dir = path.join(REPO, "app/src/app");
-    const found: string[] = [];
+  /** Every hand-spelled `/explore?` permalink literal under `app/src`, as `<file> => <qs>`.
+   *
+   *  WHAT THIS CATCHES THAT NOTHING ELSE CAN: a NEW one appearing, anywhere. `recovery.test.ts`,
+   *  `page.test.tsx` and `recoveryLink.callsites.test.tsx` each pin a KNOWN permalink; not one of
+   *  them can see a tenth literal added to some file tomorrow. That is the exact mechanism that
+   *  produced #145's own frozen-window defect, so the scan outlives the literals it was written
+   *  for: it is an emptiness assertion, and an empty exact-set pin is falsifiable (add a literal
+   *  and it fails), the same shape `prefetchPolicy.test.ts`'s KNOWN_PREFETCHING and
+   *  `entityFacts.test.ts`'s declaration pin already use.
+   *
+   *  THE ROOT IS `app/src`, NOT `app/src/app`, and the difference is not hypothetical. #145's own
+   *  three hand-spelled builders were `lib/watch.ts`, `lib/topn.ts` and one page -- two of the
+   *  three live under `lib/`, so a scan rooted at `app/src/app` cannot see a regression in the
+   *  very files this issue exists to fix. `entityFacts.test.ts` scans all of `app/src` for the
+   *  same reason.
+   *
+   *  THE ANCHOR IS THE QUOTE DELIMITER PLUS AN `=`, and it is deliberately NOT a `v=1` prefix.
+   *  `v` first is one SPELLING, not the format: CLAUDE.md's rule is "one canonical KEY SET, never
+   *  'one spelling' -- key order survives", so `...&g=op&v=1` is a working, server-admitted,
+   *  cacheable permalink that a `v=1`-anchored scan waves through -- and it would freeze exactly
+   *  the way the front door's SAMPLE did. Requiring the opening quote instead catches every way a
+   *  literal is actually written: `href="..."`, `href={"..."}`, single quotes, a template literal
+   *  with no interpolation, and adjacent-string concatenation (rejoined below), in either key
+   *  order.
+   *
+   *  The second half of the anchor is that the query must BEGIN like one -- `/^[a-z]+=/` -- which
+   *  is a shape requirement, not an order one, so it holds for any key order. That is what keeps
+   *  prose out without narrowing the format: `canonicalQuery.ts` really does document a measured
+   *  finding as `` `/explore?...&bogus=1` ``, which carries an `=` and is emphatically not a
+   *  permalink. An ELIDED query cannot start with a key; a real one always does.
+   *
+   *  So what it excludes, precisely: an UNQUOTED mention in prose, and a quoted one that does not
+   *  open with a key. A docstring that quotes a FULL working query IS a subject, and that is
+   *  correct rather than a false positive: a quoted, complete, admissible permalink sitting in
+   *  this tree is one copy-paste from being a call site, which is how the eight #140 closed got
+   *  there.
+   *
+   *  Anything carrying a brace is INTERPOLATED, not a literal: a template-literal href
+   *  (`/explore?${encode(query)}`) is built from a PivotQuery this app just constructed, so its
+   *  admissibility is a property of the builder rather than of a string, and `encode()`
+   *  round-trips through `decode()` by contract. The JSX permalink bar (`/explore?{permalink}`)
+   *  is the same case, and is additionally unquoted. Only hand-written literals need this scan. */
+  function scanPermalinks(): { hits: string[]; filesScanned: number } {
+    const dir = path.join(REPO, "app/src");
+    const hits: string[] = [];
+    let filesScanned = 0;
     const walk = (d: string) => {
       for (const entry of readdirSync(d, { withFileTypes: true })) {
         const full = path.join(d, entry.name);
         if (entry.isDirectory()) walk(full);
         else if (/\.tsx?$/.test(entry.name) && !entry.name.includes(".test.")) {
+          filesScanned += 1;
+          // Adjacent-string concatenation (`"a" + "b"`, which the front door's SAMPLE used)
+          // rejoined first, across a newline too -- without it the scan silently truncates such a
+          // literal to its first half and "passes" against a URL it never tested.
           const src = readFileSync(full, "utf8").replace(/"\s*\+\s*"/g, "");
-          for (const m of src.matchAll(/\/explore\?([^"'`\s]+)/g)) {
-            // Anything carrying a brace is INTERPOLATED, not a literal: a template-literal
-            // href (`/explore?${encode(query)}`) is built from a PivotQuery this app just
-            // constructed, so its admissibility is a property of the builder rather than of a
-            // string -- and `encode()` round-trips through `decode()` by contract. The JSX
-            // permalink bar (`/explore?{permalink}`) is the same case. Only hand-written
-            // literals need this scan.
-            if (!m[1].includes("{")) found.push(m[1]);
+          for (const m of src.matchAll(/["'`]\/explore\?([^"'`\s]*)/g)) {
+            const qs = m[1];
+            if (!qs.includes("{") && /^[a-z]+=/.test(qs)) {
+              hits.push(`${path.relative(REPO, full)} => ${qs}`);
+            }
           }
         }
       }
     };
     walk(dir);
-    return found;
+    return { hits, filesScanned };
   }
 
-  it("finds the hardcoded permalinks at all -- a scan matching nothing passes vacuously", () => {
-    // ONE literal is left in this tree, and this pin is what refuses a second.
-    //
-    // Eight of the nine were the SAME recovery permalink, hand-spelled: `/search`,
-    // `/explore/filter/:dim` and its 404, and the five entity and `/watch` 404s. #140 moved
-    // them onto `lib/pivot/recovery.ts`, which puts them out of this scan's reach -- an
-    // interpolated href is skipped by construction -- so their coverage MOVED rather than being
-    // decremented, exactly as the note this comment replaces required:
-    //
-    //   `recovery.test.ts`          pins both hrefs to their exact strings and asserts
-    //                               `decodeRequest` admits them -- what this scan did.
-    //   `recoveryLink.callsites`    renders every dead-end surface and asserts each emits the
-    //                               constant -- the drift this scan could NEVER see, because a
-    //                               call site can diverge to a different query that still
-    //                               decodes perfectly well.
-    //
-    // The survivor is the front door's SAMPLE, a genuinely different query (four measures, to
-    // show the gauge rail its prose promises) with a different job -- a showcase, not an escape
-    // hatch. Driving it through the constant too would take this count to zero and make the loop
-    // below vacuous, which is the failure this test exists to name.
-    //
-    // So this number now guards ONE thing, and it is a real thing: a ninth hand-spelled
-    // permalink appearing anywhere under `app/src/app` takes it to 2. Reverting any of the eight
-    // to its literal -- byte-identical, invisible to every render test -- reddens HERE.
-    expect(hardcodedPermalinks().length).toBe(1);
+  // BOTH HALVES ARE LOAD-BEARING, exactly as in `prefetchPolicy.test.ts`. Without the
+  // `filesScanned` guard, a walker that silently found nothing -- a moved directory, a changed
+  // extension -- would satisfy the emptiness assertion having read nothing at all.
+  it("walks real files, so an empty result means empty and not broken", () => {
+    expect(scanPermalinks().filesScanned).toBeGreaterThan(50);
   });
 
-  it("accepts every hardcoded /explore permalink the app serves", () => {
-    for (const qs of hardcodedPermalinks()) {
-      expect(() => decodeRequest(qs, FIXTURE), `hardcoded permalink: ${qs}`).not.toThrow();
-    }
+  // ZERO, as an EXACT SET so the failure names the offender and its query string.
+  //
+  // #140 took this from nine literals to one; #145 took the last one -- the front door's SAMPLE,
+  // which froze `t=2025-05:2026-04` under prose calling it "the trailing 12 months". The pin stays
+  // at zero rather than being deleted with its subjects: the assertion is about what may appear,
+  // not about what is there, and a tenth literal is a real regression this repo would otherwise
+  // ship blind. The ADMISSIBILITY loop that used to sit beside it is gone -- over an empty corpus
+  // it iterated nothing, and `recovery.test.ts` and `page.test.tsx` now assert `decodeRequest`
+  // admits the two queries that corpus used to hold, across a range of `asOf`.
+  it("finds no hand-spelled /explore permalink anywhere under app/src", () => {
+    expect(scanPermalinks().hits).toEqual([]);
   });
 });

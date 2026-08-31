@@ -17,13 +17,37 @@ import Link from "next/link";
  *
  * `prefetch={false}` is LOAD-BEARING, not a micro-optimisation. `Link`'s default (`auto`)
  * prefetches when the link enters the viewport, in production. This wordmark is above the fold
- * on all ten pages, and `/` is `force-dynamic` AND absent from `proxy.ts`'s matcher, so it
- * carries Next's own `no-store` and the CDN cannot absorb the prefetch: the default would add
- * one uncached origin request per page view, on a single always-on box whose entire cost
- * control is the caching (CLAUDE.md, "the caching is the cost control, not the hosting tier").
- * Every other internal link in this product is a plain `<a>`; this one is a `Link` only because
- * `@next/next/no-html-link-for-pages` fires on a statically-resolvable `href="/"` and not on the
- * dynamic hrefs elsewhere. Found by M5's final re-review. */
+ * on every page, and the CDN cannot absorb that prefetch -- NOT because `/` is uncached (it is in
+ * `proxy.ts`'s matcher and gets `HTML_CACHE`), but because `proxy.ts` answers ANY request carrying
+ * the `RSC` header `no-store`, unconditionally. A prefetch is such a request, so it always reaches
+ * the origin: the default would add one uncached origin request per page view, on a single
+ * always-on box whose entire cost control is the caching (CLAUDE.md, "the caching is the cost
+ * control, not the hosting tier").
+ *
+ * THE ONE PLACE THIS RULE IS EXPLAINED. Four 404s and the front door defer here rather than
+ * restating it -- the sentence was wrong in six places at once and reached its third revision
+ * before anyone read the plugin (#145).
+ *
+ * Internal links here are plain `<a>` by default; this one is a `Link` because
+ * `@next/next/no-html-link-for-pages` fires on it. TWO conditions have to hold, and a query
+ * string is not either of them -- the rule strips it before matching (`utils/url.js`,
+ * `url.split('?', 1)[0]`):
+ *
+ *   1. the href must be a string LITERAL. `no-html-link-for-pages.js` returns early on
+ *      `href.value.type !== 'Literal'`, so every href built from an expression -- which is every
+ *      Explorer link in this product -- is never examined at all. Necessary, not sufficient:
+ *   2. it must then MATCH a route. App-dir routes compile to `^/explore$` via `normalizeAppPath`,
+ *      while the href is normalized by `normalizeURL`, which appends a trailing slash. So even a
+ *      literal `/explore?...` is unflagged -- `/explore/` does not match `^/explore$`. `href="/"`
+ *      normalizes to `/` and matches `^/$`, which is why THIS one fires.
+ *
+ * So a `Link` is not confined to what the rule forces: `watch/page.tsx` and
+ * `watch/[preset]/not-found.tsx` both render expression-href ones it never inspects.
+ *
+ * (Written without the angle-bracket spelling on purpose: `prefetchPolicy.test.ts` matches that
+ * token in the SOURCE, comments included, so prose using it reads as an unguarded call site --
+ * measured, six of them, when this note was first written.)
+ * Found by M5's final re-review; the mechanism corrected in #145. */
 export function Wordmark() {
   return (
     <Link className="mark" href="/" prefetch={false}>

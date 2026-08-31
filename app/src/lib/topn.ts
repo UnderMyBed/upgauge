@@ -1,4 +1,4 @@
-import { encode } from "@/lib/pivot/urlstate";
+import { exploreHref } from "@/lib/pivot/builder";
 import { normalizeQuery } from "@/lib/pivot/types";
 import type { Grain, Grouping, PivotQuery } from "@/lib/pivot/types";
 
@@ -43,7 +43,12 @@ export function topNQuery(spec: TopNSpec): PivotQuery {
 }
 
 /** The Explorer permalink for the identical query, so the link under a Top-N table can never
- * drift from the table itself. */
+ * drift from the table itself.
+ *
+ * Through `exploreHref` -- never a second hand-spelled `/explore?${encode(q)}`. That line has
+ * one owner (lib/pivot/builder.ts); a private copy here is byte-identical today and is exactly
+ * the call site a future change to what a valid `/explore` permalink requires would miss,
+ * leaving `/carrier`'s two Top-N links behind while the four entity pages moved (#145). */
 export function topNPermalink(spec: TopNSpec): string {
-  return `/explore?${encode(topNQuery(spec))}`;
+  return exploreHref(topNQuery(spec));
 }

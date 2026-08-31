@@ -24,7 +24,7 @@ vi.mock("@/lib/pivot/builder", async (importOriginal) => {
 });
 
 import { ExploreView } from "@/app/explore/page";
-import { RECOVERY_HREF, RECOVERY_QUERY } from "@/lib/pivot/recovery";
+import { recoveryHref, recoveryQuery } from "@/lib/pivot/recovery";
 import { dataAsOf, loadAllowlist, runPivot } from "@/lib/db";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 import { trailing12From } from "@/lib/entityFacts";
@@ -437,10 +437,14 @@ describe("/explore mounts the builder on every state, not just the populated one
     const { container } = render(await ExploreView({ rawQuery: qs({ ...OK, d: "nope" }) }));
     expect(screen.getByText(/unknown dimension/i)).toBeDefined();
     expect(container.querySelector(".builder")).not.toBeNull();
-    // One constant behind both, so the link and the chips beside it cannot describe different
-    // queries. A mutant that re-spells either literal separates them and turns this red.
+    // ONE DEFINITION BEHIND BOTH, so the link and the chips beside it cannot describe different
+    // queries. A mutant that re-spells either separates them and turns this red.
+    //
+    // Derived from the LIVE asOf (#145), not a literal: the recovery window is the trailing 12
+    // ending at the dataset's newest month, so a hardcoded expectation here would have to be
+    // re-measured every ingest -- which is the rot the frozen constant this replaced suffered.
     const escape = container.querySelector(".error-page a")!;
-    expect(escape.getAttribute("href")).toBe(RECOVERY_HREF);
+    expect(escape.getAttribute("href")).toBe(recoveryHref(await dataAsOf()));
   });
 
   // THE REAL CATALOG'S VERDICT, which is the half `lib/pivot/recovery.test.ts` cannot give: that
@@ -450,8 +454,8 @@ describe("/explore mounts the builder on every state, not just the populated one
   // BTS renamed an aircraft type out from under an entire slug fixture set once -- is red here.
   // The recovery link offered to someone whose permalink did not parse must itself parse.
   it("offers a recovery query the server actually admits", async () => {
-    const allowlist = await loadAllowlist();
-    expect(() => decodeRequest(encode(RECOVERY_QUERY), allowlist)).not.toThrow();
+    const [allowlist, asOf] = await Promise.all([loadAllowlist(), dataAsOf()]);
+    expect(() => decodeRequest(encode(recoveryQuery(asOf)), allowlist)).not.toThrow();
   });
 });
 

@@ -1,6 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
+
+// Partial mock: wraps the REAL exploreHref in a spy without changing what it returns -- the same
+// idiom, and the same reason, as app/explore/page.test.tsx's. `rawRowsPermalink` spelled
+// `/explore?${encode(q)}` itself, which is BYTE-IDENTICAL to the helper's output, so no string
+// assertion in this file can tell the two apart. Only whether the helper was actually CALLED
+// distinguishes routing through it from a private copy of its one line.
+vi.mock("@/lib/pivot/builder", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/pivot/builder")>();
+  return { ...actual, exploreHref: vi.fn(actual.exploreHref) };
+});
+
+import { exploreHref } from "@/lib/pivot/builder";
 import {
   maskComments,
   presetBySlug,
@@ -97,6 +109,32 @@ describe("rawRowsPermalink", () => {
     expect(link).toContain("op_airline_id");
     expect(link).toContain("route");
     expect(link).toContain("d=year_month");
+  });
+
+  // THE BUG THIS EXISTS TO CATCH (#145): `rawRowsPermalink` re-spelled `exploreHref`'s one line
+  // rather than calling it. Byte-identical today -- which is exactly the problem, because a
+  // future change to `exploreHref`, or to what a valid `/explore` permalink requires, updates
+  // every real call site and silently misses a private copy. The three assertions above cannot
+  // see the difference: all three still pass against the hand-spelled form.
+  //
+  // Asserted as a CALL, not as a string, and pinned three ways so the mutant cannot survive on a
+  // coincidence: the helper is called exactly once, it is called with the query this function
+  // documents (both filters, by month), and the returned href IS that call's own return value.
+  it("routes through exploreHref, not a second hand-spelled encode() call", () => {
+    vi.mocked(exploreHref).mockClear();
+    const link = rawRowsPermalink(
+      { op_airline_id: 19790, route_key_low: 12478, route_key_high: 12892 },
+      "2025-05",
+      "2026-04",
+    );
+    expect(vi.mocked(exploreHref)).toHaveBeenCalledTimes(1);
+    const [q] = vi.mocked(exploreHref).mock.calls[0];
+    expect(q.filters).toEqual([
+      ["op_airline_id", ["19790"]],
+      ["route", ["12478-12892"]],
+    ]);
+    expect(q.dimensions).toEqual(["year_month"]);
+    expect(link).toBe(vi.mocked(exploreHref).mock.results[0].value);
   });
 });
 

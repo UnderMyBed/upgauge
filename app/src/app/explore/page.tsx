@@ -6,11 +6,12 @@ import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { formatCount } from "@/lib/format";
+import { EARLIEST_MONTH } from "@/lib/entityFacts";
 import { resolutionKey, displayValue, resolveFilterValues, type Resolved } from "@/lib/resolve";
 import { routeHrefFromCodes } from "@/lib/entityLink";
 import { ExplorerBuilder } from "@/components/builder/ExplorerBuilder";
 import { exploreHref } from "@/lib/pivot/builder";
-import { RECOVERY_HREF, RECOVERY_QUERY } from "@/lib/pivot/recovery";
+import { recoveryHref, recoveryQuery } from "@/lib/pivot/recovery";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import type { PivotQuery } from "@/lib/pivot/types";
@@ -110,11 +111,6 @@ function routeHref(
   return routeHrefFromCodes(a.code as string, b.code as string);
 }
 
-// data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- this is the
-// widest time window any query against this database can have, so it is what "offer the
-// nearest broader window" (docs/design/system.md, empty-result state) widens to.
-const EARLIEST_MONTH = "2015-01";
-
 /** A measure the KIND override map does not name still has to render as a numeric. Additive
  * measures are whole counts; non-additive ones are the computed ratios, which `gauge` and
  * `loadFactor` both format to fixed decimals -- `gauge` is the safe general choice since it
@@ -146,6 +142,11 @@ function describeQuery(query: PivotQuery, allowlist: Allowlist): string {
 
 /** The permalink for the same query widened to the full 2015-2026 window, or null when the
  * query already starts at EARLIEST_MONTH -- there is no broader window left to offer.
+ *
+ * `EARLIEST_MONTH` is IMPORTED (lib/entityFacts.ts), not re-declared here. It is the widest time
+ * window any query against this database can have, so it is what "offer the nearest broader
+ * window" (docs/design/system.md, empty-result state) widens to -- and it is the same bound
+ * `lib/year.ts` states at year grain, which is why it may only ever have one owner (#145).
  *
  * Routed through `exploreHref`, the same function the four entity pages' identical widened-window
  * link already centralised onto -- not a second hand-spelled `` `/explore?${encode(...)}` ``,
@@ -231,20 +232,24 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
             <p role="alert">{e.message}</p>
             <p>
               Nothing was guessed from it. Fix the offending key above and reload, or start
-              from <a href={RECOVERY_HREF}>a known-valid query</a>.
+              from <a href={recoveryHref(asOf)}>a known-valid query</a>.
             </p>
             {/* THE STATE A BUILDER IS WORTH THE MOST, and the one an "insert it above the
                 results table" implementation skips without noticing: `decode()` threw, so there
                 is no `query` to mutate and nothing to render a table from. Seeded from
-                RECOVERY_QUERY -- the same constant the escape link above encodes, and the same
-                one the other seven dead-end surfaces in this product offer -- so every chip here
-                is a working way out of a permalink the reader cannot fix by hand, not just the
-                single one that link offers.
+                `recoveryQuery(asOf)` -- the same query the escape link above encodes, and the
+                same one the other eight dead-end surfaces in this product offer -- so every chip
+                here is a working way out of a permalink the reader cannot fix by hand, not just
+                the single one that link offers. It takes THIS render's `asOf` -- the one handed
+                to the builder below -- so the seeded window and the window every chip is computed
+                against cannot disagree. They did while this was a frozen constant: the seed said
+                2026-04 while `asOf` said 2026-05, so the builder's own "Trailing 12" chip was
+                not marked current on the query it had just been seeded with (#145).
 
-                `resolved` is empty and that is exact, not a shortcut: RECOVERY_QUERY carries no
-                filters, so there is no id to resolve and no query to run for one. */}
+                `resolved` is empty and that is exact, not a shortcut: the recovery query carries
+                no filters, so there is no id to resolve and no query to run for one. */}
             <ExplorerBuilder
-              query={RECOVERY_QUERY}
+              query={recoveryQuery(asOf)}
               allowlist={allowlist}
               asOf={asOf}
               resolved={new Map()}

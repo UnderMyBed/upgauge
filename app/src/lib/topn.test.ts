@@ -1,4 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// Partial mock: wraps the REAL exploreHref in a spy without changing what it returns -- the same
+// idiom, and the same reason, as app/explore/page.test.tsx's. `topNPermalink` spelled
+// `/explore?${encode(...)}` itself, which is BYTE-IDENTICAL to the helper's output, so every
+// string assertion below passes against either form. Only whether the helper was actually CALLED
+// tells them apart.
+vi.mock("@/lib/pivot/builder", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/pivot/builder")>();
+  return { ...actual, exploreHref: vi.fn(actual.exploreHref) };
+});
+
+import { exploreHref } from "@/lib/pivot/builder";
 import { topNQuery, topNPermalink } from "./topn";
 
 const BASE = {
@@ -50,5 +62,21 @@ describe("topNPermalink", () => {
     expect(link).toContain(`n=${q.limit}`);
     expect(link).toContain("s=-seats");
     expect(link).toContain("d=aircraft_type");
+  });
+
+  // THE BUG THIS EXISTS TO CATCH (#145): `topNPermalink` re-spelled `exploreHref`'s one line
+  // rather than calling it, so a change to what a valid `/explore` permalink requires would
+  // reach the four entity pages and miss the link under `/carrier`'s two Top-N tables. The
+  // assertion above cannot see it -- the two forms emit the same bytes.
+  //
+  // The href must be THIS call's return value, over the SAME query `topNQuery` builds, so a
+  // mutant that calls the helper with some other query is red too, not just one that skips it.
+  it("routes through exploreHref, not a second hand-spelled encode() call", () => {
+    const spec = { ...BASE, filters: [["op_airline_id", ["19790"]]] as [string, string[]][] };
+    vi.mocked(exploreHref).mockClear();
+    const link = topNPermalink(spec);
+    expect(vi.mocked(exploreHref)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(exploreHref).mock.calls[0][0]).toEqual(topNQuery(spec));
+    expect(link).toBe(vi.mocked(exploreHref).mock.results[0].value);
   });
 });

@@ -3,8 +3,9 @@ import { headers } from "next/headers";
 import { dataAsOf, runPivot } from "@/lib/db";
 import { rawPathFromHeaders } from "@/lib/rawPath";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
-import { encode } from "@/lib/pivot/urlstate";
-import { AIRCRAFT_RECOVERY_HREF } from "@/lib/pivot/recovery";
+import { EARLIEST_MONTH } from "@/lib/entityFacts";
+import { exploreHref } from "@/lib/pivot/builder";
+import { aircraftRecoveryHref } from "@/lib/pivot/recovery";
 import { displayValue, resolutionKey } from "@/lib/resolve";
 import { TopBar } from "@/components/TopBar";
 
@@ -12,8 +13,6 @@ import { TopBar } from "@/components/TopBar";
 // build time, even on the 404 path. proxy.ts sets `no-store` on this response for the same
 // reason one level out, at the CDN.
 export const dynamic = "force-dynamic";
-
-const EARLIEST_MONTH = "2015-01";
 
 /** One of the airframes a colliding slug names, with the permalink that CAN show it. */
 interface Candidate {
@@ -28,9 +27,15 @@ type Outcome =
 
 /** The Explorer permalink for ONE BTS aircraft code. This is what makes the disambiguation
  * page a real answer rather than an apology: `/aircraft/CE-180` cannot resolve, but the
- * Explorer is keyed on the BTS code, so each airframe's rows are one click away. */
+ * Explorer is keyed on the BTS code, so each airframe's rows are one click away.
+ *
+ * Through `exploreHref` -- never a second hand-spelled `/explore?${encode(q)}`. That line has one
+ * owner (lib/pivot/builder.ts), and a private copy of it is byte-identical today, which is the
+ * whole hazard: a future change to what a valid `/explore` permalink requires would reach every
+ * real call site and silently miss this one, leaving the two links that ARE this page's answer
+ * behind (#145). */
 function candidateHref(id: string, asOf: string): string {
-  return `/explore?${encode({
+  return exploreHref({
     grain: "segment",
     dimensions: ["op_airline_id"],
     measures: ["seats", "passengers", "departures_performed", "load_factor", "avg_gauge"],
@@ -41,7 +46,7 @@ function candidateHref(id: string, asOf: string): string {
     sortDesc: true,
     limit: 50,
     grouping: "operating",
-  })}`;
+  });
 }
 
 /** Why this slug is not an aircraft type, in `aircraftSlug.ts`'s own words.
@@ -147,13 +152,13 @@ export async function NotFoundView({ pathname }: { pathname: string }) {
           </ul>
         ) : null}
         <p>
-          {/* eslint-plugin-next flags a literal <a href> against this dynamic route
-              ([name]) as "use next/link instead"; the Explorer links above carry a query
-              string and are not flagged.
-              `prefetch={false}` is load-bearing here, not style -- TopBar.tsx's own note
-              has the why in full, and prefetchPolicy.test.ts enforces it repo-wide. */}
+          {/* This `Link` is required and the Explorer links here are not: TopBar.tsx's note
+              has the full rule and the two mechanisms behind it. Carrying a query string is
+              NOT what exempts them -- the rule strips the query before matching.
+              `prefetch={false}` is load-bearing here, not style -- same note, and
+              prefetchPolicy.test.ts enforces it repo-wide. */}
           Try <Link href="/aircraft/B737-8" prefetch={false}>B737-8</Link>, or start from{" "}
-          <a href={AIRCRAFT_RECOVERY_HREF}>
+          <a href={aircraftRecoveryHref(asOf)}>
             the Explorer
           </a>
           .

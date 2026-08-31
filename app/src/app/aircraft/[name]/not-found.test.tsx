@@ -1,10 +1,20 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-// No mocks: the page is a Server Component taking the pathname as a prop (from proxy.ts's
-// RAW_PATH_HEADER, see lib/rawPath.ts) and re-running the REAL resolveAircraftSlug against the
-// REAL database, exactly as route/[pair]/not-found.test.tsx does.
+
+// The ONE partial mock in this file, and it changes no behaviour: it wraps the REAL exploreHref
+// in a spy so the last test below can see whether `candidateHref` CALLED it. Everything else
+// here still runs against the real resolver and the real database, as before.
+vi.mock("@/lib/pivot/builder", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/pivot/builder")>();
+  return { ...actual, exploreHref: vi.fn(actual.exploreHref) };
+});
+
+// Otherwise no mocks: the page is a Server Component taking the pathname as a prop (from
+// proxy.ts's RAW_PATH_HEADER, see lib/rawPath.ts) and re-running the REAL resolveAircraftSlug
+// against the REAL database, exactly as route/[pair]/not-found.test.tsx does.
 import { NotFoundView } from "@/app/aircraft/[name]/not-found";
+import { exploreHref } from "@/lib/pivot/builder";
 import { decode } from "@/lib/pivot/urlstate";
 import { loadAllowlist } from "@/lib/db";
 
@@ -86,6 +96,38 @@ describe("/aircraft/<slug> not-found", () => {
   it("offers a way back into a working page", async () => {
     render(await NotFoundView({ pathname: "/aircraft/NOPE-1" }));
     expect(screen.getByRole("link", { name: /B737-8/ })).toBeDefined();
+  });
+
+  // THE BUG THIS EXISTS TO CATCH (#145): `candidateHref` re-spelled `exploreHref`'s one line
+  // rather than calling it, so a change to what a valid `/explore` permalink requires would miss
+  // the two links that ARE this page's answer. The round-trip assertion above cannot see it --
+  // the hand-spelled form decodes identically, because it is the same bytes.
+  //
+  // PINNED AT THE CALL SITE, not at an extracted function: `candidateHref` is private to this
+  // file, and extracting it to make it testable would MOVE the untested hop rather than close it
+  // (CLAUDE.md). So this renders the real page and reads the spy.
+  //
+  // The predicate keys on the aircraft_type FILTER, which is what makes it non-vacuous: the
+  // recovery link at the foot of this same page also goes through `exploreHref`, and it carries
+  // no filter at all -- so it cannot satisfy this and a mutant collapsing the candidates onto it
+  // is red rather than accidentally green.
+  it("builds each candidate permalink through exploreHref, not a hand-spelled encode() call", async () => {
+    vi.mocked(exploreHref).mockClear();
+    const { container } = render(await NotFoundView({ pathname: "/aircraft/CE-180" }));
+
+    const links = [...container.querySelectorAll('ul a[href^="/explore?"]')];
+    expect(links).toHaveLength(2);
+
+    const candidateCalls = vi
+      .mocked(exploreHref)
+      .mock.calls.map((c, i) => ({ q: c[0], href: vi.mocked(exploreHref).mock.results[i].value }))
+      .filter(({ q }) => q.filters.some(([k]) => k === "aircraft_type"));
+
+    expect(candidateCalls.map(({ q }) => q.filters)).toEqual([
+      [["aircraft_type", ["030"]]],
+      [["aircraft_type", ["031"]]],
+    ]);
+    expect(links.map((a) => a.getAttribute("href"))).toEqual(candidateCalls.map((c) => c.href));
   });
 
   it("falls back to a generic message when the path is not an aircraft page", async () => {
