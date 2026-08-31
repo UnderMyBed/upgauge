@@ -90,11 +90,56 @@ def test_new_routes_are_not_filtered_out(con):
     assert actual == expected
 
 
-def test_low_activity_routes_are_excluded_on_performed_departures(con):
+def test_the_floor_is_a_rate_over_the_months_that_flew(con):
+    """The floor is 30 departures per month FLOWN (#148, app/src/lib/floor.ts), never a
+    trailing-12 total. This replaces an assertion on `t12_departures_performed < 30`, which
+    survives the rate form unchanged -- 30 * months_flown is >= 30 for every admitted row, so
+    that test could not fail for the reason its name claimed and was deletable-green.
+    """
     bad = con.execute(
-        "SELECT count(*) FROM mart_route_health WHERE t12_departures_performed < 30"
+        "SELECT count(*) FROM mart_route_health "
+        "WHERE t12_departures_performed < 30 * t12_months_flown"
     ).fetchone()[0]
     assert bad == 0
+
+
+def test_a_carrier_route_that_filed_and_never_flew_is_not_admitted(con):
+    """`t12_departures_performed >= 30 * t12_months_flown` is TRUE for a route that never
+    flew: months_flown is 0, so the comparison reads `0 >= 0`. Without the explicit
+    `t12_months_flown > 0` arm the rate floor therefore admits the sparsest row it is possible
+    to file -- one that filed a schedule and performed nothing -- while looking like it
+    excludes it. That is 7 extra rows on this fixture and 7 on the real warehouse.
+
+    floor.ts:74 rules the same case the same way: `activeMonths <= 0` is BELOW floor, not a
+    division to be skipped.
+
+    The second assertion is the anti-vacuity control. If no carrier-route in the window had
+    filed without flying, the first would pass under either form and prove nothing.
+    """
+    admitted = con.execute(
+        "SELECT count(*) FROM mart_route_health WHERE t12_months_flown = 0"
+    ).fetchone()[0]
+    assert admitted == 0, (
+        "a carrier-route that filed and never flew is in the scored universe -- the rate "
+        "floor is missing its `t12_months_flown > 0` arm and read `0 >= 0` as clearing it"
+    )
+
+    never_flew = con.execute("""
+        WITH w AS (SELECT DISTINCT t12_start_month AS s, t12_end_month AS e
+                   FROM mart_route_health)
+        SELECT count(*) FROM (
+            SELECT r.op_airline_id
+            FROM fct_route_month r, w
+            WHERE r.year_month BETWEEN w.s AND w.e
+            GROUP BY r.op_airline_id, r.route_key_low, r.route_key_high
+            HAVING count(DISTINCT r.year_month)
+                       FILTER (WHERE r.departures_performed > 0) = 0
+               AND sum(r.departures_performed) = 0)
+    """).fetchone()[0]
+    assert never_flew > 0, (
+        "this warehouse has no filed-but-never-flown carrier-route, so the assertion above "
+        "is vacuous -- it would pass with the guard deleted"
+    )
 
 
 def test_additive_sums_are_carried_alongside_the_derived_columns(con):
@@ -152,8 +197,8 @@ def test_windows_are_global_and_do_not_overlap(con):
     ).fetchall()
     if not row:
         pytest.skip(
-            "fixture has no route clearing the <30 departures floor; window ordering is "
-            "verified against real 2015-2017 data in the task's manual step"
+            "fixture has no carrier-route pair clearing the departure rate floor; "
+            "window ordering is verified against real 2015-2017 data in the task's manual step"
         )
     assert len(row) == 1, "the window must be global, not per-route"
     t12s, t12e, p12s, p12e = row[0]
@@ -162,8 +207,9 @@ def test_windows_are_global_and_do_not_overlap(con):
 
 def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
     """Fix round 1: the original version of this test checked parity against `lf_delta`
-    alone, which is FALSE on real data -- 580 of 7,336 real routes have a fully-populated
-    prior window (so lf_delta, gauge_delta, capacity_delta, frequency_delta are all known)
+    alone, which is FALSE on real data -- 76 of the 5,238 scored carrier-route pairs have a
+    fully-populated prior window (so lf_delta, gauge_delta, capacity_delta and frequency_delta
+    are all known)
     but `completion_factor` is NULL anyway, because they filed zero scheduled departures
     against real performed ones (on-demand/charter carriers). `lf_delta`-only parity holds
     on the small fixture purely because its single surviving row happens to have every
@@ -171,7 +217,7 @@ def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
     completion_factor NULL.
 
     The composite is FOUR axes, not five: M6 removed capacity_delta from the score, because
-    in log space it is exactly frequency + gauge (verified to 2.66e-15 over all 7,459 finite
+    in log space it is exactly frequency + gauge (verified to 1.33e-15 over all 5,314 finite
     rows -- docs/data/model.md), so scoring it scored those two a second time. It keeps its
     column and stays on the page; it is the composite it has no place in.
 
@@ -195,7 +241,7 @@ def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
 
 def test_health_score_is_bounded_by_the_clamp(con):
     """Each axis is clamped to +/-3 and weighted 0.25, so |health_score| <= 3.0 by
-    construction. Without the clamp a nine-seat aircraft's log gauge ratio reaches z = -15.99
+    construction. Without the clamp a nine-seat aircraft's log gauge ratio reaches z = -18.91
     on the real warehouse (VD CPX-VQS) and Death Watch fills with bush operators."""
     worst = con.execute(
         "SELECT max(abs(health_score)) FROM mart_route_health WHERE health_score IS NOT NULL"
@@ -206,7 +252,7 @@ def test_health_score_is_bounded_by_the_clamp(con):
 def test_the_completion_cap_is_null_safe(con):
     """DuckDB's least() IGNORES NULLs: least(NULL, 1.5) returns 1.5, not NULL. Written as a
     bare least(), the cap fabricates a 1.5 completion rate for every route that filed no
-    schedule at all -- 180 of them on the real warehouse -- and each then gets a health_score
+    schedule at all -- 89 of them on the real warehouse -- and each then gets a health_score
     it has no basis for."""
     leaked = con.execute("""
         SELECT count(*) FROM mart_route_health

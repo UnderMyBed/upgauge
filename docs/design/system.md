@@ -182,8 +182,12 @@ The denominator is `active_months`, a companion count both pivot templates emit 
 departures — a month that filed a schedule and flew nothing did not fly.
 
 **A row with no month count claims nothing about the floor**, exactly as a row with no departure
-count does. `/watch`'s presets read `mart_route_health` rather than a pivot, so they carry a
-twelve-month departure sum with no month count beside it and take no floor treatment at all.
+count does — the branch exists for any producer that supplies a departure count without a month
+count beside it. `/watch`'s presets are not that producer: `mart_route_health` carries
+`t12_months_flown`, the four presets alias it as `active_months`, and their floor mark is a real
+division rather than an abstention. It comes out false on every preset row, because the mart's
+own admission gate **is** this rule (`t12_departures_performed >= 30 * t12_months_flown`) — a
+row below the floor is not in the table to be marked.
 
 Rows below the floor are **rendered, never hidden**: dashed bottom rule,
 `--ink-2` text, and a muted gauge tick. **The gutter glyph is not part of that treatment** —
@@ -1409,14 +1413,14 @@ page still said otherwise — a rule in a doc does not enforce itself.
 `p12_months_present = 0` means *this carrier filed nothing on this route in the prior 12
 months*, full stop. Two things it does **not** mean, each measured:
 
-- **Not a first appearance.** The mart has no lookback past that window. 334 of 688 qualifying
-  rows (48.5%), and 17 of the 25 rendered, had already filed earlier — `MQ AZO–ORD` in 93
+- **Not a first appearance.** The mart has no lookback past that window. 174 of 297 qualifying
+  rows (58.6%), and 19 of the 25 rendered, had already filed earlier — `B6 AUS–FLL` in 106
   distinct months back to 2015-01.
 - **Not an unserved route.** `mart_route_health`'s grain is **(op_airline_id, route)**, so the
-  filter is silent about every other carrier on the same airport pair. **521 of 688 (75.7%), and
+  filter is silent about every other carrier on the same airport pair. **245 of 297 (82.5%), and
   25 of the 25 rendered**, had a different carrier flying that pair inside the prior window —
-  `AS HNL–ITO` leads the page while HA, UA and WN filed **1,787,347 seats** on it in that
-  window, 4.9× the subject's own trailing 12.
+  `AS HNL–ITO` leads the page while HA, UA and WN filed **1,786,963 seats** on it in that
+  window, 3.7× the subject's own trailing 12.
 
 **Grain is a copy problem, not just a data problem.** The second bullet was introduced by the
 fix wave that closed the first: "nobody flew last year" read as the accurate half of the old
@@ -1426,8 +1430,11 @@ claim about a route the query never made. `docs/product/features.md` § Insight 
 rule and the rest of the evidence.
 
 **Every filter a preset applies is stated on the preset's own page**, in a `.foot` note, or the
-page cannot be reproduced from what it says. Empty Planes has two (`gauge_t12 >= 50` and
-`t12_departures_performed >= 360`, the latter the more restrictive) and both are stated.
+page cannot be reproduced from what it says. Empty Planes has exactly one of its own,
+`gauge_t12 >= 50`, and states it. The departure floor is **not** a per-preset filter: it is
+`mart_route_health`'s admission gate, so it holds on all four leaderboards and is stated on all
+four (`DeparturesFloorNote`). Stating a shared floor once per page is disclosure; declaring it
+twice in two predicates is the defect #134 closed.
 
 **`health_score` renders in a left-aligned `td.id`, not a `.num` cell** — a deliberate,
 declared exception to "all numerics right-aligned, tabular-figure". The cell's value is

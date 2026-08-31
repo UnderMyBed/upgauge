@@ -108,12 +108,12 @@ except `DataTable`'s rank column.
 route_key_low, route_key_high`, ascending. Each ranks on a single column, so without that suffix
 rows tying on it at the `LIMIT` boundary come back in DuckDB's merge order rather than by the
 query: the gap #136 closed for the pivot templates, reaching these files, which share none of
-that SQL. The triple is unique per row of the mart (8,065 rows, 8,065 distinct triples, no NULL
+that SQL. The triple is unique per row of the mart (5,611 rows, 5,611 distinct triples, no NULL
 in any of the three) and these queries neither join nor aggregate, so appending it makes the
 ordering total; it is a suffix, so the requested measure still ranks. **All three columns, never
 the route pair alone** — the grain is a carrier–route pair: `gauge_delta = 0.0` is one tie run
-of 887 rows over 39 carriers and 800 distinct route pairs, inside which **87 pairs repeat under
-a different carrier**, so a route-only tiebreak leaves those 87 unordered and passes any fixture
+of 546 rows over 27 carriers and 515 distinct route pairs, inside which **31 pairs repeat under
+a different carrier**, so a route-only tiebreak leaves those 31 unordered and passes any fixture
 keyed on route alone. It is written **literally, not as a substituted token**: the pivot
 templates need a token because their `GROUP BY` varies per query, this grain is fixed, and a
 second substitution site is exactly where Python's replace-every-occurrence and JavaScript's

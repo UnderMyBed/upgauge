@@ -160,10 +160,13 @@ describe("every DataTable call site declares the floor partition it means", () =
 
   it("/watch takes the partition", async () => {
     // THE EIGHTH CALL SITE, which an earlier revision of this file's header claimed to cover
-    // while having no entry for it. /watch is a structural no-op for the partition -- its rows
-    // carry `t12_departures_performed` and never `departures_performed`, so no preset row ever
-    // claims the floor -- but "the prop is unnecessary here" and "the prop is asserted here" are
-    // different statements, and only the second survives someone adding a table.
+    // while having no entry for it. /watch still produces no below-floor row, but the REASON
+    // changed in #148 and the old one is no longer true: its rows now DO carry
+    // `departures_performed` and `active_months` (aliased from the mart's `t12_months_flown`),
+    // so `belowFloor` really divides. It comes out false everywhere because
+    // mart_route_health's own admission gate IS the floor, so a sub-floor pair is not in the
+    // table. "The prop is unnecessary here" and "the prop is asserted here" are different
+    // statements, and only the second survives someone adding a table.
     //
     // The props union already refuses `partition={false}` beside `rank`, so a future RANKED
     // table here cannot decline it. An UNRANKED one could, and that is the door this closes.

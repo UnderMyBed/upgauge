@@ -58,7 +58,7 @@ export function gapNote(gaps: number): string {
  * `gapNote`'s count puts a false sentence -- "with no filings" -- on the one line a sighted
  * reader gets. That is the compound-claim-with-one-false-clause shape this project has shipped
  * before: `/watch/new-routes` told every visitor its rows were service nobody flew last year
- * while 521 of 688 had another carrier on the pair.
+ * while 521 of the 688 rows the mart then carried had another carrier on the pair.
  *
  * Same geometry as a gap, different sentence. Both are stated, separately, on the key AND in the
  * aria-label -- `/airport`'s foot already sets the precedent that the CAUSE of an absence is

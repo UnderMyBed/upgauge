@@ -252,8 +252,8 @@ with the generic Top-N builder (`app/src/lib/topn.ts`) and nothing else. The cla
 by any reader who tries to reproduce Gauge Watch in `/explore` and cannot.
 
 - **Gauge Watch** — biggest upgauges/downgauges, trailing 12mo. *The differentiator.*
-- **Empty Planes** — lowest trailing-12 load factor, with a `gauge_t12 >= 50` floor and a flat
-  360-departure one. *The hook.* "Seasonally-adjusted" is the wrong description for `lf_t12`: it
+- **Empty Planes** — lowest trailing-12 load factor, with a `gauge_t12 >= 50` floor. *The
+  hook.* "Seasonally-adjusted" is the wrong description for `lf_t12`: it
   is a trailing-12-month **sum** of passengers over seats, not a seasonally-decomposed model,
   so a full year of months is already summed together and seasonality is gone by construction
   — there is no separate adjustment step, and no code computes one. The `gauge_t12 >= 50` floor
@@ -261,24 +261,23 @@ by any reader who tries to reproduce Gauge Watch in `/explore` and cannot.
   wildly on a handful of passengers and would otherwise dominate a "lowest LF" ranking with
   noise rather than a genuinely underperforming route.
 
-  **Two floors, and the page must state both.** The second is
-  `t12_departures_performed >= 360` in `watch_empty_planes.sql`, and it is the **more
-  restrictive** of the two — 12× stronger than `mart_route_health`'s own 30-per-trailing-12
-  floor, which every row already clears, so disclosing only `gauge_t12 >= 50` would name the
-  weaker floor and hide the binding one.
+  **`gauge_t12 >= 50` is Empty Planes' own floor; the DEPARTURE floor is not.** The departure
+  floor belongs to `mart_route_health` — 30 performed departures per month *flown*,
+  `t12_departures_performed >= 30 * t12_months_flown`, applied as the mart's admission gate — so
+  it holds on **all four** presets, not this one, and the page states it on all four
+  (`DeparturesFloorNote`, `app/src/app/watch/[preset]/page.tsx`). `gauge_t12 >= 50` is the
+  per-preset one: Empty Planes and Death Watch both apply it, Gauge Watch and Route Birth
+  Tracker do not, so it is disclosed on the two pages that apply it and the departure floor is
+  disclosed on all four.
 
-  **That 360 is a flat annual total, and it is NOT the departure floor the tables and maps
-  apply.** That floor is 30 departures per month *flown* — a rate over the months a route
-  actually operated (`docs/design/system.md` § The data table, `app/src/lib/floor.ts`) — and the
-  two rules disagree in both directions: a route flying twelve months at 2.5 departures a month
-  files 30 and clears 360's spirit nowhere, while one flying three months at 40 a month files
-  120, is four times the rate floor, and 360 excludes it. `mart_route_health` has no months-flown
-  column for this preset to divide by (`t12_months_present` counts months FILED, which is a
-  different quantity), so the two floors remain different rules stated separately rather than one
-  rule stated twice. A page
-  that enumerates its filters and omits one cannot be reproduced from what it says; Death Watch
-  carries the gauge floor and **not** this one, which is what makes the disclosure per-preset
-  rather than shared.
+  **The preset's own `t12_departures_performed >= 360` predicate is deleted, not restated as a
+  rate.** The mart's window is twelve months, so `t12_months_flown <= 12` and
+  `>= 30 * t12_months_flown` is at most 360: every row admitted by the mart's rate floor already
+  clears any rate the preset could restate, making `>= 360` a strict **subset** of the gate above
+  it. A restated version would have removed no row, and declaring the floor twice in two places
+  is exactly the defect #134 closed. A page that enumerates its filters and omits one cannot be
+  reproduced from what it says — but a page that states the same floor twice is not more
+  reproducible, only harder to keep true.
 - **Route Birth Tracker** — a carrier × O&D pair that filed **nothing in the prior 12 months**
   and something in the trailing 12. Label it **re-entry, not first appearance** — and
   emphatically not "first appearance since 2015", which the query cannot support.
@@ -286,20 +285,20 @@ by any reader who tries to reproduce Gauge Watch in `/explore` and cannot.
   `p12_months_present = 0` and nothing else; `mart_route_health` carries **no lookback past the
   prior 12 months**, so the query cannot distinguish a brand-new route from a resumed one.
 
-  Measured on the 2026-05 warehouse: **303 of the 606 qualifying rows (50.0%) filed in at least
+  Measured on the 2026-05 warehouse: **174 of the 297 qualifying rows (58.6%) filed in at least
   one month before the p12 window**, including **19 of the 25 the page renders**. Worst case
-  `QX BLI–SEA` — **99 distinct months filed, first filed 2015-01** — was presented as brand-new
-  service. Also `B6 AUS–FLL` (99 months), `OO ORD–PAH` (96), `MQ AZO–ORD` (93), `MQ BPT–DFW`
-  (92). The old reasoning here ("a route flown in 2014 and resumed in 2019 looks new") had the
+  `B6 AUS–FLL` — **106 distinct months filed, first filed 2015-01** — was presented as brand-new
+  service. Also `MQ AZO–ORD` (105 months), `MQ ALO–ORD` (103), `OO ORD–PAH` (100), `OH CLT–DSM`
+  (99). The old reasoning here ("a route flown in 2014 and resumed in 2019 looks new") had the
   right failure mode and stopped one rung too high: a route flown in **2023** and resumed in
-  2025 looks new too, and that is half the rows. The mirror-image limitation is unchanged — a
-  route that stopped and resumed *within* the p12/t12 windows has some p12 presence and never
-  appears here at all.
+  2025 looks new too, and that is well over half the rows. The mirror-image limitation is
+  unchanged — a carrier–route that stopped and resumed *within* the p12/t12 windows has some p12
+  presence and never appears here at all.
 
   **And the grain is the pair, not the route — so "nobody flew it last year" is false too.**
   `mart_route_health` is one row per **(op_airline_id, undirected route)**, which is why this
   bullet says "carrier × O&D pair". `p12_months_present = 0` is therefore silent about every
-  *other* carrier on the same airport pair. Measured: **466 of the 606 qualifying rows (76.9%),
+  *other* carrier on the same airport pair. Measured: **245 of the 297 qualifying rows (82.5%),
   and 25 of the 25 the page renders**, had a different carrier flying that pair inside the p12
   window. The page's own #1 row, `AS HNL–ITO`, ranks first while HA, UA and WN filed
   **1,786,963 seats** on that pair in the prior window — **3.7×** the subject's own trailing 12.
@@ -339,41 +338,44 @@ gauge`), so scoring it scores those two a second time — see
 for the identity, the measured residual, and the before/after contribution table. It still
 appears in the UI as a component, since the components (not the score) are the insight.
 Windows are the latest 12 calendar months present (globally, not per-route) vs. the 12 before
-that. Excludes routes with **<30 departures *performed*** (not scheduled) in the trailing
-12mo.
+that. Excludes carrier–route pairs below the departure floor: **30 departures *performed*** (not
+scheduled) **per month flown** over the trailing 12 —
+`t12_departures_performed >= 30 * t12_months_flown`, with `t12_months_flown > 0`. The rule is
+declared once in `app/src/lib/floor.ts` and every `/watch` preset inherits it from the mart.
 
-**A route with no prior-12mo data gets `NULL` deltas and a `NULL` score, never an enormous
-"improvement."** It still appears as a row — that row is the Route Birth Tracker's input.
-Measured over the full 2015–2026 window: 606 of 8,065 routes are new in exactly this sense
-(`p12_months_present = 0`).
+**A carrier–route pair with no prior-12mo data gets `NULL` deltas and a `NULL` score, never an
+enormous "improvement."** It still appears as a row — that row is the Route Birth Tracker's
+input. Measured over the full 2015–2026 window: 297 of the mart's 5,611 rows are new in exactly
+this sense (`p12_months_present = 0`).
 
 **Show the components in the UI, not just the score.** The components are the insight; the
 score is a sort key. Label it plainly as a heuristic. Do not over-engineer this.
 
-### `health_score` is `NULL` for three reasons — a route unrankable for lack of a filed schedule must not render as unhealthy
+### `health_score` is `NULL` for three reasons — a row unrankable for lack of a filed schedule must not render as unhealthy
 
 Measured over the full 2015–2026 window (`t12 = 2025-06..2026-05`, `p12 = 2024-06..2025-05`):
-**733 of 8,065 routes** have `health_score IS NULL`, for three distinct reasons — which
-**overlap by 50 routes, so never sum them.** Full SQL-level accounting:
+**373 of the mart's 5,611 rows** have `health_score IS NULL`, for three distinct reasons — which
+**overlap by 13 rows, so never sum them.** Full SQL-level accounting:
 [../data/model.md § Window rule, floor, and the NULL-prior-window trap](../data/model.md#window-rule-floor-and-the-null-prior-window-trap).
 
-1. **No prior window — 606, the largest group.** A
-   genuinely new route (`p12_months_present = 0`). Correctly has no deltas to show.
+1. **No prior window — 297, the largest group.** This carrier filed nothing on this pair in the
+   prior window (`p12_months_present = 0`) — a re-entry as often as a birth, per Route Birth
+   Tracker above. Correctly has no deltas to show.
 2. **Zero-measure prior window — 0 today.** The prior window is
    technically "present" but filed zero seats and zero departures, so the ratio is undefined
    the same way division by zero is. Empty in the current window — a property of which 24
    months happen to be the trailing window right now, not a structural absence of the case.
-3. **Zero scheduled departures — 177.** `completion_factor` is
+3. **Zero scheduled departures — 89.** `completion_factor` is
    undefined when `t12_departures_scheduled = 0`, which BTS allows for on-demand/
    charter-style operators that file real performed flights against no filed schedule at
-   all. Unlike the other two, this route usually has known `lf_delta`, `gauge_delta`,
+   all. Unlike the other two, this row usually has known `lf_delta`, `gauge_delta`,
    `capacity_delta`, and `frequency_delta` — only `completion_factor` (and therefore the
    composite score) is unknown.
 
 **UI requirement: a `NULL` `health_score` must never render as "unhealthy."** All three
 groups are `NULL` for a data-availability reason, not a low-score reason — sorting or
 filtering that silently treats `NULL` as the bottom of the range would misrepresent up to
-606 routes (the largest of the three groups today — "no prior window," not "zero scheduled
+297 rows (the largest of the three groups today — "no prior window," not "zero scheduled
 departures," which was largest only in the smaller 2015–2017 measurement) as failing on
 completion when the real story is "no schedule was ever filed to complete" or "this route
 didn't exist yet." Render these rows with an explicit "insufficient data" state,

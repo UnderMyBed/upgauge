@@ -8,8 +8,8 @@
 --
 -- 1. NOT "first appearance since 2015". This filter says nothing about the years before the p12
 --    window, because mart_route_health carries no lookback beyond it. Measured on the 2026-05
---    warehouse: 303 of the 606 qualifying rows (50.0%) filed in at least one month BEFORE the
---    p12 window, and 19 of the 25 rows the page actually renders. Worst case QX BLI-SEA -- 99
+--    warehouse: 174 of the 297 qualifying rows (58.6%) filed in at least one month BEFORE the
+--    p12 window, and 19 of the 25 rows the page actually renders. Worst case B6 AUS-FLL -- 106
 --    distinct months on file, first filed 2015-01 -- which "first appearance since 2015"
 --    presented as brand-new service. features.md's older reasoning ("a route flown in 2014 and
 --    resumed in 2019 looks new") had the right failure mode and the wrong window: a route flown
@@ -17,8 +17,8 @@
 --
 -- 2. NOT "new service nobody flew last year". THE GRAIN IS (op_airline_id, route_key_low,
 --    route_key_high) -- one row per carrier per undirected route, never one row per route -- so
---    this filter is silent about every OTHER carrier on the same airport pair. Measured: 466 of
---    the 606 (76.9%), and 25 of the 25 rows this page renders, had a different carrier flying
+--    this filter is silent about every OTHER carrier on the same airport pair. Measured: 245 of
+--    the 297 (82.5%), and 25 of the 25 rows this page renders, had a different carrier flying
 --    that pair inside the p12 window. The #1 row is AS HNL-ITO, where HA, UA and WN filed
 --    1,786,963 seats in that window -- 3.7x the subject's own trailing 12. AS DEN-SAN had SEVEN
 --    other operators and 1.88M seats, 14x its own; AA FLL-LGA had three and 1.52M, 10.8x.
@@ -40,7 +40,7 @@ SELECT
     route_key_high,
     lf_t12, lf_delta, gauge_t12, gauge_delta,
     capacity_delta, frequency_delta, completion_factor,
-    t12_seats, t12_departures_performed, t12_quarantined_rows,
+    t12_seats, t12_departures_performed, t12_months_flown, t12_quarantined_rows,
     health_score
 FROM mart_route_health
 WHERE route_key_low <> route_key_high
@@ -52,7 +52,7 @@ WHERE route_key_low <> route_key_high
 -- three columns, never the route pair alone: the grain is a carrier-route PAIR. watch_gauge.sql
 -- carries the full rule and the measurement that proves route alone is not total.
 --
--- Ties are real here: 22 tie runs covering 49 of the 606 qualifying rows, the largest three
+-- Ties are real here: 4 tie runs covering 9 of the 297 qualifying rows, the largest three
 -- Alaska routes all filing exactly 55,944 t12 seats.
 ORDER BY t12_seats DESC, op_airline_id, route_key_low, route_key_high
 LIMIT $limit
