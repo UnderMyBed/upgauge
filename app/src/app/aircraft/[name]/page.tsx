@@ -30,6 +30,7 @@ import {
 import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/format";
 import type { AircraftRef } from "@/lib/resolve";
 import type { Allowlist } from "@/lib/pivot/allowlist";
+import { NON_DISPLAY_COLUMNS } from "@/lib/pivot/types";
 import type { PivotQuery } from "@/lib/pivot/types";
 
 // Same reasoning as route/[pair]/page.tsx and explore/page.tsx: this page's content depends on
@@ -43,11 +44,6 @@ export const dynamic = "force-dynamic";
 // rationale on the route page's own copy of this comment; not verifiable by this project's
 // Vitest suite (disclosed in task-2-report.md).
 const resolveAircraftSlugForRequest = cache((slug: string) => resolveAircraftSlug(slug));
-
-// fct_segment_month exposes quarantine bookkeeping columns alongside every measure a query
-// asked for -- the stat strip surfaces the count, but they are not pivot-vocabulary columns and
-// must never appear as a table column.
-const NON_DISPLAY_COLUMNS = new Set(["quarantined_rows", "quarantine_reasons"]);
 
 /** WHAT THE FILTER DOES NOT DO, said out loud. `?carrier=` narrows the MAP and nothing else --
  * the stat strip, the chart and the table are the same on `/aircraft/B737-8?carrier=DL` as on
@@ -393,7 +389,7 @@ export async function AircraftView({
 
               `map` is that same rule applied to the section above: the arcs encode three
               independent facts -- width by seats, dash below a 70% load factor, dotted and
-              muted below the 30-departure floor (`lib/map/arcs.ts`) -- and nothing else on the
+              muted under 30 departures a month flown (`lib/map/arcs.ts`) -- and nothing else on the
               served page explains any of them. Asked for only when a map was drawn, so an
               unfiltered page does not carry a legend for an element it does not have. */}
           <LegendRail fleetMix={chartDrawn} stack={BY_CARRIER} map={arcsDrawn} />

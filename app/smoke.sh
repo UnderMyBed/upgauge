@@ -1880,8 +1880,13 @@ check     "carrier?type: the 308 keeps the project Cache-Control"    "$HDRS" "$H
 # self-defect this file has produced three times. Do not "escape" this dash; it is one
 # character on purpose.
 #
-# 2O, dataset-pinned: 25 Top routes, 2 below floor, and its sparse rows genuinely interleave under
-# the measure sort (a 179-seat below-floor row out-seats scored rows at 176, 169 and 168).
+# 2O, dataset-pinned and RE-DERIVED under the monthly floor (#134): 25 Top routes, 20 below floor
+# and 5 scored, so both needles below have something to match. Its sparse rows no longer
+# interleave -- the below-floor block is rows 6..25 -- which is why the /carrier UNIT fixture for
+# the interleaving property moved to M5; these two needles never depended on it. What 2O pins
+# here instead is the boundary in the served bytes: row 5 runs 373 departures across all twelve
+# months (31.1 a month, scored) and row 6 runs 356 across twelve (29.7, below floor). Seventeen
+# departures apart over a year, opposite sides of the floor.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/2O")
 check_dataset check_re "carrier/2O: a below-floor row's rank cell is the em dash" \
   "$BODY" '<td[^>]*rank[^>]*>—</td>'

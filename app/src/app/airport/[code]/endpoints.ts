@@ -113,7 +113,10 @@ function mergeReasons(a: string | null, b: string | null): string | null {
  * `load_factor`, `quarantined_rows`) so the component, the reason-code gutter and the gauge
  * rail all work unchanged -- these rows stand in for a pivot result the pivot cannot express.
  * Sorted by seats descending, matching what the ORDER BY would have been. */
-export function carrierRows(rows: EndpointRow[]): Record<string, unknown>[] {
+export function carrierRows(
+  rows: EndpointRow[],
+  activeMonths: ReadonlyMap<string, number>,
+): Record<string, unknown>[] {
   const byCarrier = new Map<string, EndpointRow>();
   for (const row of rows) {
     const key = String(row.carrierId);
@@ -139,6 +142,21 @@ export function carrierRows(rows: EndpointRow[]): Record<string, unknown>[] {
       avg_gauge: ratio(r.seats, r.departures),
       quarantined_rows: r.quarantinedRows,
       quarantine_reasons: r.quarantineReasons,
+      // THE FLOOR'S DENOMINATOR, AND IT DOES NOT COME FROM THE FOLD ABOVE (#134).
+      //
+      // Every other field here folds arithmetically -- sums add, reasons union as strings. A
+      // DISTINCT-MONTH COUNT DOES NOT. The truth for this row is the number of months the
+      // carrier flew AT THIS AIRPORT AT ALL, which is the union of its per-endpoint month
+      // sets, and a union is not recoverable from the counts: `max()` is only a lower bound
+      // and `sum()` double-counts every month two endpoints share. Measured over every
+      // /airport page in the trailing 12 (3,457 folded carrier rows), `max()` gives the wrong
+      // month count on 342 and the wrong BELOW-FLOOR VERDICT on 18; `sum()` flips 1,186.
+      //
+      // So it comes from `airportCarrierMonthsQuery` -- a second pivot grouped by carrier
+      // alone, where DuckDB does the DISTINCT over exactly that union. Undefined for a carrier
+      // the count query did not return, which `DataTable` reads as "no claim about the floor"
+      // rather than as a denominator of zero.
+      active_months: activeMonths.get(String(r.carrierId)),
     }));
 }
 
@@ -230,6 +248,51 @@ export function airportTrafficQuery(
   };
 }
 
+/** Measured ceiling for the carrier-months query below. The most operating carriers any one
+ * airport sees over a trailing 12 months is 43 (ORD, 13930) on the 2026-05 warehouse, and 70
+ * carriers file anything at all anywhere in that window -- so this cannot truncate on any
+ * airport in the database, and 500 leaves an order of magnitude of headroom besides. Unlike
+ * `AIRPORT_ENDPOINT_LIMIT` this bounds a query whose grain is one row per CARRIER, not one per
+ * (carrier, origin, dest), which is why it is three orders of magnitude smaller. */
+export const AIRPORT_CARRIER_LIMIT = 500;
+
+/** THE FLOOR'S DENOMINATOR, AS ITS OWN PIVOT (#134).
+ *
+ * Deliberately the SAME window, the SAME filter, the SAME grain and the SAME grouping as
+ * `airportTrafficQuery`, differing on exactly one axis: it groups by `op_airline_id` ALONE.
+ * That single difference is the whole point -- `active_months` is a `count(DISTINCT
+ * year_month)` computed per GROUP, so grouping by carrier alone makes it the union over every
+ * endpoint that carrier served, which is what the folded row in `carrierRows` needs and what
+ * no fold of the per-endpoint counts can reconstruct.
+ *
+ * A SECOND QUERY, NOT A SECOND SOURCE OF TRUTH: nothing but the month count is read from it.
+ * The seats, passengers and departures the table shows still come from the one traffic pivot,
+ * so the two cannot disagree about a displayed number.
+ *
+ * THE ONE SEAM, stated so the next reader does not rediscover it as a bug: if the traffic
+ * pivot ever came back at exactly `AIRPORT_ENDPOINT_LIMIT` its departures would be truncated
+ * while this query's month count would not, making the rate slightly understated on a page
+ * that is already declaring `truncated` and under-reporting every figure on it. The real worst
+ * case is ORD at 1,732 groups against a 5,000 limit, so it does not happen today. */
+export function airportCarrierMonthsQuery(
+  airportId: number,
+  timeFrom: string,
+  timeTo: string,
+): PivotQuery {
+  return {
+    grain: "segment",
+    dimensions: ["op_airline_id"],
+    measures: CARRIER_MEASURES,
+    timeFrom,
+    timeTo,
+    filters: [["endpoint_airport_id", [String(airportId)]]],
+    sort: "seats",
+    sortDesc: true,
+    limit: AIRPORT_CARRIER_LIMIT,
+    grouping: "operating",
+  };
+}
+
 /** The airport at the OTHER end of a row that is guaranteed (by the `endpoint_airport_id`
  * filter) to have `airportId` at one end or the other -- the destination of a departure, the
  * origin of an arrival, and `airportId` itself for a same-airport filing (both columns equal
@@ -263,6 +326,10 @@ export interface AirportTraffic {
   /** The pivot came back at exactly `limit` rows, so the table and stat strip under-report and
    * the page must say so. */
   truncated: boolean;
+  /** Months each carrier ACTUALLY FLEW at this airport, keyed by `String(airline_id)` -- the
+   * departure floor's denominator, from `airportCarrierMonthsQuery`. Not derivable from
+   * `rows`: see `carrierRows`. */
+  activeMonths: Map<string, number>;
 }
 
 /** The trailing-12 table and the stat strip, in one pivot -- no union. `carrierRows` and
@@ -276,11 +343,20 @@ export async function fetchAirportTraffic(
   timeTo: string,
   limit: number = AIRPORT_ENDPOINT_LIMIT,
 ): Promise<AirportTraffic> {
-  const result = await runPivot(airportTrafficQuery(airportId, timeFrom, timeTo, limit));
+  // CONCURRENT, not a sequential second await: the two pivots share nothing and `connect()`
+  // hands each its own DuckDBConnection off the single memoized instance -- the same shape
+  // /route and /carrier already use for their several pivots.
+  const [result, months] = await Promise.all([
+    runPivot(airportTrafficQuery(airportId, timeFrom, timeTo, limit)),
+    runPivot(airportCarrierMonthsQuery(airportId, timeFrom, timeTo)),
+  ]);
   return {
     rows: toEndpointRows(result.rows, String(airportId)),
     resolved: result.resolved,
     truncated: result.rows.length >= limit,
+    activeMonths: new Map(
+      months.rows.map((r) => [String(r.op_airline_id), Number(r.active_months)]),
+    ),
   };
 }
 

@@ -37,7 +37,7 @@ const COORDS = {
 } as const;
 
 function originArc(code: keyof typeof COORDS): ArcDatum {
-  return { code, ...COORDS[code], seats: 0, departures: 0, loadFactor: null };
+  return { code, ...COORDS[code], seats: 0, departures: 0, loadFactor: null, activeMonths: 1 };
 }
 
 function destArc(code: keyof typeof COORDS, overrides: Partial<ArcDatum> = {}): ArcDatum {
@@ -47,6 +47,7 @@ function destArc(code: keyof typeof COORDS, overrides: Partial<ArcDatum> = {}): 
     seats: 100_000,
     departures: 200,
     loadFactor: 0.85,
+    activeMonths: 1,
     ...overrides,
   };
 }
@@ -70,13 +71,14 @@ function fixture(): NetworkMapInput {
 function fixtureWithSeats(seats: number[]): NetworkMapInput {
   const codes: (keyof typeof COORDS)[] = ["SEA", "JFK", "ORD"];
   return {
-    origin: { code: "PDX", ...COORDS.PDX, seats: 0, departures: 0, loadFactor: null },
+    origin: { code: "PDX", ...COORDS.PDX, seats: 0, departures: 0, loadFactor: null, activeMonths: 1 },
     arcs: seats.map((s, i) => ({
       code: codes[i],
       ...COORDS[codes[i]],
       seats: s,
       departures: 200,
       loadFactor: 0.85,
+      activeMonths: 1,
     })),
     window: "2015-01 → 2026-04",
     sameAirportSeats: 0,
@@ -98,7 +100,7 @@ function fixtureWithLoadFactor(loadFactor: number): NetworkMapInput {
 function fixtureWithDepartures(departures: number): NetworkMapInput {
   return {
     origin: originArc("ORD"),
-    arcs: [destArc("SEA", { departures, loadFactor: 0.9 })],
+    arcs: [destArc("SEA", { departures, loadFactor: 0.9, activeMonths: 1 })],
     window: "2015-01 → 2026-04",
     sameAirportSeats: 0,
   };
@@ -145,10 +147,10 @@ const SELF_ARC_FIXTURE_ARC_COUNT = 3;
 
 function fixtureIncludingSelfArc(originCode: string): NetworkMapInput {
   return {
-    origin: { code: originCode, ...COORDS.ORD, seats: 0, departures: 0, loadFactor: null },
+    origin: { code: originCode, ...COORDS.ORD, seats: 0, departures: 0, loadFactor: null, activeMonths: 1 },
     arcs: [
       // The self row: same code as the origin, real seats, no valid great circle.
-      { code: originCode, ...COORDS.ORD, seats: 73_082, departures: 53, loadFactor: 0.8 },
+      { code: originCode, ...COORDS.ORD, seats: 73_082, departures: 53, loadFactor: 0.8, activeMonths: 1 },
       destArc("SEA"),
       destArc("JFK"),
     ],

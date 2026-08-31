@@ -288,3 +288,233 @@ def test_composite_route_filter_excludes_self_routes_the_naive_form_matches(con)
         "should match strictly MORE rows (it also matches route_key_low=route_key_high "
         "self-routes at both endpoint airports), so it should never be the smaller count"
     )
+
+
+# ---------------------------------------------------------------------------------------
+# ACTIVE MONTHS -- the floor's denominator (#134).
+#
+# `active_months` is a companion COUNT emitted by both pivot templates beside
+# `quarantined_rows`, never a catalog measure: it must not be selectable, sortable or
+# renderable as a column, and adding it to meta_pivot_measures would need a `make build`.
+# It is what turns the 30-departure floor back into the MONTHLY rule its legend states --
+# `docs/design/system.md`, "min 30 departures/mo" -- on every surface that queries a
+# trailing window.
+#
+# Every assertion below reads the column BY NAME. Reading it as `r[-1]` is what the first
+# revision of this file did, and two of these tests then passed against the UNPATCHED
+# templates -- `quarantine_reasons` is also the last column, and comparing month counts to
+# reason strings finds them unequal for the wrong reason. A positional read cannot tell
+# "the column is correct" from "the column is not there".
+# ---------------------------------------------------------------------------------------
+
+WINDOW = ("2025-06", "2026-05")
+
+
+def _named(con, q):
+    """Run a rendered pivot and return its rows as dicts keyed by OUTPUT COLUMN NAME."""
+    sql, params = render_pivot(q, con)
+    cur = con.execute(sql, params)
+    names = [d[0] for d in cur.description]
+    return [dict(zip(names, r, strict=True)) for r in cur.fetchall()]
+
+
+@pytest.mark.parametrize(
+    "grain,table",
+    [("segment", "fct_segment_month"), ("route", "fct_route_month")],
+)
+def test_active_months_matches_an_independent_recomputation(con, grain, table):
+    """BOTH grains, because both templates carry their own copy of the column.
+
+    Parametrised rather than written once: `pivot_route.sql` and `pivot_segment.sql` are
+    separate files with separate SELECT lists, so a column added to one and not the other is
+    a defect no single-grain test can see -- and route grain is what /carrier's Top routes
+    table (the surface with the most below-floor rows) actually queries.
+    """
+    rows = _named(
+        con,
+        PivotQuery(
+            grain=grain,
+            dimensions=("op_airline_id",),
+            measures=("departures_performed",),
+            time_from=WINDOW[0],
+            time_to=WINDOW[1],
+            limit=2000,
+        ),
+    )
+    got = {r["op_airline_id"]: r["active_months"] for r in rows}
+    expected = {
+        r[0]: r[1]
+        for r in con.execute(
+            f"""
+            SELECT op_airline_id,
+                   count(DISTINCT year_month) FILTER (
+                       WHERE NOT is_quarantined AND departures_performed > 0)
+            FROM {table}
+            WHERE year_month BETWEEN '{WINDOW[0]}' AND '{WINDOW[1]}'
+            GROUP BY op_airline_id
+            """
+        ).fetchall()
+    }
+    assert got == expected
+    # Not a vacuous comparison of two empty maps, and not one where every value is the same
+    # number: the denominator only does work when it VARIES across rows.
+    assert len(got) > 50
+    assert len(set(got.values())) > 3
+
+
+def test_active_months_counts_months_flown_not_months_filed(con):
+    """A month that filed a schedule and performed nothing did not fly.
+
+    The FILTER carries `departures_performed > 0` for this reason, and the distinction is
+    real in the warehouse rather than hypothetical -- this asserts there ARE groups where the
+    two differ, then that the template took the flown reading. Without the inequality
+    assertion the test would pass against a template that dropped the predicate entirely.
+    """
+    rows = _named(
+        con,
+        PivotQuery(
+            grain="segment",
+            dimensions=("op_airline_id", "origin_airport_id", "dest_airport_id"),
+            measures=("departures_performed",),
+            time_from=WINDOW[0],
+            time_to=WINDOW[1],
+            limit=200000,
+        ),
+    )
+    got = {
+        (r["op_airline_id"], r["origin_airport_id"], r["dest_airport_id"]): r["active_months"]
+        for r in rows
+    }
+    both = con.execute(
+        f"""
+        SELECT op_airline_id, origin_airport_id, dest_airport_id,
+               count(DISTINCT year_month) FILTER (
+                   WHERE NOT is_quarantined AND departures_performed > 0) AS flown,
+               count(DISTINCT year_month) FILTER (WHERE NOT is_quarantined) AS filed
+        FROM fct_segment_month
+        WHERE year_month BETWEEN '{WINDOW[0]}' AND '{WINDOW[1]}'
+        GROUP BY 1, 2, 3
+        """
+    ).fetchall()
+    flown = {(r[0], r[1], r[2]): r[3] for r in both}
+    filed = {(r[0], r[1], r[2]): r[4] for r in both}
+    differ = [k for k in flown if flown[k] != filed[k]]
+    # 54 such groups on the 2026-05 warehouse. The bound is loose because the figure moves
+    # with every refresh; what must not move is that it is not zero, since a warehouse where
+    # filed and flown never differ makes the two readings indistinguishable and this test
+    # vacuous.
+    assert len(differ) > 20, "no group where filed and flown month counts differ -- vacuous"
+    assert got == flown
+    assert got != filed
+
+
+def test_active_months_excludes_quarantined_months(con):
+    """The denominator is drawn from the same rows the numerator is.
+
+    Every measure is `SUM(x) FILTER (WHERE NOT is_quarantined)`, so a denominator that counted
+    quarantined months would divide un-quarantined departures by a month count including
+    months whose every filing was thrown away -- understating the rate and marking rows sparse
+    that are not. Asserts the two readings genuinely differ on this warehouse first.
+    """
+    rows = _named(
+        con,
+        PivotQuery(
+            grain="segment",
+            dimensions=("op_airline_id", "origin_airport_id", "dest_airport_id"),
+            measures=("departures_performed",),
+            time_from="2015-01",
+            time_to="2026-05",
+            limit=2000000,
+        ),
+    )
+    got = {
+        (r["op_airline_id"], r["origin_airport_id"], r["dest_airport_id"]): r["active_months"]
+        for r in rows
+    }
+    unfiltered = {
+        (r[0], r[1], r[2]): r[3]
+        for r in con.execute(
+            """
+            SELECT op_airline_id, origin_airport_id, dest_airport_id,
+                   count(DISTINCT year_month) FILTER (WHERE departures_performed > 0)
+            FROM fct_segment_month
+            WHERE year_month BETWEEN '2015-01' AND '2026-05'
+            GROUP BY 1, 2, 3
+            """
+        ).fetchall()
+    }
+    differ = [k for k in got if got[k] != unfiltered.get(k)]
+    assert len(differ) > 10, "no group whose quarantined months change the count -- vacuous"
+    assert got != unfiltered
+
+
+def test_active_months_never_exceeds_the_window(con):
+    """A count of DISTINCT months inside a 12-month window cannot exceed 12.
+
+    Cheap, and it is the assertion that would catch the denominator being SUMMED rather than
+    counted -- the fold error /airport's carriers table has to avoid (see
+    app/src/app/airport/[code]/endpoints.ts).
+    """
+    rows = _named(
+        con,
+        PivotQuery(
+            grain="route",
+            dimensions=("route",),
+            measures=("departures_performed",),
+            time_from=WINDOW[0],
+            time_to=WINDOW[1],
+            limit=200000,
+        ),
+    )
+    months = [r["active_months"] for r in rows]
+    assert months, "no rows -- vacuous"
+    assert max(months) == 12
+    assert min(months) >= 0
+
+
+def test_the_floor_only_ever_tightens_under_the_monthly_rule(con):
+    """MONOTONICITY, over the real warehouse.
+
+    `departures / activeMonths <= departures` for `activeMonths >= 1`, so the monthly rule can
+    only ever mark MORE rows below floor than the twelve-month-sum rule it replaces -- never
+    fewer. Written as a test rather than left as a remark: it is the cheapest guard against a
+    future "simplification" inverting the comparison, and unlike a row count it survives every
+    dataset refresh.
+    """
+    rows = _named(
+        con,
+        PivotQuery(
+            grain="route",
+            dimensions=("op_airline_id", "route"),
+            measures=("departures_performed",),
+            time_from=WINDOW[0],
+            time_to=WINDOW[1],
+            limit=2000000,
+        ),
+    )
+    assert rows, "no rows -- vacuous"
+    old_below = new_below = 0
+    for r in rows:
+        dep, months = r["departures_performed"], r["active_months"]
+        if dep is None:
+            continue
+        # THE LOAD-BEARING SQL PROPERTY, and the only part of this test a template edit can
+        # break: a group that performed departures flew in at least one month. It is what makes
+        # the monotonicity below arithmetic rather than luck -- with a zero denominator against a
+        # positive numerator there would be no rate to compare at all. MUTANT: raise the
+        # template's predicate to `departures_performed > 1` and groups whose every month flew a
+        # single departure report 0 months against a positive sum -- red here.
+        assert not (dep > 0 and months == 0), (
+            f"a group performed {dep} departures in 0 active months -- the template's "
+            f"`departures_performed > 0` FILTER no longer agrees with its own numerator"
+        )
+        old = dep < 30
+        new = True if not months else dep / months < 30
+        assert not (old and not new), (
+            f"below floor under the sum rule, scored under the monthly one: {dep=} {months=}"
+        )
+        old_below += old
+        new_below += new
+    # Discriminating, not merely consistent: the two rules must genuinely disagree on this
+    # warehouse, or the loop above proves nothing about either.
+    assert new_below > old_below > 0

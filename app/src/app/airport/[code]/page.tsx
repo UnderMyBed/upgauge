@@ -253,7 +253,7 @@ export async function AirportView({
     fetchAirportNetwork(airport, mapWindow.from, mapWindow.to),
   ]);
 
-  const rows = carrierRows(traffic.rows);
+  const rows = carrierRows(traffic.rows, traffic.activeMonths);
   const totals = airportTotals(traffic.rows, airport.id);
   const isEmpty = rows.length === 0;
   const hasMix = mix.rows.length > 0;

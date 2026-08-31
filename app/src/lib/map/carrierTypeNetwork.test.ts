@@ -236,6 +236,7 @@ describe("hasNothingToShow", () => {
     seats: 10,
     passengers: 5,
     departures: 1,
+    activeMonths: 1,
   };
 
   it("is true only when all three categories are empty", () => {
@@ -260,7 +261,7 @@ describe("segmentsForDrawing", () => {
     [id, { id, code, name: code, lat, lon }] as const;
 
   function routeOf(low: number, high: number, seats: number): DrawableRoute {
-    return { routeKeyLow: low, routeKeyHigh: high, seats, passengers: seats / 2, departures: 1 };
+    return { routeKeyLow: low, routeKeyHigh: high, seats, passengers: seats / 2, departures: 1, activeMonths: 1 };
   }
 
   it("refuses a set the renderer would draw a different number of", () => {

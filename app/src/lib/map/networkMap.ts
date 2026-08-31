@@ -16,7 +16,8 @@
  */
 
 import type { GeoPoint, Panel } from "./albers";
-import { DEPARTURE_FLOOR, type ArcDatum } from "./arcs";
+import { type ArcDatum } from "./arcs";
+import { belowFloor } from "@/lib/floor";
 import type { NodeMark, SegmentDatum } from "./segmentMap";
 import {
   arcsSentence,
@@ -51,7 +52,7 @@ export interface NetworkMapInput {
    * `meta_pivot_measures` is `SUM(x) FILTER (WHERE NOT is_quarantined)`, and a SUM over zero
    * passing rows returns NULL -- "nothing here can be trusted", never "nothing flew". Before
    * #114 `airportNetwork.ts` coerced that NULL with `?? 0` and DREW the pair as an ordinary
-   * arc reading 0 seats and 0 departures, below `DEPARTURE_FLOOR`, dotted and muted: a
+   * arc reading 0 seats and 0 departures, below the departure floor, dotted and muted: a
    * positive claim of "barely flown" about a pair the data cannot describe. Measured over the
    * trailing 12 (2025-06..2026-05): 11 such pairs, EVERY one of which performed a departure
    * before quarantine (`zero_seats` -- a passenger aircraft flew and filed zero seats), so the
@@ -101,6 +102,7 @@ function networkSegments(input: NetworkMapInput): SegmentDatum[] {
     seats: a.seats,
     departures: a.departures,
     loadFactor: a.loadFactor,
+    activeMonths: a.activeMonths,
   }));
 }
 
@@ -197,7 +199,10 @@ export function renderNetworkMap(input: NetworkMapInput): string {
     code: s.to.code,
     lat: s.to.lat,
     lon: s.to.lon,
-    belowFloor: s.departures < DEPARTURE_FLOOR,
+    // Per SEGMENT, and exact: on a hub each destination has exactly one arc, so this is the
+    // arc's own verdict and needs no fold (contrast `segmentMap.ts`'s `tallyNodes`, where an
+    // airport can carry many incident segments and their month sets cannot be unioned).
+    belowFloor: belowFloor(s.departures, s.activeMonths),
   }));
 
   // Labels rank by ARC seats. On a hub each destination has exactly one arc, so this is the

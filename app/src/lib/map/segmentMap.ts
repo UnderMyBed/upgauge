@@ -32,7 +32,8 @@
 import type { GeoPoint, Panel, PanelFit } from "./albers";
 import { fitPanels, normalizeLon, PANEL_RECTS, project, regionOf } from "./albers";
 import { greatCircle, stepsFor } from "./greatCircle";
-import { strokeFor, DEPARTURE_FLOOR } from "./arcs";
+import { strokeFor } from "./arcs";
+import { belowFloor } from "@/lib/floor";
 import { BASEMAP_FIT_POINTS } from "./basemap";
 
 /** One end of a segment. `code` is the display code; coordinates come from
@@ -59,6 +60,11 @@ export interface SegmentDatum {
   seats: number;
   departures: number;
   loadFactor: number | null;
+  /** Months inside the drawn window in which this pair ACTUALLY FLEW -- the departure floor's
+   * denominator (`lib/floor.ts`), straight from the pivot's `active_months` companion count.
+   * Required for the same reason `ArcDatum`'s is: every map here is drawn over a trailing-12
+   * window, so a segment without it would silently stop claiming anything about the floor. */
+  activeMonths: number;
   /** The quantity this segment's panel was RANKED and CUT on, when that quantity is not one of
    *  the fields above. Only the diff map's downgauged panel has one: the fall in gauge, in seats
    *  per departure, computed as a ratio of sums over each window.
@@ -907,6 +913,9 @@ interface NodeTally {
   lon: number;
   seats: number;
   departures: number;
+  /** Whether EVERY segment incident on this airport is itself below the departure floor. See
+   * `tallyNodes` for why the disc's claim is this and not a rate over summed departures. */
+  allIncidentBelowFloor: boolean;
 }
 
 /**
@@ -925,15 +934,31 @@ interface NodeTally {
  * on a disagreement because a renderer on the served path must not, and there is no honest
  * thing to draw instead.
  *
- * Departures are SUMMED, which is what makes the below-floor mark mean the same thing on both
- * maps: a hub destination has exactly one incident arc, so the sum IS that arc's departures and
- * `/airport`'s bytes do not move; point-to-point, "this airport is barely served" is a claim
- * about everything flying into it, not about whichever segment happened to be listed first.
+ * Departures are SUMMED, and the disc's SIZE and LABEL rank on the summed seats -- unchanged.
+ *
+ * THE BELOW-FLOOR MARK DOES NOT COME FROM THAT SUM (#134), and the disc's claim changed with
+ * it: it now reads "nothing serving this airport clears the departure floor", not "this airport
+ * is barely served in total". The floor is 30 departures per month FLOWN, so a rate over summed
+ * departures needs the number of months THE AIRPORT was served -- which is the UNION of its
+ * incident segments' month sets, and a union cannot be recovered from per-segment counts:
+ * `max()` is a lower bound and `sum()` double-counts every shared month. Measured over every
+ * /carrier type map in the trailing 12 (9,897 node marks), folding with `max()` gives the wrong
+ * month count on 1,997 and the WRONG BELOW-FLOOR VERDICT on 150.
+ *
+ * The exact denominator is not reachable from here: it would need a pivot grouped by endpoint
+ * airport, and `endpoint_airport_id` is `filter_only` in the catalog. So the rule is the one
+ * this data DOES support exactly -- every incident segment below floor -- rather than an
+ * approximation of the old one. A quietly wrong mark is the opposite of showing the dirt.
+ *
+ * ON A HUB MAP THIS CHANGES NOTHING: each destination has exactly one incident arc, so "every
+ * incident segment is below floor" is that arc's own verdict, which is what the summed rule
+ * gave too. Only the point-to-point maps move.
  */
 function tallyNodes(lines: SegmentDatum[]): NodeTally[] {
   const byCode = new Map<string, NodeTally>();
   for (const s of lines) {
     for (const end of [s.from, s.to]) {
+      const below = belowFloor(s.departures, s.activeMonths);
       const existing = byCode.get(airportKey(end));
       if (existing === undefined) {
         byCode.set(airportKey(end), {
@@ -942,10 +967,13 @@ function tallyNodes(lines: SegmentDatum[]): NodeTally[] {
           lon: end.lon,
           seats: s.seats,
           departures: s.departures,
+          allIncidentBelowFloor: below,
         });
       } else {
         existing.seats += s.seats;
         existing.departures += s.departures;
+        // AND, not OR: one segment clearing the floor is enough for the airport to be served.
+        existing.allIncidentBelowFloor = existing.allIncidentBelowFloor && below;
       }
     }
   }
@@ -1043,7 +1071,7 @@ export function renderSegmentMap(input: SegmentMapInput): string {
       code: n.code,
       lat: n.lat,
       lon: n.lon,
-      belowFloor: n.departures < DEPARTURE_FLOOR,
+      belowFloor: n.allIncidentBelowFloor,
     }));
 
   const labelled = new Set(

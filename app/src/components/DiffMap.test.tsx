@@ -46,11 +46,12 @@ function seg(
     from: N[from],
     to: N[to],
     seats: 100_000,
-    // Above DEPARTURE_FLOOR, so `strokeFor` scales width by seats rather than overriding it
+    // Above the departure floor, so `strokeFor` scales width by seats rather than overriding it
     // with the fixed 1px dotted floor stroke. The width assertions below are unreachable
     // otherwise -- every arc would render "1.00" and the shared-ramp test could not fail.
     departures: 200,
     loadFactor: 0.85,
+    activeMonths: 1,
     rankedBy: null,
     ...over,
   };

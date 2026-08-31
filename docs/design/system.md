@@ -149,11 +149,35 @@ request per page view on a box whose whole cost control is the caching.
 Column order is fixed: **gutter · identifiers · additive measures · derived measures ·
 counts · gauge rail · sparkline.** Identifiers left, everything numeric right.
 
-Rows below the 30-departure floor are **rendered, never hidden**: dashed bottom rule,
+**The floor is 30 departures per month FLOWN, and it is one number, declared once**
+(`app/src/lib/floor.ts`). Every table and both maps read it from there, and the served copy states
+the grain: *under 30 departures a month flown*, in the legend rail and in the `n` glyph's own
+title. Naming the grain in the copy is not decoration — every page carrying that mark draws a
+trailing-12 window, so a marked row can print a departure count in the hundreds, and a bare
+"below the 30-departure floor" beside 323 departures reads as a rendering fault rather than as a
+rate.
+
+**A surface that queries a window divides.** All of them do: the four entity pages, `/carrier`'s
+two Top-N tables and both maps are drawn over a trailing 12 months, so a row's departure count is
+a twelve-month sum and the floor's denominator is the number of months in that window the subject
+actually flew — never the window's length, and never 1. A route filing 30 departures across a
+year is 2.5 a month and is **below** floor; one filing 120 across three months is 40 a month and
+is **scored**. Both readings the arithmetic invites are wrong: comparing the raw sum against 30
+is ~12x too lenient, and comparing it against a flat 360 brands dense seasonal service sparse.
+The denominator is `active_months`, a companion count both pivot templates emit beside
+`quarantined_rows` (`sql/03_queries/pivot_segment.sql`), and it counts months that PERFORMED
+departures — a month that filed a schedule and flew nothing did not fly.
+
+**A row with no month count claims nothing about the floor**, exactly as a row with no departure
+count does. `/watch`'s presets read `mart_route_health` rather than a pivot, so they carry a
+twelve-month departure sum with no month count beside it and take no floor treatment at all.
+
+Rows below the floor are **rendered, never hidden**: dashed bottom rule,
 `--ink-2` text, and a muted gauge tick. **The gutter glyph is not part of that treatment** —
 it is chosen independently, by severity (`Q` > `⌀` > `n`), so a below-floor row that is also
 quarantined or zero-pax shows `Q` or `⌀` and never `n` while carrying every mark above —
-roughly one in four of them, at route×carrier grain. **Read the floor from the departure count,
+roughly one in five of them, at route×carrier grain. **Read the floor from the departure count
+and the active-month count together,
 never from the gutter**; the *reason-code
 gutter* section below has the mechanism, and names gating on the glyph as the bug it exists to
 prevent.
@@ -290,7 +314,7 @@ A 22px left column carrying one mono glyph per row, in `--limit`:
 | Code | Meaning |
 |---|---|
 | `⌀` | Filed departures carrying zero passengers. A real filing, not a gap |
-| `n` | Below the 30-departure floor — reported, never scored (rendered in `--ink`, not `--limit`) |
+| `n` | Under 30 departures a month flown — reported, never scored (rendered in `--ink`, not `--limit`). **The copy names the grain deliberately**: every page carrying this glyph draws a trailing-12 window, so a marked row can show a departure count in the hundreds, and "below the 30-departure floor" beside 323 departures reads as a rendering fault rather than as a rate. |
 | `Q` | Quarantined: failed an invariant. Excluded from totals, never clamped |
 
 **The caveat is a column, not a tooltip.** Given how much of this data is edge cases, the
@@ -299,7 +323,7 @@ apparatus has to survive a screenshot.
 **The gutter glyph and the below-floor row treatment (dashed rule, `--ink-2` text, muted
 gauge tick) are independent signals, not one collapsed state.** A row can be below floor *and*
 zero-pax at once, and nearly every zero-pax row is. The gutter shows exactly one glyph, chosen
-by severity — `Q` > `⌀` > `n` — so **roughly one in four below-floor rows shows `⌀` or `Q`
+by severity — `Q` > `⌀` > `n` — so **roughly one in five below-floor rows shows `⌀` or `Q`
 rather than `n`**, which is the number this rule turns on: gate the treatment on the glyph and
 you drop it from all of them. The treatment applies whenever the row is below floor, regardless
 of which glyph won. Gating row treatment on the glyph instead of on
@@ -1041,11 +1065,25 @@ and an `--ink-3` floor arc is 4.22:1, against WCAG's 3.0:1 minimum for a graphic
 |---|---|
 | Stroke width `0.7 + 2.9·√(seats/max)` | Seats |
 | Dash `5 3` | Load factor < 70% |
-| Dotted `1 3`, `--ink-3`, 1px | Below the 30-departure floor |
+| Dotted `1 3`, `--ink-3`, 1px | Below the departure floor — under 30 departures per month flown |
 | Opacity 0.62 (0.75 for thin) | Overlap legibility |
 
-Never hue. Thin arcs draw first so heavy ones sit on top. Destination nodes are 2px `--ink`
-(1.3px `--ink-3` below floor); the origin is a 4.5px `--field` disc ringed in `--signal`.
+Never hue. Thin arcs draw first so heavy ones sit on top. The origin is a 4.5px `--field` disc
+ringed in `--signal`.
+
+**An airport disc is 2px `--ink`, or 1.3px `--ink-3` when NOTHING SERVING THAT AIRPORT CLEARS
+THE FLOOR.** That is the disc's whole claim, and it is a claim about its arcs rather than about
+the airport's total traffic: one route running at 30 departures a month is real service, so the
+disc stays `--ink` however sparse everything else into that airport is. On a hub map each
+destination has exactly one incident arc, so the disc simply takes that arc's verdict.
+
+The rule is the arcs' rather than a rate over summed departures because a rate needs the months
+the AIRPORT was served, which is the union of its incident arcs' month sets — and a union cannot
+be recovered from per-arc counts. `max()` of them is a lower bound and `sum()` double-counts
+every shared month; measured over every `/carrier` type map in the trailing 12, a `max()` fold
+gets the month count wrong on 1,997 of 9,897 discs and the verdict wrong on 150. The exact
+denominator would need a pivot grouped by endpoint airport, and `endpoint_airport_id` is
+`filter_only` in the catalog. A quietly wrong mark is worse than a narrower true one.
 
 **A same-airport row is never an arc, on any page, standing rule.** `fct_segment_month`
 really carries rows whose origin and destination are the same airport — 359 of 1,047
@@ -1312,7 +1350,7 @@ of these are **normal** in T-100.
 |---|---|
 | **Loading** | Skeleton rows at exact 22px height so nothing reflows. Never a spinner. |
 | **Empty (valid query, no rows)** | Keep the header, stat strip and legend rail. State the query in words and offer the nearest broader window. Never a blank panel. |
-| **Sparse** (below the 30-dep floor) | Dashed rule, `--ink-2`, muted gauge tick — and the gutter shows `n` only where nothing outranks it, since the glyph is picked by severity and roughly one in four of these rows shows `⌀` or `Q` instead. On a ranked table, sorted below every scored row and excluded from ranking — a rank cell reads `—`. On `/explore` the visitor's own sort order stands; the treatment is identical either way. |
+| **Sparse** (below the departure floor — under 30 departures per month flown) | Dashed rule, `--ink-2`, muted gauge tick — and the gutter shows `n` only where nothing outranks it, since the glyph is picked by severity and roughly one in five of these rows shows `⌀` or `Q` instead. On a ranked table, sorted below every scored row and excluded from ranking — a rank cell reads `—`. On `/explore` the visitor's own sort order stands; the treatment is identical either way. |
 | **Zero passengers** | `⌀` gutter code. Load factor renders `0.00%`, not `—`: it flew and carried nobody, which is a fact, not a gap. |
 | **Quarantined** | `Q` code, excluded from totals, **count always surfaced** with its reason. Never clamped, never silently dropped. |
 | **Unknowable** (a measure was queried and cannot be stated) | The measure cells render `—`, never `0` and never blank — the sum of no trusted values is not a measurement of nothing. The gauge rail keeps its axis and shows no tick. No below-floor treatment: an unknown departure count makes no claim about the floor. **Its cause is named per row and per page, never by the legend rail**, which is rendered on every view and so can only state that the mark is not a zero — and is painted in `--ink`, not `--limit`, because a dash is a data-availability mark and not an out-of-limit code. `Q` in the gutter where the cause is quarantine; the page's own foot where it has one. A zero denominator has neither, and the dash stands alone. On a card — no foot, no empty state, no `aria-label` — the sixth stat slot carries the quarantined count *where there are quarantined rows to count*, and the entity count otherwise. **All four entity cards compose it the same way** — `cardStats(totals, cardSixthStat(totals, quarantinedRows, fallback))` — and the rule is gated on **both** operands: the quarantined count displaces the entity count only where the totals are unknowable *and* quarantine is why. Keyed on the null alone it answers "Quarantined 0" on every page that simply filed nothing, naming the one cause it is not; keyed on the count alone it displaces the entity count on every page carrying a quarantined row beside honest traffic. Distinct from *Zero passengers*, which flew and is a measurement, and from *Not queried* below. **The glyph has one other holder**: a rank cell on a row excluded from ranking (*Sparse*, above). There it means *not applicable* rather than *not statable* — the same mark for the same reason, that a number would be a claim the row does not support. **Which of the two a reader is looking at is told by the COLUMN**, never by the gutter: a dash under a measure is an unstatable measure, a dash in the rank column is a withheld rank. The rank column carries no visible header, so that distinction is not self-evident on the page and **the legend rail states it** — the rail is opt-in per surface (`ranked`), rendered by `/carrier` and `/watch`, the two that have a rank column at all. A correction that lives only in this file has not landed. Not the glyph — `reasonFor` picks one code by severity (`Q` > `⌀` > `n`), so a below-floor row that is *also* quarantined or zero-pax shows `Q` or `⌀` and never `n` while still taking the withheld rank. Roughly one in four below-floor rows is in that state. No exact split is stated: the only figure available for it is derived from a Top-N page, and a hand-written figure read off a page is the kind this repo has repeatedly watched rot -- `stats_counts.sql` does not generate it. (Which rows fall inside a `LIMIT` is no longer the obstacle on either surface: **#136** gave the two pivot templates a deterministic tiebreak, and **#144** gave the four `/watch` presets one — they read `mart_route_health` through their own query files, so the first did not reach them.) Reading the floor off the gutter is the collapse the *reason-code gutter* section forbids, one layer up. |
@@ -1434,5 +1472,7 @@ them. When the design changes, change the mockup and this file together.
 defect.** A mockup is a sketch that nothing builds, nothing tests and nothing serves, so it can
 depict a thing the product does not have and no gate will ever say so — the same failure as a
 doc stating something untrue, minus the gate. **So read a mockup against the rules above, not as
-one of them.** `table.html` still gives a 38-departure row the below-floor treatment, which no
-30-departure floor licenses.
+one of them.** `table.html` gives a 38-departure row the below-floor treatment while stating no
+window for it, so the mark cannot be read: 38 departures in one month clears the floor, and 38
+across a year is 3.2 a month and is well under it. A mockup that shows a floor mark has to show
+the window the count is over.

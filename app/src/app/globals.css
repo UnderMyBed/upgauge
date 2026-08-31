@@ -135,7 +135,8 @@ body { background: var(--panel); color: var(--ink); }
   text-underline-offset: 2px;
 }
 
-/* Rows below the 30-departure floor are rendered, never hidden: dashed rule, --ink-2 text.
+/* Rows below the departure floor (under 30 departures a month flown) are rendered, never
+   hidden: dashed rule, --ink-2 text.
    Sorted to the bottom and excluded from ranking, not from sight. */
 .data-table tr[data-below-floor="true"] td {
   color: var(--ink-2);

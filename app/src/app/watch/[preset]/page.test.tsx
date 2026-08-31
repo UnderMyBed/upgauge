@@ -50,6 +50,36 @@ describe("/watch/<preset>", () => {
     expect(content(container)).toContain(preset.frame);
   });
 
+  // THE PRESETS ABSTAIN FROM THE DEPARTURE FLOOR, AND THAT IS THE SETTLED RULE (#134).
+  //
+  // The floor is 30 departures per month FLOWN, so it needs a departure count AND the months
+  // that produced it. Every other table gets both from a pivot; these rows come from
+  // `mart_route_health`, which carries `t12_departures_performed` -- a twelve-month SUM -- and
+  // no month count beside it. `displayRows` therefore aliases `gauge_t12` and
+  // `t12_quarantined_rows` and deliberately does NOT alias the departure sum.
+  //
+  // MUTANT: add `departures_performed: r.t12_departures_performed` to `displayRows`
+  // (watch/[preset]/page.tsx) -- the one-line change the old "deliberately NOT aliased" comment
+  // was there to prevent. Every preset then divides a yearly total by nothing, marks rows sparse
+  // on the ~12x-lenient reading, sinks them to the foot and blanks their rank. This test is the
+  // only thing in the repo that would see it: DataTable's own positive control uses synthetic
+  // rows and stays green.
+  //
+  // BOTH HALVES ARE ASSERTED, because they fail independently: no row takes the below-floor
+  // TREATMENT, and every rank is a NUMBER (a withheld rank renders an em dash). A mark without
+  // a partition, or a partition without a mark, satisfies exactly one of them.
+  it.each(PRESETS)("claims nothing about the departure floor on '%s'", async (slug) => {
+    const { container } = await renderPreset(slug);
+    const rows = [...container.querySelectorAll("table.data-table tbody tr")];
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.filter((tr) => tr.getAttribute("data-below-floor") === "true")).toHaveLength(0);
+    const ranks = [...container.querySelectorAll('[data-testid="rank-cell"]')].map(
+      (n) => n.textContent,
+    );
+    expect(ranks.length).toBe(rows.length);
+    expect(ranks.filter((r) => r === "\u2014")).toHaveLength(0);
+  });
+
   it("shows DATA AS OF", async () => {
     await renderPreset("gauge");
     expect(screen.getByText(/DATA AS OF/)).toBeDefined();

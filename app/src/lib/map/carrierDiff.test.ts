@@ -6,7 +6,7 @@ import {
   type CarrierDiff,
   type DiffRow,
 } from "./carrierDiff";
-import { DEPARTURE_FLOOR } from "./arcs";
+import { belowFloor } from "@/lib/floor";
 
 // Live-database tests, not fixtures, for the reason lib/resolve.ts's header gives: this codebase
 // has no mocks. Every figure below was measured directly against fct_route_month on the 2026-05
@@ -108,16 +108,17 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     // incomparable. Measured under the shared floor: AS is 225 added / 138 dropped / 128
     // downgauged; under a 30-floor on added alone it is 39.
     //
-    // The sub-30 assertion is the second half and is not decoration: arcs.ts draws a
-    // sub-30-departure arc dotted and muted, so if one panel were floored at 30 that "barely
-    // flown" encoding would be reachable in the other panels only, and a VISUAL difference would
-    // read as a DATA difference.
+    // The below-floor assertion is the second half and is not decoration: arcs.ts draws a
+    // below-floor arc dotted and muted, so if one panel were floored at 30 that "barely flown"
+    // encoding would be reachable in the other panels only, and a VISUAL difference would read
+    // as a DATA difference. It asks `belowFloor` (departures per month FLOWN, #134), not a raw
+    // departure count, because that is the rule the arc is actually drawn by.
     const diffs = (await fetchCarrierDiff(AS, AS_OF)).panels;
     expect(diffs.map((d) => d.map.segments.length)).toEqual([225, 138, 128]);
     for (const diff of diffs) {
       const departures = diff.map.segments.map((s) => s.departures);
       expect(Math.min(...departures)).toBe(1);
-      expect(departures.some((d) => d < DEPARTURE_FLOOR)).toBe(true);
+      expect(diff.map.segments.some((x) => belowFloor(x.departures, x.activeMonths))).toBe(true);
     }
   });
 
@@ -243,9 +244,15 @@ describe("fetchCarrierDiff, against the warehouse", () => {
     expect(dg.map.segments).toHaveLength(400);
     // A fall-cut panel reaches down to 50-seat routes; a seats-cut one stops at 272.
     expect(Math.min(...dg.map.segments.map((s) => s.seats))).toBe(50);
-    // ...and carries 230 sub-floor arcs against a seats cut's 74. Both are consequences of
+    // ...and carries 257 below-floor arcs against a seats cut's 125. Both are consequences of
     // cutting on a key that is orthogonal to seats; neither is observable from row order.
-    expect(dg.map.segments.filter((s) => s.departures < DEPARTURE_FLOOR)).toHaveLength(230);
+    // Re-measured under the monthly floor (#134) rather than carried forward -- the same two
+    // cuts read 230 and 74 when the floor was a raw twelve-month departure count, and both
+    // moved. Asserted through `belowFloor`, not through `departures < 30`, so the figure is
+    // about what the map DRAWS: the arc encoding stopped comparing a window sum against 30.
+    expect(
+      dg.map.segments.filter((s) => belowFloor(s.departures, s.activeMonths)),
+    ).toHaveLength(257);
   });
 
   it("carries the ranked quantity on the segment, not only in the row order", async () => {

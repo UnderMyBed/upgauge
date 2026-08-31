@@ -3,6 +3,7 @@ import { GaugeRail } from "@/components/GaugeRail";
 import { ReasonCode, type Reason } from "@/components/ReasonCode";
 import { resolutionKey, displayValue, type Resolved } from "@/lib/resolve";
 import { entityHref } from "@/lib/entityLink";
+import { belowFloor } from "@/lib/floor";
 
 export interface ColumnSpec {
   key: string;
@@ -23,7 +24,6 @@ export interface ColumnSpec {
   href?: (row: Record<string, unknown>) => string | null;
 }
 
-const DEPARTURE_FLOOR = 30;
 
 function num(v: unknown): number | null {
   return v === null || v === undefined ? null : Number(v);
@@ -101,16 +101,32 @@ function isZeroPax(row: Record<string, unknown>): boolean {
   return num(row.load_factor) === 0 && (num(row.departures_performed) ?? 0) > 0;
 }
 
-/** Absence is not a measurement of zero (see lib/format.ts's opening rule). The pivot
- * templates emit only the measures the query selected, so `departures_performed` is missing
- * from every row of any permalink that did not ask for it -- including the error page's own
+/** THE FLOOR IS PER MONTH FLOWN, NOT PER QUERY WINDOW (#134). `lib/floor.ts` holds the rule
+ * and the single declaration of the constant; this function only supplies the two fields.
+ *
+ * Both come off the row, and both come from the pivot: `departures_performed` is a measure the
+ * query selected, `active_months` is the companion count both templates emit unconditionally
+ * beside `quarantined_rows` (sql/03_queries/pivot_segment.sql). Every table in the product is
+ * fed a TRAILING-12 window, so dividing is not a refinement -- comparing that window's summed
+ * departures against 30 is what made the rule ~12x too lenient, and a route filing 2.5
+ * departures a month read as scored.
+ *
+ * Absence is not a measurement of zero (lib/format.ts's opening rule). The pivot templates
+ * emit only the measures the query selected, so `departures_performed` is missing from every
+ * row of any permalink that did not ask for it -- including the error page's own
  * "known-valid query" link. Reading that absence as 0 marked 100% of those rows below floor:
  * a dashed, muted row and an `n` glyph in every gutter cell, asserting something false about
  * the data on the surface the design system calls the trust moment. A row whose departure
- * count was never queried makes no claim about the floor either way. */
+ * count was never queried makes no claim about the floor either way, and neither does one
+ * carrying no month count -- which is how /watch's mart-fed rows correctly abstain.
+ *
+ * `num()` for departures and a separate `undefined` check for the months, because the two
+ * absences are not the same shape: a queried departure count can be NULL (a wholly-quarantined
+ * group's FILTERed sum), whereas `active_months` is a COUNT that is either present or was
+ * never emitted. `belowFloor` collapses both to "no claim" -- see its own docstring for why
+ * that is not a swallowed error. */
 function isBelowFloor(row: Record<string, unknown>): boolean {
-  const departures = num(row.departures_performed);
-  return departures !== null && departures < DEPARTURE_FLOOR;
+  return belowFloor(num(row.departures_performed), num(row.active_months));
 }
 
 /** One row in render order, carrying everything the render loop needs -- it derives nothing
@@ -132,7 +148,7 @@ interface OrderedRow {
  *
  * `isBelowFloor` and nothing else decides the bucket -- NOT `reasonFor`. The two are
  * independent signals (see below), and the base rate that matters here is the share of
- * BELOW-FLOOR rows showing some other glyph: roughly one in four shows `Q` or `⌀`, because the
+ * BELOW-FLOOR rows showing some other glyph: roughly one in five shows `Q` or `⌀`, because the
  * gutter picks one code by severity. Partitioning on the winning glyph would leave every one of
  * those sitting among the scored rows -- the same re-coupling `reasonFor`'s own comment exists
  * to prevent, re-introduced one layer down. */
@@ -149,10 +165,14 @@ function partitionByFloor(rows: Record<string, unknown>[]): Record<string, unkno
  * `—`: docs/design/system.md says such a row is "sorted below scored rows, excluded from
  * ranking", and a number printed against it would be neither its position by measure nor a
  * withheld one. Measured on the real warehouse, this is not hypothetical -- `/carrier`'s Top
- * routes table renders 141 below-floor rows across 24 of 70 carriers. On 20 of those 24 a
- * below-floor row sits above the last row rather than only at the foot; the four carrying ten
- * or more such rows, by the position of their FIRST one, are `TJ` (3 of 15, 13 below), `V8`
- * (9 of 21, 13), `4W` (12 of 25, 14) and `AN` (15 of 25, 11).
+ * routes table renders 297 below-floor rows across 33 of 70 carriers. Twelve of those pages
+ * carry ten or more such rows; by the position of their FIRST one they are `4W` (2 of 25, 24
+ * below), `JN` (2 of 16, 15), `V8` (3 of 21, 19), `TJ` (3 of 15, 13), `K3` (4 of 25, 22),
+ * `7S` (5 of 25, 17), `5V` (6 of 25, 19), `2O` (6 of 25, 20), `AN` (7 of 25, 16), `6F`
+ * (8 of 25, 17), `XP` (12 of 25, 13) and `J5` (14 of 25, 12).
+ *
+ * RE-MEASURED UNDER THE MONTHLY FLOOR (#134), not carried forward: the same table read 141 rows
+ * over 24 carriers while the floor was a raw twelve-month departure sum.
  *
  * `partition` is the rule, and `false` is the exception one caller asks for -- see the
  * component's own `partition` note. Defaulted ON there so a sixth table surface inherits the
@@ -178,7 +198,7 @@ export function orderRows(
 
 /** The gutter glyph and the below-floor row treatment are independent signals, not one
  * collapsed state. A row can be below floor AND zero-pax at once, and nearly every zero-pax row
- * is; run the other way -- which is the direction that matters -- roughly one in four below-floor
+ * is; run the other way -- which is the direction that matters -- roughly one in five below-floor
  * rows shows `⌀` or `Q` rather than `n`. A single `reason` used to gate row treatment rendered
  * all of those as ordinary scored rows, silently dropping the below-floor signal from exactly
  * the rows the design system calls the trust moment. The gutter still shows one glyph, chosen

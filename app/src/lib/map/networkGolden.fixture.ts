@@ -36,7 +36,8 @@ import type { NetworkMapInput } from "./networkMap";
  *   DEN  the tie's other half
  *   ANC  `loadFactor` 0.62 -- below LOAD_FACTOR_FLOOR, dashed "5 3"; also cross-panel (ak)
  *   SYA  Alaska's Eareckson, longitude +174.11 -- a POSITIVE longitude that `regionOf` files
- *        as `us` unless normalized first; also 12 departures, below DEPARTURE_FLOOR, so it
+ *        as `us` unless normalized first; also 12 departures in its one active month --
+ *        below the departure floor -- so it
  *        pins both the dotted "1 3" stroke and the 1.3px `--ink-3` node
  *   HNL  cross-panel into `hi`
  *   GUM  longitude +144.8 -> `pac`, the ONE panel `fitPanels(BASEMAP_FIT_POINTS)` has no entry
@@ -51,18 +52,18 @@ import type { NetworkMapInput } from "./networkMap";
  * emission independently of each other.
  */
 export const GOLDEN_NETWORK_INPUT: NetworkMapInput = {
-  origin: { code: "ORD", lat: 41.98, lon: -87.9, seats: 0, departures: 0, loadFactor: null },
+  origin: { code: "ORD", lat: 41.98, lon: -87.9, seats: 0, departures: 0, loadFactor: null, activeMonths: 1 },
   arcs: [
-    { code: "ORD", lat: 41.98, lon: -87.9, seats: 73_082, departures: 53, loadFactor: 0.8 },
-    { code: "HNL", lat: 21.32, lon: -157.92, seats: 180_000, departures: 900, loadFactor: 0.83 },
-    { code: "MIA", lat: 25.79, lon: -80.29, seats: 42_000, departures: 300, loadFactor: 0.79 },
-    { code: "SYA", lat: 52.71, lon: 174.11, seats: 900, departures: 12, loadFactor: 0.55 },
-    { code: "JFK", lat: 40.64, lon: -73.78, seats: 310_000, departures: 1_400, loadFactor: 0.88 },
-    { code: "DEN", lat: 39.86, lon: -104.67, seats: 42_000, departures: 300, loadFactor: 0.81 },
-    { code: "GUM", lat: 13.48, lon: 144.8, seats: 26_000, departures: 120, loadFactor: 0.71 },
-    { code: "ANC", lat: 61.17, lon: -149.99, seats: 64_000, departures: 260, loadFactor: 0.62 },
-    { code: "SEA", lat: 47.45, lon: -122.31, seats: 155_000, departures: 700, loadFactor: 0.86 },
-    { code: "SJU", lat: 18.44, lon: -66.0, seats: 31_000, departures: 150, loadFactor: null },
+    { code: "ORD", lat: 41.98, lon: -87.9, seats: 73_082, departures: 53, loadFactor: 0.8, activeMonths: 1 },
+    { code: "HNL", lat: 21.32, lon: -157.92, seats: 180_000, departures: 900, loadFactor: 0.83, activeMonths: 1 },
+    { code: "MIA", lat: 25.79, lon: -80.29, seats: 42_000, departures: 300, loadFactor: 0.79, activeMonths: 1 },
+    { code: "SYA", lat: 52.71, lon: 174.11, seats: 900, departures: 12, loadFactor: 0.55, activeMonths: 1 },
+    { code: "JFK", lat: 40.64, lon: -73.78, seats: 310_000, departures: 1_400, loadFactor: 0.88, activeMonths: 1 },
+    { code: "DEN", lat: 39.86, lon: -104.67, seats: 42_000, departures: 300, loadFactor: 0.81, activeMonths: 1 },
+    { code: "GUM", lat: 13.48, lon: 144.8, seats: 26_000, departures: 120, loadFactor: 0.71, activeMonths: 1 },
+    { code: "ANC", lat: 61.17, lon: -149.99, seats: 64_000, departures: 260, loadFactor: 0.62, activeMonths: 1 },
+    { code: "SEA", lat: 47.45, lon: -122.31, seats: 155_000, departures: 700, loadFactor: 0.86, activeMonths: 1 },
+    { code: "SJU", lat: 18.44, lon: -66.0, seats: 31_000, departures: 150, loadFactor: null, activeMonths: 1 },
   ],
   window: "2025-05 → 2026-04",
   sameAirportSeats: 73_082,

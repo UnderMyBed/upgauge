@@ -14,10 +14,19 @@
 // one. Re-swept over all 114 fact-present carriers and 110 aircraft short names through the real
 // queries and limits:
 //
-//     CARRIER-TYPETABLE        6 below-floor rows over  4 pages -- 0 disagreements
-//     CARRIER-TOPROUTES      141 below-floor rows over 24 pages -- 2 (2O, F4)
-//     CARRIER-TOPORIGINS      85 below-floor rows over 22 pages -- 1 (F4)
-//     AIRCRAFT-CARRIERTABLE    6 below-floor rows over  6 pages -- 0 disagreements
+//     CARRIER-TYPETABLE       25 below-floor rows over 18 pages --  0 disagreements
+//     CARRIER-TOPROUTES      297 below-floor rows over 33 pages -- 10
+//     CARRIER-TOPORIGINS     243 below-floor rows over 36 pages --  5
+//     AIRCRAFT-CARRIERTABLE   25 below-floor rows over 16 pages --  1
+//
+// RE-SWEPT UNDER THE MONTHLY FLOOR (#134), not carried forward -- the same four call sites read
+// 6/4, 141/24, 85/22 and 6/6 while the floor was a raw twelve-month departure sum. Two things
+// moved with the counts. The behavioural row-order fixtures CHANGED, because the old ones
+// stopped discriminating: /route from MKE-ORD to CLT-ORD, Top routes from 2O to M5. Each
+// fixture guard went red rather than going quietly vacuous, which is what those guards are for.
+// And AIRCRAFT-CARRIERTABLE now has one page where the orderings disagree, so a behavioural
+// test is writable there for the first time -- noted, not built: the call-site pin below
+// already covers it, and one page is a thin instrument to invent a second time.
 //
 // So /airport, /route and BOTH of /carrier's Top-N tables carry row-order tests, and only the
 // aircraft-type table and /aircraft's carrier table rest on this file alone.

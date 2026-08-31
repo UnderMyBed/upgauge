@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { addSum } from "@/lib/nullSum";
 import {
+  airportCarrierMonthsQuery,
   airportTotals,
   airportTrafficQuery,
   carrierRows,
@@ -8,6 +9,7 @@ import {
   toEndpointRows,
   type EndpointRow,
 } from "@/app/airport/[code]/endpoints";
+import { belowFloor } from "@/lib/floor";
 import { dataAsOf } from "@/lib/db";
 
 /** SEA. Resolved, never hard-coded, everywhere it matters -- pinned here only because these
@@ -175,7 +177,7 @@ describe("aggregating the traffic rows", () => {
   ];
 
   it("computes a carrier's load factor from summed passengers and seats", () => {
-    const rows = carrierRows(twoEndpoints);
+    const rows = carrierRows(twoEndpoints, new Map());
     expect(rows.length).toBe(1);
     expect(rows[0].load_factor).toBeCloseTo(0.54, 10);
     expect(rows[0].avg_gauge).toBeCloseTo(100, 10);
@@ -192,14 +194,15 @@ describe("aggregating the traffic rows", () => {
     const rows = carrierRows([
       row({ carrierId: 20304, endpointId: PDX, seats: 5 }),
       row({ carrierId: 19930, endpointId: PDX, seats: 50 }),
-    ]);
+    ],
+    new Map(),);
     expect(rows.map((r) => r.op_airline_id)).toEqual([19930, 20304]);
   });
 
   it("leaves a derived measure null rather than reporting zero when the denominator is zero", () => {
     // Absence is not a measurement of zero (lib/format.ts's opening rule). A carrier that
     // filed no performed departures has an UNKNOWN gauge; 0.0 would be a claim about metal.
-    const rows = carrierRows([row({ carrierId: 19930, endpointId: PDX, seats: 0, departures: 0 })]);
+    const rows = carrierRows([row({ carrierId: 19930, endpointId: PDX, seats: 0, departures: 0 })], new Map());
     expect(rows[0].load_factor).toBeNull();
     expect(rows[0].avg_gauge).toBeNull();
   });
@@ -280,7 +283,8 @@ describe("an unknowable sum is not a zero", () => {
     const rows = carrierRows([
       row({ carrierId: 20333, endpointId: LAX, seats: null, passengers: null, departures: null }),
       row({ carrierId: 20333, endpointId: PDX, seats: null, passengers: null, departures: null }),
-    ]);
+    ],
+    new Map(),);
     expect(rows.length).toBe(1);
     expect(rows[0].seats).toBeNull();
     expect(rows[0].passengers).toBeNull();
@@ -295,7 +299,8 @@ describe("an unknowable sum is not a zero", () => {
     const rows = carrierRows([
       row({ carrierId: 19930, endpointId: PDX, seats: 100, passengers: 90, departures: 4 }),
       row({ carrierId: 19930, endpointId: LAX, seats: null, passengers: null, departures: null }),
-    ]);
+    ],
+    new Map(),);
     expect(rows[0].seats).toBe(100);
     expect(rows[0].passengers).toBe(90);
     expect(rows[0].departures_performed).toBe(4);
@@ -354,7 +359,8 @@ describe("an unknowable sum is not a zero", () => {
       row({ carrierId: 20333, endpointId: LAX, seats: null }),
       row({ carrierId: 19930, endpointId: PDX, seats: 0 }),
       row({ carrierId: 20304, endpointId: PDX, seats: 50 }),
-    ]);
+    ],
+    new Map(),);
     expect(rows.map((r) => r.op_airline_id)).toEqual([20304, 19930, 20333]);
   });
 
@@ -364,7 +370,8 @@ describe("an unknowable sum is not a zero", () => {
     // MUTANT: drop the null guard from ratio() -> this goes red with NaN, not with a number.
     const rows = carrierRows([
       row({ carrierId: 20333, endpointId: LAX, seats: null, passengers: null, departures: null }),
-    ]);
+    ],
+    new Map(),);
     expect(rows[0].load_factor).toBeNull();
     expect(rows[0].avg_gauge).toBeNull();
     const totals = airportTotals(
@@ -388,7 +395,8 @@ describe("an unknowable sum is not a zero", () => {
       row({ carrierId: 20333, endpointId: LAX, seats: null, quarantineReasons: "zero_seats" }),
       row({ carrierId: 20333, endpointId: PDX, seats: null, quarantineReasons: "load_factor_gt_1" }),
       row({ carrierId: 20333, endpointId: SEA, seats: null, quarantineReasons: "zero_seats" }),
-    ]);
+    ],
+    new Map(),);
     expect(rows[0].quarantine_reasons).toBe("zero_seats,load_factor_gt_1");
   });
 
@@ -408,5 +416,80 @@ describe("an unknowable sum is not a zero", () => {
       String(SEA),
     );
     expect(rows[0].quarantineReasons).toBe("zero_seats");
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// THE FLOOR'S DENOMINATOR ON A FOLDED ROW (#134).
+//
+// `carrierRows` folds many (carrier, origin, dest) pivot groups into ONE carrier row.
+// Departures fold by SUM; a DISTINCT-MONTH COUNT DOES NOT FOLD AT ALL. The truth for the
+// folded row is the UNION of the groups' month sets, and neither `max()` (a lower bound) nor
+// `sum()` (a wild overcount) recovers it.
+//
+// Measured across every /airport page in the trailing 12 (3,457 folded carrier rows):
+// max() gives the wrong month count on 342 of them and the WRONG BELOW-FLOOR VERDICT on 18;
+// sum() flips 1,186. So the count comes from a SECOND pivot grouped by carrier alone, where
+// SQL does the DISTINCT over the union directly, and these tests are what refuse the folds.
+// ---------------------------------------------------------------------------------------
+describe("the active-month count a folded carrier row carries", () => {
+  it("takes the carrier's own count, never a fold of its endpoints'", () => {
+    // THE DISCRIMINATING FIXTURE. One carrier, two endpoints, DISJOINT month sets: six months
+    // each, twelve between them. 360 departures over twelve months is exactly 30/month --
+    // ON the floor, so scored.
+    //   max()  -> 360/6  = 60/mo   scored (right answer, wrong reason -- see the second test)
+    //   sum()  -> 360/12 ... equals the union here by coincidence of 6+6, so this fixture is
+    //            deliberately paired with the next one, where the two diverge.
+    const rows = [
+      row({ carrierId: 19930, endpointId: PDX, seats: 6000, departures: 180 }),
+      row({ carrierId: 19930, endpointId: LAX, seats: 6000, departures: 180 }),
+    ];
+    const out = carrierRows(rows, new Map([["19930", 12]]));
+    expect(out).toHaveLength(1);
+    expect(out[0].departures_performed).toBe(360);
+    expect(out[0].active_months).toBe(12);
+  });
+
+  it("is the union, so a carrier flying two half-years reads as twelve months, not six", () => {
+    // The verdict-flipping shape, in miniature: 300 departures.
+    //   union 12 months -> 25.0/mo -> BELOW FLOOR
+    //   max()  6 months -> 50.0/mo -> scored     <- the wrong answer 18 real rows would get
+    const rows = [
+      row({ carrierId: 20304, endpointId: PDX, seats: 5000, departures: 150 }),
+      row({ carrierId: 20304, endpointId: LAX, seats: 5000, departures: 150 }),
+    ];
+    const out = carrierRows(rows, new Map([["20304", 12]]));
+    expect(out[0].departures_performed).toBe(300);
+    expect(out[0].active_months).toBe(12);
+    // Stated as the verdict, not just the inputs -- this is the fact the page renders.
+    expect(belowFloor(out[0].departures_performed as number, out[0].active_months as number)).toBe(true);
+  });
+
+  it("makes no claim for a carrier the count query did not return", () => {
+    // Absence stays absence rather than becoming a fabricated denominator: a carrier with no
+    // entry gets no `active_months`, and `DataTable` then marks nothing about the floor.
+    const out = carrierRows([row({ carrierId: 19790, endpointId: PDX, departures: 5 })], new Map());
+    expect(out[0].active_months).toBeUndefined();
+    expect(belowFloor(out[0].departures_performed as number, out[0].active_months as number)).toBe(false);
+  });
+});
+
+describe("the carrier-months query", () => {
+  it("asks the same question of the same rows as the traffic query, grouped only by carrier", () => {
+    // THE DENOMINATOR MUST DESCRIBE THE SAME QUERY AS THE NUMERATOR. A different window or a
+    // different filter here would divide one query's departures by another query's months --
+    // a ratio of two different populations, which is the failure `sumTotals`' ratio-of-sums
+    // rule exists to prevent one level up. Asserted field by field against the real traffic
+    // query rather than restated as literals.
+    const traffic = airportTrafficQuery(SEA, "2025-06", "2026-05", 5000);
+    const months = airportCarrierMonthsQuery(SEA, "2025-06", "2026-05");
+    expect(months.filters).toEqual(traffic.filters);
+    expect(months.timeFrom).toBe(traffic.timeFrom);
+    expect(months.timeTo).toBe(traffic.timeTo);
+    expect(months.grain).toBe(traffic.grain);
+    expect(months.grouping).toBe(traffic.grouping);
+    // ...and differs on exactly one axis: it groups by carrier ALONE, which is what makes the
+    // DISTINCT month count the union over that carrier's endpoints rather than a per-pair one.
+    expect(months.dimensions).toEqual(["op_airline_id"]);
   });
 });

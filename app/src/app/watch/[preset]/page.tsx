@@ -195,11 +195,25 @@ function buildColumns(
  * rendering empty on every row; `t12_quarantined_rows` IS a count of quarantined underlying
  * segment-month rows, so the `Q` gutter mark -- which DataTable already shows only when
  * non-zero -- is how this page surfaces it, rather than a bespoke mechanism duplicating logic
- * DataTable.test.tsx already covers. `load_factor` and `departures_performed` are deliberately
- * NOT aliased: DataTable's `n` (below-floor) mark is calibrated to a MONTHLY 30-departure floor
- * (docs/design/system.md's legend text, "min 30 departures/mo"), and `t12_departures_performed`
- * is a twelve-month sum -- aliasing it would either never fire (every mart row already clears
- * 30 by construction) or, worse, silently change meaning if that floor is ever edited. */
+ * DataTable.test.tsx already covers.
+ *
+ * `load_factor` and `departures_performed` ARE NOT ALIASED, and since #134 that is the SETTLED
+ * RULE rather than a refusal to guess at one. The floor is 30 departures per month FLOWN
+ * (`lib/floor.ts`; docs/design/system.md), so DataTable needs
+ * two fields: a departure count AND the number of months that produced it. Every other table
+ * gets both from the pivot, which emits `active_months` beside every result. These rows do not
+ * come from a pivot -- `mart_route_health` carries `t12_departures_performed`, a twelve-month
+ * SUM, and no month count beside it -- so aliasing the sum alone would divide by nothing and
+ * restate a yearly total as a monthly rate, which is the exact ~12x-lenient reading #134
+ * closed everywhere else. `belowFloor` answers an absent month count with "no claim", so these
+ * presets abstain by construction and DataTable marks nothing about the floor on them.
+ *
+ * The mart has a `t12_months_present` column, and it is NOT the missing field: it counts months
+ * FILED, while the floor's denominator is months FLOWN. Wiring it here would put a second,
+ * subtly different definition of "active months" in the tree -- the defect #134 exists to close,
+ * reintroduced by its own fix. Issue #148 carries the two sites that still compare a trailing-12
+ * sum against a floor: this preset family's `t12_departures_performed >= 360` and
+ * `mart_route_health`'s own `>= 30`. */
 function displayRows(
   rows: WatchRow[],
   resolved: Map<string, Resolved>,
@@ -245,10 +259,16 @@ function GaugeFloorNote() {
 }
 
 /** Empty Planes carries a SECOND floor, and it is the more restrictive of the two:
- * `t12_departures_performed >= 360` (watch_empty_planes.sql), features.md's "min 30
- * departures/mo" restated over the trailing twelve. Death Watch does NOT carry it -- its SQL
- * floors only on gauge -- so this note is Empty Planes' alone, not a second sentence bolted
- * onto GaugeFloorNote.
+ * `t12_departures_performed >= 360` (watch_empty_planes.sql), a flat annual total. Death Watch
+ * does NOT carry it -- its SQL floors only on gauge -- so this note is Empty Planes' alone, not
+ * a second sentence bolted onto GaugeFloorNote.
+ *
+ * IT IS NOT THE DEPARTURE FLOOR THE TABLES AND MAPS APPLY, and this note used to say it was
+ * ("the 'min 30 departures/mo' floor, restated over twelve months"). That equivalence is the
+ * one #134 ruled wrong: the product's floor is a RATE, 30 departures per month flown, so a
+ * route flying three months at 40 a month files 120, runs at four times the floor, and 360
+ * excludes it anyway. The two are different rules and the copy now says so. Issue #148 carries
+ * why this one has not moved -- mart_route_health has no months-flown column to divide by.
  *
  * Final whole-branch review: the page enumerated the gauge floor and stopped, and a page that
  * enumerates its filters and omits one cannot be reproduced from what it says. The mart's own
@@ -258,10 +278,11 @@ function DeparturesFloorNote() {
   return (
     <p className="foot">
       Routes below 360 performed departures over the trailing 12 months are also excluded
-      (t12_departures_performed &gt;= 360 &mdash; the &ldquo;min 30 departures/mo&rdquo; floor,
-      restated over twelve months). It is the more restrictive of this leaderboard&rsquo;s two
-      filters, and it is 12x stronger than mart_route_health&rsquo;s own 30-departures-per-year
-      floor, which every row in the table already clears.
+      (t12_departures_performed &gt;= 360, a flat annual total). It is the more restrictive of
+      this leaderboard&rsquo;s two filters, and 12x stronger than mart_route_health&rsquo;s own
+      30-departures-per-trailing-12 floor, which every row in the table already clears. It is a
+      different rule from the departure floor the tables and maps apply, which is a rate:
+      30 departures per month flown.
     </p>
   );
 }
