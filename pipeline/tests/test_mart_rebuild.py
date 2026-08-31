@@ -50,9 +50,21 @@ def test_the_setup_action_rebuilds_the_marts():
     because the asset's database opens fine and answers every query the old SQL asked. That is
     the defect, and it is the one no other test in this repo can see."""
     steps = _setup_steps()
-    assert _index_of_step_running(steps, "make build") is not None, (
+    at = _index_of_step_running(steps, "make build")
+    assert at is not None, (
         "the setup action no longer runs `make build`, so every job that uses it tests the "
         "marts frozen into the release asset rather than the ones sql/02_marts/ produces"
+    )
+    # UNCONDITIONAL is half the property, and the half a plausible optimisation removes. An
+    # `if: steps.cache.outputs.cache-hit != 'true'` reads as "skip redundant work" and is the
+    # exact defect this step's own comment warns about: actions/cache stores the REBUILT
+    # database, so on a hit the gates would run against a mart from whichever earlier commit
+    # last populated that key -- worse than the baked asset, which at least had one known
+    # provenance. Nothing else in this repo can see that; the workflow stays green.
+    assert "if" not in steps[at], (
+        f"the mart rebuild is conditional ({steps[at]['if']!r}). It must run on every job, "
+        f"every time: the restored upgauge.duckdb may itself be a cached rebuild from another "
+        f"commit, so skipping the rebuild serves marts of unknown provenance with nothing red"
     )
 
 
@@ -152,35 +164,117 @@ def test_the_image_rebuilds_the_marts_after_unpacking_the_asset():
     )
 
 
-# The four things that would make the runtime image carry a Python toolchain. Each is checked
-# separately so a mutant names the clause that refused it rather than "something did".
-_PY_COPY_SOURCES = ("pipeline", "pyproject.toml", "uv.lock")
+# WHAT THE RUNTIME STAGE MAY TAKE OUT OF A BUILDER, as an allow-list keyed on the source stage.
+# A blacklist of forbidden sources cannot hold this boundary, and the measurement is the reason:
+# `COPY --from=warehouse /w/pipeline ./pipeline` is the form the runtime stage ALREADY uses twice
+# for the database and the Parquet tree, so it is the most natural way anyone would break the
+# rule -- and a blacklist that normalises `./pipeline` to `pipeline` never sees `/w/pipeline` at
+# all. The same blacklist was blind to `/opt/venv` (which ships CPython AND duckdb) and to
+# `/usr/local/bin/uv`. Naming what MAY cross is the only form that refuses everything else,
+# including the next builder path nobody has thought of yet.
+_RUNTIME_COPY_ALLOW = {
+    "build": {"/build/app/.next"},
+    "warehouse": {"/w/upgauge.duckdb", "/w/data/parquet"},
+}
+
+# Paths that exist only because the warehouse stage built them. None may be NAMED anywhere in
+# the runtime stage -- not as a COPY source, not on a PATH, not inside a RUN. `ENV
+# PATH=/opt/venv/bin:$PATH` copies nothing and runs nothing, so neither of the other two checks
+# can see it, and it is enough to make the interpreter reachable if anything ever lands there.
+_BUILDER_ONLY_PATHS = (
+    "/opt/venv",
+    "/usr/local/bin/uv",
+    "/w/pipeline",
+    "/w/sql",
+    "/w/Makefile",
+    "/w/pyproject.toml",
+    "/w/uv.lock",
+)
+
+# Context (non `--from`) COPY sources that are CI-only. Compared on a NORMALISED path, so
+# `./pipeline`, `pipeline/` and `pipeline` are one thing.
+_CI_ONLY_SOURCES = {"pipeline", "pyproject.toml", "uv.lock"}
+
 _PY_APT = re.compile(r"\b(python3?|python3-pip|pip3?)\b")
-_PY_RUNNERS = re.compile(r"(?:^|\s|&&\s*)(uv|uvx|python3?|pip3?|make)\b")
+# Path-aware on purpose: a bare-word rule reads `/opt/venv/bin/python -m pipeline.marts` as
+# nothing at all, because the interpreter is not preceded by a space or a `&&`.
+_PY_RUNNERS = re.compile(r"(?:^|\s|&&\s*|\|\s*|;\s*)(?:\S*/)?(uv|uvx|python3?|pip3?|make)\b")
+
+
+def _copy_sources(instruction: str) -> tuple[str | None, list[str]]:
+    """`(from_stage, sources)` for a COPY/ADD. The last argument is the destination."""
+    from_stage = None
+    args = []
+    for token in instruction.split()[1:]:
+        if token.startswith("--from="):
+            from_stage = token.split("=", 1)[1]
+        elif not token.startswith("--"):
+            args.append(token)
+    return from_stage, args[:-1]
+
+
+def _normalise(src: str) -> str:
+    """`./pipeline`, `pipeline/` and `pipeline` are one source. Absolute paths keep their root,
+    because that is what distinguishes a builder path from a context path."""
+    src = src.rstrip("/")
+    return src[2:] if src.startswith("./") else src
+
+
+def test_the_runtime_stage_copies_only_what_the_allow_list_names():
+    """THE boundary, stated the way the docs state it: `runtime` takes `upgauge.duckdb` and
+    `data/parquet` out of `warehouse` and nothing else.
+
+    Asserted as an ALLOW-LIST because a blacklist demonstrably cannot hold it. Measured: six
+    separate ways of putting the Python toolchain into the shipped image passed a blacklist form
+    of this test, and the worst of them -- `COPY --from=warehouse /w/pipeline ./pipeline` --
+    is spelled exactly like the two COPYs the stage already has. An allow-list also fails safe
+    for the next builder path nobody has thought of, which is the property that matters after
+    this file stops being read."""
+    for instruction in _stages()["runtime"]:
+        if not instruction.startswith(("COPY", "ADD")):
+            continue
+        from_stage, sources = _copy_sources(instruction)
+        if from_stage is None:
+            continue
+        assert from_stage in _RUNTIME_COPY_ALLOW, (
+            f"the runtime stage copies from the {from_stage!r} stage, which nothing has "
+            f"authorised it to take anything from: {instruction!r}"
+        )
+        allowed = _RUNTIME_COPY_ALLOW[from_stage]
+        for src in sources:
+            assert _normalise(src) in allowed, (
+                f"the runtime stage copies {src!r} out of {from_stage!r}. Only "
+                f"{sorted(allowed)} may cross that boundary -- everything else in a builder is "
+                f"build-time apparatus, and pipeline/ and its interpreter are CI-only, never "
+                f"prod: {instruction!r}"
+            )
 
 
 def test_no_python_toolchain_reaches_the_runtime_stage():
     """CLAUDE.md: `pipeline/` is "Python 3.12 + uv. CI only, never runs in prod." The warehouse
     stage is a BUILDER and is discarded, so it may hold all of this; `runtime` is what ships.
 
-    Four independent ways to break it, asserted independently -- a copy of `pipeline/` or of the
-    lock files, an apt-installed interpreter, a `COPY --from` of the uv binary, and a RUN that
-    invokes any of them. A single "no python anywhere" check would be red against the correct
-    Dockerfile, which is the point of the discrimination test below."""
-    runtime = _stages()["runtime"]
-
-    for instruction in runtime:
-        if instruction.startswith(("COPY", "ADD")):
-            assert "--from=uvbin" not in instruction, (
-                f"the runtime stage copies the uv binary in: {instruction!r}"
+    The allow-list above closes the cross-stage route. This closes the other three, each with
+    its own assertion so a mutant names the clause that refused it: a CONTEXT copy of `pipeline/`
+    or the lock files, an apt-installed interpreter, and any instruction that so much as NAMES a
+    builder-only path -- which is what catches `ENV PATH=/opt/venv/bin:$PATH`, an instruction
+    that neither copies nor runs anything."""
+    for instruction in _stages()["runtime"]:
+        for path in _BUILDER_ONLY_PATHS:
+            assert path not in instruction, (
+                f"the runtime stage names the builder-only path {path!r}, which exists only "
+                f"because the warehouse stage built it: {instruction!r}"
             )
-            # Sources are every argument but the flags and the final destination.
-            args = [a for a in instruction.split()[1:] if not a.startswith("--")]
-            for src in args[:-1]:
-                assert src.strip("./") not in _PY_COPY_SOURCES, (
-                    f"the runtime stage copies {src!r} into the image -- pipeline/ and its lock "
-                    f"files are CI-only, never prod: {instruction!r}"
-                )
+
+        if instruction.startswith(("COPY", "ADD")):
+            from_stage, sources = _copy_sources(instruction)
+            if from_stage is None:
+                for src in sources:
+                    assert _normalise(src) not in _CI_ONLY_SOURCES, (
+                        f"the runtime stage copies {src!r} out of the build context -- "
+                        f"pipeline/ and its lock files are CI-only, never prod: {instruction!r}"
+                    )
+
         if instruction.startswith("RUN"):
             body = instruction[len("RUN") :]
             if "apt-get install" in body:
@@ -195,11 +289,12 @@ def test_no_python_toolchain_reaches_the_runtime_stage():
 
 
 def test_the_runtime_check_is_scoped_to_the_runtime_stage_and_not_the_whole_file():
-    """DISCRIMINATION, and this is the property that actually matters. Every clause the test
-    above applies is TRUE of the warehouse stage on purpose -- it copies `pipeline`, copies the
-    lock files, copies the uv binary and runs `uv` and `make`. So a version of that test written
-    as a grep over the whole Dockerfile would be red against the correct file, and would then be
-    "fixed" by weakening it into something that passes for any input.
+    """DISCRIMINATION, and this is the property that actually matters. Every path and token the
+    two tests above refuse is TRUE of the warehouse stage on purpose -- it copies `pipeline`,
+    copies the lock files, copies the uv binary, builds `/opt/venv` and runs `uv` and `make`. So
+    either test written as a grep over the whole Dockerfile is RED against the correct file, and
+    would then be "fixed" by weakening it into something that passes for any input. Measured:
+    re-scoping the runtime check to every stage fails on the warehouse stage's own apt line.
 
     This asserts the two halves separately: the runtime stage carries none of it, and the
     warehouse stage carries all of it. Deleting the mart rebuild reddens the second half here as
@@ -209,7 +304,7 @@ def test_the_runtime_check_is_scoped_to_the_runtime_stage_and_not_the_whole_file
     warehouse = " ; ".join(stages["warehouse"])
     runtime = " ; ".join(stages["runtime"])
 
-    for token in ("COPY pipeline", "--from=uvbin", "uv sync", "make build"):
+    for token in ("COPY pipeline", "--from=uvbin", "uv sync", "make build", "/opt/venv"):
         assert token in warehouse, (
             f"the warehouse builder no longer carries {token!r} -- if the toolchain moved, this "
             f"test and the runtime check are asserting a boundary that has stopped existing"

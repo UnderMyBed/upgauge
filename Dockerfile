@@ -70,9 +70,13 @@ RUN test ! -e data/raw || { echo "FAIL: data/raw is in the warehouse asset"; exi
 # op_airline_id and health_score.
 #
 # EVERYTHING BELOW IS BUILDER-ONLY. This stage is discarded; `runtime` is node:*-slim and stays
-# Node-only, per CLAUDE.md ("pipeline/: CI only, never runs in prod"). No COPY in `runtime`
-# names pipeline/, pyproject.toml, uv.lock or this uv binary, and
-# pipeline/tests/test_mart_rebuild.py asserts that per stage rather than by grepping the file.
+# Node-only, per CLAUDE.md ("pipeline/: CI only, never runs in prod"). The boundary is an
+# ALLOW-LIST, not a list of forbidden names: `runtime` may take `/w/upgauge.duckdb` and
+# `/w/data/parquet` out of this stage and NOTHING else -- not /opt/venv, not the uv binary, not
+# /w/pipeline. A blacklist cannot hold it, measured: `COPY --from=warehouse /w/pipeline
+# ./pipeline` is spelled exactly like the two COPYs runtime already has, and six such mutants
+# passed a blacklist form of the test. pipeline/tests/test_mart_rebuild.py asserts the
+# allow-list per stage rather than by grepping the file.
 #
 # ORDER IS DELIBERATE. The curl and tar layers above depend only on WAREHOUSE_TAG, so they stay
 # ahead of every COPY here -- an edit to sql/ or pipeline/ invalidates from `COPY sql` down and
