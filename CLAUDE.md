@@ -81,15 +81,15 @@ box its own timer keeps at `:deploy`. `warehouse.yml` polls BTS and publishes th
 `image.yml` builds and gates the container, `promote.yml` moves the tag. `make portability` proves
 the WORKDIR/data contract by breaking it, and is hand-run — no workflow invokes it.
 
-Current gates (`app-check`/`app-smoke` measured 2026-08-30, `verify`/`goldens` 2026-08-08,
+Current gates (`app-check`/`app-smoke` measured 2026-08-31, `verify`/`goldens` 2026-08-08,
 `portability` 2026-08-09, the rest 2026-08-10; the only counts kept here — history lives in git):
 
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 59 skip without `data/` |
 | `make app-check` | 1,840 app tests · without a built `upgauge.duckdb` 1,824 are collected, 12 skip, and **641 of the 1,812 that run fail** — collected, run and failed are three different sets, so "N of the total fail" was never the sentence it read as |
-| `make app-smoke` | 749 served-build checks |
-| `make image-smoke` | the host set less the 10 host-only gap checks, which print as skipped — **739, measured 2026-08-30** by `image-contract.yml` on #158's PR, and it reconciles against the rule (749 host − 10). Needs Docker plus the pinned release asset — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
+| `make app-smoke` | 752 served-build checks |
+| `make image-smoke` | the host set less the 10 host-only gap checks, which print as skipped — **742, measured 2026-08-31** by `image-contract.yml` on #163, and it reconciles against the rule (752 host − 10). Needs Docker plus the pinned release asset — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
 | `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
 | `make goldens` | byte-identical |
@@ -202,9 +202,9 @@ back out. Full justification and the tests that guard it: `docs/data/model.md`.
 **`mart_route_health`'s grain is `(op_airline_id, route)` — a carrier–route pair, never a
 route.** Any sentence about one of its rows names the carrier, or it is a claim about a route
 the query never made. This shipped wrong twice on the same page: `/watch/new-routes` told every
-visitor its rows were "new service nobody flew last year" when **521 of 688 qualifying rows, and
-25 of the 25 rendered**, had another carrier flying the pair inside the window — `AS HNL–ITO`
-ranked first while HA, UA and WN filed 1,787,347 seats on it. When a compound claim is found
+visitor its rows were "new service nobody flew last year" when **521 of the 688 rows the mart then
+carried, and 25 of the 25 rendered**, had another carrier flying the pair in the window — `AS
+HNL–ITO` led while HA/UA/WN filed 1,787,347 seats (pre-#148). When a compound claim is found
 false, re-derive **each clause** from the query; do not triage by how true a clause sounds.
 
 **Key on `AIRLINE_ID` and `AIRPORT_ID`, never letter codes.** `CARRIER` (raw IATA) is

@@ -179,13 +179,14 @@ With Cloudflare's free tier in front, near-zero repeat traffic touches the box r
 `stale-while-revalidate` keeps serving from the edge while either value revalidates.
 
 **Leaderboard precompute was specified for three milestones and is retired, not deferred**
-(#14). Measured 2026-08-09 against a served build at `4aa8087`, not argued: `mart_route_health`
-is 8,080 rows, and the four `/watch` preset queries cost **2.2-2.5 ms** each at a warm median
-(fresh read-only connection per preset, median of seven runs), **5.0 ms** at the cold worst case
-(`watch_death_watch`; the other three cold runs were 3.3-3.5 ms). End-to-end TTFB on that same
-build puts `/watch/gauge` at **43-46 ms** — against `/route/JFK-LAX` at 63-69 ms and
-`/airport/ORD` at 85-104 ms, neither of which anyone proposes precomputing. Precompute would have
-optimised the third-cheapest page on the site and left the two most expensive per-request.
+(#14). Measured 2026-08-30 at `9b358aa`, against a served build on that commit's warehouse, not
+argued: `mart_route_health` is 5,611 rows, and the four `/watch` preset queries cost
+**1.9-2.3 ms** each at a warm median (fresh read-only connection per preset, median of ten
+runs), **3.8 ms** at the cold worst case (`watch_gauge`; the other three cold runs were
+2.0-2.3 ms). End-to-end TTFB on that same build puts `/watch/gauge` at **44-50 ms** — against
+`/route/JFK-LAX` at 66-72 ms and `/airport/ORD` at 89-110 ms, neither of which anyone proposes
+precomputing. Precompute would have optimised the third-cheapest page on the site and left the
+two most expensive per-request.
 
 ## Avoid
 

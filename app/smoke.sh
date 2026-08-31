@@ -2375,8 +2375,22 @@ check_re     "watch/gauge: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td
 check_not_re "watch/gauge: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
 
 # The falsifiable pair itself (measured against the real warehouse, mart_route_health, current
-# window): AS LAX-OGG is the single largest upgauge, gauge_delta +75.8; DL BOS-CVG the largest
-# downgauge, -64.3. Presence in $BODY alone would be satisfied by a page that put both routes in
+# window). AS LAX-OGG is the single largest upgauge, gauge_delta +72.46. FIVE carriers fly that
+# airport pair and UA is downgauging it at -1.76, so the `check_not` below passes on MARGIN, not
+# because the pair is one-sided: UA LAX-OGG ranks 1,114th by descending downgauge against a
+# 25-row cutoff of -29.09. That is a real but weaker guarantee than the pair below it, and it is
+# stated rather than implied -- an earlier revision of this comment claimed no carrier downgauges
+# LAX-OGG, which is false.
+#
+# THE DOWNGAUGE HALF CANNOT USE ITS LEADER, and the reason is this repo's own grain rule. The
+# largest downgauge is HA HNL-PDX at -64.49, but AS flies the SAME airport pair upgauging at
+# +41.74 and sits 7th in the other table -- the mart's grain is a carrier-route PAIR, so
+# "HNL-PDX" names two rows in two different tables and a route-only `check_not` against the
+# upgauge table fails on a page that is entirely correct. Measured: it did, which is how this
+# was found. The needle is therefore B6 DAB-JFK, -53.37, rank 5 -- the largest downgauge whose
+# airport pair carries exactly ONE carrier in the mart, so its absence from the upgauge table is
+# a real statement about which table rendered. (It was DL BOS-CVG before #148, which the rate
+# floor no longer admits to the mart at all.) Presence in $BODY alone would be satisfied by a page that put both routes in
 # ONE table, or the wrong one -- these mean something only checked against the CORRECT table and
 # refuted against its sibling, which is why they're split with `between()` first.
 #
@@ -2389,8 +2403,8 @@ UP_TABLE=$(between "$BODY" '<h2>Upgauging</h2>' '<h2>Downgauging</h2>')
 DOWN_TABLE=$(between "$BODY" '<h2>Downgauging</h2>' '<aside class="legend">')
 check_dataset check     "watch/gauge: the upgauge table leads with AS LAX-OGG"   "$UP_TABLE"   'LAX–OGG'
 check_dataset check_not "watch/gauge: ...which is not in the downgauge table"    "$DOWN_TABLE" 'LAX–OGG'
-check_dataset check     "watch/gauge: the downgauge table leads with DL BOS-CVG" "$DOWN_TABLE" 'BOS–CVG'
-check_dataset check_not "watch/gauge: ...which is not in the upgauge table"      "$UP_TABLE"   'BOS–CVG'
+check_dataset check     "watch/gauge: the downgauge table carries B6 DAB-JFK"  "$DOWN_TABLE" 'DAB–JFK'
+check_dataset check_not "watch/gauge: ...which is not in the upgauge table"     "$UP_TABLE"   'DAB–JFK'
 
 # 14c. /watch/empty-planes -- one table, lowest load factor at a real-airliner gauge floor.
 BODY=$(curl -s --max-time 15 "${BASE}/watch/empty-planes")
@@ -2399,11 +2413,22 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/watch/empty-planes")
 check "watch/empty-planes: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 check     "watch/empty-planes: renders a carrier code"     "$BODY" '>AS<'
 check_not "watch/empty-planes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
-# Final whole-branch review (M6), Minor #5: this page enumerated ONE of its two floors. The
-# needle is the note's own words, never the bare digits -- a 25-row table of real seat counts
-# contains "360" by coincidence (t12_seats of 360,442), the same trap the "50" mutant already
+# #148 replaced this preset's own `t12_departures_performed >= 360` with the mart's rate floor,
+# which applies to all four presets -- so the note is now stated on every preset and says
+# something different. Both directions in the served bytes: the rate claim present AND the flat
+# annual total gone. The needle is the note's own words, never the bare digits -- a 25-row table
+# of real seat counts contains "360" by coincidence, the same trap the "50" mutant already
 # sprang on this preset (task-6-report.md).
-check "watch/empty-planes: discloses the departures floor too" "$BODY" '360 performed departures'
+check     "watch/empty-planes: discloses the mart's departure floor" "$BODY" '30 performed departures per month flown'
+# THE FRAME, both halves. #148 deleted this preset's `t12_departures_performed >= 360` predicate
+# and left the frame saying "flown often" -- a trailing-12 frequency claim with nothing behind
+# it, on a leaderboard whose rank 1 flew 65 departures across 2 months and 11 of whose 25 rows
+# fall below 360. NOTHING pinned that sentence, which is exactly why it went false silently: the
+# /watch/new-routes shape CLAUDE.md records twice, a compound claim losing one clause to a
+# paraphrase no grep would catch. Both directions now, so the replacement cannot rot the same way.
+check     "watch/empty-planes: the frame states the rate the mart enforces" "$BODY" '30+ departures a month flown'
+check_not "watch/empty-planes: ...and no longer claims a frequency nothing floors" "$BODY" 'flown often'
+check_not "watch/empty-planes: no longer claims a flat 360 annual total" "$BODY" '360 performed departures'
 check_re     "watch/empty-planes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/empty-planes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
 
@@ -2418,22 +2443,22 @@ check "watch/new-routes: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EX
 check     "watch/new-routes: renders a carrier code"     "$BODY" '>AS<'
 check_not "watch/new-routes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
 # Final whole-branch review (M6), CRITICAL: this page told visitors "First appearance since
-# 2015" about rows that had filed for years. `p12_months_present = 0` is a RE-ENTRY -- 334 of
-# 688 qualifying rows (48.5%) and 17 of the 25 rendered had filed before the p12 window, worst
-# case MQ AZO-ORD at 93 distinct months back to 2015-01. Both halves, in the served bytes: the
+# 2015" about rows that had filed for years. `p12_months_present = 0` is a RE-ENTRY -- 174 of
+# 297 qualifying rows (58.6%) and 19 of the 25 rendered had filed before the p12 window, worst
+# case B6 AUS-FLL at 106 distinct months back to 2015-01. Both halves, in the served bytes: the
 # accurate claim present AND the false one gone. All-ASCII needles for the reason above; the
 # frame itself is a plain TS string literal (lib/watch.ts), not JSX, so it ships verbatim.
 check     "watch/new-routes: states re-entry, not first appearance" "$BODY" 'not necessarily a first appearance'
-check_dataset check "watch/new-routes: carries the measured count"        "$BODY" '303 of the 606'
+check_dataset check "watch/new-routes: carries the measured count"        "$BODY" '174 of the 297'
 check_not "watch/new-routes: no longer claims 'since 2015'"         "$BODY" 'since 2015'
 # The SECOND false claim on this page, found by the re-review of the wave that fixed the first:
 # mart_route_health's grain is (op_airline_id, route), so `p12_months_present = 0` says nothing
-# about the OTHER carriers on that airport pair -- 466 of 606 (76.9%) and 25 of the 25 rendered
-# had one, the #1 row (AS HNL-ITO) while HA/UA/WN filed 1,787,347 seats on it. This page has now
+# about the OTHER carriers on that airport pair -- 245 of 297 (82.5%) and 25 of the 25 rendered
+# had one, the #1 row (AS HNL-ITO) while HA/UA/WN filed 1,786,963 seats on it. This page has now
 # shipped a false claim twice, so every one of them gets a served-byte guard, both directions.
 check     "watch/new-routes: names the carrier, not the route (frame)" "$BODY" 'A route this carrier flew nothing on last year'
 check     "watch/new-routes: names the carrier, not the route (note)"  "$BODY" 'this carrier filed nothing at all on this route'
-check_dataset check "watch/new-routes: carries the unserved-route measurement" "$BODY" '466 of the 606'
+check_dataset check "watch/new-routes: carries the unserved-route measurement" "$BODY" '245 of the 297'
 check_not "watch/new-routes: never claims nobody flew it"              "$BODY" 'nobody flew'
 check_re     "watch/new-routes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/new-routes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'

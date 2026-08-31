@@ -156,3 +156,50 @@ pairs AS (
 SELECT count(*)
 FROM pairs, bound
 WHERE pairs.last_month < bound.lo;
+
+-- name: route_health_rows
+-- mart_route_health cardinality (#146, #148). This family was the one test_stated_counts.py did
+-- not cover: stated across docs, SQL comments, served copy and test literals, generated nowhere,
+-- so the #148 floor change moved every one of them at once and nothing would have reddened.
+-- THE GRAIN IS (op_airline_id, route) -- a carrier-route PAIR, never a route -- which is why
+-- route_health_rows and route_health_pairs are both measured and are different numbers.
+--
+-- This is the mart's ROW count. Not a route count, and every sentence quoting it must say so.
+SELECT count(*) FROM mart_route_health;
+
+-- name: route_health_pairs
+-- DISTINCT undirected route pairs across those rows. The figure the tree never carried: stating
+-- the row count as a route count overstated routes by 84% before #146. Measured, not derived
+-- from rows, so the gap between the two is a real cross-check rather than an assumption.
+SELECT count(*) FROM (
+    SELECT DISTINCT route_key_low, route_key_high FROM mart_route_health);
+
+-- name: route_health_scored
+SELECT count(health_score) FROM mart_route_health;
+
+-- name: route_health_with_prior_window
+-- p12_months_present >= 1. The complement of route_health_no_prior_window, MEASURED rather than
+-- subtracted, for the reason route_order_agreeing_pairs above is measured: a derived complement
+-- cannot cross-check the thing it was derived from.
+SELECT count(*) FROM mart_route_health WHERE p12_months_present >= 1;
+
+-- name: route_health_null_score
+SELECT count(*) FROM mart_route_health WHERE health_score IS NULL;
+
+-- name: route_health_no_prior_window
+SELECT count(*) FROM mart_route_health WHERE p12_months_present = 0;
+
+-- name: route_health_no_schedule
+-- The predicate docs/data/model.md states for this reason, not `completion_factor IS NULL`.
+-- The two agree today and are different questions: one is about what BTS filed, the other about
+-- what the ratio could be computed from.
+SELECT count(*) FROM mart_route_health WHERE t12_departures_scheduled = 0;
+
+-- name: route_health_null_overlap
+-- The two live NULL reasons OVERLAP. Never sum them without subtracting this.
+SELECT count(*) FROM mart_route_health
+WHERE p12_months_present = 0 AND t12_departures_scheduled = 0;
+
+-- name: route_health_same_airport_rows
+SELECT count(*) FROM mart_route_health WHERE route_key_low = route_key_high;
+

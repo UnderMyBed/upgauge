@@ -62,7 +62,13 @@ const REGISTRY: ReadonlyMap<PresetSlug, Preset> = new Map([
     {
       slug: "empty-planes",
       title: "Empty Planes",
-      frame: "Real airliner metal, flown often, with the seats going out empty.",
+      // "flown often" until #148, which deleted this preset's `t12_departures_performed >=
+      // 360` predicate and left the claim standing with nothing behind it -- 11 of the 25
+      // rendered rows fall below 360, and rank 1 flew 65 departures across 2 months. The
+      // frame now states the property the mart's gate actually enforces, which is a RATE
+      // and not a trailing-12 total. app/smoke.sh pins both halves in the served bytes;
+      // nothing pinned the old sentence, which is why it went false silently.
+      frame: "Real airliner metal, at 30+ departures a month flown, with the seats going out empty.",
       sqlFile: "watch_empty_planes",
       directions: [{ heading: "Emptiest", direction: "asc" }],
     },
@@ -78,11 +84,11 @@ const REGISTRY: ReadonlyMap<PresetSlug, Preset> = new Map([
       //
       // (1) NOT "first appearance since 2015". watch_new_routes.sql selects
       //     `p12_months_present = 0`: nothing filed in the PRIOR 12 months. That is a re-entry.
-      //     303 of the 606 qualifying rows (50.0%) filed before that window -- QX BLI-SEA in 99
+      //     174 of the 297 qualifying rows (58.6%) filed before that window -- B6 AUS-FLL in 106
       //     distinct months back to 2015-01.
       // (2) NOT "nobody flew last year". mart_route_health's grain is (op_airline_id, route) --
       //     a CARRIER-ROUTE PAIR, not a route -- so `p12_months_present = 0` says nothing
-      //     whatever about the other carriers on that airport pair. 466 of the 606 (76.9%), and
+      //     whatever about the other carriers on that airport pair. 245 of the 297 (82.5%), and
       //     ALL 25 rows the page renders, had another carrier flying the same pair inside the
       //     prior window. The #1 row is AS HNL-ITO, where HA, UA and WN filed 1,786,963 seats
       //     in that window -- 3.7x the subject's own trailing 12.

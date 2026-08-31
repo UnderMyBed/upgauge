@@ -53,7 +53,8 @@ map_mainline_group    airline_id, parent_airline_id, effective_from, effective_t
 
 mart_route_health     one row per (op_airline_id, route_key_low, route_key_high)
                       UNDIRECTED, and the only materialized TABLE in the database.
-                      Global trailing-12 / prior-12 windows, <30 performed-departures floor,
+                      Global trailing-12 / prior-12 windows, a RATE floor of 30 performed
+                      departures per month FLOWN (t12_months_flown, never months present),
                       NULL (not huge-positive) deltas when the prior window is empty.
                       There is no leaderboards mart: /watch's presets read this table
                       directly (../architecture/pipeline.md).
@@ -83,8 +84,10 @@ you're reading before writing a `>=`/`<`/`<=` comparison against either.
 ## Route health is UNDIRECTED
 
 T-100 files each direction of an O&D pair as its own row, so a directed grain splits every
-route's health into two half-populated rows and halves each one's departure count against the
-`<30 departures in trailing 12mo` floor — silently excluding routes that clear it easily.
+route's health into two half-populated rows and halves each one's departures against the floor
+of 30 performed departures per month flown. The floor's denominator does **not** halve with the
+numerator — both directions fly in the same months, so `t12_months_flown` is unchanged by the
+split — so the rate itself halves, silently excluding carrier–route pairs that clear it easily.
 `fct_segment_month` already carries `route_key_low` / `route_key_high` (the two airport IDs
 sorted, stable regardless of filing direction) for exactly this, and the product URL
 `/route/PDX-AUS` reads undirected too.
@@ -447,22 +450,50 @@ per-row date parsing is needed. Measured over the full 2015–2026 window:
 `t12 = 2025-06..2026-05`, `p12 = 2024-06..2025-05` — 2026 is a partial year, so the trailing
 window lands mid-2026 rather than on a year boundary.
 
-The `<30 departures` floor applies to `t12_departures_performed` — **performed, not
-scheduled** — same reasoning as the fact-table quarantine rules: a route with a big schedule
-that mostly didn't fly should not count as "active."
+**The floor is a RATE, not a window total: 30 performed departures per month FLOWN** —
+`t12_departures_performed >= 30 * t12_months_flown`, guarded by an explicit
+`t12_months_flown > 0` arm. It reads `t12_departures_performed`, **performed, not scheduled** —
+same reasoning as the fact-table quarantine rules: a carrier–route with a big schedule that
+mostly didn't fly should not count as "active."
+
+**The denominator is `t12_months_flown`, months FLOWN, never `t12_months_present`, months
+FILED.** `t12_months_flown` is `count(DISTINCT year_month) FILTER (… AND
+departures_performed > 0)`, defined identically to the pivot templates' `active_months`
+([`sql/03_queries/pivot_route.sql`](../../sql/03_queries/pivot_route.sql)) and to
+`map_carrier_diff.sql`'s column of the same name. A month that filed a schedule and flew
+nothing did not fly; counting it would understate the rate and admit a sparser carrier–route
+than the floor allows.
+
+**The `t12_months_flown > 0` arm is load-bearing, not a guard against a case that cannot
+happen.** A pair that filed and never flew has `t12_months_flown = 0` and a departure sum of 0,
+so the rate comparison alone reads `0 >= 30 * 0` and **admits** it — 7 such rows on the real
+warehouse. (A wholly-quarantined window sums to `NULL` instead, and `NULL` fails both arms on
+its own.) The multiplication form is deliberate over
+`t12_departures_performed / t12_months_flown >= 30`: same 5,611 rows either way, but the
+division form hides the never-flown case inside a `nullif`, and this form is exact integer
+arithmetic at the boundary.
+
+**The rule is declared once, in [`app/src/lib/floor.ts`](../../app/src/lib/floor.ts)**, and this
+gate is its SQL-side application. The same rate is what the four entity pages, the Explorer,
+both maps and all four `/watch` presets mark rows against — the mart is the one surface that
+applies it as an admission gate rather than a mark, which is why no preset row is ever marked
+sparse.
 
 **A dropped carrier–route is structurally absent from this table, and the fix is never to lower
-the floor.** A route a carrier stopped flying has zero trailing-window departures, so it cannot
-clear `t12_departures_performed >= 30` — measured: **zero** rows with `t12_months_present = 0`.
-The floor gates the whole table before any delta, z-score or clamp, so relaxing it to admit
-dropped routes would move **every `health_score` in the database**. Anything needing the dropped
+the floor.** A pair a carrier stopped flying has zero trailing-window departures, so it clears
+neither arm of the gate — measured: **zero** rows with `t12_months_present = 0`, and **zero**
+with `t12_months_flown = 0`. The second is the stronger statement and it is not left to the
+data: the `t12_months_flown > 0` arm guarantees it directly. The floor gates the whole table
+before any delta, z-score or clamp, so relaxing it to admit dropped pairs would move **every
+`health_score` in the database**. Anything needing the dropped
 side reads `fct_route_month` directly, as `sql/03_queries/map_carrier_diff.sql` does.
 
-The floor is not confined to dropped routes either, which matters to anything comparing two
-populations across it: of the added carrier–routes in the same 24-month span (nothing flown in
-the prior window, something flown in the trailing one), **92.8% are also below the floor**. So a
+The floor is not confined to dropped carrier–routes either, which matters to anything
+comparing two populations across it: of the added carrier–routes in the same 24-month span
+(nothing flown in the prior window, something flown in the trailing one), **96.5% are also
+below the floor** — 96.4% counting arcs only, i.e. excluding same-airport pairs. So a
 query sourcing one category from this table and another from `fct_route_month` floors the two
-by a factor of 14 and they are not comparable — the categories must share one floor, applied in
+by a factor of 28 and they are not comparable — the categories must share one floor, applied in
 one place.
 
 **`p12_months_present` (like `t12_months_present`) is a 0–12 *count* of distinct months
@@ -471,10 +502,10 @@ present in the window, not a boolean** — `count(DISTINCT r.year_month) FILTER 
 ("some prior window") are the meaningful boundaries; `= 1` means "exactly one month," a
 much narrower and mostly incidental condition.
 
-**A route absent from the prior 12 months gets `NULL` deltas, never a huge positive number.**
-A new route is not a route that improved infinitely. Enforced by `CASE WHEN
-p12_months_present = 0 THEN NULL ELSE ... END` on every `p12_*`-derived ratio and every
-`*_delta` column. This `CASE` is a documentation aid, not the load-bearing guard — deleting
+**A carrier–route pair absent from the prior 12 months gets `NULL` deltas, never a huge
+positive number.** A pair with no prior window is not a pair that improved infinitely.
+Enforced by `CASE WHEN p12_months_present = 0 THEN NULL ELSE ... END` on every
+`p12_*`-derived ratio and every `*_delta` column. This `CASE` is a documentation aid, not the load-bearing guard — deleting
 all four is a provable no-op (identical byte-for-byte mart — proved on the 2015–2017
 warehouse and never re-proved on the full window, so it is a bounded claim), because a
 `SUM(...) FILTER (WHERE <no rows match>)` already returns `NULL`, not `0`, in DuckDB, and
@@ -484,17 +515,19 @@ defence against a future `coalesce` on the p12 sums, just not what "enforces" th
 today. The row itself still exists (it is the Route Birth Tracker's input); only its
 deltas are unknown.
 
-Measured over the full 2015–2026 window: of **8,065** surviving routes, **606** have no
-prior-window data (`p12_months_present = 0`, `new_routes`) and are correctly `NULL`-delta
-rows; the other **7,459** have `p12_months_present >= 1`.
+Measured over the full 2015–2026 window: the table holds **5,611** surviving carrier–route
+pairs over only **3,198** distinct route pairs — the grain is `(op_airline_id, route)`, so a
+row count is never a route count. Of those 5,611 rows, **297** have no prior-window data
+(`p12_months_present = 0`, `new_routes`) and are correctly `NULL`-delta rows; the other
+**5,314** have `p12_months_present >= 1`.
 
 **"No prior window" and "zero-measure prior window" are two different things and must not be
-conflated.** A route can carry `p12_months_present >= 1` and still have filed `p12_seats = 0`
+conflated.** A row can carry `p12_months_present >= 1` and still have filed `p12_seats = 0`
 and `p12_departures_performed = 0`, which makes `lf_p12`/`gauge_p12` `NULL` through the
 `nullif` on their denominators even though the window is technically "present" — only the
-first category is `new_routes` in the Route Birth Tracker sense. **No route is in that second
-category today**, which is a property of which 24 months are the current trailing window, not
-a structural absence of the case: a mart consumer that assumes the categories partition
+first category is `new_routes` in the Route Birth Tracker sense. **No carrier–route pair is in
+that second category today**, which is a property of which 24 months are the current trailing
+window, not a structural absence of the case: a mart consumer that assumes the categories partition
 cleanly will break when one reappears.
 
 > **The formula below replaced an earlier one, and what is worth keeping is why.** v0 scored
@@ -516,8 +549,8 @@ scoring *deliberately dumb*, and any other weighting would be a number invented 
 mean `|z|` contribution per component, on the real 2015–2026 warehouse: `lf_delta` 0.575,
 `capacity_delta` 0.517, `gauge_delta` 0.178, `frequency_delta` 0.179, `completion_factor`
 0.023 — a **25.0×** spread on nominally equal weights, because three of the five were raw,
-unbounded ratios whose own outliers inflated their own denominators (`capacity_delta` reached
-+2348.658 on this warehouse), while `completion_factor` — already bounded near 1.0 by
+unbounded ratios whose own outliers inflated their own denominators (`capacity_delta` reaches
++2656.618 on this warehouse), while `completion_factor` — already bounded near 1.0 by
 definition — was left contributing 1.6% of a nominal 20% share.
 
 **The identity that licenses dropping `capacity_delta` from the score, not just shrinking its
@@ -529,10 +562,10 @@ ln(seats_t12 / seats_p12) ≡ ln(dep_t12 / dep_p12) + ln(gauge_t12 / gauge_p12)
 
 i.e. in log space, capacity change is *exactly* frequency change plus gauge change — not
 approximately correlated, identically decomposed, because `seats = departures × gauge` by
-construction. Measured: max `|residual|` **2.66e-15** over all **7,459** finite rows (the
+construction. Measured: max `|residual|` **1.33e-15** over all **5,314** finite rows (the
 `p12_months_present >= 1` population — see above), which is floating-point noise, not a
 near-identity. In raw (unlogged) form the same relationship shows up as `corr(capacity_delta,
-frequency_delta) = 0.9857`; in logs it is **1.00**. Scoring `capacity_delta` alongside
+frequency_delta) = 0.9856`; in logs it is **1.00**. Scoring `capacity_delta` alongside
 `gauge_delta` and `frequency_delta` would therefore score the same underlying movement twice —
 this is the whole justification for excluding it from the composite, not a stylistic choice, and
 without this paragraph a future editor re-adding it "to use all five components" would silently
@@ -570,9 +603,10 @@ transitively any `t12`/`p12` window sum in `mart_route_health` — with
 `mart_route_health` that can produce `departures_performed > 0` with `seats = 0` in either
 window. Confirmed two ways: **by construction** — a 12-month, all-quarantined adversarial
 route fed through the real `fct_route_month.sql` and `200_mart_route_health.sql` comes back
-with `departures_performed` and `seats` both `NULL`, excluded entirely by the
-`t12_departures_performed >= 30` floor before `gauge_t12` is ever computed — and
-**empirically** — measured `min(gauge_t12) = 0.958` on the real 2026-04 warehouse. The guard
+with `departures_performed` and `seats` both `NULL`, excluded entirely by the departure floor —
+`t12_months_flown` is 0 and the summed departures are `NULL`, so it fails both arms — before
+`gauge_t12` is ever computed — and
+**empirically** — measured `min(gauge_t12) = 0.958` on the real 2026-05 warehouse. The guard
 is kept anyway, the same way the `p12_months_present = 0` `CASE` earlier in this file is kept:
 correct defence against a future change to the quarantine rule, which *would* change this.
 
@@ -580,42 +614,42 @@ correct defence against a future change to the quarantine rule, which *would* ch
 
 | Component | Before (five axes) | After (four axes) |
 |---|---|---|
-| `lf_delta` | 0.575 | 0.538 |
-| gauge (`gauge_delta` → `ln(gauge_t12/gauge_p12)`) | 0.178 | 0.454 |
-| frequency (`frequency_delta` → `ln(dep_t12/dep_p12)`) | 0.179 | 0.506 |
-| `completion_factor` (capped at 1.5) | 0.023 | 0.348 |
+| `lf_delta` | 0.575 | 0.560 |
+| gauge (`gauge_delta` → `ln(gauge_t12/gauge_p12)`) | 0.178 | 0.472 |
+| frequency (`frequency_delta` → `ln(dep_t12/dep_p12)`) | 0.179 | 0.483 |
+| `completion_factor` (capped at 1.5) | 0.023 | 0.360 |
 | `capacity_delta` | 0.517 | *(displayed only, not scored)* |
 
-Spread (max/min of the scored components): **25.0× → 1.5×**.
+Spread (max/min of the scored components): **25.0× → 1.55×**.
 
 **The `least`/`greatest` NULL trap.** DuckDB's `least()` and `greatest()` **ignore `NULL`
 rather than propagating it** — `least(NULL, 3)` returns `3`, not `NULL`, and chaining that into
 `greatest(least(NULL, 3), -3)` returns `greatest(3, -3)`, i.e. **`3`**, not `NULL` — verified in
 DuckDB directly, and **resolve it inside-out or you will transpose which bound wins**; either
 way a value is fabricated instead of `NULL` propagating. A bare `least(completion_factor,
-1.5)` therefore **fabricates a near-perfect completion rate of `1.5`** for every route with no
-filed schedule at all (`t12_departures_scheduled = 0`, so `completion_factor` is itself
-`NULL`) — **177 invented completion rates**. Left unguarded through to the clamp, the same
+1.5)` therefore **fabricates a near-perfect completion rate of `1.5`** for every carrier–route
+pair with no filed schedule at all (`t12_departures_scheduled = 0`, so `completion_factor` is
+itself `NULL`) — **89 invented completion rates**. Left unguarded through to the clamp, the same
 behaviour on `greatest(least(z_completion, 3), -3)` would score **every** row with an
-unknown axis, destroying the three-reason NULL contract below: **8,065 rows scored instead of
-the correct 7,332**. Both are `CASE WHEN … IS NULL THEN NULL ELSE least/greatest(...) END` in
+unknown axis, destroying the three-reason NULL contract below: **5,611 rows scored instead of
+the correct 5,238**. Both are `CASE WHEN … IS NULL THEN NULL ELSE least/greatest(...) END` in
 `sql/02_marts/200_mart_route_health.sql` — a `CASE`, not a bare call, for exactly this reason.
 This is not a hypothetical: `pipeline/tests/test_route_health_real_data.py`'s own reference SQL
 (written to independently re-derive the axes from raw columns and check the mart's arithmetic)
 originally used a bare `least(completion_factor, 1.5)` and reproduced this exact fabrication —
-its measured completion contribution came out 0.195, not 0.348, until the guard was added to
+its measured completion contribution came out 0.197, not 0.360, until the guard was added to
 the test's own SQL to match the mart's.
 
 **The clamp.** Each of the four z-scores is clamped to `±3` before the weighted sum, so no
 single axis can move `health_score` by more than `0.75` and `|health_score| ≤ 3.0` **by
 construction** (four axes × 0.25 weight × a 3.0 clamp bound). Measured on the real
-2015–2026 warehouse: the clamp binds (at least one axis `|z| > 3`) on **466 of the 7,332**
+2015–2026 warehouse: the clamp binds (at least one axis `|z| > 3`) on **289 of the 5,238**
 scored rows — a real minority, not decoration and not a rank transform wearing a z-score's
-name. Observed maximum `|health_score|`: **2.30880**, comfortably inside the 3.0 construction
-bound. Unclamped, the worst single axis (`VD` `CPX–VQS`) reaches `z_gauge = -15.99` on this
+name. Observed maximum `|health_score|`: **2.33977**, comfortably inside the 3.0 construction
+bound. Unclamped, the worst single axis (`VD` `CPX–VQS`) reaches `z_gauge = -18.91` on this
 warehouse — the reason a per-axis clamp exists at all, not just an overall cap on the sum.
 
-> ⚠️ **`health_score` is `NULL` for three distinct reasons, not one — 733 of 8,065 routes,
+> ⚠️ **`health_score` is `NULL` for three distinct reasons, not one — 373 of 5,611 rows,
 > measured over the full 2015–2026 window** (`t12 = 2025-06..2026-05`,
 > `p12 = 2024-06..2025-05`). The product-facing writeup (what the UI must do about each) lives
 > in
@@ -624,18 +658,18 @@ warehouse — the reason a per-axis clamp exists at all, not just an overall cap
 >
 > | Reason | Count | Why |
 > |---|---|---|
-> | No prior window | 606 | `p12_months_present = 0` — a genuinely new route. |
+> | No prior window | 297 | `p12_months_present = 0` — this carrier filed nothing on this pair in the prior window. Not necessarily a new route: see § Route Birth Tracker in ../product/features.md. |
 > | Zero-measure prior window | 0 | `p12_months_present >= 1` but `p12_seats = 0` and `p12_departures_performed = 0` — `nullif` makes `lf_p12`/`gauge_p12` NULL despite the window being "present." Empty today, not structurally impossible. |
-> | Zero scheduled departures | 177 | `t12_departures_scheduled = 0` despite real `t12_departures_performed` (on-demand/charter-style operators) — `completion_factor = t12_departures_performed / nullif(t12_departures_scheduled, 0)` is computed from `t12_*` sums alone and has nothing to do with `p12_months_present`. |
-> | *(overlap: no-prior-window AND zero-scheduled)* | **-50** | 50 routes are in both categories at once. |
+> | Zero scheduled departures | 89 | `t12_departures_scheduled = 0` despite real `t12_departures_performed` (on-demand/charter-style operators) — `completion_factor = t12_departures_performed / nullif(t12_departures_scheduled, 0)` is computed from `t12_*` sums alone and has nothing to do with `p12_months_present`. |
+> | *(overlap: no-prior-window AND zero-scheduled)* | **-13** | 13 rows are in both categories at once. |
 >
-> **The reasons OVERLAP — never sum them.** `606 + 0 + 177 - 50 = 733`; a query adding the
-> three counts without subtracting the overlap overcounts by 50. Non-overlap is a property of
+> **The reasons OVERLAP — never sum them.** `297 + 0 + 89 - 13 = 373`; a query adding the
+> three counts without subtracting the overlap overcounts by 13. Non-overlap is a property of
 > whichever window is current, never a guarantee.
 >
 > A test asserting "`health_score` is null exactly when `lf_delta` is null" states a **narrower
 > invariant than the real one** — null exactly when *any* component is null — and passes
-> against a fixture too small to hold a `p12`-populated, `t12_departures_scheduled = 0` route.
+> against a fixture too small to hold a `p12`-populated, `t12_departures_scheduled = 0` row.
 > `test_health_score_is_null_exactly_when_a_component_is_unknown`
 > ([`pipeline/tests/test_route_health.py`](../../pipeline/tests/test_route_health.py)) checks
 > parity against every component for that reason. **It discriminates only against the real
@@ -673,6 +707,18 @@ warehouse — the reason a per-axis clamp exists at all, not just an overall cap
 > rows from `data/raw/`, never fabricated ones — see the CGQ precedent in
 > [`sql/01_staging/dim_city_market.sql`](../../sql/01_staging/dim_city_market.sql) and the
 > two-aircraft-type rows added for `test_distance_is_not_summed`.
+>
+> **That rule governs the SHARED fixture — the one every mart test reads — and it stands.**
+> `pipeline/tests/test_route_health.py` also builds a separate `adversarial_con` warehouse whose
+> rows are synthetic, and the split is what keeps both correct. It is read only by the mart tests
+> that need a shape the committed sample cannot produce. It DOES fabricate traffic — two of its
+> pairs are fully populated controls carrying invented departures and seats, and they are
+> load-bearing, because every z-score is `stddev_samp(...) OVER ()` and a single value or
+> identical ones make the axis NULL through `nullif`. The clause the exception
+> rests on is narrower and is the one to check: **no test asserts a measured quantity against
+> those rows.** They are read only for which components are NULL and whether a row was admitted,
+> so they cannot make a real figure wrong — which is exactly what fabricated rows in the shared
+> fixture would do. Anything standing in for a real filing still comes from `data/raw/`.
 
 ### `distance` is not additive
 

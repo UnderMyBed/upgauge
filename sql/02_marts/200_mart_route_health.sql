@@ -14,7 +14,7 @@
 -- See docs/data/model.md.
 --
 -- UNDIRECTED. T-100 files each direction separately, so a directed grain would split every
--- route in two and halve each half's departures against the <30 floor below.
+-- route in two and halve each half's departures against the rate floor below.
 WITH bounds AS (
     SELECT max(strptime(year_month, '%Y-%m')) AS end_m FROM fct_route_month
 ),
@@ -36,6 +36,21 @@ agg AS (
 
         count(DISTINCT r.year_month) FILTER (
             WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_months_present,
+        -- MONTHS FLOWN, NOT MONTHS PRESENT, and the two are different columns on purpose
+        -- (#148). `t12_months_present` counts every month the pair FILED; this counts the
+        -- months it PERFORMED departures, which is the departure floor's denominator and is
+        -- defined identically to the pivot templates' `active_months`
+        -- (sql/03_queries/pivot_route.sql) and to map_carrier_diff.sql's column of the same
+        -- name. A month that filed a schedule and flew nothing did not fly, so counting it
+        -- would understate the rate and admit a sparser route than the floor allows.
+        --
+        -- No ::BIGINT here, unlike t12_quarantined_rows below. That cast exists because sum()
+        -- over a BIGINT column promotes to HUGEINT; count() does not promote, and
+        -- t12_months_present directly above is already BIGINT uncast. Copying the guard onto a
+        -- construct that never had the defect would be cargo-culting it.
+        count(DISTINCT r.year_month) FILTER (
+            WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month
+              AND r.departures_performed > 0)                                 AS t12_months_flown,
         sum(r.seats)                FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_seats,
         sum(r.passengers)           FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_passengers,
         sum(r.departures_performed) FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_departures_performed,
@@ -78,7 +93,24 @@ derived AS (
              ELSE p12_seats / nullif(p12_departures_performed, 0) END AS gauge_p12,
         t12_departures_performed / nullif(t12_departures_scheduled, 0) AS completion_factor
     FROM agg
-    WHERE t12_departures_performed >= 30   -- performed, NOT scheduled
+    -- THE DEPARTURE FLOOR, AS A RATE: 30 departures per month FLOWN (#148). It used to read
+    -- `t12_departures_performed >= 30` -- a twelve-month SUM against a per-month floor, so a
+    -- carrier-route flying 2.5 departures a month cleared it. That was the most lenient
+    -- surviving instance of the defect #134 closed on every other surface; the rule is
+    -- declared once in app/src/lib/floor.ts and this is its SQL-side application.
+    --
+    -- `t12_months_flown > 0` is load-bearing, not a guard against a case that cannot happen.
+    -- A carrier-route that filed and never flew has months_flown = 0 and a departure sum of
+    -- 0, so the comparison below reads `0 >= 0` and ADMITS it -- 7 rows on the real
+    -- warehouse. floor.ts:77 rules the same case the same way: no months flown is BELOW the
+    -- floor, never a division to be skipped. (A wholly-quarantined window sums to NULL
+    -- instead, and NULL fails both arms on its own.)
+    --
+    -- Multiplication rather than `t12_departures_performed / t12_months_flown >= 30`: the
+    -- same 5,611 rows either way, but the division form hides the never-flown case inside a
+    -- nullif, and this form is exact integer arithmetic at the boundary.
+    WHERE t12_months_flown > 0
+      AND t12_departures_performed >= 30 * t12_months_flown   -- performed, NOT scheduled
 ),
 deltas AS (
     SELECT
@@ -93,12 +125,12 @@ deltas AS (
     FROM derived
 ),
 -- Four INDEPENDENT axes, equal 0.25. capacity_delta is deliberately NOT among them: in log
--- space it is exactly frequency + gauge (verified to 2.66e-15 over all 7,459 finite rows --
+-- space it is exactly frequency + gauge (verified to 1.33e-15 over all 5,314 finite rows --
 -- docs/data/model.md), so scoring it scores those two a second time. It keeps its column and
 -- stays on the page; it is the COMPOSITE it has no place in.
 --
 -- The ratios are logged because the raw form is unbounded and asymmetric: capacity_delta
--- reached +2348.658 on the real warehouse, its own outliers inflated its own stddev, and
+-- reached +2656.618 on the real warehouse, its own outliers inflated its own stddev, and
 -- completion_factor was left contributing 1.6% of a nominally 20% share. In logs a halving and
 -- a doubling get equal magnitude; in raw ratios they are -0.5 and +1.0.
 axes AS (
@@ -120,16 +152,16 @@ axes AS (
         -- window. Confirmed by construction (a 12-month all-quarantined adversarial route
         -- fed through the real fct_route_month.sql + this file: departures_performed and
         -- seats both come back NULL, and the row never reaches mart_route_health at all,
-        -- excluded by the `t12_departures_performed >= 30` floor below) and empirically
-        -- (measured min(gauge_t12) = 0.958 on the real 2026-04 warehouse). Keep the guard
+        -- excluded by the rate floor below, which no zero-departure row can clear) and empirically
+        -- (measured min(gauge_t12) = 0.958 on the real 2026-05 warehouse). Keep the guard
         -- anyway, the same way the `p12_months_present = 0` CASE above is kept: correct
         -- defence against a future change to the quarantine rule, which WOULD change this.
         ln(nullif(gauge_t12, 0) / nullif(gauge_p12, 0))                    AS gauge_log,
         ln(nullif(t12_departures_performed, 0)
            / nullif(p12_departures_performed, 0))                          AS freq_log,
         -- CASE, not a bare least(): DuckDB's least() IGNORES NULLs, so least(NULL, 1.5)
-        -- returns 1.5 and fabricates a near-perfect completion rate for the 177 routes that
-        -- filed no schedule at all. See docs/data/model.md.
+        -- returns 1.5 and fabricates a near-perfect completion rate for the 89 carrier-route
+        -- pairs that filed no schedule at all. See docs/data/model.md.
         CASE WHEN completion_factor IS NULL THEN NULL
              ELSE least(completion_factor, 1.5) END                        AS completion_capped
     FROM deltas
@@ -146,11 +178,11 @@ z AS (
 -- Clamped at +/-3 so no single axis can move the composite by more than 0.75. Uniform, with no
 -- per-component threshold to invent. Logging alone fixes capacity and frequency but BREAKS
 -- gauge: a three-seat change on a nine-seat aircraft is a huge log ratio, and VD CPX-VQS
--- reaches z_gauge = -15.99 unclamped. Touches 466 of the 7,332 scored rows.
+-- reaches z_gauge = -18.91 unclamped. Touches 289 of the 5,238 scored rows.
 --
 -- Every clamp is a CASE for the same reason the cap above is: greatest(least(NULL,3),-3)
 -- returns 3 (least(NULL,3) is 3, then greatest(3,-3) is 3), not NULL, which would score all
--- 8,065 rows and destroy the three-reason NULL contract (docs/product/features.md).
+-- 5,611 rows and destroy the three-reason NULL contract (docs/product/features.md).
 scored AS (
     SELECT
         * EXCLUDE (gauge_log, freq_log, completion_capped, z_lf, z_gauge, z_freq, z_completion),

@@ -41,8 +41,10 @@ function prior12Window(asOf: string): { from: string; to: string } {
   return { from: monthsBefore(asOf, 23), to: monthsBefore(asOf, 12) };
 }
 
-/** Rows per direction. Every preset's SQL already floors and filters heavily (a gauge floor, a
- * departures floor, a NULL-score exclusion) before this file ever sees a row, so 25 is a
+/** Rows per direction. Every preset's SQL already filters heavily before this file ever sees a
+ * row -- the departure floor is mart_route_health's own admission gate rather than any preset's
+ * WHERE clause (#148), and on top of that Empty Planes and Death Watch floor on gauge, Death
+ * Watch excludes NULL scores, and Route Birth Tracker takes only empty prior windows -- so 25 is a
  * "top of" limit in the same spirit as topn.ts's TOPN_LIMIT, not a truncation boundary -- no
  * disclosure paragraph, matching that precedent. */
 const ROWS_PER_TABLE = 25;
@@ -53,19 +55,19 @@ const ROWS_PER_TABLE = 25;
  * DataTable's generic ColumnSpec `kind`s (`"seats" | "loadFactor" | "gauge" | "count"`) all
  * render a NULL measure as an em-dash (lib/format.ts) -- correct for an ordinary absent
  * measure, and exactly the wrong rendering here. docs/product/features.md's standing UI
- * requirement is that a NULL health_score must never read as unhealthy: all 733 NULL routes
- * (2015-2026 window) are NULL for a data-availability reason -- 606 no prior window, 177 no
- * filed schedule, overlap 50 -- not a low-score reason, and an em-dash in a column this preset
+ * requirement is that a NULL health_score must never read as unhealthy: all 373 NULL
+ * carrier-route pairs (2015-2026 window) are NULL for a data-availability reason -- 297 no prior
+ * window, 89 no filed schedule, overlap 13 -- not a low-score reason, and an em-dash in a column this preset
  * sorts ascending reads as the worst row on the page.
  *
  * **The NULL branch is not a defensive edge case -- it is the common case on three of the four
  * presets**, measured against the real warehouse (current window):
  *
- *   - Route Birth Tracker: 606 of 606 rows (100%) -- EVERY row `p12_months_present = 0`
+ *   - Route Birth Tracker: 297 of 297 rows (100%) -- EVERY row `p12_months_present = 0`
  *     selects has a NULL score, by construction: there is no prior window to diff against, so
  *     "insufficient data" is not one branch among several here, it is the entire page.
- *   - Gauge Watch: 124 of 7,391 rows.
- *   - Empty Planes: 81 of 4,452 rows.
+ *   - Gauge Watch: 76 of 5,308 rows.
+ *   - Empty Planes: 270 of 5,205 rows.
  *   - Route Death Watch is the ONE preset where this function's NULL branch is provably
  *     unreachable in production: `watch_death_watch.sql` filters `WHERE health_score IS NOT
  *     NULL` before a row ever reaches `runPreset()` (see task-6-brief.md's own resolution of
@@ -168,7 +170,7 @@ function buildColumns(
     // flagged as undeclared by the final whole-branch review and declared here rather than
     // silently changed. `__health_score` is not a number: it is `formatHealthScore`'s output,
     // which is either a two-decimal score or the literal string "insufficient data", and on
-    // Route Birth Tracker it is that string on 100% of rows (688 of 688 -- see
+    // Route Birth Tracker it is that string on 100% of rows (297 of 297 -- see
     // formatHealthScore's own docstring). DataTable's `kind` is per COLUMN, not per cell, so
     // the alternatives are (a) right-align a column whose every cell on one preset is a
     // sentence, or (b) teach DataTable a per-cell kind for one column on one page. Neither is
@@ -197,23 +199,26 @@ function buildColumns(
  * non-zero -- is how this page surfaces it, rather than a bespoke mechanism duplicating logic
  * DataTable.test.tsx already covers.
  *
- * `load_factor` and `departures_performed` ARE NOT ALIASED, and since #134 that is the SETTLED
- * RULE rather than a refusal to guess at one. The floor is 30 departures per month FLOWN
- * (`lib/floor.ts`; docs/design/system.md), so DataTable needs
- * two fields: a departure count AND the number of months that produced it. Every other table
- * gets both from the pivot, which emits `active_months` beside every result. These rows do not
- * come from a pivot -- `mart_route_health` carries `t12_departures_performed`, a twelve-month
- * SUM, and no month count beside it -- so aliasing the sum alone would divide by nothing and
- * restate a yearly total as a monthly rate, which is the exact ~12x-lenient reading #134
- * closed everywhere else. `belowFloor` answers an absent month count with "no claim", so these
- * presets abstain by construction and DataTable marks nothing about the floor on them.
+ * `departures_performed` and `active_months` ARE ALIASED, and since #148 that is what makes the
+ * floor mark on these rows a COMPUTATION rather than an abstention. The floor is 30 departures
+ * per month FLOWN (`lib/floor.ts`; docs/design/system.md), so DataTable needs two fields: a
+ * departure count AND the number of months that produced it. Every other table gets both from
+ * the pivot, which emits `active_months` beside every result; these rows come from
+ * `mart_route_health`, which now carries `t12_months_flown` -- the same count, defined
+ * identically (sql/02_marts/200_mart_route_health.sql).
  *
- * The mart has a `t12_months_present` column, and it is NOT the missing field: it counts months
- * FILED, while the floor's denominator is months FLOWN. Wiring it here would put a second,
- * subtly different definition of "active months" in the tree -- the defect #134 exists to close,
- * reintroduced by its own fix. Issue #148 carries the two sites that still compare a trailing-12
- * sum against a floor: this preset family's `t12_departures_performed >= 360` and
- * `mart_route_health`'s own `>= 30`. */
+ * NO ROW HERE CAN BE BELOW THE FLOOR, and that is a property of the mart, not of this mapping:
+ * its `derived` CTE admits only pairs with `t12_departures_performed >= 30 * t12_months_flown`,
+ * so the division DataTable performs is guaranteed to land on or above 30. Before #148 the same
+ * "nothing is marked" outcome came from `belowFloor` abstaining on an absent month count, which
+ * meant `page.test.tsx`'s pin on it could not fail for the reason it claimed. It is now real:
+ * reverting the mart's gate to `t12_departures_performed >= 30` puts 2,454 sub-floor pairs back
+ * into the table and reddens that test on Gauge Watch, Empty Planes and Death Watch -- measured,
+ * not predicted, and Route Birth Tracker stays green because it ranks by seats.
+ *
+ * `t12_months_present` is still NOT the field to use: it counts months FILED, while the floor's
+ * denominator is months FLOWN. Using it would put a second, subtly different definition of
+ * "active months" in the tree -- the defect #134 exists to close, reintroduced by its own fix. */
 function displayRows(
   rows: WatchRow[],
   resolved: Map<string, Resolved>,
@@ -226,6 +231,8 @@ function displayRows(
     __explore: "Explorer",
     avg_gauge: r.gauge_t12,
     quarantined_rows: r.t12_quarantined_rows,
+    departures_performed: r.t12_departures_performed,
+    active_months: r.t12_months_flown,
   }));
 }
 
@@ -233,11 +240,11 @@ function displayRows(
  * airport and itself -- not a data error -- but `/route/`'s own resolver refuses to name one a
  * "route" (routePair.ts), and every watch_*.sql file already excludes them
  * (`WHERE route_key_low <> route_key_high`). Stated once, identically, on all four presets --
- * measured: 68 of the 8,065 rows mart_route_health carries over the current window. */
+ * measured: 6 of the 5,611 rows mart_route_health carries over the current window. */
 function SameAirportNote() {
   return (
     <p className="foot">
-      Same-airport rows (route_key_low = route_key_high -- 68 of 8,065 mart_route_health rows)
+      Same-airport rows (route_key_low = route_key_high -- 6 of 5,611 mart_route_health rows)
       are excluded from every preset here: a route is between two different airports.
     </p>
   );
@@ -250,7 +257,8 @@ function SameAirportNote() {
 function GaugeFloorNote() {
   return (
     <p className="foot">
-      Routes below 50 seats of trailing-12 gauge are excluded from this leaderboard: without the
+      Carrier&ndash;route pairs below 50 seats of trailing-12 gauge are excluded from this
+      leaderboard: without the
       floor, tiny bush and sightseeing operators dominate with trivial absolute swings rather
       than a genuinely underperforming mainline route (gauge_t12 &gt;= 50, the CRJ-200&rsquo;s
       seat count).
@@ -258,31 +266,28 @@ function GaugeFloorNote() {
   );
 }
 
-/** Empty Planes carries a SECOND floor, and it is the more restrictive of the two:
- * `t12_departures_performed >= 360` (watch_empty_planes.sql), a flat annual total. Death Watch
- * does NOT carry it -- its SQL floors only on gauge -- so this note is Empty Planes' alone, not
- * a second sentence bolted onto GaugeFloorNote.
+/** THE DEPARTURE FLOOR, stated on ALL FOUR presets (#148), the same way SameAirportNote is.
+ * It is a property of `mart_route_health`, which every preset reads, not of one leaderboard:
+ * the mart's `derived` CTE admits only carrier-route pairs performing >= 30 departures per
+ * month FLOWN, so every row on every preset here already clears the rate the tables and maps
+ * apply (app/src/lib/floor.ts).
  *
- * IT IS NOT THE DEPARTURE FLOOR THE TABLES AND MAPS APPLY, and this note used to say it was
- * ("the 'min 30 departures/mo' floor, restated over twelve months"). That equivalence is the
- * one #134 ruled wrong: the product's floor is a RATE, 30 departures per month flown, so a
- * route flying three months at 40 a month files 120, runs at four times the floor, and 360
- * excludes it anyway. The two are different rules and the copy now says so. Issue #148 carries
- * why this one has not moved -- mart_route_health has no months-flown column to divide by.
+ * It used to be Empty Planes' alone and said something different: `t12_departures_performed >=
+ * 360`, a flat annual total, described as "the more restrictive of the two" filters. That
+ * predicate is gone (watch_empty_planes.sql carries why). It was the reading #134 ruled wrong
+ * -- a route flying three months at 40 a month files 120, runs at four times the rate floor,
+ * and 360 excluded it anyway -- and it was also a strict subset of the mart's own gate, so
+ * restating it as a rate would have enforced nothing.
  *
- * Final whole-branch review: the page enumerated the gauge floor and stopped, and a page that
- * enumerates its filters and omits one cannot be reproduced from what it says. The mart's own
- * 30-departures-per-12-months floor (200_mart_route_health.sql's `derived` CTE) is a different,
- * 12x weaker thing and is not what this states. */
+ * A page that enumerates its filters and omits one cannot be reproduced from what it says,
+ * which is why this is stated rather than left implicit now that it applies everywhere. */
 function DeparturesFloorNote() {
   return (
     <p className="foot">
-      Routes below 360 performed departures over the trailing 12 months are also excluded
-      (t12_departures_performed &gt;= 360, a flat annual total). It is the more restrictive of
-      this leaderboard&rsquo;s two filters, and 12x stronger than mart_route_health&rsquo;s own
-      30-departures-per-trailing-12 floor, which every row in the table already clears. It is a
-      different rule from the departure floor the tables and maps apply, which is a rate:
-      30 departures per month flown.
+      Every row here runs at least 30 performed departures per month flown over the trailing 12
+      months. That floor is applied once, to mart_route_health itself, so it holds on all four
+      leaderboards &mdash; it is the same rate the data tables and maps mark rows against, not a
+      per-leaderboard filter.
     </p>
   );
 }
@@ -295,12 +300,12 @@ function DeparturesFloorNote() {
  * the trailing 12. Two things follow, and the page shipped a false claim about each:
  *
  *   1. It is a RE-ENTRY, not a first appearance. mart_route_health carries no lookback past
- *      that window, so the query cannot distinguish one from the other -- 303 of the 606
- *      qualifying rows (50.0%) filed in some earlier month, QX BLI-SEA as far back as 2015-01
- *      with 99 distinct months on file. (M6 shipped "first appearance since 2015".)
+ *      that window, so the query cannot distinguish one from the other -- 174 of the 297
+ *      qualifying rows (58.6%) filed in some earlier month, B6 AUS-FLL as far back as 2015-01
+ *      with 106 distinct months on file. (M6 shipped "first appearance since 2015".)
  *   2. It is a CARRIER-ROUTE PAIR, not a route. The mart's grain is (op_airline_id, route), so
- *      this filter is silent about every OTHER carrier on the same airport pair -- 466 of the
- *      606 (76.9%), and all 25 rows this page renders, had another carrier flying that pair
+ *      this filter is silent about every OTHER carrier on the same airport pair -- 245 of the
+ *      297 (82.5%), and all 25 rows this page renders, had another carrier flying that pair
  *      inside the prior window. (M6 shipped "new service nobody flew last year", and the fix
  *      wave for #1 carried that clause over unexamined.)
  *
@@ -318,9 +323,9 @@ function ReEntryNote({ p12From, p12To }: { p12From: string; p12To: string }) {
       qualifies when this carrier filed nothing at all on this route in the prior 12 months (
       {p12From} to {p12To}) and something in the trailing 12. mart_route_health carries no
       lookback beyond that window, so it cannot tell a brand-new pair from a resumed one:
-      measured, 303 of the 606 qualifying pairs (50.0%) had already filed in some earlier month,
-      one of them in 99 distinct months going back to 2015-01. Nor does it mean the route was
-      unserved &mdash; 466 of the 606 (76.9%) had a <em>different</em> carrier flying the same
+      measured, 174 of the 297 qualifying pairs (58.6%) had already filed in some earlier month,
+      one of them in 106 distinct months going back to 2015-01. Nor does it mean the route was
+      unserved &mdash; 245 of the 297 (82.5%) had a <em>different</em> carrier flying the same
       airport pair inside that prior window. A pair that stopped and resumed <em>within</em>
       these two windows is excluded for the mirror-image reason.
     </p>
@@ -334,7 +339,7 @@ function ReEntryNote({ p12From, p12To }: { p12From: string; p12To: string }) {
 function DeathWatchScopeNote() {
   return (
     <p className="foot">
-      733 of 8,065 routes have no health score at all -- no prior-year window, no filed schedule,
+      373 of 5,611 carrier-route pairs have no health score at all -- no prior-year window, no filed schedule,
       or both -- and are excluded from this leaderboard entirely, never silently ranked worst.
     </p>
   );
@@ -363,7 +368,9 @@ function DirectionTable({
     return (
       <section>
         <h2>{heading}</h2>
-        <p className="empty-state">No routes currently meet this preset&rsquo;s criteria.</p>
+        <p className="empty-state">
+          No carrier&ndash;route pairs currently meet this preset&rsquo;s criteria.
+        </p>
       </section>
     );
   }
@@ -409,7 +416,7 @@ export async function WatchPresetView({ preset }: { preset: Preset }) {
             <p className="frame">{preset.frame}</p>
             <SameAirportNote />
             {showGaugeFloor ? <GaugeFloorNote /> : null}
-            {preset.slug === "empty-planes" ? <DeparturesFloorNote /> : null}
+            <DeparturesFloorNote />
             {preset.slug === "new-routes" ? <ReEntryNote p12From={p12.from} p12To={p12.to} /> : null}
             {preset.slug === "death-watch" ? <DeathWatchScopeNote /> : null}
             {directions.map((d) => (

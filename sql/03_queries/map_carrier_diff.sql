@@ -18,18 +18,21 @@
 -- WHY THIS READS fct_route_month AND NOT mart_route_health
 -- ============================================================================================
 --
--- 200_mart_route_health.sql filters `t12_departures_performed >= 30` before any delta, z-score
--- or clamp. A route a carrier STOPPED flying has zero trailing-window departures, so the mart
--- STRUCTURALLY CANNOT CONTAIN A DROPPED ROUTE -- measured: zero rows with
--- t12_months_present = 0. Lowering or removing that floor is not the fix: it gates the whole
--- table, so it would move every health_score in the database. docs/data/model.md owns that rule.
+-- 200_mart_route_health.sql admits only carrier-route pairs performing >= 30 departures per
+-- month FLOWN (#148) before any delta, z-score or clamp. A route a carrier STOPPED flying has
+-- zero trailing-window departures, so the mart STRUCTURALLY CANNOT CONTAIN A DROPPED ROW --
+-- measured: zero rows with t12_months_present = 0, and zero with t12_months_flown = 0, which
+-- the rate floor's own `t12_months_flown > 0` arm guarantees directly. Lowering or removing
+-- that floor is not the fix: it gates the whole table, so it would move every health_score in
+-- the database. docs/data/model.md owns that rule.
 --
 -- The floor does not only remove dropped routes, and that is the part that decides this file's
--- shape. Measured over the 27,232 arc-forming carrier-route triples in the 24-month span: 92.7%
--- of added carrier-routes are ALSO invisible to the mart. (92.8% counting same-airport pairs in,
--- which is the convention docs/data/model.md states it in; this file counts arcs only.) Sourcing "dropped" here and "added" from the
--- mart would floor two panels of one small multiple differently by a factor of 14, and the
--- panels would not be comparable -- mutual exclusivity is necessary and not sufficient.
+-- shape. Measured over the 27,232 arc-forming carrier-route triples in the 24-month span: 96.4%
+-- of added carrier-routes are ALSO invisible to the mart. (96.5% counting same-airport pairs in,
+-- which is the convention docs/data/model.md states it in; this file counts arcs only.)
+-- Sourcing "dropped" here and "added" from the mart would floor two panels of one small
+-- multiple differently by a factor of 28, and the panels would not be comparable -- mutual
+-- exclusivity is necessary and not sufficient.
 --
 -- So ALL THREE categories come from fct_route_month, out of ONE aggregation and ONE CASE. That
 -- is what makes the floor shared by construction rather than by two numbers agreeing.
@@ -54,18 +57,32 @@
 -- its own. 25 carrier-routes are excluded this way; they are COUNTED and returned, not silently
 -- dropped -- see the quarantine section.
 --
--- WHY 1 AND NOT 30 (the mart's floor, and arcs.ts:33's DEPARTURE_FLOOR). Measured, all carriers:
+-- WHY 1 AND NOT THE MART'S FLOOR. That floor is a RATE -- >= 30 departures per month FLOWN
+-- (200_mart_route_health.sql, app/src/lib/floor.ts:37) -- not the flat 30 this comment used to
+-- name, and not arcs.ts's constant either: #134 moved that declaration to lib/floor.ts and
+-- arcs.ts has held none since.
 --
---            floor 1     floor 30
---   added      8,357          606
---   dropped    5,959          463
---   downgauged 5,012        2,972
+-- Measured, all carriers, arcs only. THE TWO COLUMNS USE DIFFERENT MEMBERSHIP PREDICATES and
+-- that is stated rather than left to be re-derived, because this header requires it:
 --
--- At 30 the panel labelled "dropped" would draw 6 of Delta's 573 dropped carrier-routes and the
--- panel labelled "added" 16 of its 780. A map that renders 1% of the thing its label names is a
--- worse false claim than one that includes a route flown five times -- and a 30-floor guts the
--- two categories the map exists for while leaving the third mostly intact, breaking panel
--- comparability in the other direction.
+--   floor 1      the three-valued `flew` rule below -- flew in one window, did not fly in the
+--                other (months_present = 0 -> FALSE, NULL departures -> NULL, else >= 1)
+--   mart floor   cleared the rate in the deciding window AND filed NOTHING in the other, which
+--                is mart_route_health's own membership (its p12_months_present = 0 / the
+--                absence of any t12 row), not the `flew` rule at a higher threshold
+--
+--                          floor 1    mart floor
+--   added                    8,357           297
+--   dropped                  5,959           219
+--   downgauged               5,012         2,033
+--
+-- At the mart's floor -- the SAME "mart floor" predicate as the column above, not the `flew`
+-- rule evaluated at a higher threshold, which is a third rule again and gives 25 and 19 -- the
+-- panel labelled "dropped" would draw 6 of Delta's 573 dropped carrier-routes and the panel
+-- labelled "added" 10 of its 780. A map that renders 1% of the thing its label names is a
+-- worse false claim than one that includes a route flown five times
+-- -- and the mart's floor guts the two categories the map exists for while leaving the third
+-- mostly intact, breaking panel comparability in the other direction.
 --
 -- 1 is the weakest floor that makes each category's own sentence true. It removes only what
 -- falsifies it: 5 added and 3 dropped carrier-routes that filed in the deciding window and
@@ -186,8 +203,8 @@
 -- the same phenomenon: watch_gauge.sql ranks ORDER BY gauge_delta, never on seats.
 --
 -- THAT PRECEDENT IS ONLY HALF APPLICABLE, and the missing half matters. watch_gauge.sql ranks
--- over mart_route_health, whose population is ALREADY floored at t12_departures_performed >= 30 --
--- which is WHY nothing with one departure can lead /watch/gauge. This file floors at 1 for
+-- over mart_route_health, whose population is ALREADY floored at >= 30 departures per month
+-- flown -- which is WHY nothing with one departure can lead /watch/gauge. This file floors at 1 for
 -- cross-panel comparability, so it inherits the key WITHOUT the floor that made the key safe
 -- there. The consequence is measured and stated below rather than assumed away.
 --

@@ -141,14 +141,20 @@ describe("rawRowsPermalink", () => {
 describe("routeCellHref", () => {
   it("links to the CODE-alphabetical canonical URL, not the displayed id order", () => {
     // THE trap. A watch row carries route_key_low/high in AIRPORT-ID order, but /route/<pair>
-    // is canonicalised alphabetically BY CODE, and the two disagree for 22 of 8,009
-    // cross-airport mart rows. XP USA-LAL is the measured fixture: USA holds the lower
-    // airport_id but sorts AFTER LAL alphabetically.
+    // is canonicalised alphabetically BY CODE, and the two disagree for 29 of 5,605
+    // cross-airport mart rows. UA EWR-DJT is the measured fixture: EWR holds the lower
+    // airport_id but sorts AFTER DJT alphabetically.
     //
-    // A JFK-LAX-shaped fixture CANNOT fail this way, which is why this test names USA/LAL. No
-    // preset's top 25 contains a disagreeing pair (the earliest is rank 82), so smoke cannot
-    // cover this -- only this unit test can.
-    expect(routeCellHref("USA", "LAL")).toBe("/route/LAL-USA");
+    // THE FIXTURE MOVED IN #148, and that is the point of naming a measured one. It used to be
+    // XP USA-LAL, which the rate floor no longer admits to mart_route_health -- a pair that no
+    // longer reaches a watch cell cannot demonstrate a bug in how watch cells are linked, and
+    // would have passed against the very bug it exists to catch. EWR-DJT is the largest
+    // disagreeing pair on the current warehouse (917,310 t12 seats).
+    //
+    // A JFK-LAX-shaped fixture CANNOT fail this way, which is why this test names a
+    // disagreeing pair. No preset's top 25 contains one (the earliest is rank 62, on Empty
+    // Planes), so smoke cannot cover this -- only this unit test can.
+    expect(routeCellHref("EWR", "DJT")).toBe("/route/DJT-EWR");
     expect(routeCellHref("JFK", "LAX")).toBe("/route/JFK-LAX");
   });
 });
@@ -202,12 +208,14 @@ describe("runPreset (real database)", () => {
     // the Empty Planes coverage alone.
     //
     // limit 5, not 1: unlike Empty Planes (sorted BY the measure the floor bounds), Death
-    // Watch sorts by health_score, which is only weakly correlated with gauge size -- on this
-    // warehouse the single worst-health_score row already happens to clear 50 seats, so a
-    // limit-1 version of this test does not go red when the floor is deleted (verified by
-    // running that exact mutant; task-5-report.md). The THIRD-worst row without the floor
-    // carries gauge_t12 ~= 10.65 and would appear inside a top-5, which is what makes this
-    // limit red for the right reason.
+    // Watch sorts by health_score, which is only weakly correlated with gauge size, so WHICH
+    // rank first exposes a sub-50 row is a property of the data, not of the rule -- and it moved
+    // under #148. The unfloored top five now read gauge 10.38, 9.65, 75.83, 9.00, 75.32, so
+    // ranks 1, 2 and 4 would each redden a limit-1 version today; before the floor change the
+    // worst row happened to clear 50 and only the third did not (verified by running that exact
+    // mutant; task-5-report.md). limit 5 is kept because it is red under BOTH data shapes. A
+    // limit-1 test would have been green by luck for a year and is one refresh from being so
+    // again.
     const p = presetBySlug("death-watch")!;
     const rows = await runPreset(p, "asc", 5);
     expect(rows.length).toBeGreaterThan(0);
@@ -228,9 +236,9 @@ describe("runPreset (real database)", () => {
 // unique per row of that table and which these queries neither join nor aggregate away.
 //
 // THE GRAIN IS A CARRIER-ROUTE PAIR, NEVER A ROUTE, and the tiebreak has to carry both halves:
-// gauge_delta = 0.0 is a single tie run of 887 rows spanning 39 carriers and 800 distinct route
-// pairs, inside which 87 pairs repeat under a DIFFERENT carrier. A fixture keyed on route alone
-// passes against the very bug these tests exist to catch.
+// gauge_delta = 0.0 is a single tie run of 546 rows spanning 27 carriers and 515 distinct route
+// pairs, inside which 31 pairs are flown by more than one carrier. A fixture keyed on route
+// alone passes against the very bug these tests exist to catch.
 
 const QUERIES_DIR = path.join(process.env.UPGAUGE_ROOT ?? process.cwd(), "sql", "03_queries");
 
@@ -312,7 +320,7 @@ describe("preset ORDER BY", () => {
   });
 });
 
-// Any limit above mart_route_health's 8,065 rows returns a preset's whole qualifying set, so
+// Any limit above mart_route_health's 5,611 rows returns a preset's whole qualifying set, so
 // this is not a window a warehouse refresh can slide a tie group out of.
 const WHOLE_QUALIFYING_SET = 100_000;
 
@@ -339,7 +347,7 @@ function tieRuns(rows: WatchRow[], ranked: string): WatchRow[][] {
 // runPreset() against the real database, so it covers the SUBSTITUTED bytes watch_gauge.sql
 // sends to DuckDB, which no text assertion can reach.
 //
-// NOT parameterized over empty-planes, deliberately. That preset has ZERO tie runs in its 4,452
+// NOT parameterized over empty-planes, deliberately. That preset has ZERO tie runs in its 5,205
 // qualifying rows on this warehouse, so a case for it would assert over an empty list -- the
 // vacuous fixture, passing against the bug. Its cover is the ORDER BY property tests above. A
 // future warehouse that gives it a tie is a reason to ADD a case here, never evidence one was

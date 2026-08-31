@@ -47,10 +47,13 @@ export const DEPARTURE_FLOOR = 30;
  *     that did not ask. Reading it as 0 marked 100% of those rows below floor.
  *   - `departures === null` -- it was selected and is UNKNOWABLE: each measure is
  *     `SUM(x) FILTER (WHERE NOT is_quarantined)`, so a wholly-quarantined group sums to NULL.
- *   - `activeMonths` absent -- the row did not come from a pivot at all. /watch's four presets
- *     read `mart_route_health` directly, whose `t12_departures_performed` is a twelve-month sum
- *     with no month count beside it; abstaining is the correct answer there and it is now the
- *     SETTLED rule rather than the refusal it used to be.
+ *   - `activeMonths` absent -- the row did not come from a pivot at all. This is no longer how
+ *     /watch behaves: since #148 `mart_route_health` carries `t12_months_flown`, the four
+ *     presets alias it as `active_months`, and their floor mark is a real division rather than
+ *     an abstention. It comes out false on every preset row because the mart's OWN admission
+ *     gate is this rule (`t12_departures_performed >= 30 * t12_months_flown`), so a row below
+ *     the floor is not in the table to be marked. The branch stays for any future producer that
+ *     supplies a departure count without a month count.
  *
  * This returns `false` rather than throwing on the one shape that IS a producer bug -- a
  * departure count present with no month count beside it. A throw here would surface as a 500
