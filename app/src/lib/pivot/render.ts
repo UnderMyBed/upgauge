@@ -317,6 +317,7 @@ export function renderPivot(
   sql = sql.replace("{{DIM_SELECT}}", () => dimSelect);
   sql = sql.replace("{{MEASURE_SELECT}}", () => measureSelect);
   sql = sql.replace("{{GROUP_BY}}", () => groupBy);
+  sql = sql.replace("{{TIEBREAK}}", () => groupBy);
   sql = sql.replace("{{FILTERS}}", () => filtersSql);
   sql = sql.replace("{{SORT}}", () => sortSql);
   sql = sql.replace("{{MAINLINE_JOIN}}", () => mainlineJoin);

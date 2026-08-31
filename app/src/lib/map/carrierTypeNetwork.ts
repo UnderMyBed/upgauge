@@ -133,17 +133,17 @@ export function carrierTypeNetworkQuery(
 /** Descending by seats, then ascending by the route key -- a TOTAL order, so the same rows in
  * any input order rank identically.
  *
- * This is not defensive tidiness. `render.ts:301` emits `ORDER BY <col> DESC` with NO secondary
- * key, and ties land exactly on the cut: measured over the trailing 12, 31 of the 36 views that
+ * This is not defensive tidiness. Ties land exactly on the cut: measured over the trailing 12, 31 of the 36 views that
  * exceed 400 have a seats tie at `row_number() = 400`. The widest is `OH` x type `638` with 232
  * pairs tied at 76.0 seats, then `9E` x `638` (228), `OO` x `629` (223), `OO` x `530` (211);
  * `DL` x `614`, this file's fixture, is sixth with 164 tied at exactly 160.0. Every figure is
  * measured on the DRAWABLE population this comparator ranks -- quarantined and same-airport
  * groups already removed. "Top 400" is
- * therefore non-deterministic on the SQL side -- which 164 get drawn could change between two
- * runs or two DuckDB versions. Ranking here instead of in SQL makes the result independent of
- * the engine's row order entirely, which is strictly stronger than a SQL tiebreak, and needs no
- * edit to `render.ts` or to its exact `pipeline/pivot.py` mirror.
+ * therefore was non-deterministic on the SQL side -- which 164 got drawn could change between two
+ * runs or two DuckDB versions. #136 has since given the templates a tiebreak, so that side is
+ * deterministic too. Ranking here instead of in SQL remains strictly stronger: it makes the
+ * result independent of the engine's row order entirely, rather than dependent on the query
+ * keeping a guarantee.
  *
  * The tiebreak is the NUMERIC route key, not the airport code: `chart/aircraftMix.ts:341` sets
  * the house precedent for a deterministic tiebreak but reaches for `localeCompare`, which is
@@ -156,9 +156,11 @@ export function carrierTypeNetworkQuery(
  * is present, so this comparator alone decides what is drawn. The key is kept as `seats`
  * because a query that describes itself wrongly is a trap for the next reader.
  *
- * KNOWN, OUT OF SCOPE: an `/explore` permalink for the same filters at `limit = 400` inherits
- * the tiebreak-less `ORDER BY` and so can disagree with this map about which tied routes make
- * the cut. Closing that means editing `render.ts`, its Python mirror and the goldens. */
+ * CLOSED BY #136: an `/explore` permalink for the same filters at `limit = 400` used to inherit
+ * a tiebreak-less `ORDER BY` and could disagree with this map about which tied routes make the
+ * cut. The templates now break ties on the grouping keys ASCENDING -- the same order this
+ * comparator applies to `routeKeyLow` then `routeKeyHigh` -- so the two agree by construction
+ * rather than by luck. */
 function bySeatsThenRouteKey(a: DrawableRoute, b: DrawableRoute): number {
   return (
     b.seats - a.seats || a.routeKeyLow - b.routeKeyLow || a.routeKeyHigh - b.routeKeyHigh

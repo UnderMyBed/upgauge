@@ -539,3 +539,106 @@ def test_filter_value_rejects_a_composite_pair_whose_second_part_is_bad(con):
     """Catches: checking parts[0] only. The first id here is perfectly valid."""
     with pytest.raises(PivotError, match="must be a plain whole number"):
         render_pivot(q(filters=(("route", ("12478-99999999999",)),)), con)
+
+
+# ---------------------------------------------------------------------------------------
+# Deterministic Top-N ordering (#136).
+#
+# `ORDER BY {{SORT}}` alone names ONE measure column, so rows tying on it AT THE LIMIT
+# BOUNDARY were returned in DuckDB's aggregation-merge order -- a permalink could render a
+# different row set across redeploys with no data change. The templates now append the full
+# GROUP BY key set, which is unique per output row by definition of GROUP BY, making the
+# ordering total.
+#
+# These assert the PROPERTY -- every grouping key participates in the ordering -- not a row
+# set. A test pinning today's 25 rows passes under the bug.
+
+
+def _clause(sql: str, keyword: str) -> str:
+    """Return the text of the one `keyword` line in a rendered pivot template."""
+    lines = [ln for ln in sql.splitlines() if ln.startswith(f"{keyword} ")]
+    assert len(lines) == 1, f"expected exactly one {keyword} line, got {lines!r}"
+    return lines[0][len(keyword) + 1 :]
+
+
+def _split_terms(clause: str) -> list[str]:
+    """Split a clause on its TOP-LEVEL commas only.
+
+    `coalesce(m.parent_airline_id, f.op_airline_id)` -- the mainline grouping expression --
+    carries a comma inside parentheses, so a plain `.split(",")` reports it as two terms and
+    every assertion below would compare against nonsense.
+    """
+    terms: list[str] = []
+    depth = 0
+    buf = ""
+    for ch in clause:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0:
+            terms.append(buf.strip())
+            buf = ""
+        else:
+            buf += ch
+    if buf.strip():
+        terms.append(buf.strip())
+    return terms
+
+
+def _order_terms(sql: str) -> list[str]:
+    """ORDER BY terms with any trailing direction keyword removed."""
+    out = []
+    for term in _split_terms(_clause(sql, "ORDER BY")):
+        for suffix in (" DESC", " ASC"):
+            if term.endswith(suffix):
+                term = term[: -len(suffix)]
+        out.append(term.strip())
+    return out
+
+
+@pytest.mark.parametrize(
+    "name,kw",
+    [
+        ("one dimension", dict()),
+        ("two dimensions", dict(dimensions=("op_airline_id", "origin_airport_id"))),
+        ("three dimensions", dict(dimensions=("op_airline_id", "origin_airport_id", "year"))),
+        ("route pair at segment grain", dict(dimensions=("route",))),
+        ("route pair at route grain", dict(grain="route", dimensions=("route",))),
+        ("pair beside a scalar", dict(dimensions=("route", "op_airline_id"))),
+        ("mainline grouping", dict(grouping="mainline")),
+        (
+            "mainline grouping beside a pair",
+            dict(grouping="mainline", dimensions=("route", "op_airline_id")),
+        ),
+        (
+            "sorted by a dimension",
+            dict(sort="op_airline_id", dimensions=("op_airline_id", "origin_airport_id")),
+        ),
+        ("sorted ascending", dict(sort_desc=False)),
+    ],
+)
+def test_order_by_carries_every_grouping_key_so_the_ordering_is_total(con, name, kw):
+    """Every GROUP BY key must also appear in ORDER BY, or ties are broken by merge order.
+
+    The multi-dimension and pair cases are the discriminating ones: a tiebreak that appends
+    only the FIRST grouping key leaves the query non-deterministic whenever the first key
+    ties, and `route` is one dimension carrying TWO columns, so appending "the dimension"
+    rather than its columns is the same bug wearing a disguise.
+    """
+    sql, _ = render_pivot(q(**kw), con)
+    group_terms = _split_terms(_clause(sql, "GROUP BY"))
+    order_terms = _order_terms(sql)
+    missing = [t for t in group_terms if t not in order_terms]
+    assert not missing, (
+        f"{name}: grouping keys {missing!r} never reach ORDER BY, so rows tying on "
+        f"{order_terms[0]!r} at the LIMIT boundary are ordered by DuckDB merge order. "
+        f"GROUP BY={group_terms!r} ORDER BY={order_terms!r}"
+    )
+
+
+def test_the_requested_sort_still_leads_the_ordering(con):
+    """The tiebreak is a SUFFIX. If it sorted first, Top-N would rank by key, not by measure."""
+    sql, _ = render_pivot(q(dimensions=("op_airline_id", "origin_airport_id")), con)
+    assert _order_terms(sql)[0] == "seats"
+    assert _clause(sql, "ORDER BY").startswith("seats DESC,")

@@ -8,8 +8,9 @@
  *
  * That last one is preserved rather than fixed, deliberately. `/airport`'s rendered bytes must
  * not move (`networkGolden.fixture.ts`), and they are a function of the array `runPivot`
- * returns -- whose SQL sorts `seats DESC` with no tiebreak column. Imposing an order here would
- * be a real improvement and a real byte change; the fix belongs upstream, at the query.
+ * returns. That array is now reproducible: #136 gave the pivot templates a tiebreak, so the query
+ * no longer leaves tied rows to DuckDB's merge order. Imposing a second order here would still be
+ * a byte change, now for no remaining correctness gain, so the caller's order stands.
  *
  * Contract: `docs/design/system.md` § The map § Arc encoding.
  */

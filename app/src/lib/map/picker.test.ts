@@ -78,9 +78,9 @@ describe("pickerOptions", () => {
   });
 
   it("breaks a seats tie on the value, so two loads of tied rows agree", () => {
-    // The pivot's ORDER BY seats DESC carries no tiebreak column, so tied seats are
-    // SQL-unspecified and two runs can list them differently (segmentMap.ts states the same
-    // rule for node emission order). Fed in DESCENDING value order, a dropped tiebreak leaves
+    // This comparator must not depend on how its rows were produced (segmentMap.ts states the
+    // same rule for node emission order); #136 gave the pivot a tiebreak of its own, and this
+    // one has to hold for any caller regardless. Fed in DESCENDING value order, a dropped tiebreak leaves
     // them there -- V8's sort is stable -- so only the SEQUENCE distinguishes correct here.
     const tied = pickerOptions({
       rows: [

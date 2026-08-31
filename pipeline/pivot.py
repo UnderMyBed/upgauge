@@ -519,6 +519,7 @@ def render_pivot(q: PivotQuery, con: duckdb.DuckDBPyConnection) -> tuple[str, di
     sql = sql.replace("{{DIM_SELECT}}", dim_select)
     sql = sql.replace("{{MEASURE_SELECT}}", measure_select)
     sql = sql.replace("{{GROUP_BY}}", group_by)
+    sql = sql.replace("{{TIEBREAK}}", group_by)
     sql = sql.replace("{{FILTERS}}", filters_sql)
     sql = sql.replace("{{SORT}}", sort_sql)
     sql = sql.replace("{{MAINLINE_JOIN}}", mainline_join_sql)
