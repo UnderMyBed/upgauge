@@ -185,6 +185,7 @@ STATED: dict[str, tuple[str, ...]] = {
     # and `pairs` are different questions and both are gated -- stating one as the other is the
     # defect #146 closed.
     "route_health_rows": (
+        "app/smoke.sh",
         "app/src/app/watch/[preset]/page.test.tsx",
         "app/src/app/watch/[preset]/page.tsx",
         "app/src/lib/watch.test.ts",
