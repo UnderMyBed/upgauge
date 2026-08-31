@@ -11,7 +11,7 @@ import { resolutionKey, displayValue, resolveFilterValues, type Resolved } from 
 import { routeHrefFromCodes } from "@/lib/entityLink";
 import { ExplorerBuilder } from "@/components/builder/ExplorerBuilder";
 import { exploreHref } from "@/lib/pivot/builder";
-import { RECOVERY_HREF, RECOVERY_QUERY } from "@/lib/pivot/recovery";
+import { recoveryHref, recoveryQuery } from "@/lib/pivot/recovery";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import type { PivotQuery } from "@/lib/pivot/types";
@@ -232,20 +232,24 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
             <p role="alert">{e.message}</p>
             <p>
               Nothing was guessed from it. Fix the offending key above and reload, or start
-              from <a href={RECOVERY_HREF}>a known-valid query</a>.
+              from <a href={recoveryHref(asOf)}>a known-valid query</a>.
             </p>
             {/* THE STATE A BUILDER IS WORTH THE MOST, and the one an "insert it above the
                 results table" implementation skips without noticing: `decode()` threw, so there
                 is no `query` to mutate and nothing to render a table from. Seeded from
-                RECOVERY_QUERY -- the same constant the escape link above encodes, and the same
-                one the other seven dead-end surfaces in this product offer -- so every chip here
-                is a working way out of a permalink the reader cannot fix by hand, not just the
-                single one that link offers.
+                `recoveryQuery(asOf)` -- the same query the escape link above encodes, and the
+                same one the other eight dead-end surfaces in this product offer -- so every chip
+                here is a working way out of a permalink the reader cannot fix by hand, not just
+                the single one that link offers. It takes THIS render's `asOf` -- the one handed
+                to the builder below -- so the seeded window and the window every chip is computed
+                against cannot disagree. They did while this was a frozen constant: the seed said
+                2026-04 while `asOf` said 2026-05, so the builder's own "Trailing 12" chip was
+                not marked current on the query it had just been seeded with (#145).
 
-                `resolved` is empty and that is exact, not a shortcut: RECOVERY_QUERY carries no
-                filters, so there is no id to resolve and no query to run for one. */}
+                `resolved` is empty and that is exact, not a shortcut: the recovery query carries
+                no filters, so there is no id to resolve and no query to run for one. */}
             <ExplorerBuilder
-              query={RECOVERY_QUERY}
+              query={recoveryQuery(asOf)}
               allowlist={allowlist}
               asOf={asOf}
               resolved={new Map()}

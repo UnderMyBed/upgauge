@@ -9,7 +9,7 @@ import {
   setGrain,
 } from "@/lib/pivot/builder";
 import { decodeRequest } from "@/lib/pivot/bounds";
-import { RECOVERY_HREF } from "@/lib/pivot/recovery";
+import { recoveryHref } from "@/lib/pivot/recovery";
 import { GRAINS, type Grain, type PivotQuery } from "@/lib/pivot/types";
 import { rawPathFromHeaders } from "@/lib/rawPath";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
@@ -173,7 +173,7 @@ export async function NotFoundView({
         ) : null}
         <p>
           Start from{" "}
-          <a href={RECOVERY_HREF}>
+          <a href={recoveryHref(asOf)}>
             the Explorer
           </a>
           .

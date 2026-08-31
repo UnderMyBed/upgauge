@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { MAX_LIMIT, checkBounds, checkSpelling, decodeRequest } from "@/lib/pivot/bounds";
 import { decode, UrlStateError } from "@/lib/pivot/urlstate";
@@ -381,10 +381,10 @@ describe("bare decode() is untouched -- the port stays an exact port", () => {
  * already SHIPPED would break links that are, by this project's own framing, the entire growth
  * mechanic and are already sitting in forum posts.
  *
- * Two corpora, both derived rather than restated. The goldens are the frozen codec contract;
- * the hardcoded hrefs are what the app actually serves to a reader today -- found by scanning
- * the source, not by copying eight strings into this file, because a copy rots silently the
- * moment someone edits a page and this test would then guard a URL nobody serves. */
+ * ONE corpus now, and it is the durable one: the goldens, the frozen codec contract. The second
+ * corpus this file used to derive -- every hand-spelled `/explore?` literal under `app/src/app`
+ * -- no longer exists, because the app no longer hand-spells one. The note below records where
+ * that half of the coverage went and why it was deleted rather than pinned at zero. */
 describe("no permalink this app has shipped becomes unreadable", () => {
   const REPO = path.resolve(__dirname, "../../../..");
   const urlstateGoldens = JSON.parse(
@@ -398,64 +398,30 @@ describe("no permalink this app has shipped becomes unreadable", () => {
     }
   });
 
-  /** Every `/explore?...` literal in a page or component, with adjacent-string concatenation
-   * (`"a" + "b"`, which the front door's SAMPLE uses) rejoined first -- without that the scan
-   * silently truncates that one to its first half and "passes" against a URL it never tested. */
-  function hardcodedPermalinks(): string[] {
-    const dir = path.join(REPO, "app/src/app");
-    const found: string[] = [];
-    const walk = (d: string) => {
-      for (const entry of readdirSync(d, { withFileTypes: true })) {
-        const full = path.join(d, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else if (/\.tsx?$/.test(entry.name) && !entry.name.includes(".test.")) {
-          const src = readFileSync(full, "utf8").replace(/"\s*\+\s*"/g, "");
-          for (const m of src.matchAll(/\/explore\?([^"'`\s]+)/g)) {
-            // Anything carrying a brace is INTERPOLATED, not a literal: a template-literal
-            // href (`/explore?${encode(query)}`) is built from a PivotQuery this app just
-            // constructed, so its admissibility is a property of the builder rather than of a
-            // string -- and `encode()` round-trips through `decode()` by contract. The JSX
-            // permalink bar (`/explore?{permalink}`) is the same case. Only hand-written
-            // literals need this scan.
-            if (!m[1].includes("{")) found.push(m[1]);
-          }
-        }
-      }
-    };
-    walk(dir);
-    return found;
-  }
-
-  it("finds the hardcoded permalinks at all -- a scan matching nothing passes vacuously", () => {
-    // ONE literal is left in this tree, and this pin is what refuses a second.
-    //
-    // Eight of the nine were the SAME recovery permalink, hand-spelled: `/search`,
-    // `/explore/filter/:dim` and its 404, and the five entity and `/watch` 404s. #140 moved
-    // them onto `lib/pivot/recovery.ts`, which puts them out of this scan's reach -- an
-    // interpolated href is skipped by construction -- so their coverage MOVED rather than being
-    // decremented, exactly as the note this comment replaces required:
-    //
-    //   `recovery.test.ts`          pins both hrefs to their exact strings and asserts
-    //                               `decodeRequest` admits them -- what this scan did.
-    //   `recoveryLink.callsites`    renders every dead-end surface and asserts each emits the
-    //                               constant -- the drift this scan could NEVER see, because a
-    //                               call site can diverge to a different query that still
-    //                               decodes perfectly well.
-    //
-    // The survivor is the front door's SAMPLE, a genuinely different query (four measures, to
-    // show the gauge rail its prose promises) with a different job -- a showcase, not an escape
-    // hatch. Driving it through the constant too would take this count to zero and make the loop
-    // below vacuous, which is the failure this test exists to name.
-    //
-    // So this number now guards ONE thing, and it is a real thing: a ninth hand-spelled
-    // permalink appearing anywhere under `app/src/app` takes it to 2. Reverting any of the eight
-    // to its literal -- byte-identical, invisible to every render test -- reddens HERE.
-    expect(hardcodedPermalinks().length).toBe(1);
-  });
-
-  it("accepts every hardcoded /explore permalink the app serves", () => {
-    for (const qs of hardcodedPermalinks()) {
-      expect(() => decodeRequest(qs, FIXTURE), `hardcoded permalink: ${qs}`).not.toThrow();
-    }
-  });
+  /** THE HAND-SPELLED-PERMALINK SCAN LIVED HERE, AND IS GONE (#145) -- not pinned at zero.
+  *
+  * It read every `/explore?` literal under `app/src/app`, pinned how many remained, and asserted
+  * `decodeRequest` still admitted each one. Nine literals became one when #140 moved the eight
+  * recovery links onto a shared module; #145 moved the last one -- the front door's SAMPLE -- for
+  * the same reason, because it froze `t=2025-05:2026-04` in source under prose calling it "the
+  * trailing 12 months".
+  *
+  * With no subject left, the scan had to GO rather than assert `toBe(0)`: a count pinned at zero
+  * makes the loop beneath it iterate nothing, so both tests pass having compared nothing, and every
+  * later reader reads them as coverage. Deletable-green is the exact failure that scan was written
+  * to prevent -- this file's own comment named it -- so applying the rule to the scan itself is the
+  * only consistent end for it.
+  *
+  * WHERE THE COVERAGE WENT, both halves of it, each beside the query it now describes:
+  *
+  *   recovery.test.ts              the recovery href's exact bytes at named months, and that
+  *                                 `decodeRequest` admits them -- swept over a range of `asOf`,
+  *                                 since the window is derived rather than written out.
+  *   app/src/app/page.test.tsx     the same two properties for the front door's sample, plus the
+  *                                 four measures that make it a showcase and not the recovery query.
+  *   recoveryLink.callsites.test.tsx  every dead-end surface AND the front door, rendered, pinned
+  *                                 against the LIVE `dataAsOf()` -- the drift no admissibility
+  *                                 check can see, because a drifted query still decodes.
+  *
+  * The goldens above stay: they are the frozen codec contract, and no refactor moves them. */
 });

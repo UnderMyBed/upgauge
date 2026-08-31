@@ -11,7 +11,7 @@ import {
   removeFilterValue,
 } from "@/lib/pivot/builder";
 import { decodeRequest } from "@/lib/pivot/bounds";
-import { RECOVERY_HREF } from "@/lib/pivot/recovery";
+import { recoveryHref } from "@/lib/pivot/recovery";
 import { normalizeQuery, PivotError, type PivotQuery } from "@/lib/pivot/types";
 import { UrlStateError } from "@/lib/pivot/urlstate";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
@@ -208,7 +208,7 @@ function UnreadableQuery({ asOf, message }: { asOf: string; message: string }) {
         <p>
           A value list is scoped to the query that opened it, so there is nothing to list until
           this permalink parses. Fix the offending key and reload, or start from{" "}
-          <a href={RECOVERY_HREF}>a known-valid query</a>
+          <a href={recoveryHref(asOf)}>a known-valid query</a>
           .
         </p>
       </main>

@@ -24,9 +24,12 @@
 //
 // These are REAL renders of the REAL views against the REAL warehouse -- no mocks. Each view
 // takes its request-derived value as a prop precisely so this is possible (`lib/rawPath.ts`).
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
-import { AIRCRAFT_RECOVERY_HREF, RECOVERY_HREF } from "@/lib/pivot/recovery";
+import { aircraftRecoveryHref, recoveryHref } from "@/lib/pivot/recovery";
+import { dataAsOf } from "@/lib/db";
+import { trailing12From } from "@/lib/entityFacts";
+import Home, { sampleHref } from "@/app/page";
 import { SearchView } from "@/app/search/page";
 import { ExploreView } from "@/app/explore/page";
 import { FilterListView } from "@/app/explore/filter/[dim]/page";
@@ -39,6 +42,26 @@ import { NotFoundView as WatchNotFound } from "@/app/watch/[preset]/not-found";
 
 const GOOD = "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op";
 const UNREADABLE = "v=1&k=seg&d=nope&m=seats&t=2025-05:2026-04&n=5&g=op";
+
+// THE LIVE WINDOW, READ FROM THE WAREHOUSE THIS SERVER ACTUALLY SERVES FROM (#145).
+//
+// The recovery query's window was frozen in source at `t=2025-05:2026-04` while the product's
+// prose called it "the trailing 12 months". It stayed ADMISSIBLE as BTS advanced -- inside the
+// dataset window, so no gate reddened -- and simply stopped being what it was described as. On
+// the warehouse this suite runs against it was already a month stale.
+//
+// So every expectation below is derived from `dataAsOf()`, not written out. A literal here would
+// have to be re-measured every ingest and would rot exactly the way the constant it replaced did.
+// `recovery.test.ts` pins the DERIVATION at fixed months with no database; this file is the half
+// that can see the live value, which is the half that was wrong.
+let ASOF: string;
+let RECOVERY: string;
+let AIRCRAFT_RECOVERY: string;
+beforeAll(async () => {
+  ASOF = await dataAsOf();
+  RECOVERY = recoveryHref(ASOF);
+  AIRCRAFT_RECOVERY = aircraftRecoveryHref(ASOF);
+});
 
 /** Every Explorer-permalink href this render emitted, in document order.
  *
@@ -58,14 +81,14 @@ async function permalinksOf(view: Promise<React.ReactElement>): Promise<string[]
 describe("every dead-end surface offers the one recovery permalink", () => {
   it("/search's no-match state", async () => {
     expect(await permalinksOf(SearchView({ q: "zzzznotarealthing9999" }))).toEqual([
-      RECOVERY_HREF,
+      RECOVERY,
     ]);
   });
 
   it("/explore/filter/:dim's unreadable-permalink state", async () => {
     expect(
       await permalinksOf(FilterListView({ rawQuery: UNREADABLE, dim: "op_airline_id" })),
-    ).toEqual([RECOVERY_HREF]);
+    ).toEqual([RECOVERY]);
   });
 
   it("/explore/filter/:dim's 404", async () => {
@@ -73,24 +96,24 @@ describe("every dead-end surface offers the one recovery permalink", () => {
       await permalinksOf(
         FilterNotFound({ pathname: "/explore/filter/not_a_dimension", rawQuery: GOOD }),
       ),
-    ).toEqual([RECOVERY_HREF]);
+    ).toEqual([RECOVERY]);
   });
 
   it("/route's 404", async () => {
     expect(await permalinksOf(RouteNotFound({ pathname: "/route/ZZZZ-LAX" }))).toEqual([
-      RECOVERY_HREF,
+      RECOVERY,
     ]);
   });
 
   it("/carrier's 404", async () => {
     expect(await permalinksOf(CarrierNotFound({ pathname: "/carrier/ZZ" }))).toEqual([
-      RECOVERY_HREF,
+      RECOVERY,
     ]);
   });
 
   it("/airport's 404", async () => {
     expect(await permalinksOf(AirportNotFound({ pathname: "/airport/ZZZZ" }))).toEqual([
-      RECOVERY_HREF,
+      RECOVERY,
     ]);
   });
 
@@ -98,7 +121,7 @@ describe("every dead-end surface offers the one recovery permalink", () => {
   // all -- a fixture pointed there would assert nothing while looking like it asserted something.
   // The recovery paragraph is the null-slug branch, which a non-`/watch` path reaches.
   it("/watch's 404, on the branch that actually offers a way out", async () => {
-    expect(await permalinksOf(WatchNotFound({ pathname: "/explore" }))).toEqual([RECOVERY_HREF]);
+    expect(await permalinksOf(WatchNotFound({ pathname: "/explore" }))).toEqual([RECOVERY]);
   });
 
   // `/aircraft` OFFERS ITS OWN VARIANT, AND THAT IS DELIBERATE (lib/pivot/recovery.ts): a reader
@@ -107,7 +130,7 @@ describe("every dead-end surface offers the one recovery permalink", () => {
   // exactly the mutant that collapses the variant away.
   it("/aircraft's 404 offers the aircraft-type variant", async () => {
     expect(await permalinksOf(AircraftNotFound({ pathname: "/aircraft/NOPE-1" }))).toEqual([
-      AIRCRAFT_RECOVERY_HREF,
+      AIRCRAFT_RECOVERY,
     ]);
   });
 
@@ -117,14 +140,32 @@ describe("every dead-end surface offers the one recovery permalink", () => {
   // swept into the constant along with it.
   it("/aircraft's ambiguous 404 keeps its candidate permalinks distinct from the recovery one", async () => {
     const hrefs = await permalinksOf(AircraftNotFound({ pathname: "/aircraft/CE-180" }));
-    expect(hrefs.at(-1)).toBe(AIRCRAFT_RECOVERY_HREF);
+    expect(hrefs.at(-1)).toBe(AIRCRAFT_RECOVERY);
     const candidates = hrefs.slice(0, -1);
     expect(candidates.length).toBe(2);
     for (const c of candidates) {
       expect(c).toContain("f=aircraft_type:");
-      expect(c).not.toBe(AIRCRAFT_RECOVERY_HREF);
-      expect(c).not.toBe(RECOVERY_HREF);
+      expect(c).not.toBe(AIRCRAFT_RECOVERY);
+      expect(c).not.toBe(RECOVERY);
     }
+  });
+
+  // THE ONE ASSERTION IN THIS FILE THAT IS NOT DERIVED FROM `recoveryHref` ITSELF.
+  //
+  // Every case above compares a rendered href to `recoveryHref(ASOF)` -- which is exactly right for
+  // the property they own (a call site drifting to a DIFFERENT query), and structurally blind to
+  // the property #145 was about: if `recoveryHref` froze its window again, both sides of those
+  // comparisons would freeze together and every one of them would stay green. Measured, not
+  // reasoned: re-freezing `recoveryQuery` to `t=2025-05:2026-04` reddens `recovery.test.ts` and
+  // leaves all nine cases above passing.
+  //
+  // So the window is re-derived here from the OTHER owner -- `entityFacts.trailing12From` over the
+  // live `dataAsOf()` -- and read off a REAL rendered surface, which is what makes this the check
+  // that can see the shipped defect: the served href really did end 2026-04 against a 2026-05
+  // warehouse.
+  it("emits a window that really is the live trailing 12, not merely a self-consistent one", async () => {
+    const [href] = await permalinksOf(CarrierNotFound({ pathname: "/carrier/ZZ" }));
+    expect(href).toContain(`t=${trailing12From(ASOF)}:${ASOF}`);
   });
 
   // `/explore`'s own error state is the surface the other eight were copied from, so it belongs
@@ -135,6 +176,25 @@ describe("every dead-end surface offers the one recovery permalink", () => {
     const { container } = render(await ExploreView({ rawQuery: UNREADABLE }));
     const escape = container.querySelector(".error-page a");
     expect(escape, "no escape link on the error page").not.toBeNull();
-    expect(escape!.getAttribute("href")).toBe(RECOVERY_HREF);
+    expect(escape!.getAttribute("href")).toBe(RECOVERY);
+  });
+});
+
+// THE FRONT DOOR IS IN THIS MATRIX, and it is here to assert the OPPOSITE of every case above.
+//
+// Its sample is DELIBERATELY not the recovery query (app/page.tsx): it selects four measures,
+// because the prose beside it promises the gauge rail and the reason-code gutter, and a
+// single-measure query renders neither. A showcase, not an escape hatch. That divergence is the
+// kind a "start from a known-valid query" sweep collapses by accident -- so the guard that it
+// stays divergent belongs in the file that exists to catch one call site drifting onto another's
+// query, not only in the front door's own test.
+describe("the front door's sample is its own query, not the recovery one", () => {
+  it("offers the live sample href and NOT the recovery href", async () => {
+    const { container } = render(await Home());
+    const hrefs = [...container.querySelectorAll("a")]
+      .map((a) => a.getAttribute("href") ?? "")
+      .filter((h) => h.startsWith("/explore?"));
+    expect(hrefs).toEqual([sampleHref(ASOF)]);
+    expect(hrefs[0]).not.toBe(RECOVERY);
   });
 });
