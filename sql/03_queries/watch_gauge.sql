@@ -25,5 +25,33 @@ SELECT
 FROM mart_route_health
 WHERE route_key_low <> route_key_high
   AND gauge_delta IS NOT NULL
-ORDER BY gauge_delta {{DIRECTION}}
+--
+-- The ORDER BY carries mart_route_health's whole grain as a tiebreak. gauge_delta alone is ONE
+-- column, so rows tying on it AT THE LIMIT BOUNDARY are returned in DuckDB's merge order rather
+-- than by the query -- the same class of gap #136 closed for the pivot templates. The grain,
+-- (op_airline_id, route_key_low, route_key_high), is 200_mart_route_health.sql's own GROUP BY
+-- and is unique per row of that table (8,065 rows, 8,065 distinct triples, no NULL in any of the
+-- three); these presets neither join nor aggregate, so one output row is one mart row and
+-- appending the triple makes the ordering total. It is a SUFFIX -- gauge_delta still ranks.
+--
+-- ALL THREE COLUMNS, never the route pair alone, and here that is measured rather than argued:
+-- gauge_delta = 0.0 is a SINGLE tie run of 887 rows spanning 39 carriers and 800 distinct route
+-- pairs, inside which 87 pairs repeat under a DIFFERENT carrier. A route-only tiebreak leaves
+-- those 87 in merge order -- still nondeterministic, and green against any fixture keyed on
+-- route alone. The grain is a carrier-route PAIR, never a route.
+--
+-- The tiebreak is written LITERALLY rather than as a second substituted token, and that is the
+-- point. The pivot templates need a token because their GROUP BY varies per query; this grain is
+-- fixed, so a constant string does the whole job and there is no second substitution site for
+-- Python's replace-EVERY-occurrence to diverge from JavaScript's replace-only-the-FIRST. This
+-- file still carries exactly one direction token outside its comments, which is what
+-- substituteDirection() (app/src/lib/watch.ts) requires of it.
+--
+-- ASCENDING in BOTH directions: this is an identity key, not a ranking. Making it follow the
+-- direction token would create precisely the second substitution site the paragraph above
+-- exists to avoid, and ascending is the order 200_mart_route_health.sql stores its rows in.
+--
+-- Ties are real in this data, not hypothetical: 16 tie runs covering 919 of the 7,391
+-- qualifying rows.
+ORDER BY gauge_delta {{DIRECTION}}, op_airline_id, route_key_low, route_key_high
 LIMIT $limit

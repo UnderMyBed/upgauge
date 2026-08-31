@@ -1,4 +1,5 @@
--- Route Death Watch. health_score ascending, NULLS LAST.
+-- Route Death Watch. health_score ascending, NULLS LAST, then the mart's own grain so the
+-- ordering is total -- see the ORDER BY.
 --
 -- NULLS LAST is currently a NO-OP, not load-bearing: the WHERE clause below already excludes
 -- every NULL health_score before ORDER BY ever runs, so there is no NULL left in the sorted
@@ -32,5 +33,13 @@ FROM mart_route_health
 WHERE route_key_low <> route_key_high
   AND health_score IS NOT NULL
   AND gauge_t12 >= 50
-ORDER BY health_score ASC NULLS LAST
+--
+-- ORDER BY carries the mart's whole grain -- (op_airline_id, route_key_low, route_key_high) --
+-- as a tiebreak, because health_score alone is ONE column and rows tying on it AT THE LIMIT
+-- BOUNDARY would otherwise come back in DuckDB's merge order rather than by the query. All
+-- three columns, never the route pair alone: the grain is a carrier-route PAIR. watch_gauge.sql
+-- carries the full rule and the measurement that proves route alone is not total.
+--
+-- Ties are real here even on a float score: 2 tie runs covering 9 of the 6,630 qualifying rows.
+ORDER BY health_score ASC NULLS LAST, op_airline_id, route_key_low, route_key_high
 LIMIT $limit
