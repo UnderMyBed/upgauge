@@ -570,6 +570,23 @@ def test_the_gate_is_triggered_by_a_pr_touching_either_half_of_the_fixture():
         assert half in paths, f"a PR touching {half} would not reach this gate"
 
 
+def test_the_gate_fires_on_the_python_inputs_the_image_rebuild_reads():
+    """The Dockerfile's `warehouse` stage rebuilds the marts from `sql/02_marts/` (#158), so the
+    Python toolchain became an image input: `uv.lock` decides which DuckDB builds them,
+    `pyproject.toml` which interpreters are admissible, and `pipeline/marts.py` is the builder
+    itself. A change to any of them alters what the container serves.
+
+    Absent from the filter each one reaches `main` with no container build at all -- the same
+    silently-disabled-gate shape the test below is about, arriving from the other direction: not
+    a filter entry matching no file, but a file no filter entry matches."""
+    paths = _triggers(_doc(GATE))["pull_request"]["paths"]
+    for entry in ("pyproject.toml", "uv.lock", "pipeline/marts.py"):
+        assert entry in paths, (
+            f"{entry} is an input to the image's mart rebuild, but a PR touching it would not "
+            f"reach the container gate"
+        )
+
+
 def test_every_path_the_gate_filters_on_exists():
     """A `paths:` entry that matches no file is a silently disabled gate -- it fires on nothing
     and reports nothing, and no run appears anywhere to suggest something is wrong. This repo's

@@ -17,6 +17,20 @@
 # `mise.toml`'s `node` (24.19.0 today) so the container runs the Node the gates ran against. Do not
 # "fix" the tag-vs-digest inconsistency without deciding the patching question first.
 ARG NODE_VERSION=24.19.0
+# The `warehouse` stage below rebuilds the marts, so it needs the same Python toolchain `make
+# build` runs under everywhere else. Both are a second statement of a `mise.toml` pin, exactly as
+# NODE_VERSION is, and all three are asserted equal to it by
+# `pipeline/tests/test_mart_rebuild.py` -- the Dockerfile comment above and
+# image-contract.yml's `mise.toml` path entry both claimed that equality for NODE_VERSION with
+# nothing testing it. An image that builds its marts on a different DuckDB than the gates ran
+# under proves one thing in CI and serves another.
+ARG PYTHON_VERSION=3.12.12
+ARG UV_VERSION=0.12.0
+
+# --------------------------------------------------------------------- uv
+# The uv binary alone, by its own pinned tag -- the pattern uv documents for containers. Not
+# `pip install uv` (there is no Python in node:*-slim to pip with) and not a curl-pipe-to-shell.
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uvbin
 
 # --------------------------------------------------------------------- warehouse
 # The image's data comes from the published release asset, the same producer CI restores, so
@@ -26,7 +40,7 @@ ARG WAREHOUSE_TAG
 ARG WAREHOUSE_REPO=UnderMyBed/upguage
 WORKDIR /w
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl zstd \
+ && apt-get install -y --no-install-recommends ca-certificates curl zstd make \
  && rm -rf /var/lib/apt/lists/*
 RUN test -n "${WAREHOUSE_TAG}" \
  || { echo "FAIL: --build-arg WAREHOUSE_TAG is required (e.g. warehouse-2026.04)"; exit 1; }
@@ -43,6 +57,51 @@ RUN test -d data/parquet  || { echo "FAIL: data/parquet not at the tarball root"
 # data/raw is 156 MB of audit trail and ships as its OWN release asset. If it ever appears here,
 # the wrong asset was fetched.
 RUN test ! -e data/raw || { echo "FAIL: data/raw is in the warehouse asset"; exit 1; }
+
+# ---- and then REBUILD the marts from THIS COMMIT's sql/, because they are not the asset's to
+# carry. `mart_route_health` and the other nine objects are a pure function of data/parquet plus
+# sql/02_marts/ (pipeline/marts.py's build_database reads the existing upgauge.duckdb not at all
+# -- it builds a staging file and renames over it), and sql/ ships with the code while the asset
+# republishes only when BTS advances a month. Baked, a mart change could not reach production
+# until then: measured, sql/'s mart SQL plus one new column raised `BinderException: Referenced
+# column "t12_months_flown" not found in FROM clause!` against warehouse-2026.05. The shape that
+# failure takes in a container is the worst this repo names -- every /watch/<preset> 500s under
+# HTML_CACHE while /api/health reports ok, since health_catalog.sql asks that table for only
+# op_airline_id and health_score.
+#
+# EVERYTHING BELOW IS BUILDER-ONLY. This stage is discarded; `runtime` is node:*-slim and stays
+# Node-only, per CLAUDE.md ("pipeline/: CI only, never runs in prod"). No COPY in `runtime`
+# names pipeline/, pyproject.toml, uv.lock or this uv binary, and
+# pipeline/tests/test_mart_rebuild.py asserts that per stage rather than by grepping the file.
+#
+# ORDER IS DELIBERATE. The curl and tar layers above depend only on WAREHOUSE_TAG, so they stay
+# ahead of every COPY here -- an edit to sql/ or pipeline/ invalidates from `COPY sql` down and
+# does NOT re-download the release asset.
+ARG PYTHON_VERSION
+COPY --from=uvbin /uv /usr/local/bin/uv
+# UV_MANAGED_PYTHON, because there is no system interpreter here at all: uv fetches the exact
+# CPython mise pins rather than resolving `>=3.12,<3.13` to whatever it finds. UV_NO_SYNC and
+# UV_FROZEN so the `uv run` inside `make build` neither re-locks nor re-installs -- the sync
+# below is the one and only resolution, and it is uv.lock's (duckdb==1.5.5), so this image's
+# marts are built by the DuckDB every gate ran against.
+ENV UV_PYTHON=${PYTHON_VERSION} \
+    UV_MANAGED_PYTHON=1 \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
+    UV_NO_SYNC=1 \
+    UV_FROZEN=1
+COPY pyproject.toml uv.lock ./
+# --no-install-project: the marts need duckdb, not a built wheel of `pipeline`. `python -m`
+# puts the CWD on sys.path, so /w/pipeline imports directly.
+RUN uv sync --frozen --no-dev --no-install-project
+COPY Makefile ./
+COPY sql ./sql
+COPY pipeline ./pipeline
+# `make build MISE=`, never a re-spelling of the command. Makefile:8 declares that override for
+# this exact case ("Set MISE= to bypass when the tools are already on PATH, e.g. inside the
+# Docker image"), so there is one definition of what building the marts means rather than two
+# that drift. --parquet-dir defaults to the RELATIVE `data/parquet`, which marts.py requires:
+# DuckDB resolves it against the process CWD, which is this stage's /w.
+RUN make build MISE=
 
 # --------------------------------------------------------------------- deps
 FROM node:${NODE_VERSION}-slim AS deps

@@ -232,21 +232,28 @@ first-token rename on `fct_segment_month` turns it red, and so does one at route
 type of the dimension's underlying fact column, joined live from `duckdb_columns()` against the
 FIRST token of `column_expr`, resolved on `fct_segment_month`.
 
-**Where it is computed is a deployment constraint, not a preference.** A column added to the
-view exists only in a warehouse asset rebuilt *after* that change — and `warehouse.yml` publishes
-only when BTS advances a month, while the container copies a prebuilt asset (`WAREHOUSE_TAG`). A
-view-side column therefore makes new app code unrunnable against every already-published asset:
-measured, CI against `warehouse-2026.05` raised `Binder Error: Referenced column "value_type" not
-found in FROM clause!` from three separate jobs. Computing it in the QUERY makes the schema part
-of the code, which is what it is, and `duckdb_columns()` reflects whatever fact tables the asset
-actually carries. Which dimensions we
-offer is a product decision; a column's *width* is a schema fact, and a hand-copied schema fact
-rots. It exists so a filter value can be rejected at render time: a filter compiles to `col IN
+**Where it is computed is a statement about what KIND of fact it is.** Which dimensions we offer
+is a product decision; a column's *width* is a schema fact, and a hand-copied schema fact rots.
+Computing it in the QUERY makes the schema part of the code, which is what it is, and
+`duckdb_columns()` reads whatever fact tables the built catalog actually carries — so the bound
+tracks the column rather than anyone's memory of it, and a `fct_segment_month` whose types moved
+cannot disagree with a curated copy. It exists so a filter value can be rejected at render
+time: a filter compiles to `col IN
 ($p)` with the value bound as a VARCHAR parameter, so an integer column handed a value it
 cannot cast throws a Conversion Error at EXECUTION — after `proxy.ts` has resolved cacheability
 and written `Cache-Control`. The join is an INNER JOIN deliberately: a renamed fact column
 drops the row entirely and the count test fails, rather than the dimension shipping with no
 bound at all.
+
+**A mart view MAY carry a new column, and what makes that true is a rebuild, not the asset.**
+`sql/02_marts/` is a pure function of `data/parquet` plus that directory, and it is re-run from
+this commit's SQL after every warehouse restore in CI and inside the image's `warehouse` builder
+stage — the release asset carries the facts, the dims and the Parquet, never the schema. So the
+question for any new mart column is only whether it belongs on the view (`value_type` and
+`sort_order` do not, for the reasons stated here and in `../architecture/pipeline.md`), not
+whether the deployment can carry one. If either rebuild is ever removed, that stops being true
+and every mart-schema change becomes unshippable until BTS advances a month:
+`../architecture/hosting.md` § The Dockerfile has the mechanism.
 
 **The type is READ, never inferred from the key name.** `aircraft_type` is `VARCHAR` carrying zero-padded codes (`079`), so a rule
 that guessed "this looks like an id" from the name would re-open the `079` → `79` join break

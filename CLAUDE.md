@@ -237,6 +237,9 @@ Ours is `mainline_group`; theirs is `bts_carrier_group`.
 This is what lets the pipeline and the server share definitions and keeps a DuckDB-WASM port
 possible.
 
+**Marts are rebuilt from `sql/`, never taken from the asset** — CI after the restore, and the image's
+`warehouse` BUILDER. Bake them and a mart change waits for BTS; `pipeline/` never reaches runtime.
+
 **Segment only.** Never blend T-100 Segment with Market or DB1B.
 
 **`data/raw/` is APPEND-ONLY.** Filenames carry the download date

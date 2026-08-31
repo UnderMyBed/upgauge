@@ -218,11 +218,53 @@ one producer for CI, the image, and the portability test.
 
 ### The Dockerfile
 
-Four stages: `warehouse` (fetches and unpacks the published release asset), `deps` (full
+Five stages: `uvbin` (the pinned `uv` binary and nothing else), `warehouse` (fetches and unpacks
+the published release asset, then rebuilds the marts from `sql/`), `deps` (full
 `npm ci`, for the build only), `build` (`next build`; touches no `data/` and no `sql/`, so it
 runs concurrently with `warehouse`), `runtime` (`npm ci --omit=dev` plus the warehouse output
 copied in). `runtime` runs as `USER node` — confirmed: `docker run --rm upgauge:local id` →
 `uid=1000(node) gid=1000(node) groups=1000(node)`. No `output: "standalone"` (§ above).
+
+**The image rebuilds the marts; the asset does not carry them.** `mart_route_health` and the
+other nine database objects are a pure function of `data/parquet` plus `sql/02_marts/` —
+`pipeline/marts.py`'s `build_database` reads the existing `upgauge.duckdb` not at all, it builds
+a staging file and renames over it — while the release asset carries a copy frozen at publish
+time and `warehouse.yml` republishes only when BTS advances a month. Shipping the asset's copy
+therefore froze the served schema to whichever commit happened to be `main` on publish day, and
+the failure it produces is the worst shape this file names: a mart column the app reads but the
+asset lacks 500s **every** `/watch/<preset>` under `HTML_CACHE` — the proxy commits that header
+before the page runs — while `/api/health` keeps reporting **ok**, because `health_catalog.sql`
+asks that table for only `op_airline_id` and `health_score`. The rebuild is `RUN make build
+MISE=` at the end of the `warehouse` stage; `Makefile`'s own `MISE ?=` comment declares that
+override for this case, so there is one definition of building the marts rather than two that
+drift. CI does the same after every warehouse restore
+([pipeline.md](pipeline.md)), so the container and the gates agree about which SQL produced what
+they serve and test.
+
+**The toolchain that does it is BUILDER-ONLY, and that is not a preference.** CLAUDE.md:
+`pipeline/` is "Python 3.12 + uv. CI only, never runs in prod." So `uv`, the interpreter,
+`pyproject.toml`, `uv.lock` and `pipeline/` all enter the `warehouse` stage, which is discarded;
+`runtime` stays `node:*-slim` and copies only `upgauge.duckdb` and `data/parquet` out of it.
+`pipeline/tests/test_mart_rebuild.py` asserts that **per stage** rather than by grepping the
+file — every clause it applies to `runtime` is deliberately true of `warehouse`, so a whole-file
+form of the same test is red against a correct Dockerfile (run, and confirmed red).
+
+**Three pins, one source.** `NODE_VERSION`, `PYTHON_VERSION` and `UV_VERSION` each restate a
+`mise.toml` pin, and all three are asserted equal to it. Until the mart rebuild landed, the
+`NODE_VERSION` equality was claimed in prose by this file, by the Dockerfile's own comment and by
+`image-contract.yml`'s `mise.toml` path entry, and tested nowhere. It matters more now than it
+did: `UV_VERSION` and `PYTHON_VERSION` decide which uv resolves `uv.lock` and which interpreter
+runs `pipeline.marts` inside the image, so a drift there means the container's marts were built
+by a toolchain no gate in this repo ran under. `uv` arrives by `COPY --from` of its own pinned
+image — `node:*-slim` carries no Python to `pip install uv` with, and a curl-pipe-to-shell is the
+wrong trade for a build that already pins everything else. `UV_MANAGED_PYTHON` makes uv fetch
+the exact CPython rather than resolve `>=3.12,<3.13` against whatever it finds, and
+`uv sync --frozen --no-dev --no-install-project` is what pins DuckDB to `uv.lock`'s.
+
+**The `curl`/`tar` layers stay ahead of every `COPY` the rebuild needs.** They depend only on
+`WAREHOUSE_TAG`, so an edit to `sql/` or `pipeline/` invalidates from `COPY sql` downward and
+does **not** re-download the release asset. Ordering, not tidiness: reversed, every mart-SQL
+change would re-fetch the tarball.
 
 **The WORKDIR contract above is asserted at BUILD time, not left for the first query to
 discover.** `warehouse`'s extraction is followed by three `test` assertions — `upgauge.duckdb`
@@ -265,6 +307,13 @@ directions: with the `.dockerignore` entries in place, appending a byte to
 removed, the same append re-runs the stage and changes `.Size`. **No delta is quoted for that
 second half on purpose** — it is whatever two `next build` runs happened to differ by, so it is a
 property of one pair of builds and re-measuring it yields a different number, not a broken rule.
+
+**`**/__pycache__` joins them for the first reason, and only became load-bearing when the
+`warehouse` stage grew its `COPY pipeline ./pipeline`.** Before that, `pipeline/` sat in the
+context and no instruction read it, so whether this host had run pytest changed nothing. It now
+decides that layer's digest, which is the same host-dependence the two entries above exist to
+remove — one level down, in a builder, where the cost is a spuriously busted build cache rather
+than a different image. Nothing in the image reads a `.pyc`; `python -m` recompiles.
 
 **`app/smoke.sh` is `.dockerignore`d too, and it is TRACKED — the second reason a file leaves the
 context is that the build does not need it.** The gate script runs on the *host* in both modes

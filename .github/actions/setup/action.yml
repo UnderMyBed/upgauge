@@ -1,5 +1,5 @@
 name: Set up upguage
-description: Pinned runtimes, installed deps, and a restored warehouse.
+description: Pinned runtimes, installed deps, a restored warehouse, and marts rebuilt from this commit's sql/.
 
 inputs:
   warehouse-tag:
@@ -101,3 +101,31 @@ runs:
         fi
         echo "t100_segment year partitions: $(compgen -G 'data/parquet/t100_segment/year=*/' | wc -l)"
         echo "dims files: $(compgen -G 'data/parquet/dims/*.parquet' | wc -l)"
+
+    # THE MARTS SHIP WITH THE CODE, NOT WITH THE ASSET. `sql/02_marts/` is versioned in this
+    # repository and `mart_route_health` (and the other nine objects) are a pure function of
+    # `data/parquet` plus that directory -- `pipeline/marts.py`'s `build_database` reads the
+    # existing upgauge.duckdb not at all, it builds a staging file and renames over it. The
+    # published asset's own copy of the database is therefore a snapshot of whatever `sql/`
+    # looked like on publish day, and the asset republishes only when BTS advances a month
+    # (warehouse.yml's "Stop if this month is already published"). Without this step every gate
+    # in this repository tests marts that no commit here produced: measured, `sql/`'s current
+    # mart SQL plus one new column raised `BinderException: Referenced column
+    # "t12_months_flown" not found in FROM clause!` against warehouse-2026.05, and no gate
+    # could see it until the next BTS publish.
+    #
+    # AFTER the assert above, never before: this reads data/parquet, which the restore is what
+    # puts there. It is also downstream of `uv sync`, since it runs through uv.
+    #
+    # Costs ~1 s (measured 0.97 s locally against the full 2015-2026 window). The asset still
+    # carries the facts, the dims and the Parquet tree -- the expensive part.
+    #
+    # ONE CONSEQUENCE, benign only while this step is unconditional: actions/cache's post-job
+    # save now stores the REBUILT upgauge.duckdb under `warehouse-<tag>`, so a later run on a
+    # different commit restores that file. Harmless because every consumer rebuilds before
+    # reading it -- but delete this step and CI would test a mart from an arbitrary earlier
+    # commit, which is worse than the baked asset it replaced.
+    # `pipeline/tests/test_mart_rebuild.py` is what holds it here.
+    - name: Rebuild the marts from this commit's sql/
+      shell: bash
+      run: make build
