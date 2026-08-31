@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { MAX_LIMIT, checkBounds, checkSpelling, decodeRequest } from "@/lib/pivot/bounds";
 import { decode, UrlStateError } from "@/lib/pivot/urlstate";
@@ -381,10 +381,9 @@ describe("bare decode() is untouched -- the port stays an exact port", () => {
  * already SHIPPED would break links that are, by this project's own framing, the entire growth
  * mechanic and are already sitting in forum posts.
  *
- * ONE corpus now, and it is the durable one: the goldens, the frozen codec contract. The second
- * corpus this file used to derive -- every hand-spelled `/explore?` literal under `app/src/app`
- * -- no longer exists, because the app no longer hand-spells one. The note below records where
- * that half of the coverage went and why it was deleted rather than pinned at zero. */
+ * Two corpora, both derived rather than restated. The goldens are the frozen codec contract; the
+ * scan below is what the app actually spells by hand today -- found by walking the source, not by
+ * copying strings into this file, because a copy rots silently the moment someone edits a page. */
 describe("no permalink this app has shipped becomes unreadable", () => {
   const REPO = path.resolve(__dirname, "../../../..");
   const urlstateGoldens = JSON.parse(
@@ -398,30 +397,70 @@ describe("no permalink this app has shipped becomes unreadable", () => {
     }
   });
 
-  /** THE HAND-SPELLED-PERMALINK SCAN LIVED HERE, AND IS GONE (#145) -- not pinned at zero.
-  *
-  * It read every `/explore?` literal under `app/src/app`, pinned how many remained, and asserted
-  * `decodeRequest` still admitted each one. Nine literals became one when #140 moved the eight
-  * recovery links onto a shared module; #145 moved the last one -- the front door's SAMPLE -- for
-  * the same reason, because it froze `t=2025-05:2026-04` in source under prose calling it "the
-  * trailing 12 months".
-  *
-  * With no subject left, the scan had to GO rather than assert `toBe(0)`: a count pinned at zero
-  * makes the loop beneath it iterate nothing, so both tests pass having compared nothing, and every
-  * later reader reads them as coverage. Deletable-green is the exact failure that scan was written
-  * to prevent -- this file's own comment named it -- so applying the rule to the scan itself is the
-  * only consistent end for it.
-  *
-  * WHERE THE COVERAGE WENT, both halves of it, each beside the query it now describes:
-  *
-  *   recovery.test.ts              the recovery href's exact bytes at named months, and that
-  *                                 `decodeRequest` admits them -- swept over a range of `asOf`,
-  *                                 since the window is derived rather than written out.
-  *   app/src/app/page.test.tsx     the same two properties for the front door's sample, plus the
-  *                                 four measures that make it a showcase and not the recovery query.
-  *   recoveryLink.callsites.test.tsx  every dead-end surface AND the front door, rendered, pinned
-  *                                 against the LIVE `dataAsOf()` -- the drift no admissibility
-  *                                 check can see, because a drifted query still decodes.
-  *
-  * The goldens above stay: they are the frozen codec contract, and no refactor moves them. */
+  /** Every hand-spelled `/explore?` permalink literal under `app/src/app`, as `<file> => <qs>`.
+   *
+   *  WHAT THIS CATCHES THAT NOTHING ELSE CAN: a NEW one appearing. `recovery.test.ts`,
+   *  `page.test.tsx` and `recoveryLink.callsites.test.tsx` each pin a KNOWN permalink; not one of
+   *  them can see a tenth literal added to some page tomorrow. That is the exact mechanism that
+   *  produced #145's own frozen-window defect, so the scan outlives the literals it was written
+   *  for: it is now an emptiness assertion, and an empty exact-set pin is falsifiable (add a
+   *  literal and it fails), which is the same shape `prefetchPolicy.test.ts`'s KNOWN_PREFETCHING
+   *  and `entityFacts.test.ts`'s declaration pin already use.
+   *
+   *  ANCHORED, and this is load-bearing rather than tidiness. The unanchored form matched PROSE:
+   *  a docstring reading "never a hand-built `/explore?...`" is not a permalink, and pinning the
+   *  raw scan at `[]` would have been red on a comment. So a subject must look like one:
+   *    - a literal `href="/explore?..."` -- an href actually emitted into the markup, or
+   *    - a `/explore?v=1...` prefix -- `encode()` always emits `v` first, so every permalink this
+   *      app has ever hand-spelled starts that way (the front door's old SAMPLE did).
+   *
+   *  Adjacent-string concatenation (`"a" + "b"`, which that SAMPLE used) is rejoined first --
+   *  without it the scan silently truncates such a literal to its first half.
+   *
+   *  Anything carrying a brace is INTERPOLATED, not a literal: a template-literal href
+   *  (`/explore?${encode(query)}`) is built from a PivotQuery this app just constructed, so its
+   *  admissibility is a property of the builder rather than of a string, and `encode()`
+   *  round-trips through `decode()` by contract. The JSX permalink bar (`/explore?{permalink}`)
+   *  is the same case. Only hand-written literals need this scan. */
+  function scanPermalinks(): { hits: string[]; filesScanned: number } {
+    const dir = path.join(REPO, "app/src/app");
+    const hits: string[] = [];
+    let filesScanned = 0;
+    const walk = (d: string) => {
+      for (const entry of readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (/\.tsx?$/.test(entry.name) && !entry.name.includes(".test.")) {
+          filesScanned += 1;
+          const src = readFileSync(full, "utf8").replace(/"\s*\+\s*"/g, "");
+          for (const m of src.matchAll(/href="\/explore\?([^"]*)"|\/explore\?(v=1[^"'`\s]*)/g)) {
+            const qs = m[1] ?? m[2];
+            if (!qs.includes("{")) hits.push(`${path.relative(REPO, full)} => ${qs}`);
+          }
+        }
+      }
+    };
+    walk(dir);
+    return { hits, filesScanned };
+  }
+
+  // BOTH HALVES ARE LOAD-BEARING, exactly as in `prefetchPolicy.test.ts`. Without the
+  // `filesScanned` guard, a walker that silently found nothing -- a moved directory, a changed
+  // extension -- would satisfy the emptiness assertion having read nothing at all.
+  it("walks real files, so an empty result means empty and not broken", () => {
+    expect(scanPermalinks().filesScanned).toBeGreaterThan(20);
+  });
+
+  // ZERO, as an EXACT SET so the failure names the offender and its query string.
+  //
+  // #140 took this from nine literals to one; #145 took the last one -- the front door's SAMPLE,
+  // which froze `t=2025-05:2026-04` under prose calling it "the trailing 12 months". The pin stays
+  // at zero rather than being deleted with its subjects: the assertion is about what may appear,
+  // not about what is there, and a tenth literal is a real regression this repo would otherwise
+  // ship blind. The ADMISSIBILITY loop that used to sit beside it is gone -- over an empty corpus
+  // it iterated nothing, and `recovery.test.ts` and `page.test.tsx` now assert `decodeRequest`
+  // admits the two queries that corpus used to hold, across a range of `asOf`.
+  it("finds no hand-spelled /explore permalink anywhere under app/src/app", () => {
+    expect(scanPermalinks().hits).toEqual([]);
+  });
 });

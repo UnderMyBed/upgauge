@@ -77,8 +77,9 @@ export default async function Home() {
         {/* `Link`, not `<a>`, for the identical reason TopBar's wordmark is one:
             `@next/next/no-html-link-for-pages` fires on a statically-resolvable internal href
             (verified -- this shipped as an `<a>` and `make app-check` rejected it). The
-            sample link above is a plain `<a>` only because its href carries a query string,
-            which the rule cannot statically resolve. `prefetch={false}` for the same cost reason:
+            sample link above is a plain `<a>` because its href is an EXPRESSION, which the
+            rule never inspects (`href.value.type !== 'Literal'` returns early) -- not because it
+            carries a query string, which the rule strips before matching. `prefetch={false}` for the same cost reason:
             `/watch` is `force-dynamic` and queries `dataAsOf()` on every request. */}
         <p>
           <Link href="/watch" prefetch={false}>

@@ -5,10 +5,12 @@ import { normalizeQuery, type PivotQuery } from "@/lib/pivot/types";
 /**
  * THE RECOVERY QUERY: the one known-valid Explorer permalink every dead-end surface offers.
  *
- * ONE DEFINITION, because nine surfaces spelled this same query out by hand -- `/search`'s
- * no-match state, `/explore`'s and `/explore/filter/:dim`'s unreadable-permalink states, and the
- * five 404s (`/route`, `/carrier`, `/airport`, `/aircraft`, `/watch`). Every one of them is shown
- * to a reader who has ALREADY hit a dead end, so a copy that drifts out of admissibility sends
+ * ONE DEFINITION, over NINE dead-end surfaces -- and eight of the nine, not nine, spelled THIS
+ * query out by hand: `/search`'s no-match state, `/explore`'s and `/explore/filter/:dim`'s
+ * unreadable-permalink states, and five of the six 404s (`/explore/filter/:dim`, `/route`,
+ * `/carrier`, `/airport`, `/watch`). The ninth is `/aircraft`'s 404, which spelled out the
+ * aircraft-type VARIANT below rather than this query. Every one of them is shown to a reader who
+ * has ALREADY hit a dead end, so a copy that drifts out of admissibility sends
  * them from one error to another -- and a copy that drifts into a DIFFERENT valid query is worse,
  * because nothing looks wrong. This product has already paid for that shape once: a correction
  * landed in six places and was left standing in the one sentence a visitor reads.

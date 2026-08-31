@@ -1079,13 +1079,14 @@ Its lower bound (`EARLIEST_YEAR = 2015`) is hardcoded, and states at year grain 
 declaration** (`app/src/lib/entityFacts.ts`); every page reads it by import, and
 `entityFacts.test.ts` pins both that (a scan over `app/src`, with a vacuity guard) and the two
 bounds' agreement. T-100's earliest ingested filing does not move the way the *latest* one does
-with every rebuild, so there is nothing here for a future ingest to silently disagree with. Its upper bound is `new Date().getUTCFullYear()` — wall-clock
-time, not a hardcoded `2026` — because BTS files after the fact, so the dataset's `data_as_of`
-can never be ahead of the real calendar; wall-clock time is therefore always at least as large as
-any year this dataset could legitimately contain, and it advances on its own every January with
-no code change. The task brief's own warning was explicit about the failure this avoids: a
-literal `2026` upper bound would start rejecting a real, in-window year the moment `dataAsOf()`
-crossed it, and nothing would fail loudly to say so.
+with every rebuild, so there is nothing here for a future ingest to silently disagree with. Its
+upper bound is `new Date().getUTCFullYear()` — wall-clock time, not a hardcoded `2026` —
+because BTS files after the fact, so the dataset's `data_as_of` can never be ahead of the real
+calendar; wall-clock time is therefore always at least as large as any year this dataset could
+legitimately contain, and it advances on its own every January with no code change. The task
+brief's own warning was explicit about the failure this avoids: a literal `2026` upper bound
+would start rejecting a real, in-window year the moment `dataAsOf()` crossed it, and nothing
+would fail loudly to say so.
 
 **`proxy.ts` reads `y` off the same raw query string it already captures for `/explore`
 (`RAW_QUERY_HEADER`'s source value, captured once per request), never off

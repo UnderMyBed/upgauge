@@ -17,13 +17,18 @@ import Link from "next/link";
  *
  * `prefetch={false}` is LOAD-BEARING, not a micro-optimisation. `Link`'s default (`auto`)
  * prefetches when the link enters the viewport, in production. This wordmark is above the fold
- * on all ten pages, and `/` is `force-dynamic` AND absent from `proxy.ts`'s matcher, so it
- * carries Next's own `no-store` and the CDN cannot absorb the prefetch: the default would add
- * one uncached origin request per page view, on a single always-on box whose entire cost
- * control is the caching (CLAUDE.md, "the caching is the cost control, not the hosting tier").
- * Every other internal link in this product is a plain `<a>`; this one is a `Link` only because
- * `@next/next/no-html-link-for-pages` fires on a statically-resolvable `href="/"` and not on the
- * dynamic hrefs elsewhere. Found by M5's final re-review. */
+ * on every page, and the CDN cannot absorb that prefetch -- NOT because `/` is uncached (it is in
+ * `proxy.ts`'s matcher and gets `HTML_CACHE`), but because `proxy.ts` answers ANY request carrying
+ * the `RSC` header `no-store`, unconditionally. A prefetch is such a request, so it always reaches
+ * the origin: the default would add one uncached origin request per page view, on a single
+ * always-on box whose entire cost control is the caching (CLAUDE.md, "the caching is the cost
+ * control, not the hosting tier").
+ *
+ * Internal links here are plain `<a>` by default; this one is a `Link` because
+ * `@next/next/no-html-link-for-pages` fires on a LITERAL internal href, which `href="/"` is. The
+ * rule strips the query before matching (`utils/url.js`), so a query string exempts nothing --
+ * what it never inspects is an href built from an expression (`href.value.type !== 'Literal'`
+ * returns early). Found by M5's final re-review; the mechanism corrected in #145. */
 export function Wordmark() {
   return (
     <Link className="mark" href="/" prefetch={false}>

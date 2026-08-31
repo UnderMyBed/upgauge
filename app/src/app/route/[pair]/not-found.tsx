@@ -71,10 +71,10 @@ export async function NotFoundView({ pathname }: { pathname: string }) {
           )}
         </p>
         <p>
-          {/* eslint-plugin-next flags a literal <a href="/route/..."> against this exact
-              dynamic route ([pair]) as "use next/link instead" -- it does NOT flag the
-              Explorer link below, whose href carries a query string, so only this one needed
-              the swap.
+          {/* eslint-plugin-next flags a LITERAL internal href; it never inspects one built
+              from an expression (`href.value.type !== 'Literal'` returns early), which is why the
+              Explorer links here are plain `<a>`. Carrying a query string is NOT the reason --
+              the rule strips the query before matching (`utils/url.js`).
               `prefetch={false}` is load-bearing here, not style -- TopBar.tsx's own note
               has the why in full, and prefetchPolicy.test.ts enforces it repo-wide. */}
           Try <Link href="/route/JFK-LAX" prefetch={false}>JFK–LAX</Link>, or start from{" "}

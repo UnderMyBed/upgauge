@@ -3251,9 +3251,18 @@ R_T12=$(date -u -d "${R_ASOF}-01 -11 months" +%Y-%m)
 check    "recovery: its window is the trailing 12 ending at the DATA AS OF it served" \
   "$R_HREF" "t=${R_T12}:${R_ASOF}&"
 # ...and it really is the RECOVERY query, not some other Explorer link that happens to be on the
-# page: one measure, 25 rows. Without this the check above would pass for any permalink at all.
-check    "recovery: ...and it is the recovery query itself (m=seats, n=25)" \
+# page. Without this the check above would pass for any permalink carrying the right window.
+#
+# TWO NEEDLES, because the title names two properties and ONE needle can only assert one of them:
+# `d=op_airline_id&m=seats&t=` fixes the dimension and the single measure, and says nothing at all
+# about the limit -- rewriting the served `n=25` to `n=50` left the single-needle form `ok`. A
+# label that overstates what it asserts is the defect class of #147; the fix is to assert the
+# second property, not to soften the label. The `n` needle carries its neighbours on both sides so
+# it cannot match a different key's value.
+check    "recovery: ...and it is the recovery query itself (m=seats)" \
   "$R_HREF" "d=op_airline_id&m=seats&t="
+check    "recovery: ...and it asks for 25 rows, not some other limit" \
+  "$R_HREF" "&s=-seats&n=25&g=op"
 
 # The front door's sample -- a DIFFERENT query (four measures, for the gauge rail its prose
 # promises), same rule. This is the one sentence a first-time visitor reads, and it is the one

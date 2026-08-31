@@ -3,12 +3,12 @@
 // EVERY DEAD-END SURFACE IN THE PRODUCT, PINNED ON THE RECOVERY PERMALINK IT OFFERS (#140).
 //
 // WHY THIS FILE EXISTS RATHER THAN NINE MORE PAGE ASSERTIONS. Eight surfaces spelled the same
-// recovery permalink out by hand. `bounds.test.ts` scanned for those literals and asserted the
-// server still ADMITTED each one -- a real guard, and blind to the failure that actually costs a
-// reader something: one call site drifting to a DIFFERENT query that decodes perfectly well.
-// Nothing looks wrong on such a page. The link works. It just no longer offers what the other
-// seven offer, and the copy beside it -- "start from a known-valid query" -- stays true while the
-// product stops having one answer to it.
+// recovery permalink out by hand, and a ninth (`/aircraft`) spelled its one-key variant.
+// `bounds.test.ts` scanned for those literals and asserted the server still ADMITTED each one --
+// a real guard, and blind to the failure that actually costs a reader something: one call site
+// drifting to a DIFFERENT query that decodes perfectly well. Nothing looks wrong on such a page.
+// The link works. It just no longer offers what the other eight offer, and the copy beside it --
+// "start from a known-valid query" -- stays true while the product stops having one answer to it.
 //
 // So the constant is asserted at every CALL SITE, not once at its definition. A call site is
 // invisible to every test that does not look at THAT call site: `floorPartition.callsites.test.tsx`
@@ -17,10 +17,15 @@
 //
 // DIVISION OF LABOUR, and neither half substitutes for the other:
 //
-//   this file            a known site drifts to a different-but-still-valid query
-//   bounds.test.ts       a NINTH hand-spelled literal appears (its count pin goes 1 -> 2), or
-//                        one of these eight reverts to its byte-identical literal
-//   recovery.test.ts     the constant itself is re-spelled, or stops decoding
+//   this file            a known site drifts to a different-but-still-valid query, or the window
+//                        goes stale (the last case below, which is the only one here not derived
+//                        from `recoveryHref` itself)
+//   bounds.test.ts       ANY hand-spelled permalink literal appears under `app/src/app` -- its
+//                        pin is now the EMPTY SET, so a tenth is red without anyone updating a
+//                        count, and one of these nine reverting to its byte-identical literal is
+//                        red there too
+//   recovery.test.ts     the derivation is re-spelled, freezes, or stops decoding, pinned at
+//                        named months with no database
 //
 // These are REAL renders of the REAL views against the REAL warehouse -- no mocks. Each view
 // takes its request-derived value as a prop precisely so this is possible (`lib/rawPath.ts`).
