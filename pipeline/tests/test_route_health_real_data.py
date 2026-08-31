@@ -136,6 +136,17 @@ def test_the_clamp_binds_on_a_real_minority(con):
     """).fetchone()[0]
     assert clamped == 289
 
+    # NOT GENERATED, and the reason is a structural rule rather than a preference (#148).
+    # Generating this figure into stats_counts.sql needs the four-axis z-derivation a THIRD
+    # time, and `test_no_mart_derived_column_is_ever_aggregated_in_sql`
+    # (pipeline/tests/test_derived_measure_rules.py) exempts exactly ONE .sql file from
+    # aggregating mart_route_health's derived columns -- 200_mart_route_health.sql, the mart's
+    # own definition. CLAUDE.md licenses the mart as the single exception to "derived measures
+    # are never averaged"; a second .sql site would either weaken that guard file-wide or need
+    # per-measure machinery inside it. So this literal stays hand-measured, and it is the one
+    # figure in this family that does. Its DENOMINATOR is gated (`route_health_scored`), so a
+    # refresh still reddens half the sentence at docs/data/model.md.
+
 
 def test_no_axis_survives_the_clamp_unbounded(con):
     """The observed maximum |health_score| is 2.33977 against a construction bound of 3.0

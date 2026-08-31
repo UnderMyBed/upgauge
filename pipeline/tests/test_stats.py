@@ -86,6 +86,56 @@ def test_page_cardinality_measures_are_generated():
         assert isinstance(measures.get(key), int), f"{key} is not a generated integer"
 
 
+def test_route_health_measures_are_generated():
+    """#146/#148: the mart's own cardinality figures were the one family this gate did not
+    cover. `8,065`, `733`, `606`, `177`, the overlap `50`, `68` and `466 of 7,332` were stated
+    across docs, SQL comments, served copy and test literals and generated NOWHERE -- so the
+    #148 floor change moved every one of them at once and nothing anywhere would have gone red.
+    Same failure #91 fixed for page cardinality, one mart over.
+
+    `route_health_pairs` is here for a reason the others are not: it is the figure the tree
+    never carried at all. mart_route_health's grain is (op_airline_id, route), so its row count
+    is not a route count -- `8,065 routes` overstated routes by 84% and every derived sentence
+    inherited it. Generating the distinct-pair count is what lets a sentence about routes be
+    re-derived instead of re-worded."""
+    measures = json.loads(STATS_PATH.read_text())["measures"]
+    for key in (
+        "route_health_rows",
+        "route_health_pairs",
+        "route_health_scored",
+        "route_health_with_prior_window",
+        "route_health_null_score",
+        "route_health_no_prior_window",
+        "route_health_no_schedule",
+        "route_health_null_overlap",
+        "route_health_same_airport_rows",
+    ):
+        assert isinstance(measures.get(key), int), f"{key} is not a generated integer"
+
+
+def test_the_three_null_reasons_account_for_every_unscored_row():
+    """The identity behind docs/data/model.md's "never sum them" warning, asserted rather than
+    restated: no_prior + no_schedule - overlap == null_score, and scored + null == rows. A
+    measure that drifted off its own predicate breaks one of these while still looking like a
+    plausible number on its own."""
+    m = json.loads(STATS_PATH.read_text())["measures"]
+    assert m["route_health_scored"] + m["route_health_null_score"] == m["route_health_rows"]
+    assert (
+        m["route_health_no_prior_window"]
+        + m["route_health_no_schedule"]
+        - m["route_health_null_overlap"]
+        == m["route_health_null_score"]
+    )
+
+
+def test_route_health_pairs_is_below_rows_and_above_zero():
+    """The grain claim itself (#146). If these were equal the mart would be one row per route
+    and every "N routes" sentence the sweep rewrote would have been correct as written; the gap
+    is what makes the distinction real and worth generating."""
+    m = json.loads(STATS_PATH.read_text())["measures"]
+    assert 0 < m["route_health_pairs"] < m["route_health_rows"]
+
+
 def test_sitemap_totals_are_consistent_with_their_parts():
     """A total that is not the sum of its parts means one measure drifted off the sitemap query
     it mirrors. `+5` is /watch and its four presets -- entity pages with no OG card, which is

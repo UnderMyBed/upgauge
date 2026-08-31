@@ -12,8 +12,8 @@
 -- than the load-bearing mechanism (200_mart_route_health.sql's `p12_months_present = 0` CASE).
 --
 -- The reason this guarantee matters at all: 373 of the 5,611 carrier-route pairs in
--- mart_route_health have a NULL health_score for one of three data-availability reasons (297
--- no prior window, 89 no filed schedule, overlap 13 -- docs/product/features.md). A NULL
+-- mart_route_health have a NULL health_score for one of three data-availability reasons:
+-- 297 no prior window, 89 no filed schedule, overlap 13 (docs/product/features.md). A NULL
 -- sorted first would present them as the most distressed pairs in the system, which is
 -- exactly the misrepresentation that document's standing UI requirement forbids.
 --

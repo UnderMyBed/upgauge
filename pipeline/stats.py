@@ -55,6 +55,17 @@ _SCALAR = frozenset(
         "route_order_agreeing_pairs",
         "route_pairs_with_a_gap_month",
         "route_pairs_stale_vs_trailing_12",
+        # mart_route_health cardinality (#146, #148). The grain is a carrier-route PAIR,
+        # which is why rows and pairs are both here and are different numbers.
+        "route_health_rows",
+        "route_health_pairs",
+        "route_health_scored",
+        "route_health_with_prior_window",
+        "route_health_null_score",
+        "route_health_no_prior_window",
+        "route_health_no_schedule",
+        "route_health_null_overlap",
+        "route_health_same_airport_rows",
     }
 )
 

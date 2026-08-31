@@ -181,6 +181,36 @@ STATED: dict[str, tuple[str, ...]] = {
         "docs/design/system.md",
         "docs/product/features.md",
     ),
+    # mart_route_health cardinality (#146, #148). The grain is a carrier-route PAIR, so `rows`
+    # and `pairs` are different questions and both are gated -- stating one as the other is the
+    # defect #146 closed.
+    "route_health_rows": (
+        "app/src/app/watch/[preset]/page.test.tsx",
+        "app/src/app/watch/[preset]/page.tsx",
+        "app/src/lib/watch.test.ts",
+        "docs/architecture/hosting.md",
+        "docs/architecture/pipeline.md",
+        "docs/data/model.md",
+        "docs/product/features.md",
+        "pipeline/tests/test_route_health_real_data.py",
+        "sql/02_marts/200_mart_route_health.sql",
+        "sql/03_queries/watch_death_watch.sql",
+        "sql/03_queries/watch_gauge.sql",
+    ),
+    # One site today, and that is the point: this is the figure the tree never carried. Every
+    # "N routes" sentence about the mart was a row count wearing the wrong noun.
+    "route_health_pairs": ("docs/data/model.md",),
+    "route_health_scored": (
+        "docs/data/model.md",
+        "pipeline/tests/test_route_health.py",
+        "pipeline/tests/test_route_health_real_data.py",
+        "sql/02_marts/200_mart_route_health.sql",
+    ),
+    "route_health_with_prior_window": (
+        "docs/data/model.md",
+        "pipeline/tests/test_route_health.py",
+        "sql/02_marts/200_mart_route_health.sql",
+    ),
     "same_airport_filings": (
         "app/src/app/airport/[code]/endpoints.ts",
         "app/src/app/explore/page.test.tsx",
@@ -219,6 +249,53 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
         ("docs/product/features.md", "{v} of {sitemap_routes} pairs"),
         ("docs/product/scope.md", "{v} of {sitemap_routes} pairs"),
         ("sql/03_queries/sitemap_routes.sql", "{v} of {sitemap_routes} pairs"),
+    ),
+    # mart_route_health's sub-1,000 figures (#146, #148). Every needle carries the NOUN as well
+    # as the number, so the grain rule is pinned by the same gate that pins the count: a sweep
+    # that swapped 373 into a sentence still saying "routes" reddens here.
+    "route_health_null_score": (
+        ("app/src/app/watch/[preset]/page.test.tsx", "{v} of {route_health_rows}"),
+        (
+            "app/src/app/watch/[preset]/page.tsx",
+            "{v} of {route_health_rows} carrier-route pairs",
+        ),
+        ("docs/data/model.md", "{v} of {route_health_rows} rows"),
+        ("docs/product/features.md", "{v} of the mart's {route_health_rows} rows"),
+        (
+            "sql/03_queries/watch_death_watch.sql",
+            "{v} of the {route_health_rows} carrier-route pairs",
+        ),
+        ("sql/03_queries/watch_gauge.sql", "three-reason union ({v}"),
+    ),
+    "route_health_no_prior_window": (
+        ("app/src/app/watch/[preset]/page.tsx", "{v} no prior"),
+        ("docs/data/model.md", "| No prior window | {v} |"),
+        ("docs/product/features.md", "No prior window — {v}"),
+        ("sql/03_queries/watch_death_watch.sql", "{v} no prior window"),
+        (
+            "sql/03_queries/watch_gauge.sql",
+            "the {v} carrier-route pairs with no prior-window data",
+        ),
+    ),
+    "route_health_no_schedule": (
+        ("app/src/app/watch/[preset]/page.tsx", "{v} no filed schedule"),
+        ("docs/data/model.md", "| Zero scheduled departures | {v} |"),
+        ("docs/product/features.md", "Zero scheduled departures — {v}"),
+        ("sql/02_marts/200_mart_route_health.sql", "rate for the {v} carrier-route"),
+        ("sql/03_queries/watch_death_watch.sql", "{v} no filed schedule"),
+    ),
+    "route_health_null_overlap": (
+        ("app/src/app/watch/[preset]/page.tsx", "overlap {v}"),
+        ("docs/data/model.md", "overcounts by {v}"),
+        ("sql/03_queries/watch_death_watch.sql", "overlap {v}"),
+    ),
+    "route_health_same_airport_rows": (
+        ("app/src/app/watch/[preset]/page.test.tsx", "{v} of {route_health_rows}"),
+        (
+            "app/src/app/watch/[preset]/page.tsx",
+            "{v} of {route_health_rows} mart_route_health rows",
+        ),
+        ("pipeline/tests/test_route_health_real_data.py", "{v} of {route_health_rows} mart rows"),
     ),
     "same_airport_pairs": (
         ("app/src/app/explore/page.test.tsx", "{v} distinct pairs"),
