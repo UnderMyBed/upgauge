@@ -140,11 +140,13 @@ than treating a 404 as chrome-free.
 tidiness. Internal links here are plain `<a>` by default; `<Link>` appears where
 `@next/next/no-html-link-for-pages` forces it, as it does on this `href="/"`. **What exempts the
 product's other internal links is NOT that they carry a query string** — the rule strips the query
-before matching (`@next/eslint-plugin-next/dist/utils/url.js`, `url.split('?', 1)[0]`). It is that
-the rule only inspects a **string-literal** href: `no-html-link-for-pages.js` returns early when
-`href.value.type !== 'Literal'`, so every href this product builds from an expression is never
-examined at all. That also means the rule does not force the `<Link>`s whose own href is an
-expression, so it is not the reason for all of them.
+before matching. Two conditions have to hold: the href must be a string **literal** (an href built
+from an expression is never inspected), and it must then **match a route** — and an app-dir route
+compiles to `^/explore$` while the href normalizes with a trailing slash, so even a literal
+`/explore?…` goes unflagged. `app/src/components/TopBar.tsx` is the one place that mechanism is
+written out; every other site defers to it, because this sentence was wrong in six places at once
+before anyone read the plugin. It also means `<Link>` is not confined to what the rule forces —
+`/watch`'s preset lists render expression-href `<Link>`s it never inspects.
 
 **Every `<Link>` carries `prefetch={false}`**, and `app/src/prefetchPolicy.test.ts` enforces that
 repo-wide as an exact set that may only ever shrink — a gate, not a convention, and no count of

@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { dataAsOf } from "@/lib/db";
-import { trailing12From } from "@/lib/entityFacts";
+import { EARLIEST_MONTH, trailing12From } from "@/lib/entityFacts";
 import { exploreHref } from "@/lib/pivot/builder";
+import { maxMonth } from "@/lib/pivot/recovery";
 import { normalizeQuery, type PivotQuery } from "@/lib/pivot/types";
 import { TopBar } from "@/components/TopBar";
 
@@ -30,16 +31,20 @@ export const dynamic = "force-dynamic";
  * `trailing12From` and `exploreHref`, never a local month subtraction or a hand-built
  * `/explore?...` -- the window and the permalink each have exactly one owner in this repo.
  *
- * Exported because deleting the literal deleted `bounds.test.ts`'s hand-spelled-permalink scan
- * with it (there is no longer a subject for it to scan). Both halves of what that scan
- * guaranteed -- the exact bytes, and that the server admits them -- now live in `page.test.tsx`,
- * beside the query they describe. */
+ * Exported so `page.test.tsx` can pin the two properties this literal used to get from
+ * `bounds.test.ts`'s hand-spelled-permalink scan -- the exact bytes, and that the server admits
+ * them -- beside the query they describe. That scan is still there and still enforcing: it now
+ * pins the EMPTY SET over all of `app/src`, so re-introducing a literal here (or anywhere) is red
+ * without anyone updating a count. */
 export function sampleQuery(asOf: string): PivotQuery {
   return normalizeQuery({
     grain: "segment",
     dimensions: ["op_airline_id"],
     measures: ["seats", "departures_performed", "load_factor", "avg_gauge"],
-    timeFrom: trailing12From(asOf),
+    // Floored for the reason recovery.ts states in full, and through ITS helper rather than a
+    // second comparison: an `asOf` in the dataset's first year would otherwise put the front
+    // door's own link outside the window the server admits.
+    timeFrom: maxMonth(trailing12From(asOf), EARLIEST_MONTH),
     timeTo: asOf,
     filters: [],
     sort: "seats",
@@ -77,9 +82,8 @@ export default async function Home() {
         {/* `Link`, not `<a>`, for the identical reason TopBar's wordmark is one:
             `@next/next/no-html-link-for-pages` fires on a statically-resolvable internal href
             (verified -- this shipped as an `<a>` and `make app-check` rejected it). The
-            sample link above is a plain `<a>` because its href is an EXPRESSION, which the
-            rule never inspects (`href.value.type !== 'Literal'` returns early) -- not because it
-            carries a query string, which the rule strips before matching. `prefetch={false}` for the same cost reason:
+            sample link above is a plain `<a>`; TopBar.tsx's note has the rule and why a
+            query string is not what exempts it. `prefetch={false}` for the same cost reason:
             `/watch` is `force-dynamic` and queries `dataAsOf()` on every request. */}
         <p>
           <Link href="/watch" prefetch={false}>

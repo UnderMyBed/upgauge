@@ -24,11 +24,30 @@ import Link from "next/link";
  * always-on box whose entire cost control is the caching (CLAUDE.md, "the caching is the cost
  * control, not the hosting tier").
  *
+ * THE ONE PLACE THIS RULE IS EXPLAINED. Four 404s and the front door defer here rather than
+ * restating it -- the sentence was wrong in six places at once and reached its third revision
+ * before anyone read the plugin (#145).
+ *
  * Internal links here are plain `<a>` by default; this one is a `Link` because
- * `@next/next/no-html-link-for-pages` fires on a LITERAL internal href, which `href="/"` is. The
- * rule strips the query before matching (`utils/url.js`), so a query string exempts nothing --
- * what it never inspects is an href built from an expression (`href.value.type !== 'Literal'`
- * returns early). Found by M5's final re-review; the mechanism corrected in #145. */
+ * `@next/next/no-html-link-for-pages` fires on it. TWO conditions have to hold, and a query
+ * string is not either of them -- the rule strips it before matching (`utils/url.js`,
+ * `url.split('?', 1)[0]`):
+ *
+ *   1. the href must be a string LITERAL. `no-html-link-for-pages.js` returns early on
+ *      `href.value.type !== 'Literal'`, so every href built from an expression -- which is every
+ *      Explorer link in this product -- is never examined at all. Necessary, not sufficient:
+ *   2. it must then MATCH a route. App-dir routes compile to `^/explore$` via `normalizeAppPath`,
+ *      while the href is normalized by `normalizeURL`, which appends a trailing slash. So even a
+ *      literal `/explore?...` is unflagged -- `/explore/` does not match `^/explore$`. `href="/"`
+ *      normalizes to `/` and matches `^/$`, which is why THIS one fires.
+ *
+ * So a `Link` is not confined to what the rule forces: `watch/page.tsx` and
+ * `watch/[preset]/not-found.tsx` both render expression-href ones it never inspects.
+ *
+ * (Written without the angle-bracket spelling on purpose: `prefetchPolicy.test.ts` matches that
+ * token in the SOURCE, comments included, so prose using it reads as an unguarded call site --
+ * measured, six of them, when this note was first written.)
+ * Found by M5's final re-review; the mechanism corrected in #145. */
 export function Wordmark() {
   return (
     <Link className="mark" href="/" prefetch={false}>

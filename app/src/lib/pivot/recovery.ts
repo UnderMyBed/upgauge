@@ -1,6 +1,14 @@
-import { trailing12From } from "@/lib/entityFacts";
+import { EARLIEST_MONTH, trailing12From } from "@/lib/entityFacts";
 import { exploreHref } from "@/lib/pivot/builder";
 import { normalizeQuery, type PivotQuery } from "@/lib/pivot/types";
+
+/** The later of two `YYYY-MM` months. Zero-padded, so lexical order IS chronological -- the same
+ *  property `checkBounds` relies on to compare a range. Deliberately NOT DuckDB's `greatest`
+ *  semantics: this takes two known strings, and CLAUDE.md's NULL-swallowing warning is about the
+ *  SQL builtins, not about a comparison here. */
+export function maxMonth(a: string, b: string): string {
+  return a >= b ? a : b;
+}
 
 /**
  * THE RECOVERY QUERY: the one known-valid Explorer permalink every dead-end surface offers.
@@ -49,7 +57,13 @@ export function recoveryQuery(asOf: string): PivotQuery {
     grain: "segment",
     dimensions: ["op_airline_id"],
     measures: ["seats"],
-    timeFrom: trailing12From(asOf),
+    // FLOORED AT `EARLIEST_MONTH`, and this is the one way a derived window can do worse than the
+    // frozen constant it replaced: `trailing12From` subtracts eleven months unconditionally, so an
+    // `asOf` in the dataset's first year walks this off the front of it (2015-06 -> 2014-07), which
+    // `checkBounds` refuses. A dead end would then offer an escape link the server itself rejects.
+    // Unreachable with today's warehouse; fully reachable with a truncated one, which is exactly
+    // the shape a recovery path must not assume away.
+    timeFrom: maxMonth(trailing12From(asOf), EARLIEST_MONTH),
     timeTo: asOf,
     // `sort: "seats"` with `sortDesc` -- i.e. `s=-seats` -- rather than a null sort: this is the
     // query offered to someone whose permalink did not parse, so every key it demonstrates should

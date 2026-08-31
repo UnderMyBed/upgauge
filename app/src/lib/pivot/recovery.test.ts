@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { decodeRequest } from "@/lib/pivot/bounds";
 import { FIXTURE } from "@/lib/pivot/allowlist.fixture";
-import { trailing12From } from "@/lib/entityFacts";
+import { EARLIEST_MONTH, trailing12From } from "@/lib/entityFacts";
 import { aircraftRecoveryHref, recoveryHref, recoveryQuery } from "@/lib/pivot/recovery";
 
 /**
@@ -81,6 +81,26 @@ describe("the recovery permalink", () => {
       for (const href of [recoveryHref(asOf), aircraftRecoveryHref(asOf)]) {
         const qs = href.slice(href.indexOf("?") + 1);
         expect(() => decodeRequest(qs, FIXTURE), `recovery permalink: ${href}`).not.toThrow();
+      }
+    }
+  });
+
+
+  // THE FLOOR, and it is the one way this derivation can do WORSE than the frozen constant it
+  // replaced (#145 review): `trailing12From` subtracts eleven months unconditionally, so an `asOf`
+  // inside the dataset's first year walks `timeFrom` off the front of it -- 2015-06 yields
+  // 2014-07, which `checkBounds` refuses outright. That would hand a reader who is ALREADY at a
+  // dead end an escape link the server itself rejects: one error to another, which is the exact
+  // failure the note at the top of recovery.ts exists to prevent. Unreachable with today's
+  // warehouse and fully reachable with a truncated one, which is what a fixture is for.
+  it("never offers a window before the dataset starts, however early asOf is", () => {
+    for (const asOf of ["2015-01", "2015-06", "2015-11"]) {
+      const q = recoveryQuery(asOf);
+      expect(q.timeFrom, `timeFrom at asOf=${asOf}`).toBe(EARLIEST_MONTH);
+      expect(q.timeFrom <= q.timeTo, `ordered at asOf=${asOf}`).toBe(true);
+      for (const href of [recoveryHref(asOf), aircraftRecoveryHref(asOf)]) {
+        const qs = href.slice(href.indexOf("?") + 1);
+        expect(() => decodeRequest(qs, FIXTURE), `admitted at asOf=${asOf}: ${href}`).not.toThrow();
       }
     }
   });

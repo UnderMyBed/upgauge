@@ -3192,6 +3192,62 @@ check     "card: the ambiguous 404 card is no-store" "$HDRS" 'cache-control: no-
 check_not "card: the ambiguous 404 card is never cached" "$HDRS" 's-maxage'
 
 # ---------------------------------------------------------------------------------------------
+# 15d. #125: the stylesheet the BROWSER gets still bounds the grid track.
+#
+# globals.test.ts holds the file-wide rule -- every `grid-template-columns` track is a fixed
+# length, a percentage, or `minmax(0, ...)`, never a bare `1fr`/`auto` whose minimum is the
+# item's own content. But that reads globals.css off disk. This is the other half: that the guard
+# survives Tailwind v4 + Lightning CSS and reaches a browser. A minifier that rewrote
+# `minmax(0,1fr)` back to `1fr` (they are NOT equivalent, but a naive normaliser would think so)
+# would leave every unit test green and ship the bug.
+#
+# THE NEEDLES ARE THE MINIFIED BYTES, MEASURED FROM THE SERVED FILE, NOT COPIED FROM SOURCE.
+# globals.css writes `@media (max-width: 920px)` and `minmax(0, 1fr)`; the build emits
+# `@media (max-width:920px)` and `minmax(0,1fr)` -- no space after the colon, none after the
+# comma. A needle copied from the source could never fire, which is this file's own documented
+# trap.
+#
+# ORDERING IS LOAD-BEARING, and it was a real self-defect in this section before it shipped. The
+# href is content-hashed, so it is extracted from the served page rather than pinned -- and when
+# that extraction went stale against a rebuilt `.next`, `curl` returned "Internal Server Error"
+# and the `check_not` below printed a confident **ok** for a string that was absent only because
+# the fetch had failed. That is defect (1) in this file's header list, re-created. So the fetch
+# is PROVEN to have returned the stylesheet before any negative check runs, and the proof is a
+# positive needle on a rule that must be in it.
+CSS_HREF=$(curl -s --max-time 30 "${BASE}/airport/BET" \
+  | grep -o 'href="/_next/static/chunks/[^"]*\.css"' | head -1 | sed 's/href="//;s/"//')
+check_re "responsive: the page links a built stylesheet" "$CSS_HREF" '^/_next/static/chunks/.+\.css$'
+CSS_BODY=$(curl -s --max-time 30 "${BASE}${CSS_HREF}")
+# THE FETCH GUARD, and simultaneously a real contract check. `.table-scroll` is the container the
+# design system says owns the overflow instead of the body (docs/design/system.md, Quality floor);
+# bounding the track is only half of that contract, and without this the fix would be a track that
+# shrinks around a table that then simply clips. It is first because everything below it is only
+# meaningful if this body is actually the stylesheet.
+# NO NEEDLE HERE PINS DECLARATION ORDER. The obvious spelling of the guard,
+# `.table-scroll{max-width:100%;overflow-x:auto}`, asserts that Lightning CSS emits `max-width`
+# before `overflow-x` -- the REVERSE of the source order, i.e. a minifier-normalisation detail
+# nobody chose. A version bump that renormalises would redden this and the checks behind it with
+# no defect present. Same for the media block, whose rules could be emitted `.legend` first. So
+# the selector's presence is the guard, and each property is asserted inside its own block by
+# regex instead of by adjacency.
+check "responsive: the served file is the stylesheet, not an error page" "$CSS_BODY" \
+  '.table-scroll{'
+check_re "responsive: the table keeps its own scroll container" "$CSS_BODY" \
+  '\.table-scroll\{[^}]*overflow-x:auto'
+# The collapsed single-column grid keeps its zero minimum. This is the bug. `[^@]*` cannot run
+# past the block: this stylesheet is dense with @font-face rules on both sides of it.
+check_re "responsive: the <=920px grid track keeps minmax(0,...) in the served CSS" "$CSS_BODY" \
+  '@media \(max-width:920px\)\{[^@]*\.body\{grid-template-columns:minmax\(0,1fr\)\}'
+# The desktop track, so this section fails loudly if the rail collapse is ever restructured rather
+# than silently checking only the branch that was broken.
+check "responsive: the wide grid still carries content + 214px rail" "$CSS_BODY" \
+  '.body{grid-template-columns:minmax(0,1fr) 214px'
+# The negative half, and it is not redundant with the positive one: a build emitting BOTH forms
+# (a duplicated rule, a stale chunk concatenated after the fresh one) satisfies the check above
+# while the last declaration still wins the cascade. The bug shipped as exactly these bytes.
+check_not "responsive: no bare 1fr .body track survives the build" "$CSS_BODY" \
+  '.body{grid-template-columns:1fr}'
+
 # 15e. #145: the recovery window and the front door's sample are the LIVE trailing 12.
 #
 # WHY THIS IS A RELATIONSHIP AND NOT A NEEDLE. Both windows used to be frozen in source
@@ -3280,62 +3336,6 @@ check    "home: the sample window is the trailing 12 ending at the DATA AS OF it
 # under prose that has quietly stopped being true.
 check    "home: the sample still selects the four measures its prose promises" \
   "$H_HREF" 'm=seats,departures_performed,load_factor,avg_gauge'
-
-# 15d. #125: the stylesheet the BROWSER gets still bounds the grid track.
-#
-# globals.test.ts holds the file-wide rule -- every `grid-template-columns` track is a fixed
-# length, a percentage, or `minmax(0, ...)`, never a bare `1fr`/`auto` whose minimum is the
-# item's own content. But that reads globals.css off disk. This is the other half: that the guard
-# survives Tailwind v4 + Lightning CSS and reaches a browser. A minifier that rewrote
-# `minmax(0,1fr)` back to `1fr` (they are NOT equivalent, but a naive normaliser would think so)
-# would leave every unit test green and ship the bug.
-#
-# THE NEEDLES ARE THE MINIFIED BYTES, MEASURED FROM THE SERVED FILE, NOT COPIED FROM SOURCE.
-# globals.css writes `@media (max-width: 920px)` and `minmax(0, 1fr)`; the build emits
-# `@media (max-width:920px)` and `minmax(0,1fr)` -- no space after the colon, none after the
-# comma. A needle copied from the source could never fire, which is this file's own documented
-# trap.
-#
-# ORDERING IS LOAD-BEARING, and it was a real self-defect in this section before it shipped. The
-# href is content-hashed, so it is extracted from the served page rather than pinned -- and when
-# that extraction went stale against a rebuilt `.next`, `curl` returned "Internal Server Error"
-# and the `check_not` below printed a confident **ok** for a string that was absent only because
-# the fetch had failed. That is defect (1) in this file's header list, re-created. So the fetch
-# is PROVEN to have returned the stylesheet before any negative check runs, and the proof is a
-# positive needle on a rule that must be in it.
-CSS_HREF=$(curl -s --max-time 30 "${BASE}/airport/BET" \
-  | grep -o 'href="/_next/static/chunks/[^"]*\.css"' | head -1 | sed 's/href="//;s/"//')
-check_re "responsive: the page links a built stylesheet" "$CSS_HREF" '^/_next/static/chunks/.+\.css$'
-CSS_BODY=$(curl -s --max-time 30 "${BASE}${CSS_HREF}")
-# THE FETCH GUARD, and simultaneously a real contract check. `.table-scroll` is the container the
-# design system says owns the overflow instead of the body (docs/design/system.md, Quality floor);
-# bounding the track is only half of that contract, and without this the fix would be a track that
-# shrinks around a table that then simply clips. It is first because everything below it is only
-# meaningful if this body is actually the stylesheet.
-# NO NEEDLE HERE PINS DECLARATION ORDER. The obvious spelling of the guard,
-# `.table-scroll{max-width:100%;overflow-x:auto}`, asserts that Lightning CSS emits `max-width`
-# before `overflow-x` -- the REVERSE of the source order, i.e. a minifier-normalisation detail
-# nobody chose. A version bump that renormalises would redden this and the checks behind it with
-# no defect present. Same for the media block, whose rules could be emitted `.legend` first. So
-# the selector's presence is the guard, and each property is asserted inside its own block by
-# regex instead of by adjacency.
-check "responsive: the served file is the stylesheet, not an error page" "$CSS_BODY" \
-  '.table-scroll{'
-check_re "responsive: the table keeps its own scroll container" "$CSS_BODY" \
-  '\.table-scroll\{[^}]*overflow-x:auto'
-# The collapsed single-column grid keeps its zero minimum. This is the bug. `[^@]*` cannot run
-# past the block: this stylesheet is dense with @font-face rules on both sides of it.
-check_re "responsive: the <=920px grid track keeps minmax(0,...) in the served CSS" "$CSS_BODY" \
-  '@media \(max-width:920px\)\{[^@]*\.body\{grid-template-columns:minmax\(0,1fr\)\}'
-# The desktop track, so this section fails loudly if the rail collapse is ever restructured rather
-# than silently checking only the branch that was broken.
-check "responsive: the wide grid still carries content + 214px rail" "$CSS_BODY" \
-  '.body{grid-template-columns:minmax(0,1fr) 214px'
-# The negative half, and it is not redundant with the positive one: a build emitting BOTH forms
-# (a duplicated rule, a stale chunk concatenated after the fresh one) satisfies the check above
-# while the last declaration still wins the cascade. The bug shipped as exactly these bytes.
-check_not "responsive: no bare 1fr .body track survives the build" "$CSS_BODY" \
-  '.body{grid-template-columns:1fr}'
 
 # ---------------------------------------------------------------------------------------------
 # 16. M5 Task 7 Part A's fail-safe, verified end to end -- not just unit-mocked.

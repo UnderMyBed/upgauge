@@ -397,33 +397,50 @@ describe("no permalink this app has shipped becomes unreadable", () => {
     }
   });
 
-  /** Every hand-spelled `/explore?` permalink literal under `app/src/app`, as `<file> => <qs>`.
+  /** Every hand-spelled `/explore?` permalink literal under `app/src`, as `<file> => <qs>`.
    *
-   *  WHAT THIS CATCHES THAT NOTHING ELSE CAN: a NEW one appearing. `recovery.test.ts`,
+   *  WHAT THIS CATCHES THAT NOTHING ELSE CAN: a NEW one appearing, anywhere. `recovery.test.ts`,
    *  `page.test.tsx` and `recoveryLink.callsites.test.tsx` each pin a KNOWN permalink; not one of
-   *  them can see a tenth literal added to some page tomorrow. That is the exact mechanism that
+   *  them can see a tenth literal added to some file tomorrow. That is the exact mechanism that
    *  produced #145's own frozen-window defect, so the scan outlives the literals it was written
-   *  for: it is now an emptiness assertion, and an empty exact-set pin is falsifiable (add a
-   *  literal and it fails), which is the same shape `prefetchPolicy.test.ts`'s KNOWN_PREFETCHING
-   *  and `entityFacts.test.ts`'s declaration pin already use.
+   *  for: it is an emptiness assertion, and an empty exact-set pin is falsifiable (add a literal
+   *  and it fails), the same shape `prefetchPolicy.test.ts`'s KNOWN_PREFETCHING and
+   *  `entityFacts.test.ts`'s declaration pin already use.
    *
-   *  ANCHORED, and this is load-bearing rather than tidiness. The unanchored form matched PROSE:
-   *  a docstring reading "never a hand-built `/explore?...`" is not a permalink, and pinning the
-   *  raw scan at `[]` would have been red on a comment. So a subject must look like one:
-   *    - a literal `href="/explore?..."` -- an href actually emitted into the markup, or
-   *    - a `/explore?v=1...` prefix -- `encode()` always emits `v` first, so every permalink this
-   *      app has ever hand-spelled starts that way (the front door's old SAMPLE did).
+   *  THE ROOT IS `app/src`, NOT `app/src/app`, and the difference is not hypothetical. #145's own
+   *  three hand-spelled builders were `lib/watch.ts`, `lib/topn.ts` and one page -- two of the
+   *  three live under `lib/`, so a scan rooted at `app/src/app` cannot see a regression in the
+   *  very files this issue exists to fix. `entityFacts.test.ts` scans all of `app/src` for the
+   *  same reason.
    *
-   *  Adjacent-string concatenation (`"a" + "b"`, which that SAMPLE used) is rejoined first --
-   *  without it the scan silently truncates such a literal to its first half.
+   *  THE ANCHOR IS THE QUOTE DELIMITER PLUS AN `=`, and it is deliberately NOT a `v=1` prefix.
+   *  `v` first is one SPELLING, not the format: CLAUDE.md's rule is "one canonical KEY SET, never
+   *  'one spelling' -- key order survives", so `...&g=op&v=1` is a working, server-admitted,
+   *  cacheable permalink that a `v=1`-anchored scan waves through -- and it would freeze exactly
+   *  the way the front door's SAMPLE did. Requiring the opening quote instead catches every way a
+   *  literal is actually written: `href="..."`, `href={"..."}`, single quotes, a template literal
+   *  with no interpolation, and adjacent-string concatenation (rejoined below), in either key
+   *  order.
+   *
+   *  The second half of the anchor is that the query must BEGIN like one -- `/^[a-z]+=/` -- which
+   *  is a shape requirement, not an order one, so it holds for any key order. That is what keeps
+   *  prose out without narrowing the format: `canonicalQuery.ts` really does document a measured
+   *  finding as `` `/explore?...&bogus=1` ``, which carries an `=` and is emphatically not a
+   *  permalink. An ELIDED query cannot start with a key; a real one always does.
+   *
+   *  So what it excludes, precisely: an UNQUOTED mention in prose, and a quoted one that does not
+   *  open with a key. A docstring that quotes a FULL working query IS a subject, and that is
+   *  correct rather than a false positive: a quoted, complete, admissible permalink sitting in
+   *  this tree is one copy-paste from being a call site, which is how the eight #140 closed got
+   *  there.
    *
    *  Anything carrying a brace is INTERPOLATED, not a literal: a template-literal href
    *  (`/explore?${encode(query)}`) is built from a PivotQuery this app just constructed, so its
    *  admissibility is a property of the builder rather than of a string, and `encode()`
    *  round-trips through `decode()` by contract. The JSX permalink bar (`/explore?{permalink}`)
-   *  is the same case. Only hand-written literals need this scan. */
+   *  is the same case, and is additionally unquoted. Only hand-written literals need this scan. */
   function scanPermalinks(): { hits: string[]; filesScanned: number } {
-    const dir = path.join(REPO, "app/src/app");
+    const dir = path.join(REPO, "app/src");
     const hits: string[] = [];
     let filesScanned = 0;
     const walk = (d: string) => {
@@ -432,10 +449,15 @@ describe("no permalink this app has shipped becomes unreadable", () => {
         if (entry.isDirectory()) walk(full);
         else if (/\.tsx?$/.test(entry.name) && !entry.name.includes(".test.")) {
           filesScanned += 1;
+          // Adjacent-string concatenation (`"a" + "b"`, which the front door's SAMPLE used)
+          // rejoined first, across a newline too -- without it the scan silently truncates such a
+          // literal to its first half and "passes" against a URL it never tested.
           const src = readFileSync(full, "utf8").replace(/"\s*\+\s*"/g, "");
-          for (const m of src.matchAll(/href="\/explore\?([^"]*)"|\/explore\?(v=1[^"'`\s]*)/g)) {
-            const qs = m[1] ?? m[2];
-            if (!qs.includes("{")) hits.push(`${path.relative(REPO, full)} => ${qs}`);
+          for (const m of src.matchAll(/["'`]\/explore\?([^"'`\s]*)/g)) {
+            const qs = m[1];
+            if (!qs.includes("{") && /^[a-z]+=/.test(qs)) {
+              hits.push(`${path.relative(REPO, full)} => ${qs}`);
+            }
           }
         }
       }
@@ -448,7 +470,7 @@ describe("no permalink this app has shipped becomes unreadable", () => {
   // `filesScanned` guard, a walker that silently found nothing -- a moved directory, a changed
   // extension -- would satisfy the emptiness assertion having read nothing at all.
   it("walks real files, so an empty result means empty and not broken", () => {
-    expect(scanPermalinks().filesScanned).toBeGreaterThan(20);
+    expect(scanPermalinks().filesScanned).toBeGreaterThan(50);
   });
 
   // ZERO, as an EXACT SET so the failure names the offender and its query string.
@@ -460,7 +482,7 @@ describe("no permalink this app has shipped becomes unreadable", () => {
   // ship blind. The ADMISSIBILITY loop that used to sit beside it is gone -- over an empty corpus
   // it iterated nothing, and `recovery.test.ts` and `page.test.tsx` now assert `decodeRequest`
   // admits the two queries that corpus used to hold, across a range of `asOf`.
-  it("finds no hand-spelled /explore permalink anywhere under app/src/app", () => {
+  it("finds no hand-spelled /explore permalink anywhere under app/src", () => {
     expect(scanPermalinks().hits).toEqual([]);
   });
 });

@@ -52,12 +52,11 @@ export async function NotFoundView({ pathname }: { pathname: string }) {
           )}
         </p>
         <p>
-          {/* eslint-plugin-next flags a LITERAL internal href; it never inspects one built
-              from an expression (`href.value.type !== 'Literal'` returns early), which is why the
-              Explorer links here are plain `<a>`. Carrying a query string is NOT the reason --
-              the rule strips the query before matching (`utils/url.js`).
-              `prefetch={false}` is load-bearing here, not style -- TopBar.tsx's own note
-              has the why in full, and prefetchPolicy.test.ts enforces it repo-wide. */}
+          {/* This `Link` is required and the Explorer links here are not: TopBar.tsx's note
+              has the full rule and the two mechanisms behind it. Carrying a query string is
+              NOT what exempts them -- the rule strips the query before matching.
+              `prefetch={false}` is load-bearing here, not style -- same note, and
+              prefetchPolicy.test.ts enforces it repo-wide. */}
           Try <Link href="/airport/SEA" prefetch={false}>SEA</Link>, or start from{" "}
           <a href={recoveryHref(asOf)}>
             the Explorer
