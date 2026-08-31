@@ -1,7 +1,7 @@
 import { headers } from "next/headers";
 import { encode, UrlStateError } from "@/lib/pivot/urlstate";
 import { decodeRequest } from "@/lib/pivot/bounds";
-import { normalizeQuery, PivotError } from "@/lib/pivot/types";
+import { PivotError } from "@/lib/pivot/types";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
@@ -10,6 +10,7 @@ import { resolutionKey, displayValue, resolveFilterValues, type Resolved } from 
 import { routeHrefFromCodes } from "@/lib/entityLink";
 import { ExplorerBuilder } from "@/components/builder/ExplorerBuilder";
 import { exploreHref } from "@/lib/pivot/builder";
+import { RECOVERY_HREF, RECOVERY_QUERY } from "@/lib/pivot/recovery";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import type { PivotQuery } from "@/lib/pivot/types";
@@ -114,33 +115,6 @@ function routeHref(
 // widest time window any query against this database can have, so it is what "offer the
 // nearest broader window" (docs/design/system.md, empty-result state) widens to.
 const EARLIEST_MONTH = "2015-01";
-
-/**
- * The query the error state offers as a way out, and the query its builder is seeded from.
- *
- * ONE CONSTANT, because the escape link and the builder beside it have to be the same query. Two
- * literals drift, and the drift is invisible: an anchor whose href no longer matches the chips
- * under it still looks right. `page.test.tsx` pins `encode(FALLBACK_QUERY)` against the exact
- * string this app has been spelling by hand, so a change to the codec or to this constant is red
- * here rather than discovered as a dead recovery link on the one page a reader reaches while
- * already stuck.
- *
- * `sort: "seats"` with `sortDesc` -- i.e. `s=-seats` -- rather than a null sort: this is the query
- * offered to someone whose permalink did not parse, so every key it demonstrates should be one
- * they can see the effect of and edit.
- */
-export const FALLBACK_QUERY: PivotQuery = normalizeQuery({
-  grain: "segment",
-  dimensions: ["op_airline_id"],
-  measures: ["seats"],
-  timeFrom: "2025-05",
-  timeTo: "2026-04",
-  filters: [],
-  sort: "seats",
-  sortDesc: true,
-  limit: 25,
-  grouping: "operating",
-});
 
 /** A measure the KIND override map does not name still has to render as a numeric. Additive
  * measures are whole counts; non-additive ones are the computed ratios, which `gauge` and
@@ -258,19 +232,20 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
             <p role="alert">{e.message}</p>
             <p>
               Nothing was guessed from it. Fix the offending key above and reload, or start
-              from <a href={exploreHref(FALLBACK_QUERY)}>a known-valid query</a>.
+              from <a href={RECOVERY_HREF}>a known-valid query</a>.
             </p>
             {/* THE STATE A BUILDER IS WORTH THE MOST, and the one an "insert it above the
                 results table" implementation skips without noticing: `decode()` threw, so there
                 is no `query` to mutate and nothing to render a table from. Seeded from
-                FALLBACK_QUERY -- the same constant the escape link above encodes -- so every chip
-                here is a working way out of a permalink the reader cannot fix by hand, not just
-                the single one that link offers.
+                RECOVERY_QUERY -- the same constant the escape link above encodes, and the same
+                one the other seven dead-end surfaces in this product offer -- so every chip here
+                is a working way out of a permalink the reader cannot fix by hand, not just the
+                single one that link offers.
 
-                `resolved` is empty and that is exact, not a shortcut: FALLBACK_QUERY carries no
+                `resolved` is empty and that is exact, not a shortcut: RECOVERY_QUERY carries no
                 filters, so there is no id to resolve and no query to run for one. */}
             <ExplorerBuilder
-              query={FALLBACK_QUERY}
+              query={RECOVERY_QUERY}
               allowlist={allowlist}
               asOf={asOf}
               resolved={new Map()}

@@ -4,6 +4,7 @@ import { dataAsOf } from "@/lib/db";
 import { rawPathFromHeaders } from "@/lib/rawPath";
 import { presetSlugFromPath, presetBySlug, PRESETS } from "@/lib/watch";
 import { TopBar } from "@/components/TopBar";
+import { RECOVERY_HREF } from "@/lib/pivot/recovery";
 
 // Same reasoning as page.tsx's own export of this constant: DATA AS OF must never be frozen at
 // build time, even on the 404 path. proxy.ts sets `no-store` on this response for the same
@@ -53,7 +54,7 @@ export async function NotFoundView({ pathname }: { pathname: string }) {
         ) : (
           <p>
             Try <Link href="/watch/gauge" prefetch={false}>Gauge Watch</Link>, or start from{" "}
-            <a href="/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op">
+            <a href={RECOVERY_HREF}>
               the Explorer
             </a>
             .

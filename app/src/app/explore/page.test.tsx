@@ -23,7 +23,8 @@ vi.mock("@/lib/pivot/builder", async (importOriginal) => {
   return { ...actual, exploreHref: vi.fn(actual.exploreHref) };
 });
 
-import { ExploreView, FALLBACK_QUERY } from "@/app/explore/page";
+import { ExploreView } from "@/app/explore/page";
+import { RECOVERY_HREF, RECOVERY_QUERY } from "@/lib/pivot/recovery";
 import { dataAsOf, loadAllowlist, runPivot } from "@/lib/db";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 import { trailing12From } from "@/lib/entityFacts";
@@ -439,27 +440,18 @@ describe("/explore mounts the builder on every state, not just the populated one
     // One constant behind both, so the link and the chips beside it cannot describe different
     // queries. A mutant that re-spells either literal separates them and turns this red.
     const escape = container.querySelector(".error-page a")!;
-    expect(escape.getAttribute("href")).toBe(exploreHref(FALLBACK_QUERY));
+    expect(escape.getAttribute("href")).toBe(RECOVERY_HREF);
   });
 
-  // The recovery query is spelled by hand as a bare href in six other files (`search/page.tsx`,
-  // four `not-found.tsx`, `explore/filter/[dim]/page.tsx`). This pins the constant against that
-  // exact string, so a codec change or an edit to FALLBACK_QUERY is red HERE rather than
-  // discovered as a dead recovery link -- and it is the canary for those six copies too.
-  it("encodes FALLBACK_QUERY to the string the rest of the app spells by hand", () => {
-    expect(exploreHref(FALLBACK_QUERY)).toBe(
-      "/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op",
-    );
-  });
-
-  // `bounds.test.ts` scans every page for hardcoded `/explore?` literals and asserts the server
-  // still ADMITS each one -- "a permalink this product has already shipped must not become
-  // unreadable". Turning this one into a constant put it out of that scan's reach by
-  // construction, so its coverage moves here rather than being lost: the recovery link offered
-  // to someone whose permalink did not parse must itself parse.
+  // THE REAL CATALOG'S VERDICT, which is the half `lib/pivot/recovery.test.ts` cannot give: that
+  // file decodes against `FIXTURE` so it stays green with no `data/`, and a fixture is a copy of
+  // the catalog rather than the catalog. `loadAllowlist()` reads the warehouse this server
+  // actually serves from, so a dimension or measure renamed out from under the recovery query --
+  // BTS renamed an aircraft type out from under an entire slug fixture set once -- is red here.
+  // The recovery link offered to someone whose permalink did not parse must itself parse.
   it("offers a recovery query the server actually admits", async () => {
     const allowlist = await loadAllowlist();
-    expect(() => decodeRequest(encode(FALLBACK_QUERY), allowlist)).not.toThrow();
+    expect(() => decodeRequest(encode(RECOVERY_QUERY), allowlist)).not.toThrow();
   });
 });
 
