@@ -153,7 +153,7 @@ axes AS (
         -- fed through the real fct_route_month.sql + this file: departures_performed and
         -- seats both come back NULL, and the row never reaches mart_route_health at all,
         -- excluded by the rate floor below, which no zero-departure row can clear) and empirically
-        -- (measured min(gauge_t12) = 0.958 on the real 2026-04 warehouse). Keep the guard
+        -- (measured min(gauge_t12) = 0.958 on the real 2026-05 warehouse). Keep the guard
         -- anyway, the same way the `p12_months_present = 0` CASE above is kept: correct
         -- defence against a future change to the quarantine rule, which WOULD change this.
         ln(nullif(gauge_t12, 0) / nullif(gauge_p12, 0))                    AS gauge_log,

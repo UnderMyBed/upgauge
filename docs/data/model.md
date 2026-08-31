@@ -606,7 +606,7 @@ route fed through the real `fct_route_month.sql` and `200_mart_route_health.sql`
 with `departures_performed` and `seats` both `NULL`, excluded entirely by the departure floor —
 `t12_months_flown` is 0 and the summed departures are `NULL`, so it fails both arms — before
 `gauge_t12` is ever computed — and
-**empirically** — measured `min(gauge_t12) = 0.958` on the real 2026-04 warehouse. The guard
+**empirically** — measured `min(gauge_t12) = 0.958` on the real 2026-05 warehouse. The guard
 is kept anyway, the same way the `p12_months_present = 0` `CASE` earlier in this file is kept:
 correct defence against a future change to the quarantine rule, which *would* change this.
 
