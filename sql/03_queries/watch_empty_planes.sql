@@ -8,10 +8,20 @@
 -- unfloored it delivers cargo runs and sightseeing flights instead, which is a materially
 -- different, and false, story about the row.
 --
--- t12_departures_performed >= 360 is features.md's "min 30 departures/mo" floor restated over
--- the trailing TWELVE months (30 x 12), and it is ADDITIONAL to, not a restatement of, the
--- mart's own floor: 200_mart_route_health.sql's `derived` CTE already drops every route below
--- 30 departures for the WHOLE table before this preset ever runs. The two differ by 12x.
+-- t12_departures_performed >= 360 is a FLAT ANNUAL TOTAL, and it is NOT the departure floor the
+-- tables and maps apply. That floor is a RATE -- 30 departures per month FLOWN, app/src/lib/
+-- floor.ts -- and this file's header used to call the 360 that same floor "restated over twelve
+-- months", which is the equivalence #134 ruled wrong in both directions: a route flying twelve
+-- months at 2.5 a month files 30 and is nowhere near the rate floor, while one flying three
+-- months at 40 a month files 120, runs at four times it, and this filter excludes it anyway.
+--
+-- Left as a flat total on purpose: mart_route_health carries no months-FLOWN column to divide by
+-- (its t12_months_present counts months FILED, a different quantity), so dividing here would put
+-- a second, subtly different definition of "active months" in the tree. Issue #148 owns that.
+--
+-- It is ADDITIONAL to, not a restatement of, the mart's own floor: 200_mart_route_health.sql's
+-- `derived` CTE already drops every route below 30 departures for the WHOLE table before this
+-- preset ever runs. The two differ by 12x.
 SELECT
     op_airline_id,
     route_key_low,

@@ -7,6 +7,14 @@ import { render, screen } from "@testing-library/react";
 import { DataTable, orderRows, type ColumnSpec } from "@/components/DataTable";
 import { resolutionKey } from "@/lib/resolve";
 
+// EVERY FIXTURE ROW CARRIES `active_months: 1` (#134). The floor is 30 departures per month
+// FLOWN, so `departures_performed / active_months` is what the component compares -- and at
+// one active month the two are the same number. That is deliberate: it keeps each fixture
+// below meaning exactly what its own name and comment say (29 is below the floor, 30 is on
+// it), rather than silently becoming a claim about a rate. The rows that exercise the WINDOW
+// grain -- where a twelve-month sum and a monthly rate genuinely disagree -- live in their own
+// describe block at the foot of this file, and a row with NO month count (which makes no claim
+// at all, as /watch's mart-fed rows do not) is asserted there too.
 const COLUMNS: ColumnSpec[] = [
   { key: "route", label: "Route", kind: "identifier" },
   { key: "seats", label: "Seats", kind: "seats" },
@@ -16,9 +24,9 @@ const COLUMNS: ColumnSpec[] = [
 ];
 
 const ROWS = [
-  { route: "PDX–SEA", seats: 501089, load_factor: 0.7782, avg_gauge: 73.58, departures_performed: 6810 },
-  { route: "PDX–PDX", seats: 2780, load_factor: 0, avg_gauge: 73.2, departures_performed: 38 },
-  { route: "PDX–AUS", seats: 190, load_factor: 0.9789, avg_gauge: 190, departures_performed: 1 },
+  { route: "PDX–SEA", seats: 501089, load_factor: 0.7782, avg_gauge: 73.58, departures_performed: 6810, active_months: 1 },
+  { route: "PDX–PDX", seats: 2780, load_factor: 0, avg_gauge: 73.2, departures_performed: 38, active_months: 1 },
+  { route: "PDX–AUS", seats: 190, load_factor: 0.9789, avg_gauge: 190, departures_performed: 1, active_months: 1 },
 ];
 
 describe("DataTable", () => {
@@ -63,6 +71,7 @@ describe("DataTable", () => {
       load_factor: 0,
       avg_gauge: 78.4,
       departures_performed: 5, // below the 30-departure floor AND zero-pax
+      active_months: 1,
     };
     const { container } = render(<DataTable columns={COLUMNS} rows={[OVERLAP_ROW]} />);
     const row = container.querySelector("tbody tr");
@@ -75,10 +84,10 @@ describe("DataTable", () => {
   // palette (--limit on "n", or missing it on "⌀"/"Q") would have passed every test.
   it("gutter: `n` never carries --limit; `⌀` and `Q` always do", () => {
     const GUTTER_ROWS = [
-      { route: "PDX–SEA", seats: 501089, load_factor: 0.7782, avg_gauge: 73.58, departures_performed: 6810 }, // no reason
-      { route: "PDX–AUS", seats: 190, load_factor: 0.9789, avg_gauge: 190, departures_performed: 1 }, // belowFloor -> "n"
-      { route: "PDX–PDX", seats: 2780, load_factor: 0, avg_gauge: 73.2, departures_performed: 38 }, // zeroPax -> "⌀"
-      { route: "PDX–ZZZ", seats: 100, load_factor: 0.5, avg_gauge: 100, departures_performed: 50, quarantined_rows: 2 }, // -> "Q"
+      { route: "PDX–SEA", seats: 501089, load_factor: 0.7782, avg_gauge: 73.58, departures_performed: 6810, active_months: 1 }, // no reason
+      { route: "PDX–AUS", seats: 190, load_factor: 0.9789, avg_gauge: 190, departures_performed: 1, active_months: 1 }, // belowFloor -> "n"
+      { route: "PDX–PDX", seats: 2780, load_factor: 0, avg_gauge: 73.2, departures_performed: 38, active_months: 1 }, // zeroPax -> "⌀"
+      { route: "PDX–ZZZ", seats: 100, load_factor: 0.5, avg_gauge: 100, departures_performed: 50, quarantined_rows: 2, active_months: 1 }, // -> "Q"
     ];
     const { container } = render(<DataTable columns={COLUMNS} rows={GUTTER_ROWS} />);
     // KEYED ON THE ROW'S OWN IDENTIFIER, not on its position. The property under test is the
@@ -416,10 +425,10 @@ const FLOOR_COLUMNS: ColumnSpec[] = [
 ];
 // In measure order (seats desc), exactly as a pivot ORDER BY would hand them over.
 const FLOOR_ROWS = [
-  { carrier: "3M", seats: 1748, departures_performed: 38 },
-  { carrier: "MQ", seats: 380, departures_performed: 5 },
-  { carrier: "VD", seats: 115, departures_performed: 120 },
-  { carrier: "LF", seats: 60, departures_performed: 2 },
+  { carrier: "3M", seats: 1748, departures_performed: 38, active_months: 1 },
+  { carrier: "MQ", seats: 380, departures_performed: 5, active_months: 1 },
+  { carrier: "VD", seats: 115, departures_performed: 120, active_months: 1 },
+  { carrier: "LF", seats: 60, departures_performed: 2, active_months: 1 },
 ];
 
 /** The identifier cell of every rendered row, top to bottom. */
@@ -480,7 +489,7 @@ describe("DataTable: below-floor rows sort last", () => {
     // X is below floor and Y makes no claim, so the correct order INVERTS the measure order --
     // under the mutant it does not move at all.
     const rows = [
-      { carrier: "X", seats: 500, departures_performed: 5 },
+      { carrier: "X", seats: 500, departures_performed: 5, active_months: 1 },
       { carrier: "Y", seats: 100 },
     ];
     const { container } = render(<DataTable columns={FLOOR_COLUMNS} rows={rows} />);
@@ -501,9 +510,9 @@ describe("DataTable: below-floor rows sort last", () => {
     // class. B stays dashed and still shows Q -- the treatment and the glyph are unchanged;
     // only its position moves.
     const rows = [
-      { carrier: "A", seats: 900, departures_performed: 6810 },
-      { carrier: "B", seats: 400, departures_performed: 5, quarantined_rows: 2 },
-      { carrier: "C", seats: 100, departures_performed: 120 },
+      { carrier: "A", seats: 900, departures_performed: 6810, active_months: 1 },
+      { carrier: "B", seats: 400, departures_performed: 5, quarantined_rows: 2, active_months: 1 },
+      { carrier: "C", seats: 100, departures_performed: 120, active_months: 1 },
     ];
     const { container } = render(<DataTable columns={FLOOR_COLUMNS} rows={rows} />);
     expect(renderedOrder(container)).toEqual(["A", "C", "B"]);
@@ -520,9 +529,9 @@ describe("DataTable: below-floor rows sort last", () => {
     // only the Q case would leave the zero-pax branch of the same mutant green, and that branch
     // is the one carrying 97.7% overlap with the floor.
     const rows = [
-      { carrier: "A", seats: 900, departures_performed: 6810 },
-      { carrier: "B", seats: 400, departures_performed: 5, load_factor: 0 },
-      { carrier: "C", seats: 100, departures_performed: 120 },
+      { carrier: "A", seats: 900, departures_performed: 6810, active_months: 1 },
+      { carrier: "B", seats: 400, departures_performed: 5, load_factor: 0, active_months: 1 },
+      { carrier: "C", seats: 100, departures_performed: 120, active_months: 1 },
     ];
     const { container } = render(<DataTable columns={FLOOR_COLUMNS} rows={rows} />);
     expect(renderedOrder(container)).toEqual(["A", "C", "B"]);
@@ -596,9 +605,9 @@ describe("DataTable: the 30-departure floor is a boundary, not a vibe", () => {
   //
   // 30 IS SCORED. The rule is "below the 30-departure floor", so a row AT the floor clears it.
   const BOUNDARY_ROWS = [
-    { carrier: "OVER", seats: 300, departures_performed: 31 },
-    { carrier: "UNDER", seats: 200, departures_performed: 29 },
-    { carrier: "AT", seats: 100, departures_performed: 30 },
+    { carrier: "OVER", seats: 300, departures_performed: 31, active_months: 1 },
+    { carrier: "UNDER", seats: 200, departures_performed: 29, active_months: 1 },
+    { carrier: "AT", seats: 100, departures_performed: 30, active_months: 1 },
   ];
 
   it("puts 29 below the floor and leaves 30 and 31 above it", () => {
@@ -623,9 +632,9 @@ describe("DataTable: the 30-departure floor is a boundary, not a vibe", () => {
 // a React component gets no coverage from a DOM assertion.
 describe("orderRows", () => {
   const rows = [
-    { id: "a", departures_performed: 100 },
-    { id: "b", departures_performed: 5 },
-    { id: "c", departures_performed: 60 },
+    { id: "a", departures_performed: 100, active_months: 1 },
+    { id: "b", departures_performed: 5, active_months: 1 },
+    { id: "c", departures_performed: 60, active_months: 1 },
   ];
 
   it("returns the partitioned order with scored rows ranked 1..k", () => {
@@ -656,8 +665,8 @@ describe("orderRows", () => {
     expect(orderRows([rows[1]], true).map((r) => r.rank)).toEqual([null]);
     // Every row below floor: one empty bucket, order untouched, nothing ranked.
     const allSparse = [
-      { id: "x", departures_performed: 1 },
-      { id: "y", departures_performed: 2 },
+      { id: "x", departures_performed: 1, active_months: 1 },
+      { id: "y", departures_performed: 2, active_months: 1 },
     ];
     expect(orderRows(allSparse, true).map((r) => r.row.id)).toEqual(["x", "y"]);
     expect(orderRows(allSparse, true).every((r) => r.rank === null)).toBe(true);
@@ -675,10 +684,10 @@ describe("orderRows", () => {
     // repo's suites behaves identically. This is the only assertion that would notice.
     const probe = [
       { id: "absent" },
-      { id: "null", departures_performed: null },
-      { id: "undef", departures_performed: undefined },
-      { id: "nan", departures_performed: Number("not a number") },
-      { id: "zero", departures_performed: 0 },
+      { id: "null", departures_performed: null, active_months: 1 },
+      { id: "undef", departures_performed: undefined, active_months: 1 },
+      { id: "nan", departures_performed: Number("not a number"), active_months: 1 },
+      { id: "zero", departures_performed: 0, active_months: 1 },
     ];
     expect(orderRows(probe, true).map((r) => [r.row.id, r.belowFloor])).toEqual([
       ["absent", false],
@@ -710,5 +719,72 @@ describe("DataTable: a ranked table cannot decline the partition", () => {
     const unpartitioned = <DataTable columns={FLOOR_COLUMNS} rows={FLOOR_ROWS} partition={false} />;
     expect(render(ranked).container.querySelectorAll('[data-testid="rank-cell"]').length).toBe(4);
     expect(renderedOrder(render(unpartitioned).container)).toEqual(["3M", "MQ", "VD", "LF"]);
+  });
+});
+
+// THE FLOOR IS MONTHLY, AND THE TABLE APPLIES IT TO A TRAILING WINDOW (#134).
+//
+// Every one of these rows is a trailing-12 pivot row -- the shape /carrier's two Top-N tables,
+// /route and /aircraft all hand this component. `departures_performed` there is a TWELVE-MONTH
+// SUM, and comparing it against 30 made the floor ~12x too lenient. The denominator is
+// `active_months`, the companion count both pivot templates emit
+// (sql/03_queries/pivot_segment.sql).
+//
+// THE TWO ROWS BELOW LAND ON OPPOSITE SIDES and must: a fixture where both fall the same way
+// passes under the bug and under the fix alike, which is this repo's signature vacuous test.
+describe("DataTable reads the floor per month flown, not per window", () => {
+  const COLS: ColumnSpec[] = [
+    { key: "route", label: "Route", kind: "identifier" },
+    { key: "seats", label: "Seats", kind: "seats" },
+    { key: "departures_performed", label: "Dep.", kind: "count" },
+  ];
+
+  /** 12 months x 2.5/mo. The twelve-month sum is exactly 30, so the shipped rule scored it. */
+  const SPARSE_BUT_LONG = { route: "AAA–BBB", seats: 900, departures_performed: 30, active_months: 12 };
+  /** 3 months x 40/mo. A dense seasonal operation a flat 360 would have branded sparse. */
+  const BRIEF_BUT_DENSE = { route: "CCC–DDD", seats: 9000, departures_performed: 120, active_months: 3 };
+
+  const flagOf = (container: HTMLElement, route: string) =>
+    [...container.querySelectorAll("tbody tr")]
+      .find((tr) => tr.querySelector("td.id")?.textContent === route)
+      ?.getAttribute("data-below-floor");
+
+  it("marks a route flying twelve months at 2.5 departures/month below floor", () => {
+    const { container } = render(<DataTable columns={COLS} rows={[SPARSE_BUT_LONG, BRIEF_BUT_DENSE]} />);
+    expect(flagOf(container, "AAA–BBB")).toBe("true");
+  });
+
+  it("leaves a route flying three months at 40 departures/month scored", () => {
+    const { container } = render(<DataTable columns={COLS} rows={[SPARSE_BUT_LONG, BRIEF_BUT_DENSE]} />);
+    expect(flagOf(container, "CCC–DDD")).toBeNull();
+  });
+
+  it("gives the sparse row the `n` glyph and the dense row none", () => {
+    const { container } = render(<DataTable columns={COLS} rows={[SPARSE_BUT_LONG, BRIEF_BUT_DENSE]} />);
+    const gut = (route: string) =>
+      [...container.querySelectorAll("tbody tr")]
+        .find((tr) => tr.querySelector("td.id")?.textContent === route)
+        ?.querySelector("td.gut abbr")?.textContent ?? null;
+    expect(gut("AAA–BBB")).toBe("n");
+    expect(gut("CCC–DDD")).toBeNull();
+  });
+
+  it("sorts the sparse row below the dense one even though the caller listed it first", () => {
+    // ORDERING, not membership: the partition is what puts sparse rows at the foot, and a set
+    // assertion passes under a dropped partition. The caller's order here is deliberately the
+    // reverse of the rendered one.
+    const { container } = render(<DataTable columns={COLS} rows={[SPARSE_BUT_LONG, BRIEF_BUT_DENSE]} />);
+    const order = [...container.querySelectorAll("tbody tr td.id")].map((td) => td.textContent);
+    expect(order).toEqual(["CCC–DDD", "AAA–BBB"]);
+  });
+
+  it("claims nothing about the floor when the row carries no active-month count", () => {
+    // /watch's rows: mart_route_health carries a twelve-month departure sum and no month count
+    // beside it, so the presets abstain -- now by the settled rule rather than by refusing to
+    // alias the field.
+    const { container } = render(
+      <DataTable columns={COLS} rows={[{ route: "EEE–FFF", seats: 900, departures_performed: 30 }]} />,
+    );
+    expect(flagOf(container, "EEE–FFF")).toBeNull();
   });
 });

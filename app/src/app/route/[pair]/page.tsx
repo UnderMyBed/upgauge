@@ -24,6 +24,7 @@ import { formatSeats, formatCount, formatLoadFactor, formatGauge } from "@/lib/f
 import type { AirportRef } from "@/lib/resolve";
 import { AIRPORT_PREFIX } from "@/lib/airport";
 import type { Allowlist } from "@/lib/pivot/allowlist";
+import { NON_DISPLAY_COLUMNS } from "@/lib/pivot/types";
 import type { PivotQuery } from "@/lib/pivot/types";
 
 // A permalink page whose content depends on live warehouse state (dataAsOf(), the pivot
@@ -57,11 +58,6 @@ export const dynamic = "force-dynamic";
  * test harness, not the dedup. Disclosed, not silently assumed, in task-2-report.md;
  * `make app-smoke` against a served build is what would measure it. */
 const resolveRoutePairForRequest = cache((slug: string) => resolveRoutePair(slug));
-
-// fct_segment_month exposes quarantine bookkeeping columns alongside every measure a query
-// asked for (same as explore/page.tsx's identical constant) -- the stat strip surfaces the
-// count, but they are not pivot-vocabulary columns and must never appear as a table column.
-const NON_DISPLAY_COLUMNS = new Set(["quarantined_rows", "quarantine_reasons"]);
 
 const KIND: Record<string, ColumnSpec["kind"]> = {
   seats: "seats",

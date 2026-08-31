@@ -35,6 +35,7 @@ import { fetchCarrierTypeNetwork } from "@/lib/map/carrierTypeNetwork";
 import { rawFilterValue, resolveTypeFilter, type MapFilter } from "@/lib/map/mapFilter";
 import { slugFor } from "@/lib/aircraftSlug";
 import type { Allowlist } from "@/lib/pivot/allowlist";
+import { NON_DISPLAY_COLUMNS } from "@/lib/pivot/types";
 import type { PivotQuery } from "@/lib/pivot/types";
 
 // Same reasoning, same constant, as route/[pair]/page.tsx and explore/page.tsx: this page's
@@ -48,11 +49,6 @@ export const dynamic = "force-dynamic";
 // rationale on the route page's own copy of this comment; not verifiable by this project's
 // Vitest suite (disclosed in task-2-report.md).
 const resolveCarrierForRequest = cache((slug: string) => resolveCarrier(slug));
-
-// Quarantine bookkeeping columns ride along with every segment-grain result; the stat strip
-// surfaces the count, but they are not pivot-vocabulary columns and must never become table
-// columns. Same constant, same reason, as explore/page.tsx and route/[pair]/page.tsx.
-const NON_DISPLAY_COLUMNS = new Set(["quarantined_rows", "quarantine_reasons"]);
 
 const KIND: Record<string, ColumnSpec["kind"]> = {
   seats: "seats",

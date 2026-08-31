@@ -252,8 +252,8 @@ with the generic Top-N builder (`app/src/lib/topn.ts`) and nothing else. The cla
 by any reader who tries to reproduce Gauge Watch in `/explore` and cannot.
 
 - **Gauge Watch** — biggest upgauges/downgauges, trailing 12mo. *The differentiator.*
-- **Empty Planes** — lowest trailing-12 load factor, with a `gauge_t12 >= 50` floor (min 30
-  departures/mo). *The hook.* "Seasonally-adjusted" is the wrong description for `lf_t12`: it
+- **Empty Planes** — lowest trailing-12 load factor, with a `gauge_t12 >= 50` floor and a flat
+  360-departure one. *The hook.* "Seasonally-adjusted" is the wrong description for `lf_t12`: it
   is a trailing-12-month **sum** of passengers over seats, not a seasonally-decomposed model,
   so a full year of months is already summed together and seasonality is gone by construction
   — there is no separate adjustment step, and no code computes one. The `gauge_t12 >= 50` floor
@@ -261,11 +261,21 @@ by any reader who tries to reproduce Gauge Watch in `/explore` and cannot.
   wildly on a handful of passengers and would otherwise dominate a "lowest LF" ranking with
   noise rather than a genuinely underperforming route.
 
-  **Two floors, and the page must state both.** The "min 30 departures/mo" above is
-  `t12_departures_performed >= 360` in `watch_empty_planes.sql` (30 × 12), and it is the **more
-  restrictive** of the two — 12× stronger than `mart_route_health`'s own 30-per-year floor,
-  which every row already clears, so disclosing only `gauge_t12 >= 50` would name the weaker
-  floor and hide the binding one. A page
+  **Two floors, and the page must state both.** The second is
+  `t12_departures_performed >= 360` in `watch_empty_planes.sql`, and it is the **more
+  restrictive** of the two — 12× stronger than `mart_route_health`'s own 30-per-trailing-12
+  floor, which every row already clears, so disclosing only `gauge_t12 >= 50` would name the
+  weaker floor and hide the binding one.
+
+  **That 360 is a flat annual total, and it is NOT the departure floor the tables and maps
+  apply.** That floor is 30 departures per month *flown* — a rate over the months a route
+  actually operated (`docs/design/system.md` § The data table, `app/src/lib/floor.ts`) — and the
+  two rules disagree in both directions: a route flying twelve months at 2.5 departures a month
+  files 30 and clears 360's spirit nowhere, while one flying three months at 40 a month files
+  120, is four times the rate floor, and 360 excludes it. `mart_route_health` has no months-flown
+  column for this preset to divide by (`t12_months_present` counts months FILED, which is a
+  different quantity), so the two floors remain different rules stated separately rather than one
+  rule stated twice. A page
   that enumerates its filters and omits one cannot be reproduced from what it says; Death Watch
   carries the gauge floor and **not** this one, which is what makes the disclosure per-preset
   rather than shared.

@@ -16,11 +16,16 @@ describe("LegendRail", () => {
     expect(screen.getByText("⌀")).toBeDefined();
     expect(screen.getByText(/flew, carried no passengers/)).toBeDefined();
     expect(screen.getByText("n")).toBeDefined();
-    expect(screen.getByText(/below the 30-departure floor/)).toBeDefined();
+    // THE COPY NAMES THE GRAIN (#134). Every page carrying this rail draws a trailing-12
+    // window, so a row marked `n` can show a departure count in the hundreds -- "below the
+    // 30-departure floor" beside 323 departures reads as a rendering fault, not as a rate.
+    // Anchored on "a month", which is the whole correction: a needle matching only "30
+    // departures" would go green against the old, grainless copy.
+    expect(screen.getByText(/under 30 departures a month flown/)).toBeDefined();
     expect(screen.getByText("Q")).toBeDefined();
     // Anchored, not a bare /quarantined/: the em-dash row below this group also says
     // "quarantined", and an unscoped match is ambiguous between the two -- the same scoping
-    // this file's map-legend test already needed for "below the 30-departure floor".
+    // this file's map-legend test already needed for the departure-floor row.
     expect(screen.getByText(/^quarantined — failed an invariant$/)).toBeDefined();
     expect(screen.getByText(/computed measure/)).toBeDefined();
   });
@@ -113,7 +118,7 @@ describe("LegendRail", () => {
 
   // Final whole-branch review, Important #5: `/airport/<code>` draws a network map (M7) whose
   // three encodings (width <- seats, dash <- load factor, dotted/muted <- below the
-  // 30-departure floor) were explained NOWHERE on the served page -- this rail had no arc
+  // departure floor) were explained NOWHERE on the served page -- this rail had no arc
   // group at all, and its own header comment said outright "this page has no map." Same
   // opt-in shape as fleetMix: omitted unless a map is actually drawn.
   it("omits the arc-rendering group unless a map is on the page", () => {
@@ -127,10 +132,12 @@ describe("LegendRail", () => {
     expect(screen.getByText("Arc rendering")).toBeDefined();
     expect(screen.getByText(/width scales with seats/i)).toBeDefined();
     expect(screen.getByText(/load factor is below 70%/i)).toBeDefined();
-    // Scoped past "below the 30-departure floor" alone: the Row-marks group (always
+    // Scoped past "under 30 departures a month flown" alone: the Row-marks group (always
     // rendered, `map` or not) already contains that exact phrase for its own `n` glyph, so an
     // unscoped match would be ambiguous between the two groups.
-    expect(screen.getByText(/dotted, muted -- below the 30-departure floor/i)).toBeDefined();
+    expect(
+      screen.getByText(/dotted, muted -- under 30 departures a month flown/i),
+    ).toBeDefined();
     // The straight-line-across-a-panel-boundary fact system.md claims "the page says so" for
     // -- it must actually be true, not merely asserted in a doc. Direction-agnostic wording:
     // re-review finding 4 found the old "into an inset panel" phrasing false for every

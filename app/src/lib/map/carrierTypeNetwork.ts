@@ -28,6 +28,9 @@ export interface CarrierTypeRouteRow {
   seats?: number | null;
   passengers?: number | null;
   departures_performed?: number | null;
+  /** The pivot's `active_months` companion count -- the departure floor's denominator. A COUNT,
+   * not a FILTERed sum, so it is 0 rather than NULL when nothing flew. */
+  active_months?: number | null;
 }
 
 /** One (carrier, aircraft type, undirected pair) group that survived the floor: definite
@@ -38,6 +41,7 @@ export interface DrawableRoute {
   seats: number;
   passengers: number;
   departures: number;
+  activeMonths: number;
 }
 
 export interface DrawableView {
@@ -292,6 +296,9 @@ export function drawableRoutes(
       seats,
       passengers,
       departures,
+      // 0, not NULL, when no month flew: `active_months` is a count(DISTINCT ...), not one of
+      // the FILTERed sums above whose NULL means "unknowable" -- see the field's own docstring.
+      activeMonths: row.active_months ?? 0,
     });
   }
 
@@ -366,6 +373,7 @@ export function segmentsForDrawing(
     seats: r.seats,
     departures: r.departures,
     loadFactor: ratio(r.passengers, r.seats),
+    activeMonths: r.activeMonths,
   }));
 
   const drawable = drawableSegments(segments).length;

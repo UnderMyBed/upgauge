@@ -810,11 +810,17 @@ describe("/airport/<code> sorts below-floor rows last", () => {
     // agree and "contiguous block at the bottom" would pass against the bug it exists to catch.
     // That is exactly how M4c's two-sort fixture failed.
     //
-    // Measured at the time of writing (trailing 12 to 2026-05): MQ files 380 seats on 5
-    // departures and sits below floor, while VD files 115 seats on 120 departures and does
-    // not -- so the measure sort puts a below-floor row ABOVE a scored one. If a BTS refresh
-    // ends that, this goes red and the fixture MOVES to another airport (CLAUDE.md, "MOVE the
-    // fixture") rather than the assertion above quietly becoming vacuous.
+    // RE-DERIVED UNDER THE MONTHLY FLOOR (#134) rather than assumed to have survived it: STT
+    // still discriminates, and by a wider margin than before. Trailing 12 to 2026-05, STT's four
+    // below-floor carriers are SY (9,300 seats, 50 departures across 5 months -- 10.0 a month),
+    // F9 (8,644 / 46 / 3 -- 15.3), MQ (380 / 5 / 3 -- 1.7) and LF (60 / 2 / 2 -- 1.0), while 3M
+    // is SCORED on 1,748 seats and 38 departures in the single month it flew. So the measure
+    // sort puts a below-floor row 9,300 seats ABOVE a scored one and the two orderings genuinely
+    // disagree. 3M earns its place twice over: at 38 departures in one month it is exactly the
+    // row a flat 360-per-window floor would have branded sparse.
+    //
+    // If a BTS refresh ends that, this goes red and the fixture MOVES to another airport
+    // (CLAUDE.md, "MOVE the fixture") rather than the assertion above quietly becoming vacuous.
     // `Number.isFinite` drops the unknowable row -- STT's F4 renders `—` for every measure
     // (its whole window is quarantined), and NaN would poison both extrema. It is neither
     // below floor nor comparable by seats, so it takes no part in this comparison.

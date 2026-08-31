@@ -1,7 +1,7 @@
 import { headers } from "next/headers";
 import { encode, UrlStateError } from "@/lib/pivot/urlstate";
 import { decodeRequest } from "@/lib/pivot/bounds";
-import { PivotError } from "@/lib/pivot/types";
+import { NON_DISPLAY_COLUMNS, PivotError } from "@/lib/pivot/types";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
@@ -41,7 +41,6 @@ const KIND: Record<string, ColumnSpec["kind"]> = {
 // and measure a query asked for (sql/03_queries/pivot_segment.sql, pivot_route.sql) -- the
 // gutter/foot text surfaces them, but they are not columns of the pivot vocabulary and must
 // never appear as a DataTable column.
-const NON_DISPLAY_COLUMNS = new Set(["quarantined_rows", "quarantine_reasons"]);
 
 /** The route dimension's column_expr names two columns; the reader wants one cell. Both
  * resolve through dim_airport, so this renders the pair as `PDX–SEA` -- the form

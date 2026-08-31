@@ -56,6 +56,7 @@ function seg(
     seats: 100_000,
     departures: 200,
     loadFactor: 0.85,
+    activeMonths: 1,
     ...overrides,
   };
 }
@@ -220,19 +221,66 @@ describe("renderSegmentMap", () => {
     expect(labels).not.toContain("MIA");
   });
 
-  it("marks a node below the departure floor on its SUMMED incident departures", () => {
-    // Catches: reading one segment's departures as if it were the airport's. SEA carries two
-    // 20-departure segments -- each individually below DEPARTURE_FLOOR (30), together 40, which
-    // is not. The ARCS stay dotted (that encoding is per-arc and unchanged); the NODE must not.
+  // WHAT A DISC CLAIMS (#134). It reads "nothing serving this airport clears the departure
+  // floor", NOT "this airport is barely served in total" -- and the two are different
+  // statements about the same map.
+  //
+  // The floor is 30 departures per month FLOWN, so the summed-departures reading needs the
+  // months THE AIRPORT was served, which is the UNION of its incident segments' month sets.
+  // A union cannot be folded out of per-segment counts: `max()` is a lower bound, `sum()`
+  // double-counts every shared month, and neither is the answer. Measured over every /carrier
+  // type map in the trailing 12 (9,897 node marks), a `max()` fold gets the month count wrong
+  // on 1,997 and the VERDICT wrong on 150. The exact denominator would need a pivot grouped by
+  // endpoint airport, and `endpoint_airport_id` is `filter_only` in the catalog -- so the rule
+  // is the one this data supports exactly, rather than an approximation of the old one.
+  it("marks a node below floor when EVERY incident segment is, on disjoint months", () => {
+    // THE FIXTURE WHERE THE OLD AND NEW RULES DISAGREE. Two 20-departure segments over SIX
+    // months each, and the month sets are disjoint -- so no fold recovers the truth:
+    //   summed-departures rule  40 >= 30            -> SEA scored        (the old answer)
+    //   every-incident rule     both 3.33/mo        -> SEA below floor   (the new one)
+    //   max() fold              40 / 6  = 6.67/mo   -> below, by luck
+    //   sum() fold              40 / 12 = 3.33/mo   -> below, by luck
+    // The two folds agree here only because both segments are sparse; the next test is where
+    // they do not, and it is the one that makes this rule's shape load-bearing.
     const svg = renderSegmentMap(
       input([
-        seg("SEA", "PDX", { departures: 20 }),
-        seg("SEA", "ORD", { departures: 20 }),
+        seg("SEA", "PDX", { departures: 20, activeMonths: 6 }),
+        seg("SEA", "ORD", { departures: 20, activeMonths: 6 }),
+      ]),
+    );
+    expect(nodeMark(svg, "SEA")).toEqual(["1.3", "var(--ink-3)"]);
+    expect(nodeMark(svg, "PDX")).toEqual(["1.3", "var(--ink-3)"]);
+    expect(svg).toContain('stroke-dasharray="1 3"');
+  });
+
+  it("leaves a node scored when ONE incident segment clears the floor", () => {
+    // AND, NOT OR. One route running at 30 departures a month is real service, so the airport
+    // is served -- however sparse everything else into it is. MUTANT: `||` for `&&` in
+    // `tallyNodes` -> SEA goes 1.3px/--ink-3 and this test alone goes red, while the test
+    // above stays green because there BOTH segments are below floor.
+    const svg = renderSegmentMap(
+      input([
+        seg("SEA", "PDX", { departures: 20, activeMonths: 6 }),
+        seg("SEA", "ORD", { departures: 360, activeMonths: 12 }),
       ]),
     );
     expect(nodeMark(svg, "SEA")).toEqual(["2", "var(--ink)"]);
     expect(nodeMark(svg, "PDX")).toEqual(["1.3", "var(--ink-3)"]);
-    expect(svg).toContain('stroke-dasharray="1 3"');
+    expect(nodeMark(svg, "ORD")).toEqual(["2", "var(--ink)"]);
+  });
+
+  it("still reads a single-arc node as that arc's own verdict", () => {
+    // ON A HUB MAP NOTHING MOVES: each destination has exactly one incident arc, so "every
+    // incident segment is below floor" is that arc's verdict -- the same answer the summed rule
+    // gave. This is what makes the change confined to the point-to-point maps.
+    const svg = renderSegmentMap(
+      input([
+        seg("SEA", "PDX", { departures: 29, activeMonths: 1 }),
+        seg("SEA", "ORD", { departures: 31, activeMonths: 1 }),
+      ]),
+    );
+    expect(nodeMark(svg, "PDX")).toEqual(["1.3", "var(--ink-3)"]);
+    expect(nodeMark(svg, "ORD")).toEqual(["2", "var(--ink)"]);
   });
 
   it("reuses the baked basemap fit and never unions subject points into it", () => {
@@ -302,16 +350,16 @@ describe("renderSegmentMap", () => {
     // covering for it: on the first fixture every `from` is SEA, on the second every `to` is SEA.
     const byTo = renderSegmentMap(
       input([
-        seg("SEA", "PDX", { seats: 500, loadFactor: 0.62 }), // dashed, listed first
-        seg("SEA", "JFK", { seats: 500, loadFactor: 0.9 }), // solid; JFK < PDX, so draws first
+        seg("SEA", "PDX", { seats: 500, loadFactor: 0.62, activeMonths: 1 }), // dashed, listed first
+        seg("SEA", "JFK", { seats: 500, loadFactor: 0.9, activeMonths: 1 }), // solid; JFK < PDX, so draws first
       ]),
     );
     expect(dashOrder(byTo)).toEqual(["solid", "dashed"]);
 
     const byFrom = renderSegmentMap(
       input([
-        seg("PDX", "SEA", { seats: 500, loadFactor: 0.62 }), // dashed, listed first
-        seg("JFK", "SEA", { seats: 500, loadFactor: 0.9 }), // solid; JFK < PDX, so draws first
+        seg("PDX", "SEA", { seats: 500, loadFactor: 0.62, activeMonths: 1 }), // dashed, listed first
+        seg("JFK", "SEA", { seats: 500, loadFactor: 0.9, activeMonths: 1 }), // solid; JFK < PDX, so draws first
       ]),
     );
     expect(dashOrder(byFrom)).toEqual(["solid", "dashed"]);
@@ -358,6 +406,7 @@ describe("renderSegmentMap", () => {
       seats: 100,
       departures: 50,
       loadFactor: 0.8,
+      activeMonths: 1,
     };
     expect(drawableSegments([collided])).toEqual([]);
 
@@ -378,8 +427,8 @@ describe("renderSegmentMap", () => {
     // instead: `drawableSegments` and `tallyNodes` both route through `airportKey`, so there is
     // one edit to make and not two. That is the whole reason the function exists.
     const twoEnds: SegmentDatum[] = [
-      { from: node("SEA"), to: ausA, seats: 100, departures: 50, loadFactor: 0.8 },
-      { from: node("PDX"), to: ausB, seats: 900, departures: 50, loadFactor: 0.8 },
+      { from: node("SEA"), to: ausA, seats: 100, departures: 50, loadFactor: 0.8, activeMonths: 1 },
+      { from: node("PDX"), to: ausB, seats: 900, departures: 50, loadFactor: 0.8, activeMonths: 1 },
     ];
     expect(labelsInOrder(renderSegmentMap(input(twoEnds)))).toEqual(["SEA", "PDX", "AUS"]);
   });
@@ -599,10 +648,10 @@ describe("renderSegmentMap", () => {
   });
 
   it("carries the arc encoding through unchanged", () => {
-    const dashed = renderSegmentMap(input([seg("SEA", "PDX", { loadFactor: 0.62 })]));
+    const dashed = renderSegmentMap(input([seg("SEA", "PDX", { loadFactor: 0.62, activeMonths: 1 })]));
     expect(dashed).toContain('stroke-dasharray="5 3"');
 
-    const solid = renderSegmentMap(input([seg("SEA", "PDX", { loadFactor: null })]));
+    const solid = renderSegmentMap(input([seg("SEA", "PDX", { loadFactor: null, activeMonths: 1 })]));
     expect(solid).not.toContain("stroke-dasharray");
 
     const dotted = renderSegmentMap(input([seg("SEA", "PDX", { departures: 12 })]));

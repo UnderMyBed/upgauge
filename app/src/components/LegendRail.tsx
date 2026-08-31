@@ -93,7 +93,7 @@ export function LegendRail({
         </div>
         <div className="lrow">
           <b className="k">n</b>
-          <em>below the 30-departure floor</em>
+          <em>under 30 departures a month flown</em>
         </div>
         <div className="lrow">
           <b>Q</b>
@@ -167,9 +167,15 @@ export function LegendRail({
  * one, since `strokeFor` itself treats them as independent (a floor arc's load factor is never
  * even consulted): stroke WIDTH scales with seats: `0.7 + 2.9*sqrt(seats/max)`; a DASHED
  * stroke (`"5 3"`) means this route's load factor is below 70%; a DOTTED, muted stroke
- * (`"1 3"`, `--ink-3`) overrides both of the above when the route is below the
- * 30-departure floor -- "barely flown" is the whole story for that arc, so it is never also
- * scaled by seats or dashed by load factor. */
+ * (`"1 3"`, `--ink-3`) overrides both of the above when the route is below the departure
+ * floor -- "barely flown" is the whole story for that arc, so it is never also scaled by seats
+ * or dashed by load factor.
+ *
+ * THE COPY NAMES THE GRAIN, and it has to (#134). Every page carrying this rail draws a
+ * TRAILING-12 window, so a row marked `n` can show a departure count in the hundreds; "below
+ * the 30-departure floor" beside 323 departures reads as a rendering fault rather than as a
+ * rate. "under 30 departures a month flown" is the same rule stated so the number on the page
+ * and the mark in the gutter agree. */
 function ArcRendering() {
   return (
     <div className="grp">
@@ -212,7 +218,7 @@ function ArcRendering() {
             />
           </svg>
         </span>
-        <em>dotted, muted -- below the 30-departure floor (overrides both rows above)</em>
+        <em>dotted, muted -- under 30 departures a month flown (overrides both rows above)</em>
       </div>
       <div className="lrow">
         <em>

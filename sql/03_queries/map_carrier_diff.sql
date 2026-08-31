@@ -420,12 +420,24 @@ agg AS (
 
         count(DISTINCT r.year_month) FILTER (
             WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_months_present,
+        -- MONTHS FLOWN, NOT MONTHS PRESENT, and the two are different columns on purpose (#134).
+        -- `*_months_present` counts every month the pair FILED; this counts the months it
+        -- performed departures, which is the departure floor's denominator and is defined
+        -- identically to the pivot templates' `active_months`
+        -- (sql/03_queries/pivot_route.sql). A month that filed a schedule and flew nothing did
+        -- not fly, so counting it would understate the rate and mark served airports sparse.
+        count(DISTINCT r.year_month) FILTER (
+            WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month
+              AND r.departures_performed > 0)                                 AS t12_months_flown,
         sum(r.seats)                FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_seats,
         sum(r.passengers)           FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_passengers,
         sum(r.departures_performed) FILTER (WHERE r.year_month BETWEEN w.t12_start_month AND w.t12_end_month) AS t12_departures_performed,
 
         count(DISTINCT r.year_month) FILTER (
             WHERE r.year_month BETWEEN w.p12_start_month AND w.p12_end_month) AS p12_months_present,
+        count(DISTINCT r.year_month) FILTER (
+            WHERE r.year_month BETWEEN w.p12_start_month AND w.p12_end_month
+              AND r.departures_performed > 0)                                 AS p12_months_flown,
         sum(r.seats)                FILTER (WHERE r.year_month BETWEEN w.p12_start_month AND w.p12_end_month) AS p12_seats,
         sum(r.passengers)           FILTER (WHERE r.year_month BETWEEN w.p12_start_month AND w.p12_end_month) AS p12_passengers,
         sum(r.departures_performed) FILTER (WHERE r.year_month BETWEEN w.p12_start_month AND w.p12_end_month) AS p12_departures_performed
@@ -485,6 +497,11 @@ panel AS (
         CASE WHEN category = 'dropped' THEN p12_seats                ELSE t12_seats                END AS seats,
         CASE WHEN category = 'dropped' THEN p12_passengers           ELSE t12_passengers           END AS passengers,
         CASE WHEN category = 'dropped' THEN p12_departures_performed ELSE t12_departures_performed END AS departures,
+        -- Taken from the SAME window as `departures` directly above, by the same CASE. A
+        -- denominator drawn from the other window would divide one window's departures by
+        -- another's months -- a ratio of two different populations. A `dropped` arc draws the
+        -- prior window, so its floor mark must be about the prior window too.
+        CASE WHEN category = 'dropped' THEN p12_months_flown         ELSE t12_months_flown         END AS active_months,
         -- Per category, in the category's own unit. Never compared across categories -- every
         -- use is PARTITION BY category. See the header's ranking section.
         CASE WHEN category = 'downgauged' THEN gauge_fall
@@ -595,6 +612,7 @@ SELECT
     hi.lon  AS to_lon,
     r.seats,
     r.departures,
+    r.active_months,
     r.passengers / nullif(r.seats, 0) AS load_factor,
     r.gauge_fall,
     r.category_total,

@@ -24,13 +24,14 @@ function arc(code: keyof typeof COORDS, overrides: Partial<ArcDatum> = {}): ArcD
     seats: 100_000,
     departures: 200,
     loadFactor: 0.85,
+    activeMonths: 1,
     ...overrides,
   };
 }
 
 function conterminousNetwork(): NetworkMapInput {
   return {
-    origin: { code: "ORD", ...COORDS.ORD, seats: 0, departures: 0, loadFactor: null },
+    origin: { code: "ORD", ...COORDS.ORD, seats: 0, departures: 0, loadFactor: null, activeMonths: 1 },
     arcs: [arc("SEA"), arc("JFK")],
     window: "2025-05 → 2026-04",
     sameAirportSeats: 0,
@@ -39,7 +40,7 @@ function conterminousNetwork(): NetworkMapInput {
 
 function hawaiiReachingNetwork(): NetworkMapInput {
   return {
-    origin: { code: "PDX", ...COORDS.PDX, seats: 0, departures: 0, loadFactor: null },
+    origin: { code: "PDX", ...COORDS.PDX, seats: 0, departures: 0, loadFactor: null, activeMonths: 1 },
     arcs: [arc("HNL")],
     window: "2025-05 → 2026-04",
     sameAirportSeats: 0,
@@ -48,7 +49,7 @@ function hawaiiReachingNetwork(): NetworkMapInput {
 
 function marianasReachingNetwork(): NetworkMapInput {
   return {
-    origin: { code: "HNL", ...COORDS.HNL, seats: 0, departures: 0, loadFactor: null },
+    origin: { code: "HNL", ...COORDS.HNL, seats: 0, departures: 0, loadFactor: null, activeMonths: 1 },
     arcs: [arc("GUM")],
     window: "2025-05 → 2026-04",
     sameAirportSeats: 0,
@@ -59,7 +60,7 @@ function marianasReachingNetwork(): NetworkMapInput {
  *  airport the pre-#111 "6 airports reach the Pacific" figure omitted. */
 function samoaReachingNetwork(): NetworkMapInput {
   return {
-    origin: { code: "HNL", ...COORDS.HNL, seats: 0, departures: 0, loadFactor: null },
+    origin: { code: "HNL", ...COORDS.HNL, seats: 0, departures: 0, loadFactor: null, activeMonths: 1 },
     arcs: [arc("PPG")],
     window: "2025-05 → 2026-04",
     sameAirportSeats: 0,
@@ -70,7 +71,7 @@ function samoaReachingNetwork(): NetworkMapInput {
  *  `/airport/MDY?y=2021` and `/airport/HNL?y=2021` are real pages rather than a hypothetical. */
 function midwayReachingNetwork(): NetworkMapInput {
   return {
-    origin: { code: "HNL", ...COORDS.HNL, seats: 0, departures: 0, loadFactor: null },
+    origin: { code: "HNL", ...COORDS.HNL, seats: 0, departures: 0, loadFactor: null, activeMonths: 1 },
     arcs: [arc("MDY")],
     window: "2021-01 → 2021-12",
     sameAirportSeats: 0,
@@ -79,7 +80,7 @@ function midwayReachingNetwork(): NetworkMapInput {
 
 function caribbeanReachingNetwork(): NetworkMapInput {
   return {
-    origin: { code: "JFK", ...COORDS.JFK, seats: 0, departures: 0, loadFactor: null },
+    origin: { code: "JFK", ...COORDS.JFK, seats: 0, departures: 0, loadFactor: null, activeMonths: 1 },
     arcs: [arc("SJU")],
     window: "2025-05 → 2026-04",
     sameAirportSeats: 0,
@@ -250,7 +251,7 @@ describe("NetworkMap", () => {
     // obvious "no arcs, nothing to show" shortcut -- deletes the only thing on the page saying
     // anything was filed, on precisely the pages where it is the only thing there is.
     const empty: NetworkMapInput = {
-      origin: { code: "ORD", ...COORDS.ORD, seats: 0, departures: 0, loadFactor: null },
+      origin: { code: "ORD", ...COORDS.ORD, seats: 0, departures: 0, loadFactor: null, activeMonths: 1 },
       arcs: [],
       window: "2025-06 → 2026-05",
       sameAirportSeats: 0,
@@ -268,7 +269,7 @@ describe("NetworkMap", () => {
     // mounted at all when it returns null -- see page.tsx). This is the component staying a
     // pure, total function of whatever NetworkMapInput it is handed.
     const empty: NetworkMapInput = {
-      origin: { code: "ORD", ...COORDS.ORD, seats: 0, departures: 0, loadFactor: null },
+      origin: { code: "ORD", ...COORDS.ORD, seats: 0, departures: 0, loadFactor: null, activeMonths: 1 },
       arcs: [],
       window: "2025-05 → 2026-04",
       sameAirportSeats: 0,

@@ -103,6 +103,11 @@ export interface DiffRow {
   to_lon: number | null;
   seats: number;
   departures: number;
+  /** Months the pair FLEW inside the window this row draws -- `map_carrier_diff.sql`'s
+   * `t12_months_flown`/`p12_months_flown`, selected by the same CASE that picks `departures`,
+   * so numerator and denominator always describe one window. The departure floor's denominator
+   * (`lib/floor.ts`); defined identically to the pivot templates' `active_months`. */
+  active_months: number;
   load_factor: number | null;
   /** The downgauged panel's ranking key, in seats per departure. NULL on added and dropped. */
   gauge_fall: number | null;
@@ -150,6 +155,7 @@ function toSegment(row: DiffRow): SegmentDatum {
     to: node(row.to_code, row.to_lat, row.to_lon, row.route_key_high),
     seats: row.seats,
     departures: row.departures,
+    activeMonths: row.active_months,
     loadFactor: row.load_factor,
     // The downgauged panel is cut and ordered by gauge fall, which no arc channel encodes -- so
     // the value travels with the segment rather than being implied by its position. Null on

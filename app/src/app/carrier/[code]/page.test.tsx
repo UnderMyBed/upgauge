@@ -871,8 +871,16 @@ describe("/carrier/<code> sorts below-floor rows last", () => {
     // property, that the fixture can distinguish correct from buggy ON THAT PROPERTY -- which is
     // what the fixture guard below does, and why it is a separate assertion rather than a
     // comment.
+    // THE FIXTURE MOVED FROM 2O TO M5 (#134), and the guard above is what moved it. Under the
+    // monthly floor 2O's Top routes goes to 20 below-floor rows of 25, and no below-floor row
+    // out-seats a scored one any more -- the orderings agree, so the order half would have been
+    // exactly the half-disguised vacuum this comment was written about. M5 keeps the
+    // disagreement: 25 rows, 6 below floor, the first of them at index 13 in the measure order,
+    // and a below-floor route (2,072 seats on 259 departures across 9 months -- 28.8 a month)
+    // out-seating a scored one (889 seats, 118 departures across 3 months -- 39.3 a month).
+    //
     // MUTANT: `partition={false}` at the Top routes DataTable -> red here.
-    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "2O" }) }));
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "M5" }) }));
     const rows = rowsOf(container, 1);
     expectContiguousSuffix(rows.map((r) => r.belowFloor));
     // THE FIXTURE GUARD: a below-floor row really does out-seat a scored one here, so the two

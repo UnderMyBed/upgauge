@@ -23,6 +23,10 @@ export interface RouteEndpointRow {
   seats?: number | null;
   passengers?: number | null;
   departures_performed?: number | null;
+  /** The pivot's `active_months` companion count -- the departure floor's denominator. A COUNT,
+   * not a measure, so unlike the three above it is never NULL for a wholly-quarantined group;
+   * it comes back 0, which is the true statement "no month of this window flew". */
+  active_months?: number | null;
 }
 
 /** The far end of each row, relative to `subjectId` -- the destination of a departure, the
@@ -151,6 +155,7 @@ export interface DrawableRouteRow {
   seats: number;
   passengers: number;
   departures: number;
+  activeMonths: number;
 }
 
 /** What `classifyRouteRows` sorted the window's rows into. Every row lands in exactly one of
@@ -186,7 +191,7 @@ export interface ClassifiedRoutes {
  *                   drawn exactly as it was before #114.
  *
  * Before #114 both reached `Number(row.seats ?? 0)` and became the same arc: 0 seats, 0
- * departures, below `DEPARTURE_FLOOR`, dotted and muted -- "barely flown", which is a positive
+ * departures, below the departure floor, dotted and muted -- "barely flown", which is a positive
  * claim the data does not support for the first group. `/airport/BTT` drew `UMT` that way, and
  * for `A18`, `JZM` and `OQZ` the quarantined pair is the airport's ENTIRE trailing-12 network,
  * so the page's only arc was the fabricated one.
@@ -246,7 +251,19 @@ export function classifyRouteRows(
     }
 
     if (isSameAirport) sameAirportSeats += seats;
-    drawable.push({ farId: far[i], seats, passengers, departures });
+    // `?? 0` HERE AND NOWHERE ELSE IN THIS FUNCTION, and the difference is what the value is.
+    // The three above are FILTERed SUMs whose NULL means "unknowable", which is why coercing
+    // them was #114. `active_months` is a `count(DISTINCT ...)`, which cannot be NULL from the
+    // template -- it is 0 when no month flew, a measurement. The coercion covers only a row
+    // that reached here from a caller that did not select the column at all, and 0 there is the
+    // same "nothing flew" reading, never an invented number.
+    drawable.push({
+      farId: far[i],
+      seats,
+      passengers,
+      departures,
+      activeMonths: row.active_months ?? 0,
+    });
   });
 
   return { drawable, sameAirportSeats, quarantinedRoutes };
@@ -275,6 +292,7 @@ function toArcDatum(row: DrawableRouteRow, coords: Map<number, AirportCoords>): 
     seats: row.seats,
     departures: row.departures,
     loadFactor: ratio(row.passengers, row.seats),
+    activeMonths: row.activeMonths,
   };
 }
 
@@ -330,6 +348,7 @@ export async function fetchAirportNetwork(
       seats: 0,
       departures: 0,
       loadFactor: null,
+      activeMonths: 0,
     },
     arcs,
     window: `${timeFrom} → ${timeTo}`,

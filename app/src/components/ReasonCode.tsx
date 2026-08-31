@@ -7,7 +7,7 @@ export type Reason = "zeroPax" | "belowFloor" | "quarantined" | null;
 
 const GLYPH: Record<Exclude<Reason, null>, { mark: string; label: string; limit: boolean }> = {
   zeroPax: { mark: "⌀", label: "Filed departures carrying zero passengers", limit: true },
-  belowFloor: { mark: "n", label: "Below the 30-departure floor — reported, never scored", limit: false },
+  belowFloor: { mark: "n", label: "Under 30 departures a month flown — reported, never scored", limit: false },
   quarantined: { mark: "Q", label: "Quarantined — failed an invariant", limit: true },
 };
 

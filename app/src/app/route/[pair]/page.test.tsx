@@ -436,10 +436,10 @@ describe("/route/<pair> sorts below-floor rows last", () => {
   }
 
   it("renders the below-floor carriers as one contiguous block at the foot", async () => {
-    // MKE-ORD: 15 carrier rows in the trailing 12, 10 of them below floor.
+    // CLT-ORD: 10 carrier rows in the trailing 12, 7 of them below floor.
     // MUTANT: `partition={false}` at page.tsx's DataTable -> red here only.
     const { container } = render(
-      await RoutePage({ params: Promise.resolve({ pair: "MKE-ORD" }) }),
+      await RoutePage({ params: Promise.resolve({ pair: "CLT-ORD" }) }),
     );
     const flags = carrierRows(container).map((r) => r.belowFloor);
     const first = flags.indexOf(true);
@@ -458,17 +458,20 @@ describe("/route/<pair> sorts below-floor rows last", () => {
     // of five. It is unusable because the ORDERINGS AGREE there, which is the only property that
     // matters and is not the one the comment named.
     //
-    // The population is against this test: over the 400 busiest routes in the trailing 12, 327
-    // satisfy its assertions with the orderings already agreeing and only 2 disagree. MKE-ORD is
-    // one of the two, so it is one refresh away from vacuous -- exactly the 4W disease this
-    // branch invented the guard for.
+    // THE FIXTURE MOVED FROM MKE-ORD TO CLT-ORD, and the guard is why (#134). Under the monthly
+    // floor MKE-ORD goes from 10 below-floor rows of 15 to 14 of 15, leaving one scored row that
+    // out-seats every sparse one -- the orderings agree and the ordering half of the test above
+    // could no longer fail. The guard went red rather than the suite going quietly vacuous,
+    // which is the whole reason it is an assertion and not a comment.
     //
-    // MECHANISM: a below-floor carrier (4,195 seats, 25 departures) out-seats a scored one
-    // (2,924 seats, 45 departures), so the measure sort puts it at 5 of 15 and the partition has
-    // to move it. If a refresh ends that, THIS goes red and the fixture moves; the test above
-    // does not quietly stop testing anything.
+    // MECHANISM ON CLT-ORD, and it is the defect in one row: F9 files 66,374 seats on 323
+    // departures across all twelve months -- 26.9 a month, below the floor, and a trailing-12
+    // sum of 323 that cleared the old rule by 10x. It out-seats scored YX (47,544 seats, 630
+    // departures over 10 months, 63.0 a month), so the measure sort puts a below-floor row at 3
+    // of 10 and the partition has to move it. If a refresh ends that, THIS goes red and the
+    // fixture moves; the test above does not quietly stop testing anything.
     const { container } = render(
-      await RoutePage({ params: Promise.resolve({ pair: "MKE-ORD" }) }),
+      await RoutePage({ params: Promise.resolve({ pair: "CLT-ORD" }) }),
     );
     const rows = carrierRows(container);
     const seatsOf = (below: boolean) =>

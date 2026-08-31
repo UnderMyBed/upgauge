@@ -1,11 +1,13 @@
+import { belowFloor } from "@/lib/floor";
+
 /**
  * Arc encoding: how one destination's seats / departures / load factor become a stroke.
  *
  * Ported from the committed design mockup, `docs/design/mockups/map-network.html` (its inline
  * `<script>`, the "arcs, thinnest first" block). `docs/design/system.md` § The map § Arc
  * encoding is the contract this file implements verbatim: seats scale WIDTH, load factor
- * controls DASH, and the 30-departure floor overrides both with a fixed, dotted, muted
- * stroke. Colour is never the sole channel for any of it (CLAUDE.md) -- every stroke drawn
+ * controls DASH, and the departure floor -- 30 departures per month FLOWN, `lib/floor.ts` --
+ * overrides both with a fixed, dotted, muted stroke. Colour is never the sole channel for any of it (CLAUDE.md) -- every stroke drawn
  * here is one of two CSS variables, never a hue, so `app/src/app/globals.css` stays the
  * single source for the ramp (the property M4c's smoke checks already pin for the aircraft
  * mix chart's fills).
@@ -23,23 +25,39 @@ export interface ArcDatum {
   seats: number;
   departures: number;
   loadFactor: number | null;
+  /** Months inside the drawn window in which this pair ACTUALLY FLEW -- the departure floor's
+   * denominator (`lib/floor.ts`). Straight from the pivot's `active_months` companion count,
+   * never derived here.
+   *
+   * REQUIRED, not optional, and that is the point: every map on this site is drawn over a
+   * trailing-12 window, so an arc with no month count would silently stop claiming anything
+   * about the floor and every barely-flown pair would render as ordinary. A producer that
+   * cannot supply it does not have the data to draw a floor mark. */
+  activeMonths: number;
 }
 
 /** The three fields the stroke encoding actually reads. `ArcDatum` satisfies it, and so does
  * `SegmentDatum` -- which carries two endpoints rather than one `code`/`lat`/`lon`, and so is
  * not an `ArcDatum` however identical its weights are. Narrowing the parameter is what lets
  * ONE copy of the encoding serve both maps; the encoding itself is unchanged. */
-export type ArcWeight = Pick<ArcDatum, "seats" | "departures" | "loadFactor">;
+export type ArcWeight = Pick<ArcDatum, "seats" | "departures" | "loadFactor" | "activeMonths">;
 
-/** Below this many trailing-window departures, an arc is drawn dotted, fixed-width, and in
- * the muted `--ink-3` rather than scaled by seats -- system.md's "below the 30-departure
- * floor" row. This overrides the seat-width and load-factor-dash encodings entirely: a floor
- * arc's story is "barely flown," and scaling it by seats or dashing it by load factor would
- * bury that under a second, contradictory signal. */
-export const DEPARTURE_FLOOR = 30;
+/** THE DEPARTURE FLOOR IS DECLARED IN `lib/floor.ts`, AND IT IS PER MONTH FLOWN (#134).
+ *
+ * It used to be declared here, as a second copy of `components/DataTable.tsx`'s, and this
+ * comment described it as a count of TRAILING-WINDOW departures -- the wrong grain, written
+ * down as though settled, in the file the map reads it from. Every map here is drawn over a
+ * trailing-12 window, so that reading made an arc flying 2.5 departures a month render as
+ * ordinary, well-flown service.
+ *
+ * Below the floor an arc is drawn dotted, fixed-width, and in the muted `--ink-3` rather than
+ * scaled by seats -- system.md's "below the departure floor" row. This overrides the
+ * seat-width and load-factor-dash encodings entirely: a floor arc's story is "barely flown,"
+ * and scaling it by seats or dashing it by load factor would bury that under a second,
+ * contradictory signal. */
 
 /** Below this load factor, an arc that is ALREADY above the departure floor is dashed rather
- * than solid. Never checked on a floor arc -- see `DEPARTURE_FLOOR`. */
+ * than solid. Never checked on a floor arc -- see `strokeFor`. */
 export const LOAD_FACTOR_FLOOR = 0.7;
 
 /**
@@ -76,7 +94,7 @@ export interface ArcStroke {
 /**
  * `0.7 + 2.9·√(seats/max)` scales width by seats -- the mockup's own formula, kept verbatim.
  *
- * Below `DEPARTURE_FLOOR` this is overridden completely: fixed 1px, dotted `"1 3"`, opacity
+ * Below the departure floor (`lib/floor.ts`) this is overridden completely: fixed 1px, dotted `"1 3"`, opacity
  * 0.75, `--ink-3`. A floor arc's load factor is never consulted -- its own dash already
  * encodes "barely flown," and checking load factor on top of that would try to draw two
  * independent facts through one channel.
@@ -91,7 +109,7 @@ export interface ArcStroke {
  * NaN into the rendered attribute.
  */
 export function strokeFor(a: ArcWeight, maxSeats: number): ArcStroke {
-  if (a.departures < DEPARTURE_FLOOR) {
+  if (belowFloor(a.departures, a.activeMonths)) {
     return { width: 1, dash: "1 3", opacity: 0.75, stroke: "var(--ink-3)" };
   }
   const ratio = maxSeats > 0 ? a.seats / maxSeats : 0;

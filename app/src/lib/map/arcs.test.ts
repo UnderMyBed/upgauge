@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { arcOrder, strokeFor, DEPARTURE_FLOOR, LOAD_FACTOR_FLOOR, type ArcDatum } from "./arcs";
+import { arcOrder, strokeFor, LOAD_FACTOR_FLOOR, type ArcDatum } from "./arcs";
+import { DEPARTURE_FLOOR } from "@/lib/floor";
 
+// `activeMonths: 1` by default so a fixture's `departures` reads directly as the monthly rate
+// the floor compares -- every assertion below that names a departure count means it per month.
+// The trailing-window cases, where a twelve-month sum and a monthly rate disagree, are their
+// own describe block at the foot of this file.
 function arc(overrides: Partial<ArcDatum> = {}): ArcDatum {
   return {
     code: "SEA",
@@ -9,6 +14,7 @@ function arc(overrides: Partial<ArcDatum> = {}): ArcDatum {
     seats: 100_000,
     departures: 200,
     loadFactor: 0.85,
+    activeMonths: 1,
     ...overrides,
   };
 }
@@ -71,5 +77,38 @@ describe("strokeFor", () => {
   it("never divides by zero when every arc carries zero seats", () => {
     const s = strokeFor(arc({ seats: 0 }), 0);
     expect(Number.isFinite(s.width)).toBe(true);
+  });
+});
+
+// THE ARC FLOOR IS PER MONTH FLOWN (#134). Both maps are drawn over a TRAILING-12 window --
+// /airport's is `trailing12From(asOf)..asOf` or one calendar year, /carrier's type map the same
+// trailing 12 -- so comparing a window's summed departures against 30 made an arc read as
+// "well flown" at 2.5 departures a month. This file's own docstring called the floor
+// "trailing-window departures", which was the wrong grain written down as if settled.
+describe("strokeFor reads the departure floor per month flown", () => {
+  it("dots an arc that flew twelve months at 2.5 departures/month", () => {
+    // The shipped rule scored this: 30 is not < 30.
+    const s = strokeFor(arc({ departures: 30, activeMonths: 12, seats: 9000, loadFactor: 0.95 }), 9000);
+    expect(s.dash).toBe("1 3");
+    expect(s.width).toBe(1);
+    expect(s.stroke).toBe("var(--ink-3)");
+  });
+
+  it("leaves an arc that flew three months at 40 departures/month scaled by seats", () => {
+    // The guard against "fixing" the floor with a flat 360: 120 departures over a 12-month
+    // window is a dense seasonal operation, not a barely-flown one.
+    const s = strokeFor(arc({ departures: 120, activeMonths: 3, seats: 9000, loadFactor: 0.95 }), 9000);
+    expect(s.stroke).toBe("var(--ink)");
+    expect(s.width).toBeGreaterThan(1);
+    expect(s.opacity).toBe(0.62);
+  });
+
+  it("still never consults load factor on a floored arc", () => {
+    // The override is total, and it must stay so under the new denominator: a floor arc's dash
+    // already says "barely flown", and dashing it for load factor too would draw two
+    // independent facts through one channel.
+    const low = strokeFor(arc({ departures: 30, activeMonths: 12, loadFactor: 0.1 }), 9000);
+    const high = strokeFor(arc({ departures: 30, activeMonths: 12, loadFactor: 0.99 }), 9000);
+    expect(low).toEqual(high);
   });
 });

@@ -148,7 +148,7 @@ describe("fetchAirportNetwork, against the warehouse", () => {
 // #114. Every measure in `meta_pivot_measures` is `SUM(x) FILTER (WHERE NOT is_quarantined)`, so
 // a route pair whose every filing was quarantined sums to NULL -- "nothing here can be trusted",
 // not "nothing flew". `?? 0` used to turn that into an ordinary arc reading 0 seats and 0
-// departures, drawn below DEPARTURE_FLOOR as dotted and muted: "barely flown", about a pair the
+// departures, drawn below the departure floor as dotted and muted: "barely flown", about a pair the
 // data cannot describe at all. Measured over 2025-06..2026-05: 11 such pairs, all `zero_seats`,
 // every one of which PERFORMED a departure -- so the "0 departures" the map drew was not merely
 // unknowable, it was contradicted by the filing behind it.
@@ -171,7 +171,23 @@ describe("classifyRouteRows", () => {
     ];
     const out = classifyRouteRows(rows, [2, 3], 1);
     expect(out.quarantinedRoutes).toBe(1);
-    expect(out.drawable).toEqual([{ farId: 3, seats: 90, passengers: 60, departures: 5 }]);
+    // `activeMonths: 0` because neither row here carries `active_months` -- a count, not a
+    // FILTERed sum, so its absence reads as "no month flew" rather than as unknowable. See the
+    // next test for a row that does carry one.
+    expect(out.drawable).toEqual([
+      { farId: 3, seats: 90, passengers: 60, departures: 5, activeMonths: 0 },
+    ]);
+  });
+
+  it("carries the pivot's active-month count through to the drawable row", () => {
+    // The departure floor's denominator (#134). Without this the arc encoding compares a
+    // TRAILING-12 departure sum against a monthly floor, which is the ~12x-lenient reading
+    // arcs.ts's own docstring used to describe as correct.
+    const rows = [
+      { route_key_low: 1, route_key_high: 3, seats: 900, passengers: 600, departures_performed: 30, active_months: 12 },
+    ];
+    const out = classifyRouteRows(rows, [3], 1);
+    expect(out.drawable[0].activeMonths).toBe(12);
   });
 
   it("does not count a wholly-null SAME-AIRPORT filing as a route pair", () => {

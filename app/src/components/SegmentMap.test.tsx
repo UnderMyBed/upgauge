@@ -55,7 +55,7 @@ function seg(
   to: keyof typeof N,
   over: Partial<SegmentDatum> = {},
 ): SegmentDatum {
-  return { from: N[from], to: N[to], seats: 100_000, departures: 200, loadFactor: 0.85, ...over };
+  return { from: N[from], to: N[to], seats: 100_000, departures: 200, loadFactor: 0.85, activeMonths: 1, ...over };
 }
 
 /** `count` distinct drawable conterminous pairs, all in the `us` panel. Synthetic codes, because
@@ -68,6 +68,7 @@ function manySegments(count: number): SegmentDatum[] {
     seats: 1_000 + i,
     departures: 50,
     loadFactor: 0.8,
+    activeMonths: 1,
   }));
 }
 
