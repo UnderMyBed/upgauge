@@ -3,8 +3,8 @@ import path from "node:path";
 import { connect, demoteBigInts } from "@/lib/db";
 import { entitySlugFromPath } from "@/lib/entitySlug";
 import { routeHrefFromCodes } from "@/lib/entityLink";
+import { exploreHref } from "@/lib/pivot/builder";
 import { normalizeQuery } from "@/lib/pivot/types";
-import { encode } from "@/lib/pivot/urlstate";
 
 // Same anchor, same reason, as db.ts's ROOT / sitemap.ts's ROOT: process.cwd() is correct in
 // production; Vitest gets a chdir of its own from vitest.config.ts's setupFiles.
@@ -275,7 +275,10 @@ export function rawRowsPermalink(row: WatchRow, timeFrom: string, timeTo: string
     limit: 100,
     grouping: "operating",
   });
-  return `/explore?${encode(query)}`;
+  // `exploreHref`, never a second hand-spelled `/explore?${encode(q)}` -- that one line has
+  // one owner (lib/pivot/builder.ts), and a private copy of it is a call site a future change
+  // to what a valid `/explore` permalink requires would silently miss (#145).
+  return exploreHref(query);
 }
 
 /** The canonical /route/ URL for a watch row's two airport CODES.

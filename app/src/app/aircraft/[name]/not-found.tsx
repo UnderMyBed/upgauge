@@ -3,7 +3,7 @@ import { headers } from "next/headers";
 import { dataAsOf, runPivot } from "@/lib/db";
 import { rawPathFromHeaders } from "@/lib/rawPath";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
-import { encode } from "@/lib/pivot/urlstate";
+import { exploreHref } from "@/lib/pivot/builder";
 import { AIRCRAFT_RECOVERY_HREF } from "@/lib/pivot/recovery";
 import { displayValue, resolutionKey } from "@/lib/resolve";
 import { TopBar } from "@/components/TopBar";
@@ -28,9 +28,15 @@ type Outcome =
 
 /** The Explorer permalink for ONE BTS aircraft code. This is what makes the disambiguation
  * page a real answer rather than an apology: `/aircraft/CE-180` cannot resolve, but the
- * Explorer is keyed on the BTS code, so each airframe's rows are one click away. */
+ * Explorer is keyed on the BTS code, so each airframe's rows are one click away.
+ *
+ * Through `exploreHref` -- never a second hand-spelled `/explore?${encode(q)}`. That line has one
+ * owner (lib/pivot/builder.ts), and a private copy of it is byte-identical today, which is the
+ * whole hazard: a future change to what a valid `/explore` permalink requires would reach every
+ * real call site and silently miss this one, leaving the two links that ARE this page's answer
+ * behind (#145). */
 function candidateHref(id: string, asOf: string): string {
-  return `/explore?${encode({
+  return exploreHref({
     grain: "segment",
     dimensions: ["op_airline_id"],
     measures: ["seats", "passengers", "departures_performed", "load_factor", "avg_gauge"],
@@ -41,7 +47,7 @@ function candidateHref(id: string, asOf: string): string {
     sortDesc: true,
     limit: 50,
     grouping: "operating",
-  })}`;
+  });
 }
 
 /** Why this slug is not an aircraft type, in `aircraftSlug.ts`'s own words.
