@@ -25,5 +25,16 @@ WHERE route_key_low <> route_key_high
   AND lf_t12 IS NOT NULL
   AND gauge_t12 >= 50
   AND t12_departures_performed >= 360
-ORDER BY lf_t12 ASC
+--
+-- ORDER BY carries the mart's whole grain -- (op_airline_id, route_key_low, route_key_high) --
+-- as a tiebreak, because lf_t12 alone is ONE column and rows tying on it AT THE LIMIT BOUNDARY
+-- would otherwise come back in DuckDB's merge order rather than by the query. All three
+-- columns, never the route pair alone: the grain is a carrier-route PAIR. watch_gauge.sql
+-- carries the full rule and the measurement that proves route alone is not total.
+--
+-- This preset has ZERO tie runs in its 4,452 qualifying rows on the 2026-05 warehouse, which is
+-- why watch.test.ts's real-data determinism test does NOT cover it -- a case with no tie to
+-- order asserts nothing. Its guard here is the ORDER BY property test, and a future warehouse
+-- that gives it a tie is a reason to ADD the real-data case, not evidence one was missing.
+ORDER BY lf_t12 ASC, op_airline_id, route_key_low, route_key_high
 LIMIT $limit

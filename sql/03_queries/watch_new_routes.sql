@@ -32,7 +32,8 @@
 -- WHERE clause could fix without a longer lookback than the mart computes; all of it is stated
 -- on the page (ReEntryNote, app/src/app/watch/[preset]/page.tsx) rather than papered over.
 --
--- Ordered t12_seats DESC so the biggest new entrants lead, not the smallest charter filing.
+-- Ordered t12_seats DESC so the biggest new entrants lead, not the smallest charter
+-- filing, then on the mart's own grain so the ordering is total -- see the ORDER BY.
 SELECT
     op_airline_id,
     route_key_low,
@@ -44,5 +45,14 @@ SELECT
 FROM mart_route_health
 WHERE route_key_low <> route_key_high
   AND p12_months_present = 0
-ORDER BY t12_seats DESC
+--
+-- ORDER BY carries the mart's whole grain -- (op_airline_id, route_key_low, route_key_high) --
+-- as a tiebreak, because t12_seats alone is ONE column and rows tying on it AT THE LIMIT
+-- BOUNDARY would otherwise come back in DuckDB's merge order rather than by the query. All
+-- three columns, never the route pair alone: the grain is a carrier-route PAIR. watch_gauge.sql
+-- carries the full rule and the measurement that proves route alone is not total.
+--
+-- Ties are real here: 22 tie runs covering 49 of the 606 qualifying rows, the largest three
+-- Alaska routes all filing exactly 55,944 t12 seats.
+ORDER BY t12_seats DESC, op_airline_id, route_key_low, route_key_high
 LIMIT $limit
