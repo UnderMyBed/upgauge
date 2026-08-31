@@ -21,11 +21,15 @@
  * owns"), so `parseYear` is deliberately synchronous and touches no database -- it is a pure
  * structural/range check, safe to run on the request hot path with no query cost at all. */
 
-/** The earliest year this dataset covers. Matches the `EARLIEST_MONTH = "2015-01"` constant
- * every entity page and /explore already hardcode (CLAUDE.md's Status section: "data/raw/
- * holds the full 2015-2026 window") -- not re-derived from the warehouse, because the
- * project-wide convention is already to hardcode this specific bound: BTS's earliest T-100
- * filing this pipeline ingests does not move forward with an ingest the way the LATEST month
+/** The earliest year this dataset covers, at YEAR grain. The same bound at MONTH grain is
+ * `EARLIEST_MONTH` (lib/entityFacts.ts), which every page reads by IMPORT -- there is exactly one
+ * declaration of it in `app/src`, and `entityFacts.test.ts` pins both that fact and this file's
+ * agreement with it (`EARLIEST_MONTH === \`${EARLIEST_YEAR}-01\``). Until #145 the month form was
+ * written out three times, each copy carrying a comment asserting it matched the others; the
+ * agreement is now a test rather than a claim.
+ *
+ * Not re-derived from the warehouse, because this bound genuinely does not move: BTS's earliest
+ * T-100 filing this pipeline ingests does not advance with an ingest the way the LATEST month
  * does, so there is nothing for a future rebuild to silently disagree with here. */
 export const EARLIEST_YEAR = 2015;
 

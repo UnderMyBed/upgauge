@@ -6,6 +6,7 @@ import { rawQueryFromHeaders } from "@/lib/rawQuery";
 import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { formatCount } from "@/lib/format";
+import { EARLIEST_MONTH } from "@/lib/entityFacts";
 import { resolutionKey, displayValue, resolveFilterValues, type Resolved } from "@/lib/resolve";
 import { routeHrefFromCodes } from "@/lib/entityLink";
 import { ExplorerBuilder } from "@/components/builder/ExplorerBuilder";
@@ -110,11 +111,6 @@ function routeHref(
   return routeHrefFromCodes(a.code as string, b.code as string);
 }
 
-// data/raw/ holds the full 2015-2026 window (CLAUDE.md's Status section) -- this is the
-// widest time window any query against this database can have, so it is what "offer the
-// nearest broader window" (docs/design/system.md, empty-result state) widens to.
-const EARLIEST_MONTH = "2015-01";
-
 /** A measure the KIND override map does not name still has to render as a numeric. Additive
  * measures are whole counts; non-additive ones are the computed ratios, which `gauge` and
  * `loadFactor` both format to fixed decimals -- `gauge` is the safe general choice since it
@@ -146,6 +142,11 @@ function describeQuery(query: PivotQuery, allowlist: Allowlist): string {
 
 /** The permalink for the same query widened to the full 2015-2026 window, or null when the
  * query already starts at EARLIEST_MONTH -- there is no broader window left to offer.
+ *
+ * `EARLIEST_MONTH` is IMPORTED (lib/entityFacts.ts), not re-declared here. It is the widest time
+ * window any query against this database can have, so it is what "offer the nearest broader
+ * window" (docs/design/system.md, empty-result state) widens to -- and it is the same bound
+ * `lib/year.ts` states at year grain, which is why it may only ever have one owner (#145).
  *
  * Routed through `exploreHref`, the same function the four entity pages' identical widened-window
  * link already centralised onto -- not a second hand-spelled `` `/explore?${encode(...)}` ``,

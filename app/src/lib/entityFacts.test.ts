@@ -1,5 +1,9 @@
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { sumTotals, trailing12From } from "@/lib/entityFacts";
+import { EARLIEST_MONTH, sumTotals, trailing12From } from "@/lib/entityFacts";
+import { EARLIEST_YEAR } from "@/lib/year";
 
 /** THE DEFECT THIS FILE EXISTS FOR (issue #121): `sumTotals` restated an unknowable sum as the
  * number 0, on the stat strip of /route, /carrier and /aircraft and on all four cards.
@@ -123,5 +127,53 @@ describe("trailing12From is 11 months back, inclusive", () => {
   it("crosses the year boundary", () => {
     expect(trailing12From("2026-01")).toBe("2025-02");
     expect(trailing12From("2015-12")).toBe("2015-01");
+  });
+});
+
+/** THE DATASET'S LOWER BOUND HAS ONE OWNER (#145).
+ *
+ * It was written out three times -- `lib/entityFacts.ts` exported it, and `explore/page.tsx` and
+ * `aircraft/[name]/not-found.tsx` each re-declared the same `"2015-01"` locally, each with a
+ * comment saying it matched the others. Three copies of a constant is how they stop matching.
+ *
+ * TWO DIFFERENT PROPERTIES, and neither substitutes for the other: the first pins that the two
+ * legitimate holders of this bound AGREE; the second pins that a fourth holder cannot appear. */
+describe("EARLIEST_MONTH is declared once", () => {
+  // `lib/year.ts` states this agreement in PROSE ("Matches the `EARLIEST_MONTH = \"2015-01\"`
+  // constant") and nothing enforced it -- while `bounds.test.ts` quietly re-derives one from the
+  // other, so a drift would make that file's fixtures describe a window `/explore` does not have.
+  // The two are one fact spelled at two grains: `y` on /airport and `t` on /explore are the same
+  // question (bounds.ts's own note), so they cannot be allowed to disagree.
+  it("agrees with year.ts's EARLIEST_YEAR, which states the same bound at year grain", () => {
+    expect(EARLIEST_MONTH).toBe(`${EARLIEST_YEAR}-01`);
+  });
+
+  // The scan half. A fourth LOCAL re-declaration is the exact mechanism that produced the three
+  // this issue removed, and it is invisible to every other test in this repo: a local
+  // `const EARLIEST_MONTH = "2015-01"` renders identically until the day the two disagree.
+  //
+  // Matches a DECLARATION (`const|let|var EARLIEST_MONTH`), never a mention -- `builder.ts`,
+  // the four entity pages and `WindowControl` all read the imported constant and must not be
+  // caught. `.test.` files are excluded: `bounds.test.ts` deliberately re-derives it from
+  // EARLIEST_YEAR as its own fixture, which is the assertion above, not a drifting copy.
+  //
+  // BOTH HALVES ARE LOAD-BEARING. Without the `toEqual([...])` on the path, a scan finding zero
+  // declarations -- because the real one was deleted or renamed -- would pass the "no extras"
+  // reading vacuously.
+  it("has exactly one declaration in app/src, and it is entityFacts's", () => {
+    const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const files = (dir: string, out: string[] = []): string[] => {
+      for (const entry of readdirSync(dir)) {
+        const full = path.join(dir, entry);
+        if (statSync(full).isDirectory()) files(full, out);
+        else if (/\.tsx?$/.test(entry) && !entry.includes(".test.")) out.push(full);
+      }
+      return out;
+    };
+    const declaring = files(SRC)
+      .filter((f) => /\b(?:const|let|var)\s+EARLIEST_MONTH\b/.test(readFileSync(f, "utf8")))
+      .map((f) => path.relative(SRC, f))
+      .sort();
+    expect(declaring).toEqual(["lib/entityFacts.ts"]);
   });
 });

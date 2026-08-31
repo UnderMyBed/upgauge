@@ -3,6 +3,7 @@ import { headers } from "next/headers";
 import { dataAsOf, runPivot } from "@/lib/db";
 import { rawPathFromHeaders } from "@/lib/rawPath";
 import { aircraftSlugFromPath, resolveAircraftSlug } from "@/lib/aircraftSlug";
+import { EARLIEST_MONTH } from "@/lib/entityFacts";
 import { exploreHref } from "@/lib/pivot/builder";
 import { AIRCRAFT_RECOVERY_HREF } from "@/lib/pivot/recovery";
 import { displayValue, resolutionKey } from "@/lib/resolve";
@@ -12,8 +13,6 @@ import { TopBar } from "@/components/TopBar";
 // build time, even on the 404 path. proxy.ts sets `no-store` on this response for the same
 // reason one level out, at the CDN.
 export const dynamic = "force-dynamic";
-
-const EARLIEST_MONTH = "2015-01";
 
 /** One of the airframes a colliding slug names, with the permalink that CAN show it. */
 interface Candidate {
