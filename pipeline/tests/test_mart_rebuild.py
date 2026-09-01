@@ -17,6 +17,7 @@ either, which is why they are asserted here.
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -523,3 +524,235 @@ def test_the_images_toolchain_pins_equal_mise_tomls():
             f"Dockerfile ARG {arg}={args[arg]} but mise.toml pins {tool}={tools[tool]} -- the "
             f"image would build against a runtime no gate in this repo ran under"
         )
+
+
+# --------------------------------------------------------------------------------------
+# the ARTIFACT half -- what the BUILT image contains, not what the Dockerfile says (#162)
+# --------------------------------------------------------------------------------------
+#
+# Everything above is INSTRUCTION-level. It proves no instruction in the Dockerfile introduces
+# an interpreter. It cannot prove the IMAGE lacks one: `node:*-slim` starting to ship `python3`,
+# or an apt dependency pulling one in transitively, satisfies every assertion in this file while
+# putting an interpreter in production.
+#
+# Only the running container can answer that, so the assertion itself is a check in
+# `app/smoke.sh`'s container mode, executed by `make image-smoke`. What is asserted HERE is that
+# it still exists, still looks for everything the instruction-level allow-list refuses, and is
+# still RED when it cannot run -- none of which any other gate can see. Deleting a smoke check
+# leaves `make check`, `make app-check` and `make app-smoke` green and merely reports a smaller
+# number that nothing compares against.
+
+SMOKE = REPO / "app" / "smoke.sh"
+
+# The probe is a single-quoted assignment rather than an inline `sh -c '...'`, which is what
+# makes it extractable and therefore EXECUTABLE from a test -- see
+# test_the_probe_reports_clean_only_when_it_finds_nothing, which runs this exact program against
+# planted artifacts instead of reading it. The call site is asserted separately, because a pinned
+# program is not a pinned call site.
+_PROBE_RE = re.compile(r"^TOOLCHAIN_PROBE='\n(.*?)\n'$", re.DOTALL | re.MULTILINE)
+
+# The probe's two loops, read as TOKEN SETS rather than as substrings of the whole body. Measured
+# on the substring form this replaced: dropping `uv` from the PATH scan entirely left the name
+# check GREEN, because `uv.lock` two lines below still contains the string "uv".
+_PATH_LOOP = re.compile(r"^for b in (.+); do$", re.MULTILINE)
+_FILE_LOOP = re.compile(r"^for p in (.+); do$", re.MULTILINE)
+
+# The anchored equality the check asserts, READ FROM smoke.sh rather than restated here -- a
+# hand-copied pattern is green against a weakened one, which is the failure both halves of this
+# section exist to refuse. The probe prints `scanned:` unconditionally as its LAST act, so "found
+# nothing" and "never ran" are different strings rather than the same empty one.
+_SENTINEL_RE = re.compile(r"^TOOLCHAIN_CLEAN='(.*)'$", re.MULTILINE)
+
+
+def _probe_sentinel() -> str:
+    found = _SENTINEL_RE.search(SMOKE.read_text())
+    assert found is not None, (
+        "app/smoke.sh no longer defines TOOLCHAIN_CLEAN, the pattern the artifact-level check "
+        "asserts the probe's output against (#162)"
+    )
+    return found.group(1)
+
+
+def _probe_body() -> str:
+    found = _PROBE_RE.search(SMOKE.read_text())
+    assert found is not None, (
+        "app/smoke.sh no longer defines TOOLCHAIN_PROBE, so nothing asserts that the RUNNING "
+        "runtime image is free of the Python toolchain -- only that no Dockerfile instruction "
+        "puts it there, which a base image or a transitive apt dependency does not need (#162)"
+    )
+    return found.group(1)
+
+
+def _probe_names() -> tuple[set[str], set[str]]:
+    """`(resolved on PATH, tested on the filesystem)`, as the sets the probe actually loops over."""
+    body = _probe_body()
+    on_path = _PATH_LOOP.search(body)
+    on_disk = _FILE_LOOP.search(body)
+    assert on_path and on_disk, (
+        f"the probe no longer has both a PATH loop and a filesystem loop, so it cannot be "
+        f"asserted to cover either kind of artifact:\n{body}"
+    )
+    return set(on_path.group(1).split()), set(on_disk.group(1).split())
+
+
+def _run_probe(cwd: Path, path_dir: Path) -> str:
+    """The probe, executed. `sh`, not bash: in the gate it runs under `docker exec ... sh -c`
+    against node:*-slim, whose /bin/sh is dash."""
+    return subprocess.run(
+        ["/bin/sh", "-c", _probe_body()],
+        cwd=cwd,
+        env={"PATH": str(path_dir)},
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+
+
+def test_the_running_image_is_probed_and_not_only_the_dockerfile():
+    """THE artifact-level assertion, and the whole of #162. Remove it and every gate in this
+    repository stays green while the image is free to acquire an interpreter from its base.
+
+    Two properties beyond existence, each of which fails on its own. It runs INSIDE the
+    container under test (`docker exec`, not host-side: this checkout holds python3, uv and
+    pipeline/ by design, so a host-side form is red against a correct tree and would then be
+    "fixed" into something that passes for any input). And the result is asserted as the
+    anchored sentinel, not as the absence of a needle."""
+    smoke = SMOKE.read_text()
+    _probe_body()
+
+    assert 'docker exec upgauge-smoke sh -c "$TOOLCHAIN_PROBE"' in smoke, (
+        "the toolchain probe is no longer run inside the container under test. Against the host "
+        "it says nothing about the image -- and is red on a correct tree, which invites a "
+        "weakening rather than a fix"
+    )
+    assert "check_re" in smoke and '"$TOOLCHAIN_CLEAN"' in smoke, (
+        "the probe's result is no longer asserted with `check_re` against `$TOOLCHAIN_CLEAN`. "
+        "Written as an absence test, or with an unanchored pattern, the assertion passes for an "
+        "EMPTY haystack -- exactly what a failed `docker exec` produces: a gate that certifies "
+        "an image it never read"
+    )
+    assert _probe_sentinel() == "^scanned: none$", (
+        f"the sentinel pattern is now {_probe_sentinel()!r}. Both anchors are load-bearing: "
+        f"without `^` and `$` the pattern matches `scanned: none-of-your-business` and, more to "
+        f"the point, any line of a multi-line body that happens to contain it"
+    )
+
+
+def test_the_probe_looks_for_every_artifact_the_instruction_guard_refuses():
+    """The two halves of one rule must refuse the same set, or the artifact half silently
+    narrows. Bound to `_CI_ONLY_SOURCES` rather than to a second hand-written list: add a CI-only
+    source up there and this reddens until the probe names it too.
+
+    `/opt/venv` is named explicitly because PATH cannot see it -- it is the warehouse stage's
+    `UV_PROJECT_ENVIRONMENT` and carries CPython *and* duckdb, and
+    `COPY --from=warehouse /opt/venv /opt/venv` puts all of it in the image while adding nothing
+    to PATH. It is one of the six mutants the blacklist form of the instruction guard passed.
+
+    Membership in the loops' own token sets, never `name in body`: measured, the substring form
+    stayed GREEN after `uv` was dropped from the PATH scan entirely, because `uv.lock` two lines
+    below still spells it."""
+    on_path, on_disk = _probe_names()
+    for source in sorted(_CI_ONLY_SOURCES):
+        assert source in on_disk, (
+            f"the instruction guard refuses {source!r} as a runtime COPY source, but the "
+            f"artifact probe does not look for it in the built image -- the two halves of the "
+            f"same rule now disagree about what 'no Python in prod' means"
+        )
+    assert "/opt/venv" in on_disk, (
+        "the probe no longer looks for /opt/venv, the one artifact PATH cannot see: it carries "
+        "CPython AND duckdb, and copying it whole adds nothing to PATH"
+    )
+    for exe in ("python3", "python", "uv"):
+        assert exe in on_path, (
+            f"the probe no longer resolves {exe!r} on the container's PATH, which is how an "
+            f"interpreter arrives from a base image or a transitive apt dependency -- the exact "
+            f"route the Dockerfile guard cannot see. Nothing goes red when this stops being "
+            f"checked; it just stops being checked"
+        )
+
+
+def test_the_probe_reports_clean_only_when_it_finds_nothing(tmp_path):
+    """The probe EXECUTED, one planted artifact at a time. A grep over smoke.sh proves the names
+    are written down, not that the program looks for them: `[ -e ]` narrowed to `[ -d ]`, a
+    `command -v` typo, a `$found` assigned and never printed -- each keeps every name in the file
+    and reports `scanned: none` for a dirty image forever.
+
+    ONE artifact per case, never all six at once. A fixture planting everything is satisfied by a
+    probe that detects only the first of them, which is this repo's vacuous-fixture failure
+    wearing half a disguise.
+
+    `/opt/venv` is the one clause a test cannot plant (absolute, unwritable without root), so the
+    baseline accounts for whatever this machine happens to have there. It is covered by the name
+    check above and executed for real against the container by `make image-smoke`."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    work = tmp_path / "work"
+    work.mkdir()
+
+    baseline = _run_probe(work, bin_dir)
+    expected = "scanned: FILE:/opt/venv" if Path("/opt/venv").exists() else "scanned: none"
+    assert baseline == expected, (
+        f"the probe reports {baseline!r} for an empty directory on an empty PATH, not "
+        f"{expected!r}. Every case below reads as a delta from this, so a wrong baseline makes "
+        f"all of them meaningless"
+    )
+
+    for name, is_dir in (("pipeline", True), ("pyproject.toml", False), ("uv.lock", False)):
+        planted = work / name
+        planted.mkdir() if is_dir else planted.write_text("")
+        out = _run_probe(work, bin_dir)
+        assert f"FILE:{name}" in out, (
+            f"planted {name!r} in the image root and the probe reported {out!r} -- it does not "
+            f"detect {name!r}, so the check stays green against an image that ships it"
+        )
+        planted.rmdir() if is_dir else planted.unlink()
+
+    for exe in ("python3", "python", "uv"):
+        planted = bin_dir / exe
+        planted.write_text("#!/bin/sh\n")
+        planted.chmod(0o755)
+        out = _run_probe(work, bin_dir)
+        assert f"PATH:{exe}" in out, (
+            f"put an executable {exe!r} on PATH and the probe reported {out!r} -- an image whose "
+            f"base started shipping it would pass this gate, which is the entire residual #162 "
+            f"exists to close"
+        )
+        planted.unlink()
+
+
+def _matches_sentinel(haystack: str) -> bool:
+    """`grep -E` on smoke.sh's own pattern, invoked the way `has_re` invokes it."""
+    return (
+        subprocess.run(
+            ["grep", "-E", "--", _probe_sentinel()],
+            input=haystack,
+            capture_output=True,
+            text=True,
+        ).returncode
+        == 0
+    )
+
+
+def test_a_probe_that_could_not_run_is_red_rather_than_silently_clean():
+    """The failure mode this repository's smoke history is made of. `docker exec` failing, the
+    container already gone, `sh` unresolvable -- each yields an EMPTY string, and an assertion
+    shaped as "the output does not contain python3" prints `ok` for a probe that never executed.
+
+    Executed, not read: the pattern smoke.sh actually uses, run against the exact haystacks a
+    broken run produces. The last case is the discriminating one -- a pattern that refuses
+    everything would satisfy the first four and could never be green."""
+    for haystack, why in (
+        ("", "docker exec produced nothing at all"),
+        ("Error: No such container: upgauge-smoke", "the container was gone"),
+        ("scanned: PATH:python3", "the image ships an interpreter"),
+        ("scanned: FILE:pipeline", "the image ships pipeline/"),
+    ):
+        assert not _matches_sentinel(haystack), (
+            f"`{_probe_sentinel()}` matches the output of a run where {why}, so the gate reports "
+            f"ok for it"
+        )
+
+    assert _matches_sentinel("scanned: none"), (
+        f"`{_probe_sentinel()}` does not match a clean probe's own output -- the check could "
+        f"never be green, and would be deleted as broken rather than read as a finding"
+    )

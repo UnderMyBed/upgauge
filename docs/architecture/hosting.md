@@ -264,13 +264,33 @@ The check is **per stage**, and that is the property rather than the string: eve
 token it refuses is deliberately true of `warehouse`, so a whole-file form of the same test is
 red against a correct Dockerfile (run, and confirmed red).
 
-**It is still an INSTRUCTION-level guard.** It proves no instruction introduces Python, not that
-the built image lacks it — a base image that started shipping an interpreter would satisfy every
-assertion above. Closing that means asserting it on the artifact, in `make image-smoke`'s
-container mode, and the open reason it is not there yet is a counting one rather than a
-mechanical one: the `docker exec` idiom fits, but a container-only check breaks the
-"host set less the ten host-only gap checks" arithmetic this file and CLAUDE.md both state, and
-the replacement total cannot be measured without Docker.
+**That guard is INSTRUCTION-level, and instructions are not the artifact.** It proves no
+instruction introduces Python; it cannot prove the built image lacks it. `node:*-slim` starting
+to ship `python3`, or an apt dependency pulling one in transitively, satisfies every assertion
+above while putting an interpreter in production. **So the artifact is asserted too, by one
+check in `app/smoke.sh`'s container mode:** `docker exec` into the running container, resolve
+`python3`, `python` and `uv` on its PATH, and test for `/opt/venv`, `pipeline`, `pyproject.toml`
+and `uv.lock` under its WORKDIR. `/opt/venv` is there because PATH cannot see it — it is the
+warehouse stage's `UV_PROJECT_ENVIRONMENT`, carries CPython *and* duckdb, and copying it whole
+adds nothing to PATH. `sql` is deliberately not probed; the runtime stage copies it on purpose.
+
+**The probe's last act is to print `scanned:` unconditionally, and the check is an anchored
+equality against `scanned: none`.** A failed `docker exec`, an absent container and an
+unresolvable `sh` all yield an empty string, so a check shaped as "the output does not contain
+python3" reports `ok` for a probe that never ran — this file's § on `app/smoke.sh`'s
+self-defects is a list of that shape. Empty, crashed and dirty are three different reds, and the
+FAIL line names what was found.
+
+**It is CONTAINER-ONLY, which makes the container's check set no longer a SUBSET of host
+mode's.** There is nothing for host mode to assert: this checkout carries `python3`, `uv` and
+`pipeline/` by design, so a host-mode form would be red against a correct tree and would then be
+"fixed" into something that passes for any input. The two totals therefore reconcile as
+**host − 10 host-only + 1 container-only**, and each mode prints the term it is missing (§ The
+portability test itself). `pipeline/tests/test_mart_rebuild.py` holds the check's own guards: it
+executes the probe against planted artifacts, binds the names it looks for to the
+instruction-level allow-list's `_CI_ONLY_SOURCES`, and pins the sentinel — deleting a smoke check
+otherwise leaves `make check`, `make app-check` and `make app-smoke` green and merely reports a
+smaller number that nothing compares against.
 
 **Three pins, one source.** `NODE_VERSION`, `PYTHON_VERSION` and `UV_VERSION` each restate a
 `mise.toml` pin, and all three are asserted equal to it. Until the mart rebuild landed, the
@@ -545,12 +565,13 @@ checks, each of which starts its own short-lived `next start` against a delibera
 container contributes, and containerising them would triple image builds for zero new coverage.
 The skip is **printed**, immediately before the pass/fail tally, never silent — reporting a
 narrower count as though it were the full one is the same dishonesty as a stale build passing
-every check, one level up. `make app-smoke` (host mode) runs all three; `make image-smoke`
-reports the served-build subset alone, shorter by exactly the checks inside those three sections.
-**The two totals are not written here.** `pipeline/gatecounts.py` states that the smoke counts are
-deliberately not generated — only a real `next build` plus a served port produces them — so they
-are hand-maintained, and a second hand-maintained copy is one that goes stale silently. CLAUDE.md's
-gates table is the one place they live.
+every check, one level up. `make app-smoke` (host mode) runs all three; `make image-smoke` does
+not, and adds one check host mode cannot run (§ The Dockerfile, the artifact-level toolchain
+probe) — so neither mode's check set contains the other's, and **both** narrowings are printed,
+one per mode. **The two totals are not written here.** `pipeline/gatecounts.py` states that the
+smoke counts are deliberately not generated — only a real `next build` plus a served port
+produces them — so they are hand-maintained, and a second hand-maintained copy is one that goes
+stale silently. CLAUDE.md's gates table is the one place they live.
 
 **One existing check needed a container-specific path, not a skip: the "ONE `DuckDBInstance`"
 handle count** (§ "One `DuckDBInstance` per process", below). Its host-mode form walks the local process tree with
@@ -570,8 +591,11 @@ to this container's own processes, so no `pgrep` is needed either (`node:*-slim`
 `make portability` is the **negative** half: it breaks the WORKDIR/data-colocation contract three
 ways and asserts the *distinct* signature each break produces. The **positive** half is
 `make image-smoke` — the served-build checks against the real container, `--read-only`, no tmpfs
-(§ above) — which is host mode's total less exactly the checks inside the three host-only gap
-sections. Both totals live in CLAUDE.md's gates table and are not restated here.
+(§ above) — which is host mode's total **less** exactly the checks inside the three host-only gap
+sections and **plus** the one check only a container can answer, the artifact-level toolchain
+probe (§ The Dockerfile). One derivation, three terms; the two modes are overlapping sets, not
+nested ones, and each prints the term it is missing. Both totals live in CLAUDE.md's gates table
+and are not restated here.
 
 **The contract is defended at four layers, and the failures are not interchangeable.** One shared
 "it 500s" assertion would pass for all of them and therefore prove none:
