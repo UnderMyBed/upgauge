@@ -13,6 +13,7 @@ import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import type { Allowlist } from "@/lib/pivot/allowlist";
+import { monthsBack, trailing12From } from "@/lib/entityFacts";
 
 // Same reasoning, same constant, as every other DB-touching page (carrier/[code]/page.tsx,
 // route/[pair]/page.tsx, explore/page.tsx): this page's content is live warehouse state --
@@ -20,25 +21,16 @@ import type { Allowlist } from "@/lib/pivot/allowlist";
 // a stale leaderboard and a stale DATA AS OF badge forever.
 export const dynamic = "force-dynamic";
 
-/** The trailing-12-month window every preset ranks over, computed from `asOf` the same way
- * mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql), and the same
- * derivation carrier/[code]/page.tsx and route/[pair]/page.tsx each carry their own copy of. */
-function monthsBefore(asOf: string, n: number): string {
-  const [y, m] = asOf.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 - n, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-function trailing12From(asOf: string): string {
-  return monthsBefore(asOf, 11);
-}
-
 /** The PRIOR 12-month window mart_route_health diffs against: `asOf-23 .. asOf-12`, exactly the
  * `p12_start_month`/`p12_end_month` sql/02_marts/200_mart_route_health.sql derives. Computed
  * from `asOf` rather than written out, so ReEntryNote below cannot state a window the mart has
- * moved past after a monthly rebuild. */
+ * moved past after a monthly rebuild.
+ *
+ * `monthsBack`, from lib/entityFacts -- these two numbers are OFFSETS from asOf, not window
+ * lengths, and this file used to carry a private `monthsBefore` that spelled an offset the same
+ * way components/builder/WindowControl.tsx spelled a length (#155). */
 function prior12Window(asOf: string): { from: string; to: string } {
-  return { from: monthsBefore(asOf, 23), to: monthsBefore(asOf, 12) };
+  return { from: monthsBack(asOf, 23), to: monthsBack(asOf, 12) };
 }
 
 /** Rows per direction. Every preset's SQL already filters heavily before this file ever sees a

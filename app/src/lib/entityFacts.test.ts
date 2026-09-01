@@ -2,7 +2,13 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { EARLIEST_MONTH, sumTotals, trailing12From } from "@/lib/entityFacts";
+import {
+  EARLIEST_MONTH,
+  monthsBack,
+  sumTotals,
+  trailing12From,
+  windowStart,
+} from "@/lib/entityFacts";
 import { EARLIEST_YEAR } from "@/lib/year";
 
 /** THE DEFECT THIS FILE EXISTS FOR (issue #121): `sumTotals` restated an unknowable sum as the
@@ -172,6 +178,85 @@ describe("EARLIEST_MONTH is declared once", () => {
     };
     const declaring = files(SRC)
       .filter((f) => /\b(?:const|let|var)\s+EARLIEST_MONTH\b/.test(readFileSync(f, "utf8")))
+      .map((f) => path.relative(SRC, f))
+      .sort();
+    expect(declaring).toEqual(["lib/entityFacts.ts"]);
+  });
+});
+
+/** THE DEFECT THIS BLOCK EXISTS FOR (issue #155): two functions named `monthsBefore`, same
+ * arity, different meaning. `watch/[preset]/page.tsx` read `n` as an OFFSET (n months back);
+ * `components/builder/WindowControl.tsx` read it as a WINDOW LENGTH (n - 1 back). Both were
+ * correct in place -- `watch` called it with 11, `WindowControl` with 12, and both landed on
+ * 2025-05 -- so nothing was ever red. Moving a call between the two files, or folding them into
+ * one helper, silently shifts the window by a month.
+ *
+ * THE FIXTURE HAS TO DISCRIMINATE. A window-length call and an offset call agree whenever the
+ * caller compensates, which is exactly the state the codebase was already in, so asserting "the
+ * window is twelve months" passes under BOTH conventions and proves nothing. Every assertion
+ * below is on the month a SINGLE convention produces, and `the two conventions disagree` pins
+ * the gap itself -- if a refactor ever makes them synonyms, that test goes red before a call
+ * site silently moves. */
+describe("month arithmetic spells offset and window-length differently (#155)", () => {
+  // MUTANT: `monthsBack` implemented as `n - 1` back (WindowControl's old convention) -> 2025-05
+  // -> red. The 12 here is deliberate: it is the argument that made the two old functions
+  // disagree, so a fixture using 11 would pass under both.
+  it("monthsBack counts an offset: twelve back from 2026-04 is 2025-04", () => {
+    expect(monthsBack("2026-04", 12)).toBe("2025-04");
+  });
+
+  // MUTANT: `windowStart` implemented as `months` back (watch's old convention) -> 2025-04 ->
+  // red.
+  it("windowStart counts a length: a twelve-month window ending 2026-04 starts 2025-05", () => {
+    expect(windowStart("2026-04", 12)).toBe("2025-05");
+  });
+
+  /** The property the two old names destroyed. Asserted directly rather than left implicit in
+   * the two cases above, because those two could both be satisfied by one function the day
+   * someone decides the names are synonyms. */
+  it("the two conventions disagree on the same argument", () => {
+    expect(monthsBack("2026-04", 12)).not.toBe(windowStart("2026-04", 12));
+  });
+
+  // The year boundary is the case a same-year fixture cannot see -- and the two conventions
+  // straddle it differently, which is the whole point.
+  it("crosses the year boundary under both spellings", () => {
+    expect(monthsBack("2026-01", 1)).toBe("2025-12");
+    expect(windowStart("2026-01", 12)).toBe("2025-02");
+  });
+
+  /** `trailing12From` is the name the six existing call sites use; it must stay expressible as
+   * BOTH spellings, or the consolidation moved a window it claimed to preserve. */
+  it("trailing12From is the twelve-month window, which is eleven back", () => {
+    expect(trailing12From("2026-04")).toBe(windowStart("2026-04", 12));
+    expect(trailing12From("2026-04")).toBe(monthsBack("2026-04", 11));
+  });
+});
+
+/** ONE OWNER FOR THE DERIVATION (#155).
+ *
+ * Mirrors the EARLIEST_MONTH sweep above and for the same reason: pinning the two helpers'
+ * behaviour does not stop a third file declaring its own month subtraction, which is how this
+ * defect arrived. Both halves are load-bearing -- without the `toEqual([...])`, a scan finding
+ * zero declarations because the real ones were renamed would pass vacuously. */
+describe("month subtraction is declared once", () => {
+  it("has exactly one declaring file in app/src, and it is entityFacts's", () => {
+    const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+    const files = (dir: string, out: string[] = []): string[] => {
+      for (const entry of readdirSync(dir)) {
+        const full = path.join(dir, entry);
+        if (statSync(full).isDirectory()) files(full, out);
+        else if (/\.tsx?$/.test(entry) && !entry.includes(".test.")) out.push(full);
+      }
+      return out;
+    };
+    // The two shapes both old copies used: `Date.UTC(y, m - 1 - n, ...)` and the integer-month
+    // `y * 12 + (m - 1) - ...` form. A new copy in either idiom is caught.
+    const declaring = files(SRC)
+      .filter((f) => {
+        const src = readFileSync(f, "utf8");
+        return /Date\.UTC\(\s*y\s*,\s*m\s*-\s*1\s*-/.test(src) || /y\s*\*\s*12\s*\+\s*\(\s*m\s*-\s*1\s*\)/.test(src);
+      })
       .map((f) => path.relative(SRC, f))
       .sort();
     expect(declaring).toEqual(["lib/entityFacts.ts"]);

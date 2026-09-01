@@ -1,15 +1,8 @@
 import { Chip, ChipRow } from "@/components/builder/Chips";
-import { EARLIEST_MONTH } from "@/lib/entityFacts";
+import { EARLIEST_MONTH, windowStart } from "@/lib/entityFacts";
 import { exploreHref, setWindow } from "@/lib/pivot/builder";
 import type { PivotQuery } from "@/lib/pivot/types";
 import { yearTrack } from "@/lib/year";
-
-/** Step back `months - 1` from `asOf`, so a trailing-12 ending 2026-04 starts 2025-05. */
-function monthsBefore(asOf: string, months: number): string {
-  const [y, m] = asOf.split("-").map(Number);
-  const zero = y * 12 + (m - 1) - (months - 1);
-  return `${String(Math.floor(zero / 12)).padStart(4, "0")}-${String((zero % 12) + 1).padStart(2, "0")}`;
-}
 
 /**
  * `t`. Presets plus a year track -- an arbitrary month pair stays hand-editable, which
@@ -22,8 +15,8 @@ function monthsBefore(asOf: string, months: number): string {
  */
 export function WindowControl({ query, asOf }: { query: PivotQuery; asOf: string }) {
   const presets: [string, string, string][] = [
-    ["Trailing 12", monthsBefore(asOf, 12), asOf],
-    ["Trailing 24", monthsBefore(asOf, 24), asOf],
+    ["Trailing 12", windowStart(asOf, 12), asOf],
+    ["Trailing 24", windowStart(asOf, 24), asOf],
     ["Full window", EARLIEST_MONTH, asOf],
   ];
   const isPreset = (from: string, to: string) => query.timeFrom === from && query.timeTo === to;

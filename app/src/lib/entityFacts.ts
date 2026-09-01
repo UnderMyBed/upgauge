@@ -38,13 +38,31 @@ export const CARRIER_TYPE_LIMIT = 100;
  * headroom. */
 export const AIRCRAFT_CARRIER_LIMIT = 50;
 
+/** `n` months EARLIER than `asOf`. An OFFSET, and the name says so: this is the only month
+ * subtraction in `app/src`, and #155 is what that rule is for. Two functions were once both
+ * called `monthsBefore` with the same arity -- one an offset, one a window length -- so
+ * `monthsBefore(asOf, 12)` meant 2025-04 in one file and 2025-05 in the other, and moving a
+ * call between them shifted the window by a month with every gate still green. Reach for
+ * `windowStart` when the number you have is a window's LENGTH. */
+export function monthsBack(asOf: string, n: number): string {
+  const [y, m] = asOf.split("-").map(Number);
+  const d = new Date(Date.UTC(y, m - 1 - n, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** The first month of a window `months` long ENDING at `asOf`, inclusive of both ends -- so a
+ * twelve-month window ending 2026-04 starts 2025-05, one month later than `monthsBack(asOf,
+ * 12)`. The `- 1` lives here, once, instead of at each call site where it was the thing readers
+ * got wrong. */
+export function windowStart(asOf: string, months: number): string {
+  return monthsBack(asOf, months - 1);
+}
+
 /** The trailing-12-month window every entity page and card shows, computed from `asOf` the
  * same way mart_route_health's own t12 window is (sql/02_marts/200_mart_route_health.sql:
  * `end_m - INTERVAL 11 MONTH`) -- 11 months back from asOf, inclusive of asOf, is 12 months. */
 export function trailing12From(asOf: string): string {
-  const [y, m] = asOf.split("-").map(Number);
-  const d = new Date(Date.UTC(y, m - 1 - 11, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+  return windowStart(asOf, 12);
 }
 
 export interface EntityTotals {
