@@ -88,9 +88,10 @@ jobs:
         run: |
           set -euo pipefail
           make check 2>&1 | tee /tmp/check.log
-          # This job restores upgauge.duckdb + data/parquet but never data/raw (restore-raw
-          # defaults to "false" -- only `make verify` pays for that 136 MB). Real-data tests
-          # gated on data/raw (test_invariants_against_real_data.py, test_city_market.py,
+          # This job restores data/parquet and rebuilds upgauge.duckdb from it, but never
+          # data/raw (restore-raw defaults to "false" -- only `make verify` pays for that
+          # 136 MB). Real-data tests gated on data/raw
+          # (test_invariants_against_real_data.py, test_city_market.py,
           # test_reproducibility.py's byte-identical-on-a-real-extract case) skip HERE BY
           # DESIGN, same as on a fresh clone -- their own docstrings say so. A silently broken
           # warehouse restore looks different: it skips tests gated on `upgauge.duckdb` or

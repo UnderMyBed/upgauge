@@ -589,6 +589,44 @@ existing database not at all), which is what makes rebuilding them cheap: ~1 s a
 in its `warehouse` builder stage (`hosting.md` § The Dockerfile), so CI and the container agree
 about which SQL produced what they test and serve.
 
+**So `data/parquet` is all CI restores, and `upgauge.duckdb` exists on a runner only as the
+rebuild's output.** The `actions/cache` step keys on the release tag — `warehouse-YYYY.MM` — and
+**a cache key names exactly what the cached bytes depend on**, so only tag-derived bytes may live
+under it. `data/parquet` qualifies: it is the facts and the dims, unpacked verbatim from the
+asset, and it is the download the cache exists to avoid — `warehouse-2026.05.tar.zst` is
+81,898,972 bytes, expanding to the `data/parquet` tree `hosting.md` § Portability test measures.
+The database does not: all ten of its objects are `CREATE OR REPLACE
+VIEW|TABLE … AS <sql/02_marts/*.sql>` over that tree, and `build_database` builds a staging file
+and renames over it, so every byte of it is a function of the *commit*. Caching it under a
+tag-only key would make the post-job save store one commit's marts under a name promising the
+asset's — for a later run on a different commit to restore. The asset extraction is narrowed the
+same way (`tar --zstd -xf warehouse-*.tar.zst data/parquet`), which closes the cache-miss path
+too and makes the property hold on both: no publish-day mart bytes exist in a CI job at all.
+
+> **Narrowing `path:` is self-invalidating, so it needs no key bump and leaves no legacy entry
+> holding the old shape.** `path` is part of the cache *version* — "a hash generated for a
+> combination of compression tool used … and the `path` of directories being cached"
+> (`actions/cache`), and GitHub's own reference says the same: same key, changed `path`, cache
+> miss, separate entry. So an entry saved under the wider `path` can never be restored under the
+> narrower one, and the first run after a `path` change pays one asset download to seed the new
+> version. Do not add a key suffix to force that — it is already forced, and a suffix is then a
+> permanent second thing to keep in sync.
+
+**Naming the commit in the key would restore the same invariant, and is the worse of the two
+fixes.** The rebuild above costs the second already stated, and the whole of what it produces is
+1.04 MB — measured on a database built from `data/parquet` alone with none present beforehand,
+ten objects. A commit-keyed cache spends a miss on every push, and the asset re-download that
+comes with it, to keep a file that is a second and a megabyte to remake. Adding
+a `restore-keys` prefix fallback to win the download back reintroduces the defect by another
+route: a prefix-matched restore hands the job another commit's database under a key naming this
+one.
+
+> **Each presence assert names the step that was supposed to do the work.** The pre-build one
+> checks `data/parquet`'s two subtrees, because the restore is what produces them; the post-build
+> one checks `upgauge.duckdb`, because the rebuild is. Putting the database check before the
+> rebuild is red on every cache hit, and dropping it leaves a `make build` that exits 0 without
+> writing anything to surface as a green suite full of "no built catalog" skips.
+
 **The nightly asserts the data contract too, because `ci.yml` triggers only on human activity.**
 `data-contract` is the gate whose entire purpose is catching the upstream dataset moving, and the
 dataset moves on **BTS's** schedule, not on ours — so gating it behind `pull_request` and
