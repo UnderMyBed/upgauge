@@ -43,9 +43,21 @@ CHALLENGE = (
 )
 
 
-def _assess(health: dict, *args, health_status: int = 200, **kwargs):
-    """The healthy-fetch spelling: a real report, serialized, answered with a real status."""
-    return assess(json.dumps(health), health_status, *args, **kwargs)
+def _assess(health: dict, *args, health_status: int = 200, pivot_body: str | None = None, **kwargs):
+    """The healthy-fetch spelling: a real report, serialized, answered with a real status.
+
+    `pivot_body` defaults to a CURRENT probe result (resolved at call time, since the fixture is
+    defined further down) so the tests that predate #156 keep describing the sites they were
+    written about. The default lives here and NOT on `assess`, which requires the argument: a
+    default in production would let a mis-wired workflow drop the currency check silently, and a
+    silent watchdog is the failure class this script exists to end."""
+    return assess(
+        json.dumps(health),
+        health_status,
+        *args,
+        pivot_body=PIVOT_CURRENT if pivot_body is None else pivot_body,
+        **kwargs,
+    )
 
 
 def test_a_healthy_site_reports_no_failures():
@@ -98,7 +110,13 @@ def test_a_degraded_health_report_is_caught_with_its_named_cause():
         "data": {"asOf": None, "missing": ["mart_route_health"], "error": "boom"},
     }
     v = _assess(
-        degraded, RELEASES, SITEMAP, health_status=503, cf_cache_status="HIT", ratelimit_status=429
+        degraded,
+        RELEASES,
+        SITEMAP,
+        health_status=503,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
     )
     assert any("mart_route_health" in f for f in v.failures)
 
@@ -114,7 +132,13 @@ def test_a_503_carrying_a_real_report_is_read_as_a_real_report():
         "data": {"asOf": None, "missing": ["fct_segment_month"], "error": "boom"},
     }
     v = _assess(
-        degraded, RELEASES, SITEMAP, health_status=503, cf_cache_status="HIT", ratelimit_status=429
+        degraded,
+        RELEASES,
+        SITEMAP,
+        health_status=503,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
     )
     assert any("fct_segment_month" in f for f in v.failures)
     assert not any("could not" in f for f in v.failures)
@@ -147,7 +171,15 @@ def test_a_non_json_health_body_is_reported_not_raised():
     precisely when it could not see the site. A body that is non-empty and not JSON is a
     legitimate OBSERVATION, and it must carry the status and the first bytes so an operator can
     tell a challenge page from a 502 without going and fetching it by hand."""
-    v = assess(CHALLENGE, 403, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+    v = assess(
+        CHALLENGE,
+        403,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
+    )
     assert v.failed
     named = [f for f in v.failures if "/api/health" in f]
     assert named, f"no failure named /api/health: {v.failures}"
@@ -161,7 +193,15 @@ def test_an_unreadable_health_body_does_not_also_claim_a_forgotten_promote():
     published -- a promote was forgotten`: a second failure asserting a CAUSE that was never
     observed, in the same alert that just said it could not read the site. CLAUDE.md's rule
     about re-deriving each clause of a compound claim, applied to an alert."""
-    v = assess(CHALLENGE, 403, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+    v = assess(
+        CHALLENGE,
+        403,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
+    )
     assert len(v.failures) == 1, f"expected only the unreadable finding, got {v.failures}"
     assert not any("promote was forgotten" in f for f in v.failures)
 
@@ -172,7 +212,15 @@ def test_a_curl_failure_reports_that_the_fetch_never_completed():
     that answered with nothing. Asserting only "does not say `None`" is not enough: collapsing
     this into the empty-body branch below still satisfies that, so the distinguishing fact --
     that no HTTP status came back at all -- is what gets asserted."""
-    v = assess("", 0, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+    v = assess(
+        "",
+        0,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
+    )
     assert v.failed
     named = next(f for f in v.failures if "/api/health" in f)
     assert "did not complete the transfer" in named
@@ -184,7 +232,15 @@ def test_an_empty_body_under_a_real_status_is_reported_not_defaulted():
     reach: a server that DID answer, with nothing. Defaulting to `{}` makes `status` `None` and
     the alert then reads ``/api/health reports `None` `` -- a sentence about a report that was
     never served, in place of the fact that the body was empty."""
-    v = assess("", 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+    v = assess(
+        "",
+        200,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
+    )
     assert v.failed
     named = next(f for f in v.failures if "/api/health" in f)
     assert "reports `None`" not in named
@@ -195,7 +251,15 @@ def test_an_empty_body_under_a_real_status_is_reported_not_defaulted():
 def test_a_json_body_that_is_not_an_object_is_reported_not_raised():
     """A JSON array or bare scalar parses fine and then blows up on `.get`. Same class as the
     decode error and the same remedy: report what came back, do not raise."""
-    v = assess("[]", 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+    v = assess(
+        "[]",
+        200,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
+    )
     assert v.failed
     assert any("/api/health" in f for f in v.failures)
 
@@ -206,7 +270,15 @@ def test_the_health_snippet_is_carried_verbatim_and_marks_its_truncation():
     saying so makes a body that ends mid-tag indistinguishable from one that really ended
     there. The backtick matters because it is what a fixed pair of backticks would break on."""
     body = "<html>x=`1` " + ("y" * 400)
-    v = assess(body, 502, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+    v = assess(
+        body,
+        502,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
+    )
     named = next(f for f in v.failures if "/api/health" in f)
     assert "x=`1`" in named, "the body was altered on its way to the operator"
     assert "[truncated]" in named, "a truncated body is presented as if it were whole"
@@ -219,7 +291,13 @@ def test_a_sitemap_that_is_not_a_sitemap_does_not_blame_UPGAUGE_BASE_URL():
     diagnosis it never made, fired by the very condition being fixed. The BASE_URL claim is
     licensed only by a <loc> that was actually found carrying another host."""
     v = assess(
-        json.dumps(HEALTHY), 200, RELEASES, CHALLENGE, cf_cache_status="HIT", ratelimit_status=429
+        json.dumps(HEALTHY),
+        200,
+        RELEASES,
+        CHALLENGE,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
     )
     named = next(f for f in v.failures if "sitemap" in f)
     assert "UPGAUGE_BASE_URL" not in named
@@ -334,7 +412,15 @@ def test_json_that_is_not_a_health_report_is_reported_never_raised():
     checks that read `build` and `data` -- and `'not-a-dict'.get(...)` raises. That is defect A
     still live: `main()` dies before the issue-filing, on a body the edge controls."""
     for body in NOT_A_REPORT:
-        v = assess(body, 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+        v = assess(
+            body,
+            200,
+            RELEASES,
+            SITEMAP,
+            cf_cache_status="HIT",
+            ratelimit_status=429,
+            pivot_body=PIVOT_CURRENT,
+        )
         assert v.failed, body
         assert len(v.failures) == 1, f"{body} -> {v.failures}"
         assert "/api/health" in v.failures[0], body
@@ -347,7 +433,15 @@ def test_a_parsed_non_report_does_not_fabricate_a_forgotten_promote():
     all. `docs/architecture/deploy.md` states this as a rule, so the rule and the code have to
     agree."""
     for body in NOT_A_REPORT:
-        v = assess(body, 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+        v = assess(
+            body,
+            200,
+            RELEASES,
+            SITEMAP,
+            cf_cache_status="HIT",
+            ratelimit_status=429,
+            pivot_body=PIVOT_CURRENT,
+        )
         assert not any("promote was forgotten" in f for f in v.failures), body
         assert not any("reports `None`" in f for f in v.failures), body
 
@@ -357,7 +451,15 @@ def test_a_health_report_whose_missing_list_is_malformed_does_not_raise():
     body = json.dumps(
         {"status": "degraded", "build": {"warehouse": "w", "sha": "s"}, "data": {"missing": 5}}
     )
-    v = assess(body, 503, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+    v = assess(
+        body,
+        503,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
+    )
     assert any("degraded" in f for f in v.failures)
 
 
@@ -371,7 +473,13 @@ def test_an_absent_cf_cache_header_is_not_a_claim_that_the_edge_stopped_caching(
     carries none either, so "the edge is not caching HTML" is a diagnosis from a response that
     never reached the cache path -- the `UPGAUGE_BASE_URL` mistake in a third place."""
     v = assess(
-        json.dumps(HEALTHY), 200, RELEASES, SITEMAP, cf_cache_status="absent", ratelimit_status=429
+        json.dumps(HEALTHY),
+        200,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="absent",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
     )
     named = next(f for f in v.failures if "cf-cache-status" in f)
     assert "not caching HTML" not in named
@@ -382,7 +490,13 @@ def test_a_reported_cf_miss_still_reports_that_the_edge_is_not_caching():
     """Guards over-suppression. A header that says MISS IS the edge answering about its own
     cache, and that diagnosis must survive -- otherwise the fix above silences the check."""
     v = assess(
-        json.dumps(HEALTHY), 200, RELEASES, SITEMAP, cf_cache_status="MISS", ratelimit_status=429
+        json.dumps(HEALTHY),
+        200,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="MISS",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
     )
     assert any("not caching HTML" in f for f in v.failures)
 
@@ -391,7 +505,13 @@ def test_a_blocked_burst_is_not_a_claim_that_the_rate_limit_is_absent():
     """A burst that ends in 403 never reached `/api/pivot`, so it measured nothing about the
     rate limit -- and sends an operator to check a Cloudflare rule that is fine."""
     v = assess(
-        json.dumps(HEALTHY), 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=403
+        json.dumps(HEALTHY),
+        200,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=403,
+        pivot_body=PIVOT_CURRENT,
     )
     named = next(f for f in v.failures if "/api/" in f and "burst" in f)
     assert "not in force" not in named
@@ -401,7 +521,13 @@ def test_a_blocked_burst_is_not_a_claim_that_the_rate_limit_is_absent():
 def test_a_burst_that_got_through_still_reports_the_rate_limit_absent():
     """Guards over-suppression the other way: 80 requests answered 200 IS the measurement."""
     v = assess(
-        json.dumps(HEALTHY), 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=200
+        json.dumps(HEALTHY),
+        200,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=200,
+        pivot_body=PIVOT_CURRENT,
     )
     assert any("not in force" in f for f in v.failures)
 
@@ -442,6 +568,7 @@ def test_the_workflow_passes_live_check_its_arguments_in_order():
         '"$sitemap"',
         '"$cf"',
         '"$rl"',
+        '"$pivot"',
     ]
 
 
@@ -472,7 +599,16 @@ def test_main_files_an_issue_for_a_body_it_could_not_read(monkeypatch, tmp_path)
     monkeypatch.setattr(
         sys,
         "argv",
-        ["live_check.py", CHALLENGE, "403", json.dumps(RELEASES), SITEMAP, "HIT", "429"],
+        [
+            "live_check.py",
+            CHALLENGE,
+            "403",
+            json.dumps(RELEASES),
+            SITEMAP,
+            "HIT",
+            "429",
+            PIVOT_CURRENT,
+        ],
     )
     assert main() == 0, "a site condition is reported through the ISSUE, not a red run"
     text = out.read_text()
@@ -500,7 +636,18 @@ def test_main_cannot_emit_a_workflow_command_out_of_the_body(monkeypatch, tmp_pa
     monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "out"))
     hostile = "<html>\n::stop-commands::deadbeef\n::add-mask::hunter2\n</html>"
     monkeypatch.setattr(
-        sys, "argv", ["live_check.py", hostile, "403", json.dumps(RELEASES), SITEMAP, "HIT", "429"]
+        sys,
+        "argv",
+        [
+            "live_check.py",
+            hostile,
+            "403",
+            json.dumps(RELEASES),
+            SITEMAP,
+            "HIT",
+            "429",
+            PIVOT_CURRENT,
+        ],
     )
     assert main() == 0
     for line in capsys.readouterr().out.splitlines():
@@ -563,7 +710,15 @@ def test_a_report_naming_no_warehouse_is_not_a_forgotten_promote():
     either way and that mutant survives. Name the branch that does the work."""
     for build in ({}, {"sha": "x"}, {"warehouse": None}, {"warehouse": ""}):
         body = json.dumps({"status": "ok", "build": build, "data": {}})
-        v = assess(body, 200, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+        v = assess(
+            body,
+            200,
+            RELEASES,
+            SITEMAP,
+            cf_cache_status="HIT",
+            ratelimit_status=429,
+            pivot_body=PIVOT_CURRENT,
+        )
         assert not any("promote was forgotten" in f for f in v.failures), build
         assert any("named no warehouse" in f for f in v.failures), build
 
@@ -585,7 +740,16 @@ def test_a_newline_in_a_parsed_value_cannot_open_a_workflow_command(monkeypatch,
     monkeypatch.setattr(
         sys,
         "argv",
-        ["live_check.py", body, "503", json.dumps(RELEASES), SITEMAP, f"HIT{hostile}", "429"],
+        [
+            "live_check.py",
+            body,
+            "503",
+            json.dumps(RELEASES),
+            SITEMAP,
+            f"HIT{hostile}",
+            "429",
+            PIVOT_CURRENT,
+        ],
     )
     assert main() == 0
     for line in capsys.readouterr().out.splitlines():
@@ -607,7 +771,9 @@ def test_an_undecodable_byte_in_a_parsed_value_does_not_kill_the_output_write(
         {"status": "degraded", "build": {"warehouse": "w", "sha": "s"}, "data": {"error": bad}}
     )
     monkeypatch.setattr(
-        sys, "argv", ["live_check.py", body, "503", json.dumps(RELEASES), SITEMAP, "HIT", "429"]
+        sys,
+        "argv",
+        ["live_check.py", body, "503", json.dumps(RELEASES), SITEMAP, "HIT", "429", PIVOT_CURRENT],
     )
     assert main() == 0
     assert "file_issue=1" in out.read_text()
@@ -617,7 +783,15 @@ def test_a_fetch_that_hung_mid_body_carries_what_did_arrive():
     """Status 000 with a NON-EMPTY body: the origin began answering and then stalled, which is a
     different finding from a connection refused -- and the bytes that arrived are the only thing
     that separates them. Both other 000 fixtures pass an empty body, so neither can see this."""
-    v = assess('{"status":"ok"', 0, RELEASES, SITEMAP, cf_cache_status="HIT", ratelimit_status=429)
+    v = assess(
+        '{"status":"ok"',
+        0,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
+    )
     named = next(f for f in v.failures if "/api/health" in f)
     assert "did not complete the transfer" in named
     assert '{"status":"ok"' in named, "the partial response was discarded"
@@ -634,7 +808,16 @@ def test_a_newline_in_the_sitemap_host_cannot_open_a_workflow_command(
     monkeypatch.setattr(
         sys,
         "argv",
-        ["live_check.py", json.dumps(HEALTHY), "200", json.dumps(RELEASES), hostile, "HIT", "429"],
+        [
+            "live_check.py",
+            json.dumps(HEALTHY),
+            "200",
+            json.dumps(RELEASES),
+            hostile,
+            "HIT",
+            "429",
+            PIVOT_CURRENT,
+        ],
     )
     assert main() == 0
     for line in capsys.readouterr().out.splitlines():
@@ -654,3 +837,160 @@ def test_the_rate_limit_burst_is_bounded_overall_not_only_per_request():
     assert "burst_deadline" in burst, "the burst has no overall deadline, only a per-request one"
     assert "break" in burst
     assert any("burst_deadline=" in ln for ln in lines[:start]), "the deadline is never set"
+
+
+# ---------------------------------------------------------------------------------------------
+# THE PROBE ASKS ABOUT CURRENT DATA, BY CONSTRUCTION (#156)
+# ---------------------------------------------------------------------------------------------
+#
+# The window was HAND-SPELLED as `t=2025-05:2026-04` in live-check.yml and again in
+# deploy.md. Nothing reddened as it decayed: `bounds.ts` admits any in-window range and the
+# dataset's floor never moves, so that window stays valid forever while receding one month
+# further into the past with every BTS refresh. A liveness probe that asks "is production
+# serving a fixed historical slice?" is a strictly weaker question than the one it was written
+# to ask, and it degrades into it silently.
+#
+# The fix asserts the RELATIONSHIP instead: the month `/api/pivot` can retrieve IS the month
+# `/api/health` reports as DATA AS OF. That property cannot rot, because both halves are read
+# from the site on every run.
+
+
+def _pivot(*months: str) -> str:
+    """What `/api/pivot?d=year_month` answers, reduced to the one column this check reads."""
+    return json.dumps(
+        {
+            "columns": ["year_month", "seats"],
+            "rows": [{"year_month": m, "seats": 92684939} for m in months],
+        }
+    )
+
+
+#: The served month agrees with the health report -- what a correct run looks like.
+PIVOT_CURRENT = _pivot("2026-05")
+
+#: EXACTLY WHAT THE FROZEN WINDOW PRODUCED. `t=2025-05:2026-04` against a 2026-05 warehouse
+#: retrieves 2026-04 as its newest month while the site reports 2026-05. Measured against
+#: production on 2026-09-01: health said `2026-05`, and the pinned window's newest row was
+#: `2026-04`. This fixture is that observation.
+PIVOT_STALE = _pivot("2026-04")
+
+
+def test_a_probe_window_behind_the_served_month_is_caught():
+    """THE #156 defect. The frozen window retrieved 2026-04 while DATA AS OF said 2026-05, and
+    every gate stayed green because the window was still ADMISSIBLE.
+
+    Asserts both months are named. "the probe is stale" without them sends an operator to
+    read the dataset by hand for the two facts this check already holds."""
+    v = _assess(
+        HEALTHY,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_STALE,
+    )
+    assert len(v.failures) == 1
+    assert "2026-05" in v.failures[0] and "2026-04" in v.failures[0]
+
+
+def test_a_current_probe_window_reports_no_failure():
+    """DISCRIMINATION, not decoration: without this, an implementation that fails
+    unconditionally passes the test above and this check reddens on every healthy run."""
+    v = _assess(
+        HEALTHY,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=PIVOT_CURRENT,
+    )
+    assert v.failures == []
+
+
+def test_an_unreadable_pivot_body_is_reported_as_unmeasured_never_as_stale():
+    """A challenge page is not evidence about the data layer. Reporting it as a stale window
+    would assert a cause nobody observed -- the rule `read_health` already follows for the
+    health body, applied to this fetch."""
+    v = _assess(
+        HEALTHY,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=CHALLENGE,
+    )
+    assert len(v.failures) == 1
+    assert "never measured" in v.failures[0]
+    # The months must NOT appear: naming them would read as a currency verdict.
+    assert "2026-05" not in v.failures[0]
+
+
+def test_json_that_is_not_a_pivot_result_is_unmeasured_too():
+    """`read_newest_month` has TWO refusal branches and a fixture only reaches one of them: a
+    challenge page is not JSON at all, so it exits at the decode. This body PARSES and is still
+    not a pivot result -- Cloudflare's own JSON error shape, the same one `is_health_report`
+    exists to refuse on the health side. Without this the `isinstance(rows, list)` guard is
+    deletable green: a mutant that returns a month from it kills no test."""
+    v = _assess(
+        HEALTHY,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body='{"success": false, "errors": [{"code": 1015}]}',
+    )
+    assert len(v.failures) == 1
+    assert "never measured" in v.failures[0]
+    assert "2026-05" not in v.failures[0]
+
+
+def test_an_empty_pivot_result_is_its_own_finding():
+    """A 200 carrying zero rows is not the same finding as a body that could not be read: the
+    query reached the data layer and the data layer had nothing for the month the site claims."""
+    v = _assess(
+        HEALTHY,
+        RELEASES,
+        SITEMAP,
+        cf_cache_status="HIT",
+        ratelimit_status=429,
+        pivot_body=_pivot(),
+    )
+    assert len(v.failures) == 1
+    assert "no rows" in v.failures[0] and "2026-05" in v.failures[0]
+
+
+def test_the_currency_check_is_suppressed_when_health_is_unreadable():
+    """No asOf was observed, so there is no month to compare against. Carrying on would file a
+    second failure asserting a cause, in the same alert that just said it could not read the
+    site -- the suppression rule the module docstring states for the two health-derived
+    checks, which this is now a third instance of."""
+    v = assess(
+        CHALLENGE,
+        403,
+        RELEASES,
+        SITEMAP,
+        "HIT",
+        429,
+        pivot_body=PIVOT_STALE,
+    )
+    assert len(v.failures) == 1
+    assert "/api/health" in v.failures[0]
+
+
+def test_the_workflow_hand_spells_no_month_window():
+    """The issue's own warning: re-pinning to the current month is this defect with a fresher
+    constant. A literal `t=YYYY-MM:YYYY-MM` anywhere in the workflow's bash is that re-pin."""
+    spelled = [
+        run
+        for run in _run_scalars(LIVE_CHECK)
+        if re.search(r"t=\d{4}-\d{2}:\d{4}-\d{2}", _uncommented(run))
+    ]
+    assert spelled == []
+
+
+def test_the_runbook_hand_spells_no_month_window():
+    """`deploy.md` documented the same frozen query as the hand-run form. A documented form
+    that disagrees with the workflow is how the next reader re-introduces the pin, so the doc
+    is bound to the same rule rather than merely corrected once."""
+    runbook = Path(__file__).parents[2] / "docs" / "architecture" / "deploy.md"
+    assert re.search(r"t=\d{4}-\d{2}:\d{4}-\d{2}", runbook.read_text()) is None
