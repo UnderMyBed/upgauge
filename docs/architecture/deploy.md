@@ -157,7 +157,7 @@ success. Env-var reference for the app itself: [hosting.md](hosting.md).
 | Alert | Meaning | First command |
 |---|---|---|
 | **Freshness** (`freshness.yml`) | `max(year_month)` has not advanced in ~45 days. The site keeps serving; `DATA AS OF` silently stops moving | `gh run list --workflow=warehouse.yml --limit 5` |
-| **Live check** (`live-check.yml`) | The served site is wrong, down, or could not be read — health, sitemap, release freshness or the rate limit. **Runs only on `workflow_dispatch` (#96): Bot Fight Mode stays on, so a runner is served a challenge page and nothing is watching the site on a schedule** | `curl -sS https://upgauge.shipman.dev/api/health \| jq .` |
+| **Live check** (`live-check.yml`) | The served site is wrong, down, or could not be read — health, sitemap, release freshness, the rate limit, or a query path that cannot retrieve the month the site reports as `DATA AS OF`. **Runs only on `workflow_dispatch` (#96): Bot Fight Mode stays on, so a runner is served a challenge page and nothing is watching the site on a schedule** | `curl -sS https://upgauge.shipman.dev/api/health \| jq .` |
 | **Scheduled failure** (`scheduled-failure.yml`) | An unattended workflow failed and nobody was watching | `gh run list --limit 10` |
 
 A live-check failure that is **not** a bad promote and **not** an unreadable body is almost
@@ -296,8 +296,15 @@ A burst test must send a request the endpoint **accepts** — `/api/pivot` answe
 query with 400, and a burst of 400s measures the rejection path while looking like a broken rate
 limit:
 
+The window is **derived from the served month, never written down**. A pinned one stays
+admissible forever — `bounds.ts` accepts any in-window range and the dataset's floor never moves
+— so it recedes a month further into the past with every refresh while nothing reddens. Pinning
+it to the current month is the same defect with a fresher constant.
+
 ```bash
-Q='v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op'
+ASOF=$(curl -sS https://upgauge.shipman.dev/api/health \
+       | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["asOf"])')
+Q="v=1&k=seg&d=op_airline_id&m=seats&t=$ASOF:$ASOF&n=5&g=op"
 for i in $(seq 1 40); do curl -sS -o /dev/null -w '%{http_code} ' "https://upgauge.shipman.dev/api/pivot?$Q" & done; wait
 ```
 

@@ -97,6 +97,38 @@ jobs:
           health=$(head -c 8000 "$body_file")
           sitemap=$(curl -sS --max-time 15 "${BASE}/sitemap.xml" | head -c 2000 || echo "")
 
+          # THE PROBE'S WINDOW IS DERIVED, NEVER SPELLED (#156). It was pinned to
+          # `t=2025-05:2026-04` here and in deploy.md, and nothing reddened as it decayed:
+          # bounds.ts admits any in-window range and the dataset's floor never moves, so the pin
+          # stayed valid forever while receding a month further into the past with every BTS
+          # refresh. Re-pinning to the current month would be the same defect with a fresher
+          # constant, so the month comes from the site on every run.
+          #
+          # A SINGLE month (`t=$asof:$asof`), not a trailing twelve: the window only has to be
+          # admissible and end at the served month, and computing a trailing-12 in bash would put
+          # a THIRD copy of that derivation in a third language -- the defect #155 just closed.
+          #
+          # VALIDATED before it reaches a URL. `asof` is remote content in a job holding
+          # issues:write; the regex is what keeps it from being anything but a month. An
+          # unusable one yields the empty string, and live_check.py reports THAT rather than
+          # curling a malformed URL and reporting whatever came back.
+          # ONE LINE on purpose: a block scalar preserves the indentation of what it contains,
+          # and `python3 -c` refuses a consistently-indented program, so a multi-line spelling
+          # here is either invalid YAML or an IndentationError. A body that does not parse
+          # raises, the pipeline fails, and `|| echo ""` yields the empty string -- the same
+          # "never measured" value an absent asOf produces.
+          asof=$(printf '%s' "$health" | python3 -c 'import json,re,sys;v=json.load(sys.stdin).get("data",{}).get("asOf");print(v if isinstance(v,str) and re.fullmatch(r"[0-9]{4}-(0[1-9]|1[0-2])",v) else "")' 2>/dev/null || echo "")
+
+          # Empty `pivot` is a value live_check.py reads as "never measured", not a fetch it
+          # silently skips -- a check that quietly does not run is the failure class this whole
+          # script exists to end.
+          pivot=""
+          if [ -n "$asof" ]; then
+            pivot=$(curl -sS --max-time 15 \
+              "${BASE}/api/pivot?v=1&k=seg&d=year_month&m=seats&t=${asof}:${asof}&n=5&g=op" \
+              | head -c 8000 || echo "")
+          fi
+
           # Two fetches of the SAME url: the first may legitimately miss (cold edge, or the
           # entry just expired). Only the second says whether the edge is caching HTML at all.
           #
@@ -144,7 +176,7 @@ jobs:
           for _ in $(seq 1 80); do
             # Same concatenation trap as the health fetch above.
             if ! rl=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
-                      "${BASE}/api/pivot?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&n=5&g=op"); then
+                      "${BASE}/api/pivot?v=1&k=seg&d=op_airline_id&m=seats&t=${asof}:${asof}&n=5&g=op"); then
               rl=000
             fi
             [ "$rl" = "429" ] && break
@@ -162,7 +194,7 @@ jobs:
           # below, through gha.write_multiline_output's randomized delimiter, which is what
           # makes that half safe without a matching fix.
           mise exec -- python .github/scripts/live_check.py \
-            "$health" "$hcode" "$releases" "$sitemap" "$cf" "$rl"
+            "$health" "$hcode" "$releases" "$sitemap" "$cf" "$rl" "$pivot"
 
       # A failing live check is a CONDITION, not an event: it stays true every hour until
       # someone fixes it. Without this, one bad afternoon files a dozen issues and the alert

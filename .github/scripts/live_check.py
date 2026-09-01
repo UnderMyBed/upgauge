@@ -144,6 +144,38 @@ def read_health(body: str, http_status: int) -> tuple[dict, str | None]:
     return parsed, None
 
 
+def read_newest_month(body: str) -> tuple[str, str | None]:
+    """`(newest-month, None)` when the body is a pivot result, `("", why-not)` when it is
+    anything else.
+
+    Same contract and same reason as `read_health`: a challenge page, an HTML error page and a
+    proxy failure are all "not a pivot result", and none of them is evidence about the data
+    layer. Reporting one as a stale window would assert a cause nobody observed.
+
+    The workflow asks for a SINGLE month (`t=$asof:$asof`) grouped by `year_month`, so a correct
+    answer is exactly one row naming that month. Reading `max()` rather than `rows[0]` keeps
+    this independent of the query's sort, which is a property of the URL and not of the check.
+    """
+    if not body.strip():
+        return "", "empty"
+    try:
+        parsed = json.loads(body)
+    except json.JSONDecodeError:
+        return "", f"answered with a body that is not JSON: {code_span(snippet(body))}"
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("rows"), list):
+        return "", f"answered with JSON that is not a pivot result: {code_span(snippet(body))}"
+    months = [
+        r["year_month"]
+        for r in parsed["rows"]
+        if isinstance(r, dict) and isinstance(r.get("year_month"), str)
+    ]
+    if not months:
+        # Distinguished from an unreadable body by the CALLER, which names the month that was
+        # asked for: the query reached the data layer and the data layer had nothing for it.
+        return "", None
+    return max(months), None
+
+
 def assess(
     health_body: str,
     health_status: int,
@@ -151,6 +183,8 @@ def assess(
     sitemap: str,
     cf_cache_status: str,
     ratelimit_status: int,
+    *,
+    pivot_body: str,
     base_url: str = "https://upgauge.shipman.dev",
 ) -> LiveVerdict:
     """Every argument is a measured value, so this stays a pure function of them -- and the
@@ -188,6 +222,53 @@ def assess(
                     f"the site is serving `{inline(live_warehouse)}` but `{inline(newest)}` is "
                     "published -- a promote was forgotten, and the release-based freshness "
                     "alert cannot see this"
+                )
+
+        # THE PROBE ASKS ABOUT CURRENT DATA, BY CONSTRUCTION (#156). The window was hand-spelled
+        # `t=2025-05:2026-04` in the workflow and in deploy.md, and nothing reddened as it
+        # decayed: bounds.ts admits any in-window range and the dataset's floor never moves, so
+        # the pin stayed valid forever while receding a month further into the past with every
+        # refresh. It had drifted from "is production serving current data?" to "is production
+        # serving a fixed historical slice?" -- a strictly weaker question, reached silently.
+        #
+        # So this asserts the RELATIONSHIP rather than a window: the month /api/pivot can
+        # retrieve IS the month the site reports as DATA AS OF. Both halves are read from the
+        # site on every run, so there is no constant left to rot.
+        # SUPPRESSED unless the report says `ok`, for the reason an unreadable body suppresses
+        # the two checks above: a degraded box answers 503 with `asOf: null` and NAMES its own
+        # cause in `data.missing`, so a second failure saying the month could not be compared
+        # asserts nothing that report did not already say, in the same alert.
+        as_of = health["data"].get("asOf") if status == "ok" else "suppressed"
+        if as_of == "suppressed":
+            pass
+        elif not isinstance(as_of, str) or not as_of:
+            failures.append(
+                "/api/health named no `asOf` in its `data` section, so the month the site "
+                "claims to serve could not be compared against what /api/pivot returns"
+            )
+        else:
+            newest, unreadable_pivot = read_newest_month(pivot_body)
+            if unreadable_pivot == "empty":
+                failures.append(
+                    "the /api/pivot currency probe returned an empty body, so whether the "
+                    f"query path can retrieve the served month was never measured -- {_BLIND}"
+                )
+            elif unreadable_pivot:
+                failures.append(
+                    f"the /api/pivot currency probe {unreadable_pivot}, so whether the query "
+                    f"path can retrieve the served month was never measured -- {_BLIND}"
+                )
+            elif not newest:
+                failures.append(
+                    f"/api/health reports `DATA AS OF {inline(as_of)}` but /api/pivot returned "
+                    "no rows for that month -- the query path reached the data layer and the "
+                    "data layer had nothing for the month the site claims to serve"
+                )
+            elif newest != as_of:
+                failures.append(
+                    f"/api/health reports `DATA AS OF {inline(as_of)}` but the newest month "
+                    f"/api/pivot returns is `{inline(newest)}` -- the two disagree, so the "
+                    "served pages and the query path are not describing the same dataset"
                 )
 
     if base_url not in sitemap:
@@ -248,14 +329,14 @@ def assess(
 
 
 def main() -> int:
-    if len(sys.argv) < 7:
+    if len(sys.argv) < 8:
         # NOT 0, unlike every site verdict below. Returning 0 here made a MIS-WIRED workflow a
         # green run with no `file_issue` and no issue, forever -- a silent watchdog, which is
         # the failure class this whole script exists to end. A broken invocation is not a site
         # condition: scheduled-failure.yml is the right reporter for it.
         print(
             "usage: live_check.py <health> <health-status> <releases> <sitemap> "
-            "<cf-cache-status> <rl-status>",
+            "<cf-cache-status> <rl-status> <pivot>",
             file=sys.stderr,
         )
         return 64
@@ -272,6 +353,7 @@ def main() -> int:
         sys.argv[4],
         sys.argv[5],
         int(sys.argv[6] or 0),
+        pivot_body=sys.argv[7],
     )
 
     report = ["## Live check - " + ("FAILED" if verdict.failed else "ok"), ""] + [
