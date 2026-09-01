@@ -568,10 +568,10 @@ narrower count as though it were the full one is the same dishonesty as a stale 
 every check, one level up. `make app-smoke` (host mode) runs all three; `make image-smoke` does
 not, and adds one check host mode cannot run (§ The Dockerfile, the artifact-level toolchain
 probe) — so neither mode's check set contains the other's, and **both** narrowings are printed,
-one per mode. **The two totals are not written here.** `pipeline/gatecounts.py` states that the smoke counts are
-deliberately not generated — only a real `next build` plus a served port produces them — so they
-are hand-maintained, and a second hand-maintained copy is one that goes stale silently. CLAUDE.md's
-gates table is the one place they live.
+one per mode. **The two totals are not written here.** `pipeline/gatecounts.py` states that the
+smoke counts are deliberately not generated — only a real `next build` plus a served port
+produces them — so they are hand-maintained, and a second hand-maintained copy is one that goes
+stale silently. CLAUDE.md's gates table is the one place they live.
 
 **One existing check needed a container-specific path, not a skip: the "ONE `DuckDBInstance`"
 handle count** (§ "One `DuckDBInstance` per process", below). Its host-mode form walks the local process tree with
