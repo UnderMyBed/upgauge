@@ -27,13 +27,27 @@ runs:
       shell: bash
       run: mise exec -- npm ci --prefix app
 
+    # A CACHE KEY NAMES EXACTLY WHAT THE CACHED BYTES DEPEND ON, and this key names only the
+    # release tag -- so only tag-derived bytes may be stored under it. `data/parquet` is the
+    # facts and the dims, unpacked verbatim out of `warehouse-YYYY.MM`, and it is the download
+    # this cache exists to avoid (warehouse-2026.05.tar.zst: 81,898,972 bytes).
+    #
+    # `upgauge.duckdb` is deliberately absent. Every one of its ten objects is `CREATE OR REPLACE
+    # VIEW|TABLE ... AS <sql/02_marts/*.sql>` over data/parquet, and `pipeline/marts.py`'s
+    # `build_database` builds a staging file and renames over it -- so not one byte of that file
+    # is a function of the tag; all of it is a function of THIS COMMIT's sql/. Caching it here
+    # would make the post-job save store one commit's marts under a key promising the asset's,
+    # for a later run on a different commit to restore. Putting `github.sha` in the key would be
+    # honest too, at the price of a miss on every push -- and a `restore-keys` prefix fallback
+    # added to win the download back reintroduces the same wrong bytes by another route. The
+    # rebuild below is unconditional and costs ~1 s, so there is nothing worth caching.
+    # `pipeline/tests/test_mart_rebuild.py` holds both halves: the tree stays cached, and no
+    # rebuild output joins it.
     - name: Restore warehouse from cache
       id: cache
       uses: actions/cache@v6
       with:
-        path: |
-          upgauge.duckdb
-          data/parquet
+        path: data/parquet
         key: warehouse-${{ inputs.warehouse-tag }}
 
     # WAREHOUSE_TAG reaches bash through `env:`, never `${{ }}` spliced into the script text.
@@ -54,7 +68,13 @@ runs:
         set -euo pipefail
         gh release download "$WAREHOUSE_TAG" \
           --repo "$GITHUB_REPOSITORY" --pattern 'warehouse-*.tar.zst'
-        tar --zstd -xf warehouse-*.tar.zst
+        # data/parquet ONLY. The tarball also carries the upgauge.duckdb frozen at publish day,
+        # and unpacking it puts marts no commit here produced on disk. The rebuild below
+        # overwrites them -- silently, which is the problem: delete that step and the gates go
+        # back to testing publish-day marts with nothing red. Extracting nothing but the
+        # tag-derived tree turns that removal into a missing database, which every gate names.
+        # tar exits non-zero if the member is absent, so a repacked asset fails loudly here.
+        tar --zstd -xf warehouse-*.tar.zst data/parquet
         rm -f warehouse-*.tar.zst
 
     - name: Restore raw
@@ -71,26 +91,31 @@ runs:
         rm -f raw-*.tar.zst
 
     # The anti-vacuity guard. A silent download failure would otherwise leave the suite
-    # reporting a green 461 passed with 49 skips, which proves far less than it appears to.
+    # reporting a green 830 passed with 65 skips, which proves far less than it appears to.
     #
-    # That pair is HAND-MAINTAINED and it rots fast: 428/46 -> 442/49 -> 444/49 -> 461/49, the
-    # last three inside a single branch, each because a test was added elsewhere. It is
-    # deliberately NOT generated -- producing it means running the suite with neither `data/`
-    # nor `upgauge.duckdb`, which is a CI job rather than a sub-second collection (see
-    # pipeline/gatecounts.py § The boundary). 49 is the stable half; re-measure the other in a
-    # worktree with no data before quoting it.
+    # That pair is HAND-MAINTAINED and it rots fast: 428/46 -> 442/49 -> 444/49 -> 461/49 ->
+    # 830/65, three of those inside a single branch, each because a test was added elsewhere.
+    # BOTH halves move -- the skip count was called the stable one for three revisions and then
+    # went 49 -> 65 -- so re-measure the pair, never one half of it. It is deliberately NOT
+    # generated: producing it means running the suite with neither `data/` nor `upgauge.duckdb`,
+    # which is a CI job rather than a sub-second collection (see pipeline/gatecounts.py § The
+    # boundary). Measure it in a worktree with no data before quoting it, which is where the
+    # figures above come from.
     #
     # Specific, not just present: `data/parquet` has two independent subtrees --
     # `dims/*.parquet` and `t100_segment/year=*/`. A partial extraction can land the small
     # dims files while dropping t100_segment (or vice versa) and still satisfy a bare
     # `find data/parquet -name '*.parquet' | wc -l` count. Check each subtree the warehouse
     # actually needs, and name whichever one is missing.
+    #
+    # `upgauge.duckdb` is NOT checked here, and cannot be: nothing restores it any more. Its
+    # own assertion sits after the rebuild that produces it, so each check names the step that
+    # was supposed to do the work.
     - name: Assert the warehouse is actually present
       shell: bash
       run: |
         set -euo pipefail
         missing=()
-        [ -f upgauge.duckdb ] || missing+=("upgauge.duckdb")
         compgen -G "data/parquet/t100_segment/year=*/*.parquet" > /dev/null \
           || missing+=("data/parquet/t100_segment/year=*/ (no year partitions)")
         compgen -G "data/parquet/dims/*.parquet" > /dev/null \
@@ -120,12 +145,24 @@ runs:
     # Costs ~1 s (measured 0.97 s locally against the full 2015-2026 window). The asset still
     # carries the facts, the dims and the Parquet tree -- the expensive part.
     #
-    # ONE CONSEQUENCE, benign only while this step is unconditional: actions/cache's post-job
-    # save now stores the REBUILT upgauge.duckdb under `warehouse-<tag>`, so a later run on a
-    # different commit restores that file. Harmless because every consumer rebuilds before
-    # reading it -- but delete this step and CI would test a mart from an arbitrary earlier
-    # commit, which is worse than the baked asset it replaced.
-    # `pipeline/tests/test_mart_rebuild.py` is what holds it here.
+    # This is the ONLY thing that puts an upgauge.duckdb on a CI runner: neither the cache nor
+    # the asset extraction above supplies one. So removing this step does not silently downgrade
+    # the gates to some other commit's marts -- it leaves them with no database at all, which is
+    # a red every gate can name. `pipeline/tests/test_mart_rebuild.py` is what holds it here.
     - name: Rebuild the marts from this commit's sql/
       shell: bash
       run: make build
+
+    # The anti-vacuity guard for the rebuild's own output, the way the step above is for the
+    # restore's. `make build` failing is loud on its own; this covers the other shape -- an exit
+    # 0 that writes nothing -- which would otherwise surface as a green suite full of "no built
+    # catalog" skips.
+    - name: Assert the rebuild produced a database
+      shell: bash
+      run: |
+        set -euo pipefail
+        [ -f upgauge.duckdb ] || {
+          echo "::error::make build exited 0 without writing upgauge.duckdb"
+          exit 1
+        }
+        echo "upgauge.duckdb: $(stat -c%s upgauge.duckdb) bytes"

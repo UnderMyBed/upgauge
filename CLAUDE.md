@@ -86,7 +86,7 @@ Current gates (`app-check`/`app-smoke` measured 2026-08-31, `verify`/`goldens` 2
 
 | gate | result |
 |---|---|
-| `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 59 skip without `data/` |
+| `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 65 skip without `data/` |
 | `make app-check` | 1,846 app tests · without a built `upgauge.duckdb` 1,830 are collected, 12 skip, and **641 of the 1,818 that run fail** — collected, run and failed are three different sets, so "N of the total fail" was never the sentence it read as |
 | `make app-smoke` | 754 served-build checks |
 | `make image-smoke` | the host set less the 10 host-only gap checks, which print as skipped — **744, measured 2026-08-31** by `image-contract.yml` on #164, and it reconciles against the rule (754 host − 10). #147's two ordering checks are deliberately not dataset-pinned and were confirmed running in the container, not merely inferred from a local `SMOKE_DATASET_PINNED=0` run. Needs Docker plus the pinned release asset — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |

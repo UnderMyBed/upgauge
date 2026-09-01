@@ -97,6 +97,175 @@ def test_the_mart_rebuild_runs_after_the_warehouse_restore_is_asserted():
 
 
 # --------------------------------------------------------------------------------------
+# the CI cache -- a key names exactly what the cached bytes depend on
+# --------------------------------------------------------------------------------------
+#
+# `actions/cache` in the setup action keys on the resolved `warehouse-YYYY.MM` tag. Once the
+# mart rebuild above became unconditional, anything the rebuild WRITES that stays inside the
+# cached `path:` is saved post-job under that key -- so the key would say `warehouse-2026.05`
+# while the bytes are `warehouse-2026.05 + whichever commit last populated the key`. The whole
+# `upgauge.duckdb` is such an output: every one of its ten objects is `CREATE OR REPLACE
+# VIEW|TABLE ... AS <sql/02_marts/*.sql>` over `data/parquet`, and `build_database` builds a
+# staging file and renames over it, so not one byte of that file is a function of the tag.
+#
+# Narrowing the cache to `data/parquet` -- which IS a pure function of the tag, and IS the
+# release-asset download the cache exists to avoid -- restores the invariant. Including the
+# commit in the key would restore it too, at the cost of a cache miss on every push; these tests
+# state the invariant, not the choice, so either fix passes and the broken pair does not.
+
+
+def _marts_cli_defaults() -> dict[str, str]:
+    """`make build`'s two path defaults, read off `pipeline/marts.py`'s own argparse.
+
+    Derived rather than restated: `--parquet-dir` is what the restore must put on disk and
+    `--db` is what the rebuild writes, and the cache tests below are about exactly that split.
+    Rename either in `marts.py` and this reddens here rather than quietly testing a path no
+    `make build` uses.
+    """
+    text = (REPO / "pipeline" / "marts.py").read_text()
+    out = {}
+    for flag in ("--parquet-dir", "--db"):
+        m = re.search(rf'"{flag}",[^)]*default=Path\("([^"]+)"\)', text)
+        assert m is not None, f"pipeline/marts.py no longer declares a default for {flag}"
+        out[flag] = m.group(1)
+    return out
+
+
+def _cache_step() -> dict:
+    step = next(
+        (s for s in _setup_steps() if str(s.get("uses", "")).startswith("actions/cache")), None
+    )
+    assert step is not None, (
+        "the setup action no longer caches the warehouse at all. Do not close the cache-key "
+        "issue by deleting the cache: avoiding the release-asset download on every job is what "
+        "the cache is for, and that download is the expensive part"
+    )
+    return step["with"]
+
+
+def _cached_paths() -> list[str]:
+    return [p.strip().rstrip("/") for p in _cache_step()["path"].splitlines() if p.strip()]
+
+
+#: Contexts that make a cache key commit-specific. `github.sha` is the one this repo would
+#: reach for (image.yml already keys its image tag `<warehouse-tag>-<sha>`); the PR head sha is
+#: the same claim spelled for `pull_request`, where `github.sha` is the merge commit.
+_COMMIT_CONTEXTS = ("github.sha", "github.event.pull_request.head.sha")
+
+
+def _key_names_the_commit(key: str) -> bool:
+    return any(ctx in key for ctx in _COMMIT_CONTEXTS)
+
+
+def test_the_commit_contexts_tell_a_tag_only_key_from_a_commit_specific_one():
+    """DISCRIMINATION for the predicate the cache test below leans on. Written as its own test
+    because a predicate that answers True for everything makes that test unable to fail, and a
+    predicate that answers False for everything makes it unable to accept the OTHER legitimate
+    fix -- neither is visible from the call site, which passes either way against the real file
+    (the real key names no commit AND caches no build output)."""
+    tag_only = "warehouse-${{ inputs.warehouse-tag }}"
+    assert not _key_names_the_commit(tag_only), (
+        f"{tag_only!r} names only the asset tag, so bytes that depend on the commit cannot be "
+        f"stored under it -- a predicate that calls this commit-specific disables the cache test"
+    )
+    for spelling in (
+        "warehouse-${{ inputs.warehouse-tag }}-${{ github.sha }}",
+        "warehouse-${{ inputs.warehouse-tag }}-${{ github.event.pull_request.head.sha }}",
+    ):
+        assert _key_names_the_commit(spelling), (
+            f"{spelling!r} names the commit, so it may legitimately carry commit-derived bytes; "
+            f"a predicate that refuses it makes the second of the two valid fixes unreachable"
+        )
+
+
+def test_the_warehouse_cache_still_holds_the_parquet_tree():
+    """The half that keeps the cache worth having. `data/parquet` is a pure function of the
+    warehouse tag -- it is the facts and the dims, unpacked verbatim from the release asset --
+    and it is the download the cache exists to avoid. Dropping it is how a key/content mismatch
+    gets "fixed" for free, and #160 rules that out in as many words."""
+    parquet_dir = _marts_cli_defaults()["--parquet-dir"]
+    assert parquet_dir in _cached_paths(), (
+        f"the setup action no longer caches {parquet_dir!r}, so every job re-downloads the "
+        f"release asset. That is not the fix for a key that overpromises; narrowing what is "
+        f"cached, or naming the commit in the key, is"
+    )
+
+
+def test_the_warehouse_cache_key_names_everything_the_cached_bytes_depend_on():
+    """THE assertion for #160. `make build` writes `upgauge.duckdb` from `data/parquet` plus
+    THIS COMMIT's `sql/02_marts/`, so caching that file under a key naming only the asset tag
+    stores commit-derived bytes under a tag-derived name: a later run on a different commit
+    restores a mart no commit in its own tree produced. Benign only while the rebuild is
+    unconditional -- and `test_the_setup_action_rebuilds_the_marts` above is the only thing
+    holding that, which is precisely why the cache must not also be relying on it.
+
+    Stated as the invariant rather than as this repo's choice of fix: a key that names the
+    commit may carry the database, and a key that names only the tag may not."""
+    key = str(_cache_step()["key"])
+    db = _marts_cli_defaults()["--db"]
+    if _key_names_the_commit(key):
+        return
+    assert db not in _cached_paths(), (
+        f"the warehouse cache stores {db!r} under key {key!r}, which names only the release "
+        f"tag. {db!r} is `make build`'s own output -- every object in it comes from this "
+        f"commit's sql/02_marts/ -- so the post-job save writes this commit's marts under a "
+        f"key that promises the asset's. Either drop it from `path:` (it costs ~1 s to "
+        f"rebuild, and the rebuild runs unconditionally anyway) or put the commit in `key:`"
+    )
+
+
+def test_the_asset_is_unpacked_without_its_publish_day_database():
+    """The same invariant on the cache-MISS path. The release tarball carries `upgauge.duckdb`
+    beside `data/parquet`, and that copy is whatever `sql/02_marts/` looked like on publish day.
+    Extracting only `data/parquet` means no publish-day mart bytes exist in a CI job at all, on
+    either path -- so deleting the rebuild stops being a silent wrong answer and becomes a
+    missing database, which every gate names."""
+    step = next((s for s in _setup_steps() if "warehouse-*.tar.zst" in str(s.get("run", ""))), None)
+    assert step is not None, "the setup action no longer downloads the warehouse asset"
+    parquet_dir = _marts_cli_defaults()["--parquet-dir"]
+    # Bash comment lines dropped first. The step's own comment explains the extraction, and a
+    # needle that matches PROSE is this repo's most-repeated test defect -- test_live_check.py's
+    # `_uncommented` exists because one resolved `/api/health` to a character inside a comment.
+    body = [ln for ln in step["run"].splitlines() if not ln.strip().startswith("#")]
+    extract = next(ln for ln in body if "tar --zstd -xf" in ln)
+    assert extract.split()[-1] == parquet_dir, (
+        f"the asset extraction is {extract.strip()!r}, which unpacks the tarball's own "
+        f"`upgauge.duckdb` -- the marts frozen at publish time. Name {parquet_dir!r} as the "
+        f"member to extract so the only database a CI job can ever have is the rebuilt one"
+    )
+
+
+def test_the_rebuilt_database_is_asserted_present():
+    """The anti-vacuity guard for the rebuild's own output. Nothing restores `upgauge.duckdb`
+    any more, so if `make build` ever exits 0 without writing one, the suite reports a green run
+    full of "no built catalog" skips -- which is the shape the presence assert for the Parquet
+    tree already exists to refuse."""
+    db = _marts_cli_defaults()["--db"]
+    runs = [str(s.get("run", "")) for s in _setup_steps()]
+    assert any(f"-f {db}" in r for r in runs), (
+        f"nothing in the setup action checks that {db!r} exists. The restore no longer "
+        f"provides it, so this is the only check that `make build` produced anything"
+    )
+
+
+def test_the_database_presence_assert_runs_after_the_mart_rebuild():
+    """Ordering, on its own, because the two properties fail for different reasons and a
+    reviewer needs to be told which. Before `make build` this check is not merely redundant --
+    it is RED on every cache hit, since the restore stops putting a database on disk."""
+    steps = _setup_steps()
+    db = _marts_cli_defaults()["--db"]
+    build_at = _index_of_step_running(steps, "make build")
+    assert build_at is not None, "no `make build` step at all -- see the tests above"
+    check_at = _index_of_step_running(steps, f"-f {db}")
+    assert check_at is not None, f"nothing checks {db!r} exists -- see the test above"
+    assert check_at > build_at, (
+        f"the {db!r} presence check runs at step {check_at}, before the rebuild at "
+        f"{build_at}. Nothing restores that file any more, so the check would fail every job "
+        f"for a reason that names the restore rather than the rebuild"
+    )
+
+
+# --------------------------------------------------------------------------------------
 # the image half -- the Dockerfile's stage boundaries
 # --------------------------------------------------------------------------------------
 
