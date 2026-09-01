@@ -2375,6 +2375,59 @@ else
 fi
 check_re "db: proxy, page and API share ONE DuckDBInstance (open handles = 1)" "$HANDLES" '^1$'
 
+# THE ARTIFACT-LEVEL HALF of CLAUDE.md's "pipeline/: Python 3.12 + uv. CI only, never runs in
+# prod" (#162). pipeline/tests/test_mart_rebuild.py holds the INSTRUCTION-level half -- an
+# allow-list over the Dockerfile's runtime stage that refuses every source, source stage and
+# token which would carry the toolchain across. That proves no INSTRUCTION introduces an
+# interpreter. It cannot prove the IMAGE lacks one: node:*-slim starting to ship python3, or an
+# apt dependency pulling one in transitively, satisfies every assertion in that file while
+# putting an interpreter in production. Only the running container answers that, which is why
+# this check exists here and nowhere else.
+#
+# CONTAINER-ONLY, so a THIRD category alongside the host set and the three host-only gap
+# sections: the container's checks are no longer a SUBSET of host mode's, and the two totals in
+# CLAUDE.md's gates table now reconcile as `host - 10 host-only + 1 container-only`. There is
+# nothing here for host mode to assert -- this checkout carries python3, uv and pipeline/ by
+# design, so a host-mode form would be red against a correct tree and would then get "fixed"
+# into something that passes for any input. The narrowing is PRINTED in both directions at the
+# foot of this file, never left for someone to notice by diffing two ok-counts.
+#
+# THE SENTINEL IS THE ASSERTION, not the absence of a needle. `docker exec` failing, the
+# container already gone, `sh` unresolvable -- each yields an EMPTY string, and a check shaped as
+# "the output does not contain python3" prints ok for a probe that never ran. This file has
+# shipped that exact shape once already (self-defect #1). So the probe prints `scanned:`
+# unconditionally as its LAST act and the assertion is an anchored equality against
+# `scanned: none`: an empty result, a crashed probe and a dirty image are all RED, and the FAIL
+# line names what was found.
+#
+# The relative names are read against the image's own WORKDIR -- /srv/upgauge, which `docker
+# exec` inherits, and where both `COPY pipeline ./pipeline` and `COPY --from=warehouse
+# /w/pipeline ./pipeline` land. /opt/venv is the one PATH cannot see: it is the warehouse stage's
+# UV_PROJECT_ENVIRONMENT, it carries CPython AND duckdb, and copying it whole adds nothing to
+# PATH. `sql` is deliberately absent from the list -- the runtime stage copies it on purpose.
+#
+# Assigned rather than inlined into the `sh -c`, because pipeline/tests/test_mart_rebuild.py
+# EXECUTES this exact program against planted artifacts. A grep for the names proves they are
+# written down; only running it proves the program looks for them.
+TOOLCHAIN_PROBE='
+found=
+for b in python3 python uv; do
+  command -v "$b" >/dev/null 2>&1 && found="$found PATH:$b"
+done
+for p in /opt/venv pipeline pyproject.toml uv.lock; do
+  [ -e "$p" ] && found="$found FILE:$p"
+done
+echo "scanned:${found:- none}"
+'
+TOOLCHAIN_CLEAN='^scanned: none$'
+if [ "$SMOKE_MODE" = "container" ]; then
+  # 2>&1, not 2>/dev/null: a docker error belongs in the FAIL line's `got:`, and it cannot
+  # accidentally satisfy an anchored pattern that no error message has a line matching.
+  TOOLCHAIN=$(docker exec upgauge-smoke sh -c "$TOOLCHAIN_PROBE" 2>&1)
+  check_re "image: no Python toolchain in the RUNNING container (python3, uv, pipeline/)" \
+    "${TOOLCHAIN:-<no output: docker exec did not run the probe>}" "$TOOLCHAIN_CLEAN"
+fi
+
 # ---------------------------------------------------------------------------------------------
 # 14. M6 Task 8: /watch and the four Top-N leaderboard presets. proxy.ts's matcher grew to
 #     ELEVEN entries for this (M6 Task 7) -- `/watch` (exact path, same shape as `/search`) and
@@ -3757,12 +3810,23 @@ fi
 # full suite -- container coverage is the served-build checks only. Silent truncation reads as
 # "covered everything" when it did not, so the narrowing is printed rather than left for someone
 # to notice by diffing an ok-count against host mode.
+#
+# BOTH DIRECTIONS, since #162: the container is no longer a subset of host mode. It skips the
+# three gap sections and adds one check host mode cannot run, so the two published totals
+# reconcile as `host - 10 host-only + 1 container-only` and each mode prints the term it is
+# missing. One mode printing its narrowing and the other staying silent would read as "host mode
+# is the complete one", which stopped being true.
 if [ "$SMOKE_MODE" = "container" ]; then
   echo "==> host-only sections NOT run in container mode (3):"
   echo "    - /explore against a database missing meta_pivot_dimensions (M5 Task 7 Part A)"
   echo "    - /watch/gauge against a database missing mart_route_health (M6 Task 8)"
   echo "    - /airport map against dim_airport missing lat/lon (M7 Task 10)"
   echo "    container coverage is the served-build checks only -- NOT the full suite."
+else
+  echo "==> container-only checks NOT run in host mode (1):"
+  echo "    - no Python toolchain in the RUNNING container (#162)"
+  echo "    this checkout carries python3, uv and pipeline/ by design -- only an image can be"
+  echo "    asserted free of them, so host mode is not the superset of container mode."
 fi
 
 if [ "$DATASET_SKIPPED" -gt 0 ]; then
