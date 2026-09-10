@@ -29,11 +29,18 @@ export const dynamic = "force-dynamic";
  * determined the request 404s it rewrites to `/_not-found` -- here -- which keeps the 404
  * status, keeps `no-store`, and renders through the root layout into real HTML.
  *
- * The six segment files are NOT dead. An RSC request is answered before any rewrite (`proxy.ts`
- * line 94), so client-side navigation to a 404 URL still renders through the segment boundary,
- * and any `notFound()` the proxy did not predict still lands there. They also keep the
- * fail-loud `rawPathFromHeaders`; this file deliberately does not, because here an absent
- * header is MEANINGFUL -- it is how an unrouted URL announces itself. */
+ * SIX branches there rewrite, not seven: the four `opengraph-image` cards resolve exactly like
+ * their pages do and deliberately do NOT rewrite. An `opengraph-image.tsx` compiles to a route
+ * handler returning an `ImageResponse`, so a crawler asking for a PNG would be handed an HTML
+ * document -- which is also why `notFoundFamilyFromPath` answers `null` for those paths rather
+ * than naming an entity.
+ *
+ * The six segment files are NOT dead. An RSC request is answered by `proxy.ts`'s `RSC` header
+ * guard, which returns before every branch below it, so client-side navigation to a 404 URL
+ * still renders through the segment boundary, and any `notFound()` the proxy did not predict
+ * still lands there with the blank body this file exists to fix -- narrowed, not closed.
+ * They also keep the fail-loud `rawPathFromHeaders`; this file deliberately does not, because
+ * here an absent header is MEANINGFUL -- it is how an unrouted URL announces itself. */
 export async function RootNotFoundView({
   pathname,
   rawQuery,

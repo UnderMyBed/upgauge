@@ -301,11 +301,27 @@ export async function proxy(request: NextRequest) {
   // pathname under this prefix the matcher does forward gets an answer from this file rather
   // than falling through to none at all; the probe declines the cache for the ones the page
   // will 404.
+  //
+  // #157: the rewrite half runs on a SEPARATE predicate, and that separation is the whole
+  // correctness of this branch. `isFilterListCacheable` returns `false` for THREE different
+  // situations -- an unknown or wrong-grain dim (a real 404), a permalink that does not decode
+  // (the page catches `UrlStateError`/`PivotError` and renders `<UnreadableQuery>` as a **200**),
+  // and `loadAllowlist()` throwing (a transient DuckDB failure). Only the FIRST is a 404, so
+  // rewriting on the boolean would hand a hard, bodied 404 to a healthy request during a database
+  // blip -- for a page the server might well still render a moment later. `isFilterList404`
+  // (below) re-derives the reason and answers `true` only for that first case.
+  //
+  // It runs ONLY when the cacheability probe has already declined, so the hot path -- a real
+  // filterable dimension -- still decodes exactly once. The 404 path decodes twice and that costs
+  // no database query at all: `loadAllowlist()` is memoized on `globalThis` (lib/db.ts) and
+  // `decodeRequest` is pure CPU over the in-memory catalog, which is the same reason
+  // `isFilterListCacheable`'s own comment gives for calling it at all.
   if (pathname.startsWith(FILTER_PREFIX)) {
-    response.headers.set(
-      "Cache-Control",
-      (await isFilterListCacheable(pathname, rawQuery)) ? HTML_CACHE : NO_STORE,
-    );
+    const cacheable = await isFilterListCacheable(pathname, rawQuery);
+    if (!cacheable && (await isFilterList404(pathname, rawQuery))) {
+      return notFoundRewrite(request, headers);
+    }
+    response.headers.set("Cache-Control", cacheable ? HTML_CACHE : NO_STORE);
     return response;
   }
   // M5 Task 8. `/search` runs no proxy-side resolution at all -- unlike every branch above and
@@ -367,12 +383,18 @@ export async function proxy(request: NextRequest) {
   // is rebuilt monthly, so a 404 pinned in a shared cache outlives the condition that caused
   // it. `/watch` itself (the index, no slug) is always "known" -- there is no id to fail to
   // resolve for the bare path -- so its ONLY gate is the health probe.
+  //
+  // #157: the unknown preset is the ONE 404 on this file's spine that carries no resolution risk
+  // at all -- `presetBySlug` reads a closed four-entry map and asks the warehouse nothing -- so
+  // `!known` is exactly "this page 404s" and nothing else. The health probe is deliberately NOT
+  // part of the rewrite condition: a broken data layer means this file cannot vouch for the page,
+  // not that the preset stopped existing, and rewriting on it would answer a transient DuckDB
+  // failure with a permanent-looking 404 body. `known` is provably true past the early return
+  // below, so the header expression no longer restates it.
   if (pathname === "/watch" || presetSlugFromPath(pathname) !== null) {
     const known = pathname === "/watch" || presetBySlug(presetSlugFromPath(pathname)!) !== null;
-    response.headers.set(
-      "Cache-Control",
-      known && (await isDataLayerHealthy()) ? HTML_CACHE : NO_STORE,
-    );
+    if (!known) return notFoundRewrite(request, headers);
+    response.headers.set("Cache-Control", (await isDataLayerHealthy()) ? HTML_CACHE : NO_STORE);
     return response;
   }
   // The four OG card routes (`/<entity>/<slug>/opengraph-image`), M8/#8.
@@ -451,12 +473,20 @@ export async function proxy(request: NextRequest) {
   // return `"invalid"` -- `"default"` (no `y`) and `"year"` (a real one) are the two cacheable
   // outcomes, exactly mirroring `isCacheable`'s own "new outcome? decline by default" safety
   // property for a future third `ParsedYear` kind.
+  //
+  // #157: the rewrite reads the SLUG's kind only, never the year's. `parseYear` returning
+  // `invalid` is not a 404 -- `page.tsx` calls `notFound()` on `resolved.kind === "notFound"` and
+  // on nothing else, and renders the default trailing-12 view for a year it cannot parse -- so
+  // rewriting on `!(entityOk && yearOk)` would turn `/airport/SEA?y=nonsense` from a served page
+  // into a 404. The rewrite condition mirrors the PAGE's own `notFound()` condition, line for
+  // line, on every branch below; the cache condition is a different question and stays wider.
   const airportSlug = airportSlugFromPath(pathname);
   if (airportSlug !== null) {
     const y = new URLSearchParams(rawQuery).get("y");
-    const entityOk = await isCacheable({ resolve: resolveAirportCode }, airportSlug);
+    const kind = await resolvedKind({ resolve: resolveAirportCode }, airportSlug);
+    if (is404Kind(kind)) return notFoundRewrite(request, headers);
     const yearOk = parseYear(y).kind !== "invalid";
-    response.headers.set("Cache-Control", entityOk && yearOk ? HTML_CACHE : NO_STORE);
+    response.headers.set("Cache-Control", isCacheableKind(kind) && yearOk ? HTML_CACHE : NO_STORE);
     return response;
   }
   // #106. `/carrier/:code?type=<aircraft slug>` and `/aircraft/:name?carrier=<code>` filter each
@@ -491,27 +521,41 @@ export async function proxy(request: NextRequest) {
   // must resolve to `ok` or `redirect` (`isCacheable`, unchanged) AND the filter must be `none`
   // (absent) or `ok` (`isFilterCacheable`). `unknown` and `ambiguous` both decline, and a fifth
   // `MapFilter` kind added later declines by default rather than being cached by omission.
+  //
+  // #157, same shape as `/airport` above and for the same reason: the rewrite reads the SLUG's
+  // kind, never the filter's. An unresolvable `?type=`/`?carrier=` is not a 404 -- both pages
+  // render their unfiltered view and surface the refusal in the UI -- so it declines the cache
+  // and nothing more. The rewrite also runs BEFORE `isFilterCacheable`, which is where the "one
+  // resolution per request" rule lands on this branch: a 404 slug never pays for resolving a
+  // filter against a page that will not render.
   const carrierSlug = carrierSlugFromPath(pathname);
   if (carrierSlug !== null) {
-    const entityOk = await isCacheable({ resolve: resolveCarrier }, carrierSlug);
+    const kind = await resolvedKind({ resolve: resolveCarrier }, carrierSlug);
+    if (is404Kind(kind)) return notFoundRewrite(request, headers);
     const filterOk = await isFilterCacheable(resolveTypeFilter, rawFilterValue(rawQuery, "type"));
-    response.headers.set("Cache-Control", entityOk && filterOk ? HTML_CACHE : NO_STORE);
+    response.headers.set("Cache-Control", isCacheableKind(kind) && filterOk ? HTML_CACHE : NO_STORE);
     return response;
   }
   const aircraftSlug = aircraftSlugFromPath(pathname);
   if (aircraftSlug !== null) {
-    const entityOk = await isCacheable({ resolve: resolveAircraftSlug }, aircraftSlug);
+    const kind = await resolvedKind({ resolve: resolveAircraftSlug }, aircraftSlug);
+    if (is404Kind(kind)) return notFoundRewrite(request, headers);
     const filterOk = await isFilterCacheable(
       resolveCarrierFilter,
       rawFilterValue(rawQuery, "carrier"),
     );
-    response.headers.set("Cache-Control", entityOk && filterOk ? HTML_CACHE : NO_STORE);
+    response.headers.set("Cache-Control", isCacheableKind(kind) && filterOk ? HTML_CACHE : NO_STORE);
     return response;
   }
+  // #157: this loop `break`s rather than returning (see `ENTITY_ROUTES`'s own comment), so the
+  // rewrite has to RETURN out of it -- `break` would fall through to `return response`, which is
+  // the untouched passthrough and carries no rewrite at all.
   for (const entity of ENTITY_ROUTES) {
     const slug = entity.slugFromPath(pathname);
     if (slug === null) continue;
-    response.headers.set("Cache-Control", (await isCacheable(entity, slug)) ? HTML_CACHE : NO_STORE);
+    const kind = await resolvedKind(entity, slug);
+    if (is404Kind(kind)) return notFoundRewrite(request, headers);
+    response.headers.set("Cache-Control", isCacheableKind(kind) ? HTML_CACHE : NO_STORE);
     break;
   }
   return response;
@@ -825,12 +869,128 @@ async function isCacheable(
   entity: { resolve: (slug: string) => Promise<{ kind: string }> },
   slug: string,
 ): Promise<boolean> {
+  return isCacheableKind(await resolvedKind(entity, slug));
+}
+
+/** `isCacheable`'s two halves, split so the six branches that ALSO need the 404 verdict (#157)
+ * can ask both questions of ONE resolution. `isCacheable` itself is unchanged in behaviour and
+ * still has callers -- the `OG_ROUTES` loop, which never rewrites (a card is a route handler
+ * returning an ImageResponse; there is no not-found.tsx on that path to dispatch to).
+ *
+ * `null` is the resolver having THROWN, and it must read as "this file could not vouch for the
+ * page" everywhere: `isCacheableKind(null)` is false (decline the cache, as this function has
+ * always done) and `is404Kind(null)` is false (do NOT rewrite). Those are not the same
+ * conservative direction by coincidence -- they are the same rule, which is that a transient
+ * DuckDB failure inside a PROXY must never decide anything the page itself would decide
+ * differently. Declining the cache costs a cache miss; rewriting would cost a hard 404 body on a
+ * request the page might well still serve. */
+async function resolvedKind(
+  entity: { resolve: (slug: string) => Promise<{ kind: string }> },
+  slug: string,
+): Promise<string | null> {
   try {
-    const { kind } = await entity.resolve(slug);
-    return kind === "ok" || kind === "redirect";
+    return (await entity.resolve(slug)).kind;
+  } catch {
+    return null;
+  }
+}
+
+function isCacheableKind(kind: string | null): boolean {
+  return kind === "ok" || kind === "redirect";
+}
+
+/** The allow-list of outcomes that WILL 404, mirroring `isCacheableKind`'s allow-list of outcomes
+ * that will not, and mirroring each page's own `notFound()` condition line for line.
+ *
+ * NEVER `kind !== "ok"`, and the fixture that proves why is `/carrier/dl`: `redirect` must reach
+ * the page so the page can 308, and a negation swallows it into a 404. Never `kind !== "ok" &&
+ * kind !== "redirect"` either -- that is the same negation wearing a longer disguise, and it
+ * rewrites a kind added to a resolver later BY OMISSION, which is the exact direction
+ * `isCacheable`'s own comment argues against for the cache. An allow-list gets a new outcome
+ * wrong in the safe direction: the page renders and its 404 (if it is one) falls back to the
+ * segment boundary it has always used, which is a blank body -- the bug this task narrows, not a
+ * new one.
+ *
+ * `ambiguous` is here because `resolveAircraftSlug` has FOUR outcomes: `/aircraft/CE-180` (BTS 030
+ * CESSNA 180 and 031 CESSNA 180A/B share one short name) resolves to it and `page.tsx` calls
+ * `notFound()` for it explicitly. A `kind === "notFound"` predicate leaves that one page rendering
+ * the empty error shell while every other 404 gained a body. */
+function is404Kind(kind: string | null): boolean {
+  return kind === "notFound" || kind === "ambiguous";
+}
+
+/** `/explore/filter/:dim`'s 404 predicate, and deliberately NOT `!isFilterListCacheable(...)`.
+ *
+ * That negation is wrong three ways over, because that function answers `false` for three
+ * situations and only ONE of them is a 404 -- see the branch's own comment above for the full
+ * ruling. This function returns `true` for exactly the case `page.tsx` calls `notFound()` for:
+ * the allowlist loaded, the permalink decoded, and `filterableDimensions(allowlist, grain)` does
+ * not carry the slug. It is the same expression the page runs (`entry === undefined`), which is
+ * the point -- the proxy must not have its own opinion about which requests 404.
+ *
+ * Everything is inside the try, `decodeURIComponent` (via `filterDimFromPath`) included, and the
+ * catch falls through to `false` -- NOT rewriting. Nothing on this spine may throw
+ * (`canonicalize()` once threw on a leading `?` and 500ed every matcher path), and a swallow that
+ * rewrote would be the transient-failure hazard this whole split exists to refuse. */
+async function isFilterList404(pathname: string, rawQuery: string): Promise<boolean> {
+  try {
+    const dim = filterDimFromPath(pathname);
+    if (dim === null) return false;
+    const allowlist = await loadAllowlist();
+    const query = decodeRequest(rawQuery, allowlist);
+    return !filterableDimensions(allowlist, query.grain).some((e) => e.key === dim);
   } catch {
     return false;
   }
+}
+
+/** Next's own not-found route entry -- `UNDERSCORE_NOT_FOUND_ROUTE`,
+ * `next/dist/shared/lib/entry-constants.js`. Written out rather than imported: that module is a
+ * deep internal path with no public re-export, and a string this file would have to keep in step
+ * with Next either way. `app/smoke.sh` asserts the served result, so a rename upstream breaks a
+ * gate rather than silently un-bodying every 404. */
+const UNDERSCORE_NOT_FOUND = "/_not-found";
+
+/** The rewrite that turns a 404 this file has ALREADY resolved into a server-rendered one (#157).
+ *
+ * WHY A REWRITE AND NOT THE PAGE'S OWN `notFound()`: on this Next version a `notFound()` thrown
+ * from a rendered page cannot produce server HTML at all. The throw lands in `app-render.js`'s
+ * error path, which re-renders through `getErrorRSCPayload`, whose seed markup is literally
+ * `createElement('html', {id:'__next_error__'}, createElement('head'), createElement('body'))` --
+ * an empty body by construction. The page's real markup then exists only inside the streamed
+ * flight payload, so a visitor with JavaScript off gets a blank page: `/carrier/ZZZ` shipped
+ * 12,092 bytes with ZERO `<h1>` and no `DATA AS OF`. Routing to `/_not-found` instead sets
+ * `res.statusCode` to 404 BEFORE the render, which makes `app-render.js` take `getRSCPayload`
+ * (`is404: res.statusCode === 404`) -- the normal path, through the root layout, into real HTML.
+ * `app/src/app/not-found.tsx` carries the rest of the reasoning and does the dispatch.
+ *
+ * NO `status` IN THE INIT, and not by oversight: `NextResponse.rewrite` drops one
+ * (`server/lib/router-utils/resolve-routes.js` reads `x-middleware-rewrite` and re-routes; the
+ * response's own status is not carried through). The 404 comes from the destination route, which
+ * is why the destination has to be `/_not-found` rather than a page of ours that renders the same
+ * view.
+ *
+ * `{ request: { headers } }` is not decoration: it is what carries `x-upgauge-path` -- still
+ * holding the ORIGINAL pathname, not `/_not-found` -- and `x-upgauge-query` through the rewrite.
+ * Those two headers are the only channel the root not-found has for knowing which slug was asked
+ * for and which permalink it carried; `not-found.js` accepts no props and gets no route params.
+ * Measured on a served build, not inferred: `x-upgauge-path` arrives as `/carrier/ZZZ`.
+ *
+ * `no-store` is set HERE rather than inherited. This is a different response object from the one
+ * the branches above mutate, so whatever they set never reaches the wire on this path -- and a 404
+ * is a statement about the current dataset, which is rebuilt monthly, so one pinned in a shared
+ * cache outlives the condition that caused it.
+ *
+ * The URL keeps its query string. Nothing downstream reads it (the root not-found takes the
+ * permalink off the header above), but `/explore/filter/:dim`'s 404 is reached WITH a permalink
+ * and dropping request bytes at a rewrite is a change with no argument behind it. */
+function notFoundRewrite(request: NextRequest, headers: Headers): NextResponse {
+  const url = new URL(request.url);
+  url.pathname = UNDERSCORE_NOT_FOUND;
+  return NextResponse.rewrite(url, {
+    request: { headers },
+    headers: { "Cache-Control": NO_STORE },
+  });
 }
 
 /** The same allow-list discipline as `isCacheable` above, for the SECOND cacheability input the
