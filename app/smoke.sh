@@ -235,6 +235,32 @@ check_not_re() {
   fi
 }
 
+# A 404's body must be in the SERVED HTML, not only in the streamed flight payload -- the one
+# property of a 404 that no status check and no header check can see, and the reason #157 exists.
+#
+# `notFound()` thrown from a rendered page cannot produce server HTML on this Next version: the
+# throw is caught by app-render's error path, whose seed markup is a hardcoded
+# `<html id="__next_error__">` with an EMPTY <body>, so the page's real markup reaches the wire
+# only inside the payload and only JavaScript can render it. `proxy.ts` resolves every entity
+# before the page runs anyway (that is how it picks a Cache-Control), so when it already knows the
+# request 404s it rewrites to `/_not-found`, which renders through the normal payload path with
+# the 404 status intact. `__next_error__` in a 404 body IS the regression, not a detail of one.
+#
+# EVERY NEEDLE HERE IS EMITTED BYTES, because the payload is a JSON transcript of the same markup
+# and a needle both spellings satisfy asserts nothing. Measured on this build, `/carrier/ZZ`
+# (9,517 bytes): the bare string `Carrier not found` occurs THREE times -- once as
+# `<h1>Carrier not found</h1>` and twice as `\"h1\",null,{\"children\":\"Carrier not found\"}` --
+# so the angle brackets are the entire discriminator. It also occurs TWICE in `/carrier/dl`'s 308
+# body, which is not a 404 at all, so the bare form is not even status-discriminating. The badge
+# is the same shape: emitted `class="asof"` against the payload's `\"className\":\"asof\"`. And
+# `DATA AS OF` on its own is unusable for a different reason -- React separates the label from the
+# interpolated month with a comment node (`DATA AS OF <!-- -->2026-05`), this file's self-defect #2.
+check_rendered_404() { # check_rendered_404 <label> <body> <h1-text>
+  check_not "$1 404: not the empty __next_error__ shell" "$2" '__next_error__'
+  check     "$1 404: the heading is in the served HTML"   "$2" "<h1>$3</h1>"
+  check     "$1 404: DATA AS OF is in the served HTML"    "$2" 'class="asof"'
+}
+
 # The DATA rows of one extracted table body, one per line. The header row is dropped by
 # selecting on `<td class="num">`: its cells are `<th>`, so it carries none. `awk` rather than
 # `grep` for the filter -- awk exits 0 on no match, so a table that extracted to nothing reaches
@@ -702,8 +728,8 @@ check     "filter: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED
 check_not "filter: is not Next's own force-dynamic fallback (proves proxy.ts ran)" \
   "$HDRS" "must-revalidate"
 
-# TWO WAYS TO 404, AND THE PROBE MUST DECLINE THE CACHE FOR BOTH. `isFilterListCacheable`
-# returning a bare `true` -- or gating on `allowlist.dims.has(dim)` instead of on the grain --
+# TWO WAYS TO 404, AND THE PROBE MUST DECLINE THE CACHE FOR BOTH. `filterListVerdict` returning
+# an unconditional `cacheable` -- or gating on `allowlist.dims.has(dim)` instead of on the grain --
 # leaves these long-cached, and the dataset is rebuilt monthly, so a cached 404 outlives the
 # condition that caused it. The bodies are checked too: a missing matcher entry keeps the 404
 # STATUS and destroys the MESSAGE, which is the failure mode no header check can see.
@@ -714,6 +740,9 @@ check     "filter: an unknown dimension is a 404"       "$CODE" '404'
 check     "filter: an unknown dimension is not cached"  "$HDRS" 'no-store'
 check     "filter: the 404 names the slug"              "$BODY" 'not_a_dimension'
 check     "filter: the 404 names WHICH way it failed"   "$BODY" 'No such dimension'
+# TWO verdicts reach `notFound()` from this page, so BOTH need the served-HTML assertion: a
+# rewrite condition narrowed to one of them leaves the other shipping a blank body.
+check_rendered_404 "filter/unknown-dim" "$BODY" 'No such dimension'
 
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore/filter/aircraft_type?${ROUTE_Q}")
 HDRS=$(curl -s -o /dev/null -D -             --max-time 15 "${BASE}/explore/filter/aircraft_type?${ROUTE_Q}")
@@ -725,6 +754,7 @@ check     "filter: a wrong-grain dimension is not cached" "$HDRS" 'no-store'
 check     "filter: the wrong-grain 404 says so"           "$BODY" 'Not filed at this grain'
 check_not "filter: the wrong-grain 404 is not the unknown-slug sentence" \
   "$BODY" 'is not a dimension'
+check_rendered_404 "filter/wrong-grain" "$BODY" 'Not filed at this grain'
 # And the SAME slug against the segment permalink renders -- without this the two checks above
 # are satisfied by a page that 404s aircraft_type unconditionally.
 BODY=$(curl -s --max-time 15 "${BASE}/explore/filter/aircraft_type?${EXPLORE_Q}")
@@ -849,14 +879,17 @@ done
 # because a single generic sentence enumerating all the causes would satisfy any lone
 # positive check -- that sentence is exactly what shipped before.
 #
-# What these checks DO and DO NOT prove. Next serves a 404 from a force-dynamic page as an
-# `<html id="__next_error__">` shell with an EMPTY <body>; the page's markup arrives in the
-# streamed React payload further down the same response and is rendered client-side. That is
-# pre-existing -- verified by building and curling d158726, before any of this fix wave -- and
-# it is why these greps read the whole response body, not a <p> tag. They still prove exactly
-# the thing the fix is about: the payload is generated on the SERVER, so a hit here means the
-# server resolved this pair and shipped this specific reason. They do NOT prove the sentence
-# is visible with JavaScript off. That gap is logged, not fixed here.
+# WHY THE NEEDLES BELOW MAY READ THE WHOLE RESPONSE BODY. Only because `check_rendered_404` runs
+# on this same FAMILY and pins the reason's own `<h1>` and DATA AS OF badge as EMITTED HTML. Family,
+# not URL: the sibling-cause blocks (`/route/JFK-LHR` here, `/airport/LHR` in § 10) carry no
+# `check_rendered_404` of their own and need none, because they reach the identical branch of the
+# identical view -- what is proven emitted for one cause of a family is emitted for the other. With
+# that standing, a phrase found anywhere in this response is a phrase the server composed and
+# shipped in the document: the flight payload is a JSON transcript of the same render, so it
+# cannot carry a sentence the HTML does not. Remove `check_rendered_404` and these needles are
+# payload-only -- a body-substring grep cannot tell a rendered page from an
+# `<html id="__next_error__">` shell that renders only under JavaScript (#157), and all six of
+# them print ok against that shell (measured under the reverted-`proxy.ts` mutant).
 #
 # Fix wave 3, item 5: both of the first two checks here used to be weaker than the unit tests
 # they mirror. 'unknown airport code' alone asserts the CATEGORY, where the whole promise is
@@ -871,10 +904,53 @@ check     "route 404: names the offending code, not just the pair" "$BODY" "unkn
 check_re  "route 404: the SENTENCE carries the slug, not just the router state" "$BODY" 'We can.{1,3}t show .{1,12}ZZZZ-LAX'
 check     "route 404: DATA AS OF is present"                       "$BODY" 'DATA AS OF'
 check_not "route 404: does not offer every cause at once"          "$BODY" 'domestic-only'
+check_rendered_404 "route" "$BODY" 'Route not found'
 
 BODY=$(curl -s --max-time 15 "${BASE}/route/JFK-LHR")
 check     "route 404: a real airport outside the dataset says so"  "$BODY" 'domestic-only'
 check_not "route 404: LHR is not reported as an unknown code"      "$BODY" 'unknown airport code'
+
+# 8b. THE OTHER BRANCH OF THE SAME 404 BOUNDARY: a URL matching no route at all.
+#
+# Every `check_rendered_404` in this file lands in `app/not-found.tsx`, which dispatches on the
+# pathname `proxy.ts` forwarded. This URL is outside the matcher, so it arrives with no pathname
+# header at all and takes the `pathname === null` branch -- the paired negative the entity checks
+# need, because a dispatch that answered an entity family for an unrecognised path would satisfy
+# every one of them and be visible only here.
+#
+# `DATA AS OF` is asserted ABSENT, and that is a cost control, not a styling rule: the generic
+# branch deliberately runs no `dataAsOf()`, so it serves every scanner probe and every typo -- an
+# unbounded set the edge rate limit does not enumerate -- at zero DuckDB reads. Putting a TopBar
+# on it would put a database read on `/wp-login.php`.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/nope")
+BODY=$(curl -s --max-time 15 "${BASE}/nope")
+check     "unrouted: an unmatched URL is a 404"                      "$CODE" '404'
+check     "unrouted: the generic view is in the served HTML"         "$BODY" '<h1>Page not found</h1>'
+check_not "unrouted: no DATA AS OF -- this branch reads no database" "$BODY" 'DATA AS OF'
+
+# 8c. THE PATH HEADER IS AUTHORITATIVE ONLY WHERE THE PROXY RUNS, and the check above is scoped to
+# that: it says this branch reads no database, not that no forged request can reach one. Next
+# deletes every request header outside the middleware's override set
+# (`server/lib/router-utils/resolve-routes.js`), so on a path in `proxy.ts`'s matcher the proxy's
+# own `x-upgauge-path` always wins and a client cannot forge it. `/nope` is OUTSIDE the matcher,
+# so the proxy never runs and the header arrives exactly as the client wrote it -- the dispatch in
+# `app/not-found.tsx` honours it and renders the CARRIER view, `dataAsOf()` and `resolveCarrier()`
+# included, on a path none of `deploy/cloudflare/rate-limit.json`'s prefixes (`/api/`, `/explore`,
+# the four entity prefixes, `*/opengraph-image`) covers.
+#
+# That is ORIGIN COST and nothing else -- the status stays 404 and React escapes the echoed slug --
+# so what follows asserts what this build DOES, not a defect it has. It is a tripwire, and the
+# change that trips it is the deferred follow-up: widening the matcher to `/:path*` makes the proxy
+# set the header on `/nope` too, the forged value loses, and the heading below becomes `Page not
+# found`. Verified by exactly that mutant, not inferred.
+#
+# The needles are the same emitted bytes every other 404 check in this file uses, for the same
+# reason -- `check_rendered_404` is the helper, and `class="asof"` is what makes "it paid for a
+# database read" an assertion rather than a claim.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}/nope")
+BODY=$(curl -s --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}/nope")
+check "unrouted+forged header: still a 404" "$CODE" '404'
+check_rendered_404 "unrouted+forged header" "$BODY" 'Carrier not found'
 
 # 9. M4c: the aircraft-mix chart, in the SERVED HTML.
 #
@@ -1067,6 +1143,7 @@ check_not "airport 404: LHR is not reported as unknown"             "$BODY" 'unk
 # canonical spellings are equal by construction on this path (pinned in not-found.test.tsx).
 BODY=$(curl -s --max-time 15 "${BASE}/airport/ZZZZ")
 check_re  "airport 404: the SENTENCE carries the requested code" "$BODY" 'We can.{1,3}t show .{1,12}ZZZZ'
+check_rendered_404 "airport" "$BODY" 'Airport not found'
 
 # 10b. M7 Task 9: /airport/<code>?y=<year>, and the cache-header split proxy.ts's matcher
 # section warns can only be seen by a served build. asOf is 2026-05 as measured (M4d's own
@@ -1848,6 +1925,15 @@ LOC=$(printf '%s' "$HDRS" | grep -i '^location:' | tr -d '\r')
 check     "carrier: lower-case code redirects"  "$CODE" '308'
 check     "carrier: redirect targets canonical" "$LOC"  '/carrier/DL'
 check     "carrier: 308 keeps the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
+# THE PAIRED NEGATIVE for the 404 rewrite: `proxy.ts` decides on an ALLOW-LIST of resolved kinds,
+# and the redirect kind is not on it. Widen that to "anything that is not ok" and this URL stops
+# redirecting and starts serving a bodied 404 -- with the 308 status gone, so the status check
+# above catches it; the body needle catches the inverse slip, a rewrite that fires while something
+# downstream still emits a Location. Deliberately NOT `check_not '__next_error__'`: this 308's own
+# body IS that shell (13,786 bytes of it, measured), because `permanentRedirect()` throws through
+# the same error path `notFound()` does and Location, not markup, is what carries a redirect.
+BODY=$(curl -s --max-time 15 "${BASE}/carrier/dl")
+check_not "carrier: the 308 is not rewritten into the 404 body" "$BODY" '<h1>Carrier not found</h1>'
 
 # ZZ is in dim_carrier not at all -- the MINORITY carrier 404 (114 of dim_carrier's 1,657
 # distinct codes are fact-present; the other 1,543 land in PA's bucket below). PA (Pan American)
@@ -1868,6 +1954,7 @@ check_not "carrier: 404 (ZZ) is not long-cached"        "$HDRS" "s-maxage"
 check     "carrier: 404 (ZZ) is no-store"               "$HDRS" "no-store"
 check     "carrier 404: ZZ is unrecognized, not merely unfiled" "$BODY" "unknown carrier code 'ZZ'"
 check_not "carrier 404: ZZ is not reported as recognized"       "$BODY" "recognized by BTS"
+check_rendered_404 "carrier" "$BODY" 'Carrier not found'
 
 # PA -- the measured falsifiable pair's other half, and the COMMON carrier 404 (1,543 of 1,657
 # codes land here). All THREE holders named, not just the first: 20384 and 20386 really are Pan
@@ -2060,6 +2147,7 @@ check     "aircraft: an unknown slug is a 404"      "$CODE" '404'
 check_not "aircraft: 404 is not long-cached"        "$HDRS" "s-maxage"
 check     "aircraft: 404 is no-store"               "$HDRS" "no-store"
 check     "aircraft 404: names the offending slug"  "$BODY" "unknown aircraft type 'NOPE-1'"
+check_rendered_404 "aircraft" "$BODY" 'Aircraft type not found'
 # The lower-case slug is echoed as TYPED while the reason names the upper-cased form -- the same
 # discriminator /carrier gets, on the page that has the widest divergence available and had no
 # check at all. `resolveAircraftSlug` reasons in terms of slugFor(trimmed), so '/aircraft/nope-1'
@@ -2093,6 +2181,11 @@ check     "aircraft 404: names the second airframe" "$BODY" 'CESSNA 180A/B — B
 # and the literal `won&rsquo;t` is never in the response. That exact mistake printed `ok`
 # unconditionally in this file until M4c's final review (see the /explore note above).
 check_re  "aircraft 404: refuses to pick one"       "$BODY" 'We won.{1,3}t pick one for you'
+# `ambiguous` is a SECOND kind reaching `notFound()` from this page, and it is the kind the
+# cacheability allow-list already had to be written for. A rewrite condition keyed on `notFound`
+# alone leaves exactly this URL shipping a blank body, so it gets its own served-HTML assertion
+# rather than inheriting NOPE-1's.
+check_rendered_404 "aircraft/ambiguous" "$BODY" 'More than one aircraft type'
 
 # Page weight for the three new pages, recorded not asserted -- same reasoning as /route above.
 # /airport/ORD is the worst case in the database, and it is NOT /airport/ATL: measured (month,
@@ -2438,9 +2531,10 @@ fi
 #     directly and never crosses Next's own routing, so a matcher entry silently dropped from
 #     `config.matcher` cannot fail any unit test, only a served build. Verified by mutation, not
 #     by inspection: removing "/watch/:preset" from the matcher, rebuilding and serving turned
-#     `/watch/nope`'s 404 body from 9,941 bytes (naming the preset) to 7,816 (a bare error
-#     shell, matching the ~7,740-byte shell M4d measured for the same failure one page family
-#     over) AND degraded /watch/gauge's own Cache-Control from HTML_CACHE to Next's own
+#     `/watch/nope`'s 404 body from one naming the preset to a bare error shell -- 9,941 bytes
+#     to 7,816 on the pre-#157 tree the mutant ran against, matching the ~7,740-byte shell M4d
+#     measured for the same failure one page family over -- AND degraded /watch/gauge's own
+#     Cache-Control from HTML_CACHE to Next's own
 #     force-dynamic fallback, `private, no-cache, no-store, max-age=0, must-revalidate` -- on a
 #     PAGE THAT RENDERS FINE, which is exactly the M4b-shaped bug this file's matcher discipline
 #     exists to catch a second time. Reverted before commit; not re-run automatically here for
@@ -2689,6 +2783,7 @@ check     "watch: 404 is no-store"                  "$HDRS" "no-store"
 # the sentence into three flight-payload string fragments) the same way §8's ZZZZ-LAX check
 # spans its own escaping, and requires the actual composed sentence, not the router state alone.
 check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize the preset .{1,10}nope"
+check_rendered_404 "watch" "$BODY" 'Preset not found'
 
 # ---------------------------------------------------------------------------------------------
 # 15. M8 Task 3: one canonical KEY SET per cacheable URL.
@@ -3506,17 +3601,13 @@ first_permalink() { # first_permalink <body> -- the first /explore? href, &amp; 
     | sed 's/^href="//; s/"$//; s/&amp;/\&/g'
 }
 
-# The recovery permalink, on a real dead end -- and NOT one of the five 404s, which cannot carry
-# this check at all. MEASURED, not assumed: a thrown `notFound()` is served as Next's
-# `<html id="__next_error__">` shell, whose body contains no `<h1>`, no `class="asof"` and no
-# `href="/explore?..."` -- the whole page exists only inside the RSC flight payload, `&` spelled
-# `\u0026`. `/carrier/ZZ` is 12,387 bytes with zero `<h1>`; `/watch/nope` is 9,760 the same way.
-# That is pre-existing framework behaviour, not this section's business, but it means a needle
-# written against a 404's HTML would be looking for bytes that are not there.
-#
-# `/search`'s no-match state is the dead end that IS server-rendered: a 200, real HTML, the same
-# `DATA AS OF` badge and the same recovery permalink every 404 offers. `q` is deliberately junk --
-# `/search` is `no-store` unconditionally, so this mints no cache entry.
+# The recovery permalink, on a real dead end. `/search`'s no-match state is the 200-status half of
+# the pair: real HTML, the same `DATA AS OF` badge and the same recovery permalink the entity 404s
+# carry (`/carrier/ZZ` is 9,517 bytes with one `<h1>`, one `class="asof"` and one
+# `href="/explore?..."`, measured). What is only here is the path: this one is composed by a
+# page's own render rather than by the root 404 boundary, so it is where the live trailing-12
+# window is pinned on the ordinary path. `q` is deliberately junk -- `/search` is `no-store`
+# unconditionally, so this mints no cache entry.
 BODY=$(curl -s --max-time 15 "${BASE}/search?q=zzzznotarealthing9999")
 R_ASOF=$(asof_of "$BODY")
 R_HREF=$(first_permalink "$BODY")

@@ -407,9 +407,13 @@ export default async function RoutePage({
   }
   if (resolved.kind === "notFound") {
     // notFound() throws NEXT_HTTP_ERROR_FALLBACK;404 and terminates rendering of this segment
-    // (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/not-found.md) --
-    // there is no app/not-found.tsx yet, so Next's own default 404 UI renders; that default
-    // still returns the documented 404 status, which is the contract this page owes.
+    // (node_modules/next/dist/docs/01-app/03-api-reference/04-functions/not-found.md), which
+    // `route/[pair]/not-found.tsx` then renders under the documented 404 status -- the contract
+    // this page owes. In practice a visitor rarely reaches it: `proxy.ts` resolves this same pair
+    // before the page runs and rewrites a known 404 to `/_not-found` (#157), because a throw from
+    // a RENDERED page cannot produce server HTML on this Next version -- see
+    // `app/src/app/not-found.tsx`. This path is what still answers an RSC navigation, and any
+    // 404 the proxy did not predict.
     // Confirmed against the source, not just the docs: node_modules/next/dist/client/
     // components/not-found.js throws an Error whose `.digest` is the literal string
     // `NEXT_HTTP_ERROR_FALLBACK;404` (http-access-fallback.js's `HTTP_ERROR_FALLBACK_ERROR_CODE`

@@ -353,10 +353,10 @@ describe("proxy", () => {
 
   // Epic #6. `/explore/filter/:dim` -- the SAME two-allow-list shape as the `?y=` pair below and
   // the `/watch` pair above, and it needs its own unit cases for a reason review had to point
-  // out: a `return true` in `isFilterListCacheable` left the whole suite green at 1712 tests,
-  // and `app-smoke` alone was carrying a header committed before the page runs. Three cases, one
-  // per outcome, and all three are required -- a `no-store`-everywhere regression passes the two
-  // negatives vacuously, so the positive has to go red too for the trio to mean anything.
+  // out: an unconditional `cacheable` from `filterListVerdict` left the whole suite green at 1712
+  // tests, and `app-smoke` alone was carrying a header committed before the page runs. Three cases,
+  // one per outcome, and all three are required -- a `no-store`-everywhere regression passes the
+  // two negatives vacuously, so the positive has to go red too for the trio to mean anything.
   const FILTER_Q = "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op";
   const FILTER_Q_ROUTE = "v=1&k=route&d=route&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op";
 
@@ -413,6 +413,11 @@ describe("proxy", () => {
     // cached: `filterDimFromPath` returns null and the probe refuses rather than throwing.
     const res = await proxy(new NextRequest(`http://localhost/explore/filter/?${FILTER_Q}`));
     expect(res.headers.get("Cache-Control")).toBe("no-store");
+    // ...and it is `unknown`, not `notFound`: a rewrite response carries `no-store` too, so the
+    // line above cannot tell the two apart. There is no dim here to be missing from the catalog --
+    // this URL names no dimension at all, Next never routes it to the filter page, and claiming
+    // the filter family for it would dispatch the root 404 to a view with nothing to say.
+    expect(rewritePath(res)).toBeNull();
   });
 
   // M7 Task 9. `/airport/:code?y=<year>` -- `y`'s legitimate value set is closed (the calendar
@@ -902,6 +907,241 @@ describe("proxy", () => {
 function getReqHeader(res: { headers: Headers }, name: string): string | null {
   return res.headers.get(`x-middleware-request-${name}`) ?? res.headers.get(name);
 }
+
+/** The rewrite destination, read as a pathname rather than as a suffix match: `notFoundRewrite`
+ * preserves the request's query string on the rewritten URL (nothing downstream reads it -- the
+ * root not-found takes the permalink off RAW_QUERY_HEADER -- but dropping bytes the destination
+ * might later want is a change nobody asked for), so `/explore/filter/...?v=1&...` rewrites to
+ * `/_not-found?v=1&...` and a `/\/_not-found$/` assertion would fail for that path alone. */
+function rewritePath(res: { headers: Headers }): string | null {
+  const target = res.headers.get("x-middleware-rewrite");
+  return target === null ? null : new URL(target, "http://localhost").pathname;
+}
+
+/** A data layer that stays broken for the duration of `run`, then is put back exactly as it was.
+ *
+ * `mockRejectedValueOnce` -- the form every data-layer test in this file used before -- fails only
+ * the FIRST `loadAllowlist()` call of the request, so it stops testing anything the moment the
+ * branch under test makes two: the second call succeeds, the request resolves normally, and the
+ * test passes for a reason that has nothing to do with the failure it claims to inject. That is
+ * not hypothetical; it is how #157's first filter-branch shape got a green test for a property it
+ * did not have. A real DuckDB outage is not one call deep either.
+ *
+ * The implementation is captured and restored rather than `mockReset()`: this file's module mock
+ * installs `vi.fn(actual.loadAllowlist)`, so a reset would leave every later test calling a mock
+ * that returns undefined. Fails loud if there is nothing to restore, because silently leaving the
+ * suite's shared mock broken is the kind of harness defect that reports green for nine tests. */
+async function withBrokenDataLayer(message: string, run: () => Promise<void>): Promise<void> {
+  const real = vi.mocked(loadAllowlist).getMockImplementation();
+  if (real === undefined) {
+    throw new Error("loadAllowlist has no mock implementation to restore; refusing to swap it");
+  }
+  vi.mocked(loadAllowlist).mockImplementation(async () => {
+    throw new Error(message);
+  });
+  try {
+    await run();
+  } finally {
+    vi.mocked(loadAllowlist).mockImplementation(real);
+  }
+}
+
+// #157. `notFound()` thrown from a rendered page CANNOT produce server HTML on this Next
+// version: the throw is caught by app-render.js's error path, whose seed markup is a hardcoded
+// empty `<html id="__next_error__">` shell, so the body exists only in the flight payload and a
+// visitor with JavaScript off gets a blank page (measured: /carrier/ZZZ shipped 12,092 bytes with
+// zero `<h1>`). A URL that matches NO route does not have that problem, because Next reaches it
+// with `res.statusCode` already 404 and renders it through the normal payload path. This file
+// already resolves every entity before the page runs -- that is how it picks a Cache-Control --
+// so where it has ALREADY determined the request 404s it rewrites to `/_not-found` and turns the
+// first case into the second.
+//
+// These tests pin what `proxy()` returns. They cannot see the rewrite actually happen -- that it
+// keeps the 404 status, that the ORIGINAL pathname survives in the request headers, that the
+// `<h1>` reaches the served bytes -- because none of that exists until Next's own router consumes
+// the header. `app/smoke.sh` is what asserts those, against a served build.
+describe("proxy 404 rewrite (#157)", () => {
+  const FILTER_Q = "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op";
+
+  it.each([
+    ["an unknown carrier code", "/carrier/ZZ"],
+    ["an unknown route code", "/route/ZZZZ-LAX"],
+    ["an unknown airport code", "/airport/ZZZZ"],
+    ["an unknown aircraft slug", "/aircraft/NOPE-1"],
+    ["an unknown watch preset", "/watch/nope"],
+    ["an unknown filter dimension", `/explore/filter/not_a_dimension?${FILTER_Q}`],
+  ])("rewrites %s to the not-found entry so its body reaches the HTML", async (_label, path) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(rewritePath(res)).toBe("/_not-found");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("rewrites the ambiguous-slug 404, which is not a 'notFound'", async () => {
+    // The same trap `isCacheable`'s allow-list exists for, one axis over: `resolveAircraftSlug`
+    // has FOUR outcomes and `/aircraft/CE-180` is `ambiguous` (BTS 030 CESSNA 180 and 031 CESSNA
+    // 180A/B share one short name). A rewrite predicate written as `kind === "notFound"` alone
+    // leaves this page rendering the blank error shell while every other 404 gained a body.
+    const res = await proxy(new NextRequest("http://localhost/aircraft/CE-180"));
+    expect(rewritePath(res)).toBe("/_not-found");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("rewrites a real dimension asked for at the wrong grain", async () => {
+    // The filter page's OTHER way to 404, and the one a slug-membership test cannot see:
+    // `aircraft_type` is in the catalog and is segment-grain, so at `k=route` the page calls
+    // notFound() while `allowlist.dims.has(dim)` says yes. Both ways must reach the same rewrite
+    // or one of the two 404 sentences /explore/filter/[dim]/not-found.tsx composes is unreachable
+    // with JS off.
+    const routeQ = "v=1&k=route&d=route&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op";
+    const res = await proxy(new NextRequest(`http://localhost/explore/filter/aircraft_type?${routeQ}`));
+    expect(rewritePath(res)).toBe("/_not-found");
+  });
+
+  // THE BUG THIS EXISTS TO CATCH: a rewrite condition written as `kind !== "ok"` swallows
+  // `redirect`, and `/carrier/dl` would render a 404 instead of 308ing to `/carrier/DL`. A
+  // fixture that only ever 404s cannot fail that way, so this list carries the redirecting
+  // spelling of each entity alongside the resolving one.
+  it.each([
+    ["a real carrier", "/carrier/DL"],
+    ["a miscased carrier, which 308s", "/carrier/dl"],
+    ["a real route", "/route/JFK-LAX"],
+    ["a reversed route, which 308s", "/route/LAX-JFK"],
+    ["a real airport", "/airport/SEA"],
+    ["a miscased airport, which 308s", "/airport/sea"],
+    ["a real aircraft type", "/aircraft/B737-8"],
+    ["a known watch preset", "/watch/gauge"],
+    ["the watch index", "/watch"],
+    ["a filterable dimension", `/explore/filter/op_airline_id?${FILTER_Q}`],
+  ])("does not rewrite %s", async (_label, path) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(rewritePath(res)).toBeNull();
+  });
+
+  it("does not rewrite an RSC request for a 404 URL", async () => {
+    // The RSC guard returns before every branch below it, and this is the assertion that keeps
+    // it there. A rewritten RSC fetch would answer a client-side navigation with the ROOT
+    // boundary's payload instead of the segment boundary's, and Next's own `_rsc` hash check
+    // would then disagree about what it asked for -- the redirect-loop family this file's own
+    // guard comment measures, reached by a different door.
+    const res = await proxy(
+      new NextRequest("http://localhost/carrier/ZZ", { headers: { RSC: "1" } }),
+    );
+    expect(rewritePath(res)).toBeNull();
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  // BRANCH ORDER, and the only test that defends it. Every entity slug reader is a bare prefix
+  // test that does not stop at one segment, so `carrierSlugFromPath("/carrier/ZZ/opengraph-image")`
+  // is `"ZZ/opengraph-image"`, not null -- move any entity branch's rewrite above the OG_ROUTES
+  // loop and that string resolves as a carrier code, 404s, and the card gets rewritten to an HTML
+  // page. An `opengraph-image.tsx` compiles to a ROUTE HANDLER returning an ImageResponse: there
+  // is no not-found.tsx on that path, nothing for the root boundary to dispatch to, and a crawler
+  // asking for a PNG would be handed a document. Until this test, only prose defended that
+  // ordering.
+  it.each([
+    ["/route/ZZZZ-LAX/opengraph-image"],
+    ["/airport/ZZZZ/opengraph-image"],
+    ["/carrier/ZZ/opengraph-image"],
+    ["/aircraft/NOPE-1/opengraph-image"],
+  ])("does not rewrite the 404 card %s, which is an image route, not a page", async (path) => {
+    const res = await proxy(new NextRequest(`http://localhost${path}`));
+    expect(rewritePath(res)).toBeNull();
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
+
+  it("carries the ORIGINAL pathname through the rewrite, not /_not-found", async () => {
+    // The rewrite's `{ request: { headers } }` half. The root not-found accepts no props and gets
+    // no route params, so RAW_PATH_HEADER is its ONLY channel for knowing which slug was asked
+    // for -- and it is read AFTER the rewrite, on a request whose URL now says `/_not-found`.
+    // Drop the request-headers init and every rewritten 404 renders the generic
+    // "not part of Upgauge" view instead of the entity's own sentence.
+    const res = await proxy(new NextRequest("http://localhost/carrier/ZZ"));
+    expect(getReqHeader(res, RAW_PATH_HEADER)).toBe("/carrier/ZZ");
+  });
+
+  it("carries the raw query through the rewrite, which the filter 404 renders", async () => {
+    // /explore/filter/[dim]/not-found.tsx takes `rawQuery` as well as the pathname -- it names
+    // the grain the permalink asked for. Same header, same rewrite, second reader.
+    const res = await proxy(
+      new NextRequest(`http://localhost/explore/filter/not_a_dimension?${FILTER_Q}`),
+    );
+    expect(getReqHeader(res, RAW_QUERY_HEADER)).toBe(FILTER_Q);
+  });
+
+  it("does not rewrite when the data layer is broken, only when the answer is known", async () => {
+    // The ruling this branch turns on. `filterListVerdict` answers `unknown` for TWO situations
+    // that are not 404s -- a permalink that does not decode, and `loadAllowlist()` throwing -- and
+    // only `notFound` may rewrite. Rewriting on "not cacheable" would serve a hard, bodied 404 to
+    // a healthy request during a DuckDB outage, for a page the server might well still render.
+    // `/explore/filter/op_airline_id` is a REAL filterable dimension, so the only thing that can
+    // make this request non-cacheable is the broken data layer -- which must decline the cache
+    // without rewriting.
+    //
+    // SUSTAINED, not `mockRejectedValueOnce`, and that is the whole discrimination of this test.
+    // With `Once`, only the FIRST loadAllowlist() call rejects -- so the moment this branch made
+    // two (the shape #157 shipped first), the second succeeded, `op_airline_id` resolved as
+    // filterable, and this test passed for the same reason "does not rewrite a filterable
+    // dimension" passes: not because the swallow declined to rewrite, but because nothing failed.
+    // MUTANT RUN: `catch { return "unknown" }` -> `catch { return "notFound" }` left this test
+    // GREEN under `Once` and only reddened the does-not-decode case one test down. A real DuckDB
+    // outage is not transient, and neither is this mock; it is also immune to the call count,
+    // which is what let the `Once` form rot silently.
+    await withBrokenDataLayer(
+      "duckdb: Catalog Error: Table with name meta_pivot_dimensions does not exist",
+      async () => {
+        const res = await proxy(
+          new NextRequest(`http://localhost/explore/filter/op_airline_id?${FILTER_Q}`),
+        );
+        expect(res.headers.get("Cache-Control")).toBe("no-store");
+        expect(rewritePath(res)).toBeNull();
+      },
+    );
+  });
+
+  // "Resolve once per request" is a constraint, not an aspiration, and this is the only thing
+  // asserting it. `loadAllowlist()` is NOT memoized -- lib/db.ts's own docstring says "Read fresh
+  // on every call, never cached at the module level"; what lives on globalThis is the
+  // DuckDBInstance -- so each call opens a connection and runs two catalog queries, each preceded
+  // by a readFileSync. The first #157 shape asked twice on the 404 path (measured: hot 1, 404 2)
+  // on the strength of a comment claiming the second was free. Both paths are asserted, because a
+  // count assertion on the 404 path alone would be satisfied by a branch that never runs.
+  it.each([
+    ["the hot path", `/explore/filter/op_airline_id?${FILTER_Q}`],
+    ["the rewrite path", `/explore/filter/not_a_dimension?${FILTER_Q}`],
+  ])("reads the catalog exactly once on %s", async (_label, path) => {
+    vi.mocked(loadAllowlist).mockClear();
+    await proxy(new NextRequest(`http://localhost${path}`));
+    expect(vi.mocked(loadAllowlist).mock.calls.length).toBe(1);
+  });
+
+  it("does not rewrite a filter permalink that fails to decode, which renders a 200", async () => {
+    // The second of the three, and it is not a 404 at all: the page catches UrlStateError and
+    // PivotError and renders `<UnreadableQuery>` as a 200 (explore/filter/[dim]/page.tsx). A
+    // rewrite here would turn a readable error page into a 404 with a different message.
+    const res = await proxy(
+      new NextRequest("http://localhost/explore/filter/op_airline_id?v=1&k=seg&d=junk&m=seats"),
+    );
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(rewritePath(res)).toBeNull();
+  });
+
+  it("does not rewrite /watch when the data layer is broken", async () => {
+    // Same ruling on the preset branch: `known` is answered by a four-entry static map with no
+    // database read, so the health probe declining must never be read as "this preset does not
+    // exist". `/watch/gauge` IS known -- the only thing making it uncacheable here is the failure.
+    // Sustained for the same reason as the filter case above: a `Once` rejection is silently
+    // consumed by whichever call happens to run first, so it stops testing this property the
+    // moment the branch makes a second call.
+    await withBrokenDataLayer(
+      "duckdb: Catalog Error: Table with name mart_route_health does not exist",
+      async () => {
+        const res = await proxy(new NextRequest("http://localhost/watch/gauge"));
+        expect(res.headers.get("Cache-Control")).toBe("no-store");
+        expect(rewritePath(res)).toBeNull();
+      },
+    );
+  });
+});
 
 // #52. The key gate rejects unknown KEYS and M8 Task 4 required the permalink to decode();
 // neither sees a junk VALUE riding a legitimate key. Every URL below still decodes cleanly --

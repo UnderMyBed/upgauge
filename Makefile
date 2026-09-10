@@ -427,13 +427,13 @@ fmt-check:  ## Fail if the tree is not `ruff format`-clean
 # optional. The gate is not there to stop the file growing -- it is there to stop it growing
 # QUIETLY.
 #
-# 524 as of #158: the file is 522 after that issue's rule that marts are rebuilt from sql/ rather
-# than taken from the warehouse asset (two lines plus its separator). Without it someone re-bakes
-# the mart and the only thing in the way is one test file. The +2 is the headroom the paragraph
-# above prescribes and the constant had lost -- it stood at 519 against a 519-line file, so ANY
-# addition reddened this target rather than only a rule-sized one, which is stricter than the
-# gate is meant to be and turns a stray blank line into a red.
-CLAUDE_MD_BUDGET ?= 524
+# 530 as of #157: the file is 528 after that issue's rule that a 404's body reaches the served
+# HTML only through proxy.ts's rewrite to /_not-found (five lines plus its separator). Without it
+# a new 404 verdict resolved anywhere but the proxy ships an empty body, and every status, header
+# and body-substring check in the smoke gate stays green over it. The +2 is the headroom the
+# paragraph above prescribes: a budget equal to the file's own length reddens this target on a
+# stray blank line, which is stricter than the gate is meant to be.
+CLAUDE_MD_BUDGET ?= 530
 
 check-docs:  ## Enforce the CLAUDE.md line budget (see CLAUDE.md § Working agreements)
 	@n=$$(wc -l < CLAUDE.md); \
