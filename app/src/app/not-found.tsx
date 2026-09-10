@@ -1,0 +1,93 @@
+import { headers } from "next/headers";
+import { RAW_PATH_HEADER } from "@/lib/rawPath";
+import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
+import { notFoundFamilyFromPath } from "@/lib/notFoundFamily";
+import { NotFoundView as RouteNotFound } from "./route/[pair]/not-found";
+import { NotFoundView as AirportNotFound } from "./airport/[code]/not-found";
+import { NotFoundView as CarrierNotFound } from "./carrier/[code]/not-found";
+import { NotFoundView as AircraftNotFound } from "./aircraft/[name]/not-found";
+import { NotFoundView as WatchNotFound } from "./watch/[preset]/not-found";
+import { NotFoundView as FilterNotFound } from "./explore/filter/[dim]/not-found";
+
+export const dynamic = "force-dynamic";
+
+/** The root 404 boundary, and the ONLY one whose body reaches the served HTML.
+ *
+ * WHY THIS FILE EXISTS AT ALL, since six segment `not-found.tsx` files already render these
+ * views: `notFound()` thrown from a rendered page cannot produce server HTML on this Next
+ * version. The throw is caught in `app-render.js`'s error path, which re-renders through
+ * `getErrorRSCPayload` -- and that function's seed markup is literally
+ * `createElement('html', {id:'__next_error__'}, createElement('head'), createElement('body'))`,
+ * an empty body by construction. The page's real markup then exists only inside the streamed
+ * flight payload, so a visitor with JavaScript off gets a blank page. Measured on production
+ * and locally: `/carrier/ZZZ` shipped 12,092 bytes with ZERO `<h1>` and no `DATA AS OF`.
+ *
+ * A URL that matches NO route does not have this problem, because Next reaches it with
+ * `res.statusCode` already 404 and renders it through the normal payload path, root layout
+ * included. `proxy.ts` turns the first case into the second: it already resolves every entity
+ * before the page runs (that is how it picks a `Cache-Control`), so when it has already
+ * determined the request 404s it rewrites to `/_not-found` -- here -- which keeps the 404
+ * status, keeps `no-store`, and renders through the root layout into real HTML.
+ *
+ * The six segment files are NOT dead. An RSC request is answered before any rewrite (`proxy.ts`
+ * line 94), so client-side navigation to a 404 URL still renders through the segment boundary,
+ * and any `notFound()` the proxy did not predict still lands there. They also keep the
+ * fail-loud `rawPathFromHeaders`; this file deliberately does not, because here an absent
+ * header is MEANINGFUL -- it is how an unrouted URL announces itself. */
+export async function RootNotFoundView({
+  pathname,
+  rawQuery,
+}: {
+  pathname: string | null;
+  rawQuery: string;
+}) {
+  const family = pathname === null ? null : notFoundFamilyFromPath(pathname);
+  if (pathname !== null) {
+    // Called directly and awaited, NOT rendered as `<RouteNotFound .../>` JSX: each segment
+    // view is an async function component, and react-dom's client renderer (what
+    // @testing-library/react drives under jsdom) throws "async Client Component" for an async
+    // component reached through JSX -- only an RSC render tolerates that. Calling the
+    // function directly sidesteps that render path entirely, exactly as every segment view's
+    // own test does (`render(await NotFoundView({...}))`, never `<NotFoundView .../>`).
+    switch (family) {
+      case "route":
+        return await RouteNotFound({ pathname });
+      case "airport":
+        return await AirportNotFound({ pathname });
+      case "carrier":
+        return await CarrierNotFound({ pathname });
+      case "aircraft":
+        return await AircraftNotFound({ pathname });
+      case "watch":
+        return await WatchNotFound({ pathname });
+      case "filter":
+        return await FilterNotFound({ pathname, rawQuery });
+    }
+  }
+  // NO DATABASE ON THIS BRANCH, deliberately. It answers every scanner probe and every typo --
+  // an unbounded set the edge rate limit does not enumerate -- which today costs zero queries
+  // because Next serves its own stock page for them. `dataAsOf()` here would put a DuckDB read
+  // on `/wp-login.php`. That is also why there is no `TopBar`: it takes `asOf`, and `DATA AS OF`
+  // is a first-class element on every DATA view, which this is not.
+  return (
+    <div className="wrap">
+      <main className="error-page">
+        <h1>Page not found</h1>
+        <p role="alert">This URL is not part of Upgauge.</p>
+        <p>
+          Start from <a href="/explore">the Explorer</a>.
+        </p>
+      </main>
+    </div>
+  );
+}
+
+export default async function NotFound() {
+  const requestHeaders = await headers();
+  return (
+    <RootNotFoundView
+      pathname={requestHeaders.get(RAW_PATH_HEADER)}
+      rawQuery={requestHeaders.get(RAW_QUERY_HEADER) ?? ""}
+    />
+  );
+}
