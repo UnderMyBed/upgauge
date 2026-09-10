@@ -81,14 +81,14 @@ box its own timer keeps at `:deploy`. `warehouse.yml` polls BTS and publishes th
 `image.yml` builds and gates the container, `promote.yml` moves the tag. `make portability` proves
 the WORKDIR/data contract by breaking it, and is hand-run — no workflow invokes it.
 
-Current gates (`app-smoke` measured 2026-09-01, `app-check` 2026-08-31, `verify`/`goldens` 2026-08-08,
+Current gates (`app-smoke` and `app-check` measured 2026-09-10, `verify`/`goldens` 2026-08-08,
 `portability` 2026-08-09, the rest 2026-08-10; the only counts kept here — history lives in git):
 
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 65 skip without `data/` |
-| `make app-check` | 1,846 app tests · without a built `upgauge.duckdb` 1,830 are collected, 12 skip, and **641 of the 1,818 that run fail** — collected, run and failed are three different sets, so "N of the total fail" was never the sentence it read as |
-| `make app-smoke` | 754 served-build checks |
+| `make app-check` | 1,899 app tests · without a built `upgauge.duckdb` 1,883 are collected, 12 skip, and **654 of the 1,871 that run fail** — collected, run and failed are three different sets, so "N of the total fail" was never the sentence it read as |
+| `make app-smoke` | 782 served-build checks |
 | `make image-smoke` | the host set less the 10 host-only gap checks (printed as a named three-section block, never as `skip` lines — that shape is `check_dataset`'s), **plus the 1 container-only check** (#162's artifact-level toolchain probe) — three terms, because the two modes now OVERLAP and neither contains the other; each prints the term it is missing — **745, measured 2026-09-01** by `image-contract.yml` on #168 (run 33545375334, job `gate`), and it reconciles against the rule — derived from both logs, not asserted: of the 754 host `ok` lines exactly 10 sit inside the three `==> gap check:` sections, and none of those sections ran in the container. #147's two ordering checks are deliberately not dataset-pinned and were confirmed running in the container, not merely inferred from a local `SMOKE_DATASET_PINNED=0` run. Needs Docker plus the pinned release asset — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
 | `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
@@ -286,6 +286,12 @@ renders a 404, and the `!==` form would pin it in a shared CDN cache for its ful
 this domestic-only dataset carries no rows for are different findings. `/carrier/PA` is *not*
 "Pan American" — `PA` holds three `airline_id`s, two Pan Am eras plus an unrelated Florida
 Coastal, and picking one is the silent-pick failure the split exists to refuse.
+
+**A 404's body reaches the served HTML only through `proxy.ts`'s rewrite to `/_not-found`.** A
+`notFound()` thrown from a rendered page lands in Next's error-recovery render, whose seed markup
+is an empty `<html id="__next_error__">` shell, so the page's markup survives only in the flight
+payload: a JS-off visitor gets a blank page, and every status, header and body-substring check
+stays green. A 404 verdict `proxy.ts` cannot resolve before the page runs ships blank.
 
 **`/search` 307s, never 308.** A code resolving uniquely is a fact about *this month's* dataset;
 a 308 is cached by the browser permanently, so a code that started colliding in a future rebuild

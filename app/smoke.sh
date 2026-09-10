@@ -728,8 +728,8 @@ check     "filter: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED
 check_not "filter: is not Next's own force-dynamic fallback (proves proxy.ts ran)" \
   "$HDRS" "must-revalidate"
 
-# TWO WAYS TO 404, AND THE PROBE MUST DECLINE THE CACHE FOR BOTH. `isFilterListCacheable`
-# returning a bare `true` -- or gating on `allowlist.dims.has(dim)` instead of on the grain --
+# TWO WAYS TO 404, AND THE PROBE MUST DECLINE THE CACHE FOR BOTH. `filterListVerdict` returning
+# an unconditional `cacheable` -- or gating on `allowlist.dims.has(dim)` instead of on the grain --
 # leaves these long-cached, and the dataset is rebuilt monthly, so a cached 404 outlives the
 # condition that caused it. The bodies are checked too: a missing matcher entry keeps the 404
 # STATUS and destroys the MESSAGE, which is the failure mode no header check can see.

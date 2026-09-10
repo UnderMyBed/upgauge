@@ -353,10 +353,10 @@ describe("proxy", () => {
 
   // Epic #6. `/explore/filter/:dim` -- the SAME two-allow-list shape as the `?y=` pair below and
   // the `/watch` pair above, and it needs its own unit cases for a reason review had to point
-  // out: a `return true` in `isFilterListCacheable` left the whole suite green at 1712 tests,
-  // and `app-smoke` alone was carrying a header committed before the page runs. Three cases, one
-  // per outcome, and all three are required -- a `no-store`-everywhere regression passes the two
-  // negatives vacuously, so the positive has to go red too for the trio to mean anything.
+  // out: an unconditional `cacheable` from `filterListVerdict` left the whole suite green at 1712
+  // tests, and `app-smoke` alone was carrying a header committed before the page runs. Three cases,
+  // one per outcome, and all three are required -- a `no-store`-everywhere regression passes the
+  // two negatives vacuously, so the positive has to go red too for the trio to mean anything.
   const FILTER_Q = "v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op";
   const FILTER_Q_ROUTE = "v=1&k=route&d=route&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op";
 

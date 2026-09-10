@@ -775,8 +775,12 @@ being invisible to whoever added a route:
 >
 > **`/explore/filter/:dim` (epic #6) is the fifth carve-out, and its cacheability takes TWO
 > inputs**: the permalink must decode AND the slug must name a dimension *filterable at that
-> query's grain*. `isFilterListCacheable` is the branch, sitting beside `isExploreCacheable` and
-> AND-ing `filterableDimensions(allowlist, query.grain)` onto it. Neither half alone is the rule.
+> query's grain*. `filterListVerdict` is the branch, sitting beside `isExploreCacheable` and
+> AND-ing `filterableDimensions(allowlist, query.grain)` onto the decode. It answers with ONE
+> resolution and three allow-listed outcomes — `cacheable`, `notFound`, `unknown` — because a
+> boolean's `false` covers three different situations here and only one of them is a 404: a
+> permalink that does not decode renders `<UnreadableQuery>` as a **200**, and `loadAllowlist()`
+> throwing is a database outage. Neither half alone is the rule.
 > A `groupableDimensions` test would `no-store` `endpoint_airport_id`, which is `filter_only` and
 > is a legitimate value list; a bare `allowlist.dims.has(dim)` would long-cache
 > `/explore/filter/aircraft_type` at `k=route`, a page that 404s because T-100 files no aircraft
@@ -903,21 +907,71 @@ case's phrase together with the **absence** of a sibling case's phrase — a sin
 sentence enumerating all the causes would satisfy any lone positive check, and that sentence
 is precisely what shipped before.
 
-**Four `not-found.tsx` files depend on this header now** (`/route`, `/airport`, `/carrier`,
-`/aircraft`), each re-running its own resolver against the pathname, so the matcher rule above
-is not a caching concern with a 404 side-effect — it is the other way round on three of the four
-pages. The `/aircraft` one does the most with it: it catches `AmbiguousCodeError`, resolves both
-colliding BTS codes to their full designations, and renders each with an Explorer permalink.
+**Six 404 views depend on this header** (`/route`, `/airport`, `/carrier`, `/aircraft`,
+`/watch/:preset`, `/explore/filter/:dim`), each re-running its own resolver against the pathname,
+so the matcher rule above is not a caching concern with a 404 side-effect — it is the other way
+round on most of them. The `/aircraft` one does the most with it: it catches
+`AmbiguousCodeError`, resolves both colliding BTS codes to their full designations, and renders
+each with an Explorer permalink.
 
-> **Known gap, pre-existing and not fixed by this:** Next serves a 404 from a `force-dynamic`
-> page as an `<html id="__next_error__">` shell with an **empty `<body>`** — the page's markup
-> arrives in the streamed React payload further down the same response and is rendered
-> client-side. Verified by building and curling `d158726`, before the fix wave that moved this
-> page to the server, so it is a property of the framework's 404 path and not of the page. The
-> smoke checks therefore grep the whole response body. That still proves what matters here —
-> the payload is server-generated, so a hit means the *server* resolved the pair and shipped
-> that reason — but the 404's text is not visible with JavaScript disabled. Fixing it means
-> changing how the 404 renders, which nothing here requires.
+### A 404's body reaches the served HTML only through the proxy's `/_not-found` rewrite
+
+**`notFound()` thrown from a rendered page cannot produce server HTML on this Next version.** The
+throw is caught in `app-render.js`'s error path, which re-renders through `getErrorRSCPayload`,
+whose seed markup is literally `createElement('html', {id:'__next_error__'},
+createElement('head'), createElement('body'))` — an empty body by construction. The page's real
+markup then exists only inside the streamed flight payload, so a visitor with JavaScript off gets
+a blank page, and no status check and no header check can see it.
+
+**A URL matching NO route does not have this problem.** Next reaches it with `res.statusCode`
+already 404, so `app-render.js` takes `getRSCPayload` (`is404: res.statusCode === 404`) — the
+normal path, through the root layout, into real HTML.
+
+`proxy.ts` converts the first case into the second. It already resolves every entity before the
+page runs — that is how it picks a `Cache-Control` — so when it has already determined the
+request 404s it returns `notFoundRewrite()`, a `NextResponse.rewrite` to Next's own `/_not-found`
+entry (`UNDERSCORE_NOT_FOUND_ROUTE`, `next/dist/shared/lib/entry-constants.js`, written out
+rather than imported: a deep internal path with no public re-export). Six route families rewrite,
+across eight call sites — `/explore/filter/:dim` and `/aircraft/:name` each have two distinct 404
+verdicts. Measured on a served build, not inferred:
+
+| Property | Through the rewrite | Why it is not free |
+|---|---|---|
+| status | **404** | It comes from the destination route, never the init: `NextResponse.rewrite` DROPS a `status` (`server/lib/router-utils/resolve-routes.js` re-routes on `x-middleware-rewrite` and does not carry the response's own status). That is why the destination must be `/_not-found` and not a page of ours rendering the same view |
+| `Cache-Control` | **`no-store`** | Set on the rewrite response itself. It is a different object from the one the branches above mutate, so whatever they set never reaches the wire on this path |
+| `x-upgauge-path` | **the ORIGINAL pathname** (`/carrier/ZZZ`, not `/_not-found`) | Carried by `{ request: { headers } }`, which is the only channel the root not-found has for knowing which slug was asked for — `not-found.js` accepts no props and gets no route params |
+| body | the family's own view, in the emitted HTML | `<h1>Carrier not found</h1>` and the `class="asof"` badge, in the document rather than only in the payload |
+
+`app/src/app/not-found.tsx` is the boundary the rewrite lands on and **the only 404 view whose
+body reaches the served HTML**; `lib/notFoundFamily.ts` owns the dispatch. That dispatch tests the
+four `opengraph-image` prefixes BEFORE the entity prefixes, because every entity slug reader is a
+bare prefix test that does not stop at one segment — `carrierSlugFromPath("/carrier/DL/opengraph-image")`
+returns `"DL/opengraph-image"`, not null — and the four card routes deliberately do not rewrite at
+all: an `opengraph-image.tsx` compiles to a route handler returning an `ImageResponse`, so a
+crawler asking for a PNG would be handed an HTML document. A pathname the app does not route at
+all (`/wp-login.php` and every other scanner probe) is `null`, and gets a **database-free** generic
+view — `dataAsOf()` on that branch would put a DuckDB read on every probe.
+
+**This narrows the blank body rather than closing it, and the six segment `not-found.tsx` files
+are not dead.** An RSC request is answered by `proxy.ts`'s `RSC` header guard, which returns
+above every branch, so client-side navigation to a 404 URL still renders through the segment
+boundary — and any `notFound()` the proxy did not predict still lands there with the empty shell.
+So a 404 whose verdict is not reachable in `proxy.ts` ships blank.
+
+**A body-substring grep cannot tell a rendered 404 from the shell**, because the flight payload is
+a JSON transcript of the same markup. Measured on this build, `/carrier/ZZ` (9,517 bytes): the
+bare string `Carrier not found` occurs THREE times — once as `<h1>Carrier not found</h1>` and
+twice as `\"h1\",null,{\"children\":\"Carrier not found\"}` — and it occurs twice more in
+`/carrier/dl`'s **308** body, which is not a 404 at all, so the bare form is not even
+status-discriminating. `check_rendered_404` therefore asserts emitted bytes on every needle: the
+angle brackets are the entire discriminator, and the badge is `class="asof"` against the payload's
+`\"className\":\"asof\"`. `DATA AS OF` alone is unusable for a separate reason — React
+separates the label from the interpolated month with a comment node (`DATA AS OF <!-- -->2026-05`).
+
+That discipline is the whole gate, and the mutant is what says so. **Reverting `notFoundRewrite`
+in `proxy.ts` alone puts exactly 24 checks red — every one of them a rendered-body needle — and
+leaves the other 758 green**, including every check that does not read emitted bytes. A gate built
+from status codes, headers and body substrings alone certifies a completely blank 404.
 
 ## `Cache-Control` lives here, and it is status-blind by construction
 
