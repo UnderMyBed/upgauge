@@ -302,26 +302,29 @@ export async function proxy(request: NextRequest) {
   // than falling through to none at all; the probe declines the cache for the ones the page
   // will 404.
   //
-  // #157: the rewrite half runs on a SEPARATE predicate, and that separation is the whole
-  // correctness of this branch. `isFilterListCacheable` returns `false` for THREE different
-  // situations -- an unknown or wrong-grain dim (a real 404), a permalink that does not decode
-  // (the page catches `UrlStateError`/`PivotError` and renders `<UnreadableQuery>` as a **200**),
-  // and `loadAllowlist()` throwing (a transient DuckDB failure). Only the FIRST is a 404, so
-  // rewriting on the boolean would hand a hard, bodied 404 to a healthy request during a database
-  // blip -- for a page the server might well still render a moment later. `isFilterList404`
-  // (below) re-derives the reason and answers `true` only for that first case.
+  // #157: ONE probe, THREE outcomes -- the same "one resolution, two allow-lists" shape the
+  // entity branches below use, for the identical reason. A boolean cannot answer this branch's
+  // two questions, because the `false` it returns covers THREE different situations: an unknown
+  // or wrong-grain dim (a real 404), a permalink that does not decode (the page catches
+  // `UrlStateError`/`PivotError` and renders `<UnreadableQuery>` as a **200**), and
+  // `loadAllowlist()` throwing (a real DuckDB outage). Only the FIRST is a 404. Rewriting on the
+  // boolean would hand a hard, bodied 404 to a healthy request during a database failure, and
+  // would turn the readable error page of the second case into a 404 with a different message.
+  // So `filterListVerdict` names which one it found, `notFound` is an allow-listed VALUE rather
+  // than a negation, and `unknown` -- the swallow -- declines the cache without rewriting.
   //
-  // It runs ONLY when the cacheability probe has already declined, so the hot path -- a real
-  // filterable dimension -- still decodes exactly once. The 404 path decodes twice and that costs
-  // no database query at all: `loadAllowlist()` is memoized on `globalThis` (lib/db.ts) and
-  // `decodeRequest` is pure CPU over the in-memory catalog, which is the same reason
-  // `isFilterListCacheable`'s own comment gives for calling it at all.
+  // Asking twice was the first shape of this, and it was wrong on cost as well as on structure:
+  // `loadAllowlist()` is NOT memoized (`lib/db.ts`'s own docstring: "Read fresh on every call,
+  // never cached at the module level" -- what is memoized on `globalThis` is the DuckDBInstance,
+  // nothing else), so each call opens a connection and runs two catalog queries, each preceded by
+  // a `readFileSync`. Measured by instrumenting this function: two probes made the 404 path pay 2
+  // connections, 4 file reads and 4 catalog queries where one of each does -- on the `no-store`
+  // path, which is exactly the one a crawler or scanner walks uncached. One call now, on both
+  // paths, asserted by `proxy.test.ts`'s call-count test rather than left to review.
   if (pathname.startsWith(FILTER_PREFIX)) {
-    const cacheable = await isFilterListCacheable(pathname, rawQuery);
-    if (!cacheable && (await isFilterList404(pathname, rawQuery))) {
-      return notFoundRewrite(request, headers);
-    }
-    response.headers.set("Cache-Control", cacheable ? HTML_CACHE : NO_STORE);
+    const verdict = await filterListVerdict(pathname, rawQuery);
+    if (verdict === "notFound") return notFoundRewrite(request, headers);
+    response.headers.set("Cache-Control", verdict === "cacheable" ? HTML_CACHE : NO_STORE);
     return response;
   }
   // M5 Task 8. `/search` runs no proxy-side resolution at all -- unlike every branch above and
@@ -357,8 +360,14 @@ export async function proxy(request: NextRequest) {
   // None of that was wrapped, so a broken data layer 500s /sitemap.xml -- the one URL the
   // entire crawl graph is submitted through -- under a 30-day shared-cache header, a WORSE
   // exposure than /explore's now-one-hour HTML_CACHE window. Same probe, same reasoning:
-  // isDataLayerHealthy() is cheap (loadAllowlist() is memoized on globalThis, lib/db.ts), and
-  // "declines to cache" costs a cache miss, not a wrong answer pinned for a month.
+  // isDataLayerHealthy() is CHEAP RELATIVE TO WHAT IT GUARDS, and "declines to cache" costs a
+  // cache miss, not a wrong answer pinned for a month. Cheap, NOT free, and never "memoized":
+  // `lib/db.ts`'s own docstring is explicit that loadAllowlist() is "Read fresh on every call,
+  // never cached at the module level" -- the globalThis memo holds the DuckDBInstance, nothing
+  // else -- so each call is a connection plus two catalog queries, each preceded by a
+  // readFileSync. That is nothing against app/sitemap.ts's four DuckDB queries over 23,785 URLs.
+  // It is not nothing per branch: read as free, it invites a second probe on one request, which
+  // is exactly what #157's first filter-branch shape did.
   if (pathname === "/sitemap.xml" || pathname === "/robots.txt") {
     response.headers.set(
       "Cache-Control",
@@ -655,32 +664,49 @@ async function isExploreCacheable(rawQuery: string): Promise<boolean> {
  * the same reason `/airport`'s branch needs `parseYear`: this page has TWO ways to 404 and the
  * permalink's validity only answers one of them.
  *
- * Requires BOTH that the permalink decodes AND that the slug names a dimension filterable at
- * that grain. `filterableDimensions` -- NOT `groupableDimensions` and not a bare
+ * `cacheable` requires BOTH that the permalink decodes AND that the slug names a dimension
+ * filterable at that grain. `filterableDimensions` -- NOT `groupableDimensions` and not a bare
  * `allowlist.dims.has(dim)`: `endpoint_airport_id` is `filter_only`, so it is a legitimate value
  * list and a `groupable` test would `no-store` the one filter this product has that no other
  * T-100 tool expresses; and `aircraft_type` at `k=route` is in the catalog but not offered at
  * that grain, so a bare `has()` would pin its 404 in a shared cache. The dataset is rebuilt
  * monthly, so a cached 404 outlives the condition that caused it.
  *
- * Costs no database query beyond the `loadAllowlist()` this branch already makes as its probe --
- * `filterableDimensions` is a filter over the in-memory catalog. It does NOT extend to
- * `runPivot()` throwing after `decodeRequest()` has succeeded: that is the residual gap
- * `docs/architecture/hosting.md` § "The gap" documents for `/explore` and `/watch/:preset`, and
- * this route joins it rather than closing it.
+ * `notFound` is the SAME expression the page runs (`entry === undefined`,
+ * `explore/filter/[dim]/page.tsx`), which is the point of naming it rather than inferring it from
+ * `!cacheable`: the proxy must not have its own opinion about which requests 404. It is an
+ * allow-listed VALUE, never a negation -- the identical discipline `is404Kind` states for the
+ * entity branches, and for the identical reason. Both of this page's ways to 404 land here, the
+ * unknown slug and the wrong grain, so neither of the two sentences `not-found.tsx` composes is
+ * unreachable with JS off.
  *
- * Everything is inside the try, including `decodeURIComponent` (via `filterDimFromPath`).
- * `canonicalize()` once threw on a leading `?` that "only a wiring bug could produce" and 500ed
- * every matcher path; nothing on this spine may throw, and any failure here is `false`. */
-async function isFilterListCacheable(pathname: string, rawQuery: string): Promise<boolean> {
+ * `unknown` is the swallow, and it covers two situations that are NOT 404s: the permalink failed
+ * to decode (the page catches `UrlStateError`/`PivotError` and renders `<UnreadableQuery>` as a
+ * 200) or `loadAllowlist()` threw. Both decline the cache and neither rewrites. Everything is
+ * inside the try, `decodeURIComponent` (via `filterDimFromPath`) included -- `canonicalize()` once
+ * threw on a leading `?` that "only a wiring bug could produce" and 500ed every matcher path, so
+ * nothing on this spine may throw.
+ *
+ * ONE `loadAllowlist()`, on every path, and that is a cost claim rather than a style one:
+ * `lib/db.ts`'s own docstring says it is "Read fresh on every call, never cached at the module
+ * level" -- the `globalThis` memo holds the DuckDBInstance, not this -- so each call is a
+ * connection plus two catalog queries, each preceded by a `readFileSync`. `filterableDimensions`
+ * and `decodeRequest` add no query on top of it; both read the in-memory catalog this already
+ * returned. It does NOT extend to `runPivot()` throwing after `decodeRequest()` has succeeded:
+ * that is the residual gap `docs/architecture/hosting.md` § "The gap" documents for `/explore` and
+ * `/watch/:preset`, and this route joins it rather than closing it. */
+type FilterListVerdict = "cacheable" | "notFound" | "unknown";
+
+async function filterListVerdict(pathname: string, rawQuery: string): Promise<FilterListVerdict> {
   try {
     const dim = filterDimFromPath(pathname);
-    if (dim === null) return false;
+    if (dim === null) return "unknown";
     const allowlist = await loadAllowlist();
     const query = decodeRequest(rawQuery, allowlist);
-    return filterableDimensions(allowlist, query.grain).some((e) => e.key === dim);
+    const filterable = filterableDimensions(allowlist, query.grain).some((e) => e.key === dim);
+    return filterable ? "cacheable" : "notFound";
   } catch {
-    return false;
+    return "unknown";
   }
 }
 
@@ -917,31 +943,6 @@ function isCacheableKind(kind: string | null): boolean {
  * the empty error shell while every other 404 gained a body. */
 function is404Kind(kind: string | null): boolean {
   return kind === "notFound" || kind === "ambiguous";
-}
-
-/** `/explore/filter/:dim`'s 404 predicate, and deliberately NOT `!isFilterListCacheable(...)`.
- *
- * That negation is wrong three ways over, because that function answers `false` for three
- * situations and only ONE of them is a 404 -- see the branch's own comment above for the full
- * ruling. This function returns `true` for exactly the case `page.tsx` calls `notFound()` for:
- * the allowlist loaded, the permalink decoded, and `filterableDimensions(allowlist, grain)` does
- * not carry the slug. It is the same expression the page runs (`entry === undefined`), which is
- * the point -- the proxy must not have its own opinion about which requests 404.
- *
- * Everything is inside the try, `decodeURIComponent` (via `filterDimFromPath`) included, and the
- * catch falls through to `false` -- NOT rewriting. Nothing on this spine may throw
- * (`canonicalize()` once threw on a leading `?` and 500ed every matcher path), and a swallow that
- * rewrote would be the transient-failure hazard this whole split exists to refuse. */
-async function isFilterList404(pathname: string, rawQuery: string): Promise<boolean> {
-  try {
-    const dim = filterDimFromPath(pathname);
-    if (dim === null) return false;
-    const allowlist = await loadAllowlist();
-    const query = decodeRequest(rawQuery, allowlist);
-    return !filterableDimensions(allowlist, query.grain).some((e) => e.key === dim);
-  } catch {
-    return false;
-  }
 }
 
 /** Next's own not-found route entry -- `UNDERSCORE_NOT_FOUND_ROUTE`,

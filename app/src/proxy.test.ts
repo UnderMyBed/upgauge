@@ -413,6 +413,11 @@ describe("proxy", () => {
     // cached: `filterDimFromPath` returns null and the probe refuses rather than throwing.
     const res = await proxy(new NextRequest(`http://localhost/explore/filter/?${FILTER_Q}`));
     expect(res.headers.get("Cache-Control")).toBe("no-store");
+    // ...and it is `unknown`, not `notFound`: a rewrite response carries `no-store` too, so the
+    // line above cannot tell the two apart. There is no dim here to be missing from the catalog --
+    // this URL names no dimension at all, Next never routes it to the filter page, and claiming
+    // the filter family for it would dispatch the root 404 to a view with nothing to say.
+    expect(rewritePath(res)).toBeNull();
   });
 
   // M7 Task 9. `/airport/:code?y=<year>` -- `y`'s legitimate value set is closed (the calendar
@@ -913,6 +918,34 @@ function rewritePath(res: { headers: Headers }): string | null {
   return target === null ? null : new URL(target, "http://localhost").pathname;
 }
 
+/** A data layer that stays broken for the duration of `run`, then is put back exactly as it was.
+ *
+ * `mockRejectedValueOnce` -- the form every data-layer test in this file used before -- fails only
+ * the FIRST `loadAllowlist()` call of the request, so it stops testing anything the moment the
+ * branch under test makes two: the second call succeeds, the request resolves normally, and the
+ * test passes for a reason that has nothing to do with the failure it claims to inject. That is
+ * not hypothetical; it is how #157's first filter-branch shape got a green test for a property it
+ * did not have. A real DuckDB outage is not one call deep either.
+ *
+ * The implementation is captured and restored rather than `mockReset()`: this file's module mock
+ * installs `vi.fn(actual.loadAllowlist)`, so a reset would leave every later test calling a mock
+ * that returns undefined. Fails loud if there is nothing to restore, because silently leaving the
+ * suite's shared mock broken is the kind of harness defect that reports green for nine tests. */
+async function withBrokenDataLayer(message: string, run: () => Promise<void>): Promise<void> {
+  const real = vi.mocked(loadAllowlist).getMockImplementation();
+  if (real === undefined) {
+    throw new Error("loadAllowlist has no mock implementation to restore; refusing to swap it");
+  }
+  vi.mocked(loadAllowlist).mockImplementation(async () => {
+    throw new Error(message);
+  });
+  try {
+    await run();
+  } finally {
+    vi.mocked(loadAllowlist).mockImplementation(real);
+  }
+}
+
 // #157. `notFound()` thrown from a rendered page CANNOT produce server HTML on this Next
 // version: the throw is caught by app-render.js's error path, whose seed markup is a hardcoded
 // empty `<html id="__next_error__">` shell, so the body exists only in the flight payload and a
@@ -1036,21 +1069,49 @@ describe("proxy 404 rewrite (#157)", () => {
   });
 
   it("does not rewrite when the data layer is broken, only when the answer is known", async () => {
-    // The ruling this branch turns on. `isFilterListCacheable` returns false for THREE different
-    // situations -- an unknown or wrong-grain dim, a permalink that does not decode, and
-    // `loadAllowlist()` throwing -- and only the first is a 404. Rewriting on the boolean would
-    // serve a hard, bodied 404 to a healthy request during a transient DuckDB failure, for a page
-    // the server might well still render. `/explore/filter/op_airline_id` is a REAL filterable
-    // dimension, so the only thing that can make this request non-cacheable is the mocked
-    // rejection -- which must decline the cache without rewriting.
-    vi.mocked(loadAllowlist).mockRejectedValueOnce(
-      new Error("duckdb: Catalog Error: Table with name meta_pivot_dimensions does not exist"),
+    // The ruling this branch turns on. `filterListVerdict` answers `unknown` for TWO situations
+    // that are not 404s -- a permalink that does not decode, and `loadAllowlist()` throwing -- and
+    // only `notFound` may rewrite. Rewriting on "not cacheable" would serve a hard, bodied 404 to
+    // a healthy request during a DuckDB outage, for a page the server might well still render.
+    // `/explore/filter/op_airline_id` is a REAL filterable dimension, so the only thing that can
+    // make this request non-cacheable is the broken data layer -- which must decline the cache
+    // without rewriting.
+    //
+    // SUSTAINED, not `mockRejectedValueOnce`, and that is the whole discrimination of this test.
+    // With `Once`, only the FIRST loadAllowlist() call rejects -- so the moment this branch made
+    // two (the shape #157 shipped first), the second succeeded, `op_airline_id` resolved as
+    // filterable, and this test passed for the same reason "does not rewrite a filterable
+    // dimension" passes: not because the swallow declined to rewrite, but because nothing failed.
+    // MUTANT RUN: `catch { return "unknown" }` -> `catch { return "notFound" }` left this test
+    // GREEN under `Once` and only reddened the does-not-decode case one test down. A real DuckDB
+    // outage is not transient, and neither is this mock; it is also immune to the call count,
+    // which is what let the `Once` form rot silently.
+    await withBrokenDataLayer(
+      "duckdb: Catalog Error: Table with name meta_pivot_dimensions does not exist",
+      async () => {
+        const res = await proxy(
+          new NextRequest(`http://localhost/explore/filter/op_airline_id?${FILTER_Q}`),
+        );
+        expect(res.headers.get("Cache-Control")).toBe("no-store");
+        expect(rewritePath(res)).toBeNull();
+      },
     );
-    const res = await proxy(
-      new NextRequest(`http://localhost/explore/filter/op_airline_id?${FILTER_Q}`),
-    );
-    expect(res.headers.get("Cache-Control")).toBe("no-store");
-    expect(rewritePath(res)).toBeNull();
+  });
+
+  // "Resolve once per request" is a constraint, not an aspiration, and this is the only thing
+  // asserting it. `loadAllowlist()` is NOT memoized -- lib/db.ts's own docstring says "Read fresh
+  // on every call, never cached at the module level"; what lives on globalThis is the
+  // DuckDBInstance -- so each call opens a connection and runs two catalog queries, each preceded
+  // by a readFileSync. The first #157 shape asked twice on the 404 path (measured: hot 1, 404 2)
+  // on the strength of a comment claiming the second was free. Both paths are asserted, because a
+  // count assertion on the 404 path alone would be satisfied by a branch that never runs.
+  it.each([
+    ["the hot path", `/explore/filter/op_airline_id?${FILTER_Q}`],
+    ["the rewrite path", `/explore/filter/not_a_dimension?${FILTER_Q}`],
+  ])("reads the catalog exactly once on %s", async (_label, path) => {
+    vi.mocked(loadAllowlist).mockClear();
+    await proxy(new NextRequest(`http://localhost${path}`));
+    expect(vi.mocked(loadAllowlist).mock.calls.length).toBe(1);
   });
 
   it("does not rewrite a filter permalink that fails to decode, which renders a 200", async () => {
@@ -1067,13 +1128,18 @@ describe("proxy 404 rewrite (#157)", () => {
   it("does not rewrite /watch when the data layer is broken", async () => {
     // Same ruling on the preset branch: `known` is answered by a four-entry static map with no
     // database read, so the health probe declining must never be read as "this preset does not
-    // exist". `/watch/gauge` IS known -- the only thing making it uncacheable here is the mock.
-    vi.mocked(loadAllowlist).mockRejectedValueOnce(
-      new Error("duckdb: Catalog Error: Table with name mart_route_health does not exist"),
+    // exist". `/watch/gauge` IS known -- the only thing making it uncacheable here is the failure.
+    // Sustained for the same reason as the filter case above: a `Once` rejection is silently
+    // consumed by whichever call happens to run first, so it stops testing this property the
+    // moment the branch makes a second call.
+    await withBrokenDataLayer(
+      "duckdb: Catalog Error: Table with name mart_route_health does not exist",
+      async () => {
+        const res = await proxy(new NextRequest("http://localhost/watch/gauge"));
+        expect(res.headers.get("Cache-Control")).toBe("no-store");
+        expect(rewritePath(res)).toBeNull();
+      },
     );
-    const res = await proxy(new NextRequest("http://localhost/watch/gauge"));
-    expect(res.headers.get("Cache-Control")).toBe("no-store");
-    expect(rewritePath(res)).toBeNull();
   });
 });
 
