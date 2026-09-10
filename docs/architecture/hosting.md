@@ -931,9 +931,11 @@ normal path, through the root layout, into real HTML.
 page runs — that is how it picks a `Cache-Control` — so when it has already determined the
 request 404s it returns `notFoundRewrite()`, a `NextResponse.rewrite` to Next's own `/_not-found`
 entry (`UNDERSCORE_NOT_FOUND_ROUTE`, `next/dist/shared/lib/entry-constants.js`, written out
-rather than imported: a deep internal path with no public re-export). Six route families rewrite,
-across eight call sites — `/explore/filter/:dim` and `/aircraft/:name` each have two distinct 404
-verdicts. Measured on a served build, not inferred:
+rather than imported: a deep internal path with no public re-export). Six route families rewrite, at
+**six call sites** — `grep -c "notFoundRewrite(request, headers)" app/src/proxy.ts` — carrying
+**eight distinct 404 verdicts**: `/explore/filter/:dim` resolves an unknown dim and a wrong-grain
+dim, `/aircraft/:name` resolves `notFound` and `ambiguous` (`is404Kind`'s two members), and the
+other four families resolve one each. Measured on a served build, not inferred:
 
 | Property | Through the rewrite | Why it is not free |
 |---|---|---|
@@ -950,7 +952,21 @@ returns `"DL/opengraph-image"`, not null — and the four card routes deliberate
 all: an `opengraph-image.tsx` compiles to a route handler returning an `ImageResponse`, so a
 crawler asking for a PNG would be handed an HTML document. A pathname the app does not route at
 all (`/wp-login.php` and every other scanner probe) is `null`, and gets a **database-free** generic
-view — `dataAsOf()` on that branch would put a DuckDB read on every probe.
+view: a `dataAsOf()` there would put a DuckDB read on every probe that lands on it.
+
+**Which probes land on it is decided by the path header, and the header is the proxy's own for
+every request the matcher covers — and only those.** Next deletes every request header outside the
+middleware's override set (`server/lib/router-utils/resolve-routes.js`), so on a matched path a
+forged `x-upgauge-path` cannot survive the proxy's value. On an unmatched path the proxy never runs
+and the header arrives as the client wrote it, so the dispatch honours it: `curl -H
+'x-upgauge-path: /carrier/ZZ' <base>/wp-login.php` renders the carrier 404 view and pays its
+`dataAsOf()` + `resolveCarrier()`. The status stays 404 and React escapes the echoed slug, so what
+that buys is one dimension lookup of **origin cost** on a path outside
+`deploy/cloudflare/rate-limit.json`'s prefixes (`/api/`, `/explore`, the four entity prefixes,
+`*/opengraph-image`) — not a wrong answer and not a disclosure. Closing it means widening the
+matcher to `/:path*`, which changes behaviour on every URL in the app and needs its own smoke pass;
+`app/smoke.sh` § 8c pins today's behaviour instead, and the widened matcher is the mutant that
+kills those checks and no others.
 
 **This narrows the blank body rather than closing it, and the six segment `not-found.tsx` files
 are not dead.** An RSC request is answered by `proxy.ts`'s `RSC` header guard, which returns
@@ -970,8 +986,8 @@ separates the label from the interpolated month with a comment node (`DATA AS OF
 
 That discipline is the whole gate, and the mutant is what says so. **Reverting `notFoundRewrite`
 in `proxy.ts` alone puts exactly 24 checks red — every one of them a rendered-body needle — and
-leaves the other 758 green**, including every check that does not read emitted bytes. A gate built
-from status codes, headers and body substrings alone certifies a completely blank 404.
+leaves every check that does not read emitted bytes green.** A gate built from status codes,
+headers and body substrings alone certifies a completely blank 404.
 
 ## `Cache-Control` lives here, and it is status-blind by construction
 

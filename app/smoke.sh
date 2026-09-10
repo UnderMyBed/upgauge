@@ -880,7 +880,10 @@ done
 # positive check -- that sentence is exactly what shipped before.
 #
 # WHY THE NEEDLES BELOW MAY READ THE WHOLE RESPONSE BODY. Only because `check_rendered_404` runs
-# on this same URL and pins the reason's own `<h1>` and DATA AS OF badge as EMITTED HTML. With
+# on this same FAMILY and pins the reason's own `<h1>` and DATA AS OF badge as EMITTED HTML. Family,
+# not URL: the sibling-cause blocks (`/route/JFK-LHR` here, `/airport/LHR` in § 10) carry no
+# `check_rendered_404` of their own and need none, because they reach the identical branch of the
+# identical view -- what is proven emitted for one cause of a family is emitted for the other. With
 # that standing, a phrase found anywhere in this response is a phrase the server composed and
 # shipped in the document: the flight payload is a JSON transcript of the same render, so it
 # cannot carry a sentence the HTML does not. Remove `check_rendered_404` and these needles are
@@ -924,6 +927,30 @@ BODY=$(curl -s --max-time 15 "${BASE}/nope")
 check     "unrouted: an unmatched URL is a 404"                      "$CODE" '404'
 check     "unrouted: the generic view is in the served HTML"         "$BODY" '<h1>Page not found</h1>'
 check_not "unrouted: no DATA AS OF -- this branch reads no database" "$BODY" 'DATA AS OF'
+
+# 8c. THE PATH HEADER IS AUTHORITATIVE ONLY WHERE THE PROXY RUNS, and the check above is scoped to
+# that: it says this branch reads no database, not that no forged request can reach one. Next
+# deletes every request header outside the middleware's override set
+# (`server/lib/router-utils/resolve-routes.js`), so on a path in `proxy.ts`'s matcher the proxy's
+# own `x-upgauge-path` always wins and a client cannot forge it. `/nope` is OUTSIDE the matcher,
+# so the proxy never runs and the header arrives exactly as the client wrote it -- the dispatch in
+# `app/not-found.tsx` honours it and renders the CARRIER view, `dataAsOf()` and `resolveCarrier()`
+# included, on a path none of `deploy/cloudflare/rate-limit.json`'s prefixes (`/api/`, `/explore`,
+# the four entity prefixes, `*/opengraph-image`) covers.
+#
+# That is ORIGIN COST and nothing else -- the status stays 404 and React escapes the echoed slug --
+# so what follows asserts what this build DOES, not a defect it has. It is a tripwire, and the
+# change that trips it is the deferred follow-up: widening the matcher to `/:path*` makes the proxy
+# set the header on `/nope` too, the forged value loses, and the heading below becomes `Page not
+# found`. Verified by exactly that mutant, not inferred.
+#
+# The needles are the same emitted bytes every other 404 check in this file uses, for the same
+# reason -- `check_rendered_404` is the helper, and `class="asof"` is what makes "it paid for a
+# database read" an assertion rather than a claim.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}/nope")
+BODY=$(curl -s --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}/nope")
+check "unrouted+forged header: still a 404" "$CODE" '404'
+check_rendered_404 "unrouted+forged header" "$BODY" 'Carrier not found'
 
 # 9. M4c: the aircraft-mix chart, in the SERVED HTML.
 #
@@ -2504,9 +2531,10 @@ fi
 #     directly and never crosses Next's own routing, so a matcher entry silently dropped from
 #     `config.matcher` cannot fail any unit test, only a served build. Verified by mutation, not
 #     by inspection: removing "/watch/:preset" from the matcher, rebuilding and serving turned
-#     `/watch/nope`'s 404 body from 9,941 bytes (naming the preset) to 7,816 (a bare error
-#     shell, matching the ~7,740-byte shell M4d measured for the same failure one page family
-#     over) AND degraded /watch/gauge's own Cache-Control from HTML_CACHE to Next's own
+#     `/watch/nope`'s 404 body from one naming the preset to a bare error shell -- 9,941 bytes
+#     to 7,816 on the pre-#157 tree the mutant ran against, matching the ~7,740-byte shell M4d
+#     measured for the same failure one page family over -- AND degraded /watch/gauge's own
+#     Cache-Control from HTML_CACHE to Next's own
 #     force-dynamic fallback, `private, no-cache, no-store, max-age=0, must-revalidate` -- on a
 #     PAGE THAT RENDERS FINE, which is exactly the M4b-shaped bug this file's matcher discipline
 #     exists to catch a second time. Reverted before commit; not re-run automatically here for

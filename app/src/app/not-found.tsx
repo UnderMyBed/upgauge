@@ -9,6 +9,13 @@ import { NotFoundView as AircraftNotFound } from "./aircraft/[name]/not-found";
 import { NotFoundView as WatchNotFound } from "./watch/[preset]/not-found";
 import { NotFoundView as FilterNotFound } from "./explore/filter/[dim]/not-found";
 
+// NOT the siblings' reason, and copying it here would be wrong. All six segment `not-found.tsx`
+// files export this so DATA AS OF is never frozen at build time; the generic branch below reads
+// no data at all, deliberately, so that reason does not reach it. This export is here because the
+// default export calls `headers()`, which has no answer at build time. The second-order cost is
+// the part worth knowing, and it is measured rather than inferred: `next build`'s route table
+// prints `/_not-found` as Static with this file absent and Dynamic with it present, so the
+// unrouted-URL 404 is a per-request render now where it was a prerendered page before #157.
 export const dynamic = "force-dynamic";
 
 /** The root 404 boundary, and the ONLY one whose body reaches the served HTML.
@@ -40,7 +47,18 @@ export const dynamic = "force-dynamic";
  * still renders through the segment boundary, and any `notFound()` the proxy did not predict
  * still lands there with the blank body this file exists to fix -- narrowed, not closed.
  * They also keep the fail-loud `rawPathFromHeaders`; this file deliberately does not, because
- * here an absent header is MEANINGFUL -- it is how an unrouted URL announces itself. */
+ * here an absent header is MEANINGFUL -- it is how an unrouted URL announces itself.
+ *
+ * THE HEADER IS AUTHORITATIVE ONLY ON A PATH THE MATCHER COVERS, and every cost claim in this
+ * file is scoped to that. Next deletes every request header outside the middleware's override set
+ * (`server/lib/router-utils/resolve-routes.js`), so wherever `proxy.ts` runs its value wins and a
+ * forged one cannot survive. Outside the matcher `proxy.ts` never runs, so a client-supplied
+ * `x-upgauge-path` reaches the dispatch below: `curl -H 'x-upgauge-path: /carrier/ZZ' /wp-login.php`
+ * renders the carrier view and pays its one `dataAsOf()` + `resolveCarrier()`. The status stays
+ * 404 and React escapes the echoed slug, so what that buys is one dimension lookup of ORIGIN COST
+ * on a path `deploy/cloudflare/rate-limit.json`'s prefixes do not cover -- not a wrong answer, not
+ * a disclosure. Widening the matcher to every path closes it and changes behaviour on every URL in
+ * the app; `app/smoke.sh` § 8c pins what happens today. */
 export async function RootNotFoundView({
   pathname,
   rawQuery,
@@ -69,13 +87,27 @@ export async function RootNotFoundView({
         return await WatchNotFound({ pathname });
       case "filter":
         return await FilterNotFound({ pathname, rawQuery });
+      case null:
+        break;
+      default: {
+        // A seventh `NotFoundFamily` with no case above compiles clean and silently serves the
+        // generic "This URL is not part of Upgauge" for that whole family -- which is the bug
+        // `not-found.test.tsx` names verbatim, and which no test can catch for a family that
+        // does not exist yet. `never` makes it a TYPECHECK failure at the moment the union
+        // grows. `case null` is what leaves this arm exhausted rather than merely unreached: an
+        // unrouted pathname breaks to the generic view below, unchanged.
+        const unhandled: never = family;
+        void unhandled;
+      }
     }
   }
-  // NO DATABASE ON THIS BRANCH, deliberately. It answers every scanner probe and every typo --
-  // an unbounded set the edge rate limit does not enumerate -- which today costs zero queries
-  // because Next serves its own stock page for them. `dataAsOf()` here would put a DuckDB read
-  // on `/wp-login.php`. That is also why there is no `TopBar`: it takes `asOf`, and `DATA AS OF`
-  // is a first-class element on every DATA view, which this is not.
+  // NO DATABASE ON THIS BRANCH, deliberately. Every request whose path header `proxy.ts` set --
+  // which is every request the proxy matches -- lands here for zero queries when the pathname is
+  // one this app does not route: every scanner probe and every typo, an unbounded set the edge
+  // rate limit does not enumerate. A forged header on an unmatched path reaches the dispatch above
+  // instead, one dimension lookup and no further (see this file's header). That is also why there
+  // is no `TopBar`: it takes `asOf`, and `DATA AS OF` is a first-class element on every DATA view,
+  // which this is not.
   return (
     <div className="wrap">
       <main className="error-page">

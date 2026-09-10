@@ -948,8 +948,14 @@ function is404Kind(kind: string | null): boolean {
 /** Next's own not-found route entry -- `UNDERSCORE_NOT_FOUND_ROUTE`,
  * `next/dist/shared/lib/entry-constants.js`. Written out rather than imported: that module is a
  * deep internal path with no public re-export, and a string this file would have to keep in step
- * with Next either way. `app/smoke.sh` asserts the served result, so a rename upstream breaks a
- * gate rather than silently un-bodying every 404. */
+ * with Next either way. A RENAME UPSTREAM IS NOT WHAT THE GATES CATCH, and claiming it was is
+ * worse than saying nothing: a rewrite to a pathname matching no route falls through `check_fs`
+ * to `router-server.js`, which looks up whatever the CURRENT not-found entry is, renders it with
+ * `res.statusCode = 404` and the `x-middleware-request-*` overrides applied -- the same page,
+ * silently. What IS gated is the other half of this constant's contract: `/_not-found` mapping to
+ * `/404` in `base-server.js` is what sets `is404Page`, and `is404Page` is what assigns
+ * `res.statusCode = 404` on the render. Lose that mapping and every rewrite here becomes a **200**
+ * carrying a 404 body, which turns every family's status check in `app/smoke.sh` red. */
 const UNDERSCORE_NOT_FOUND = "/_not-found";
 
 /** The rewrite that turns a 404 this file has ALREADY resolved into a server-rendered one (#157).
