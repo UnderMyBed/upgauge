@@ -167,7 +167,7 @@ app-smoke:  ## Build, serve, and curl real URLs. Catches production-only bugs no
 # `make image-smoke` UNOVERRIDDEN on any PR touching either half, which is the only invocation
 # that can see the coupling: image.yml's resolves the newest release and passes
 # SMOKE_DATASET_PINNED=0. docs/architecture/hosting.md carries the full rule.
-WAREHOUSE_TAG ?= warehouse-2026.05
+WAREHOUSE_TAG ?= warehouse-2026.06
 IMAGE ?= upgauge:local
 
 # `git describe --always --dirty`, never `git rev-parse --short HEAD`: rev-parse ignores
