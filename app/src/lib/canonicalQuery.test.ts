@@ -1,6 +1,7 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { canonicalize, isOurs, queryVerdict, QUERY_ROWS } from "@/lib/canonicalQuery";
 
 const APP_DIR = path.resolve(__dirname, "../app");
@@ -19,7 +20,7 @@ const UNMODELED_FILE = [
 /** An export that moves a code metadata route off the URL its file name gives: `generateSitemaps`
  * serves `/sitemap/<id>.xml`, and `generateImageMetadata` puts an `/<id>` segment under a card. */
 const URL_MOVING_EXPORT =
-  /^\s*export\s+(?:async\s+)?(?:function|const|let)\s+generate(?:Sitemaps|ImageMetadata)\b/m;
+  /^\s*export\s+(?:async\s+)?(?:function|const|let)\s+(generate(?:Sitemaps|ImageMetadata))\b/m;
 
 /** The last URL segment each modeled code metadata file serves. */
 const METADATA_URL: Record<string, string> = {
@@ -28,23 +29,25 @@ const METADATA_URL: Record<string, string> = {
   robots: "robots.txt",
 };
 
-/** Every URL pattern a file under src/app serves: `page`/`route`, `opengraph-image`, `sitemap` and
- * `robots` in any of Next's four code extensions (`[jt]sx?`), plus `favicon.ico`. THROWS, naming
- * the file, on every other route or metadata file convention (`UNMODELED_FILE`), on a code
- * metadata file carrying a URL-moving export, and on a private, route-group, parallel, catch-all
- * or optional catch-all folder -- so a new convention is a red test rather than a route this
- * agreement silently cannot see. Any other file (`layout`, `not-found`, tests, helpers) serves no
- * URL of its own. */
-function servedRoutePatterns(dir: string = APP_DIR, prefix = ""): string[] {
+/** Every URL pattern a file under `dir` (src/app by default) serves: `page`/`route`,
+ * `opengraph-image`, `sitemap` and `robots` in any of Next's four code extensions (`[jt]sx?`),
+ * plus `favicon.ico`. THROWS on every other route or metadata file convention (`UNMODELED_FILE`),
+ * on a code metadata file carrying a URL-moving export, and on a private, route-group, parallel,
+ * catch-all or optional catch-all folder -- so a new convention is a red test rather than a route
+ * this agreement silently cannot see. Each guard has its own message ("file convention",
+ * "URL-moving export", "folder convention") naming what it refused, relative to `root`, and the
+ * "servedRoutePatterns" describe pins each one. Any other file (`layout`, `not-found`, tests,
+ * helpers) serves no URL of its own. */
+function servedRoutePatterns(dir: string = APP_DIR, prefix = "", root: string = dir): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const file = path.relative(APP_DIR, path.join(dir, entry.name));
+    const file = path.relative(root, path.join(dir, entry.name));
     if (entry.isDirectory()) {
       if (/^[(@_]|^\[\[?\.\.\./.test(entry.name)) {
         throw new Error(`servedRoutePatterns does not model the folder convention '${file}'`);
       }
       const segment = entry.name.replace(/^\[(.+)\]$/, ":$1");
-      out.push(...servedRoutePatterns(path.join(dir, entry.name), `${prefix}/${segment}`));
+      out.push(...servedRoutePatterns(path.join(dir, entry.name), `${prefix}/${segment}`, root));
       continue;
     }
     if (UNMODELED_FILE.some((re) => re.test(entry.name))) {
@@ -52,8 +55,11 @@ function servedRoutePatterns(dir: string = APP_DIR, prefix = ""): string[] {
     }
     const metadata = /^(opengraph-image|sitemap|robots)\.[jt]sx?$/.exec(entry.name)?.[1];
     if (metadata !== undefined) {
-      if (URL_MOVING_EXPORT.test(readFileSync(path.join(dir, entry.name), "utf8"))) {
-        throw new Error(`servedRoutePatterns does not model the URL-moving export in '${file}'`);
+      const moving = URL_MOVING_EXPORT.exec(readFileSync(path.join(dir, entry.name), "utf8"))?.[1];
+      if (moving !== undefined) {
+        throw new Error(
+          `servedRoutePatterns does not model the URL-moving export '${moving}' in '${file}'`,
+        );
       }
       out.push(`${prefix}/${METADATA_URL[metadata]}`);
     } else if (/^(page|route)\.[jt]sx?$/.test(entry.name)) {
@@ -467,6 +473,65 @@ describe("queryVerdict vs canonicalize on an exempt row", () => {
     // must never redirect. Nothing consumes this verdict today; the row states the truth anyway.
     expect(queryVerdict("/search", "q=DL&x=1")).toEqual({ kind: "strip", location: "/search?q=DL" });
     expect(canonicalize("/search", "q=DL&x=1")).toEqual({ kind: "clean" });
+  });
+});
+
+// Each guard in `servedRoutePatterns` fires only when app/src/app holds the file or folder it
+// refuses, which it does not -- so against the real tree every guard is deletable with the suite
+// green. These pin each one against a throwaway tree under os.tmpdir(), never inside the repo,
+// and assert WHICH guard refused: the three messages differ, and each names what it refused.
+describe("servedRoutePatterns", () => {
+  let tree: string | undefined;
+
+  afterEach(() => {
+    if (tree === undefined) return;
+    // Removal is recursive, so the path is checked before it is trusted: a direct child of
+    // os.tmpdir() carrying this suite's own prefix, or nothing is removed.
+    expect(path.relative(os.tmpdir(), tree)).toMatch(/^route-tree-[^/\\]+$/);
+    rmSync(tree, { recursive: true, force: true });
+    tree = undefined;
+  });
+
+  function build(files: Record<string, string>): string {
+    const root = mkdtempSync(path.join(os.tmpdir(), "route-tree-"));
+    tree = root;
+    for (const [relative, body] of Object.entries(files)) {
+      const file = path.join(root, relative);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, body);
+    }
+    return root;
+  }
+
+  it("models page.jsx and a nested opengraph-image.js as exactly the URLs they serve", () => {
+    // The control. Without it, a builder that wrote nothing would make every throw case below
+    // fail for the wrong reason -- and a walker that modelled only `.tsx` would pass them all.
+    const root = build({ "page.jsx": "", "x/[id]/opengraph-image.js": "" });
+    expect(servedRoutePatterns(root).sort()).toEqual(["/", "/x/:id/opengraph-image"]);
+  });
+
+  it("refuses twitter-image.tsx with the unmodeled-file guard, naming the file", () => {
+    const root = build({ "x/twitter-image.tsx": "" });
+    expect(() => servedRoutePatterns(root)).toThrow(
+      "servedRoutePatterns does not model the file convention 'x/twitter-image.tsx'",
+    );
+  });
+
+  it.each(["[[...slug]]", "[...slug]"])(
+    "refuses a %s folder with the folder-convention guard, naming the folder",
+    (folder) => {
+      const root = build({ [`${folder}/page.tsx`]: "" });
+      expect(() => servedRoutePatterns(root)).toThrow(
+        `servedRoutePatterns does not model the folder convention '${folder}'`,
+      );
+    },
+  );
+
+  it("refuses an exported generateSitemaps with the URL-moving-export guard, naming it", () => {
+    const root = build({ "sitemap.ts": "export async function generateSitemaps() {}\n" });
+    expect(() => servedRoutePatterns(root)).toThrow(
+      "servedRoutePatterns does not model the URL-moving export 'generateSitemaps' in 'sitemap.ts'",
+    );
   });
 });
 
