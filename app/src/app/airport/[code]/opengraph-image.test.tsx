@@ -93,8 +93,11 @@ describe("/airport/<code> opengraph-image", () => {
 // literal left the whole suite green. Every case it covered is below, driven through the spy,
 // where the same mutant dies.
 describe("the default export's card input", () => {
-  // OQZ and 05A are the two absences, and both have fewer than two filed months, so `cardChart`
-  // returns early and no Plot/jsdom rendering happens in this node-environment file.
+  // OQZ and 05A are the two absences, but for different reasons. OQZ has one full-window filed
+  // month, wholly quarantined, so `cardChart` returns early and no Plot/jsdom rendering happens
+  // for it. 05A filed real, stateable data across 13 months (2015-2019), so its chart draws
+  // normally -- its absence is the trailing-12 stat strip (the 290-page cell), asserted below as
+  // `Carriers: 0`, not a missing chart.
   async function cardInputFor(code: string) {
     renderSpy.mockClear();
     await Image({ params: Promise.resolve({ code }) });

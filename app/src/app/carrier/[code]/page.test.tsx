@@ -795,8 +795,8 @@ describe("/carrier/<code> diff map (#110)", () => {
 // three tables below left all 1,483 tests green before these existed.
 //
 // /carrier is where the change has its largest measured effect: across the trailing 12 months,
-// its Top routes table renders 141 below-floor rows over 24 of 70 carriers, and Top origins 85
-// over 22.
+// its Top routes table renders 297 below-floor rows over 32 of 69 active carriers, and Top origins
+// 241 over 35.
 //
 // WHAT MAKES A FIXTURE HERE DISCRIMINATING: in the pivot's own order, a SCORED row appears
 // after a below-floor one. Only then do the measure order and the partitioned order differ, and
@@ -814,14 +814,16 @@ describe("/carrier/<code> diff map (#110)", () => {
 // Re-swept over all 114 fact-present carriers and 110 aircraft short names, through the real
 // queries and their real limits, with the correct predicate:
 //
-//     CARRIER-TYPETABLE        6 below-floor rows over  4 pages -- 0 disagreements
-//     CARRIER-TOPROUTES      141 below-floor rows over 24 pages -- 2 (2O, F4)
-//     CARRIER-TOPORIGINS      85 below-floor rows over 22 pages -- 1 (F4)
-//     AIRCRAFT-CARRIERTABLE    6 below-floor rows over  6 pages -- 0 disagreements
+//     CARRIER-TYPETABLE       23 below-floor rows over 16 pages -- 0 disagreements
+//     CARRIER-TOPROUTES      297 below-floor rows over 32 pages -- 9 (4W, 5V, 6F, 7S, 8V, AN, F4, M5, SY)
+//     CARRIER-TOPORIGINS     241 below-floor rows over 35 pages -- 6 (6F, AN, F4, KG, RVQ, XP)
+//     AIRCRAFT-CARRIERTABLE   22 below-floor rows over 14 pages -- 1 (CE-206/7)
 //
 // So both Top-N tables ARE testable behaviourally, and both are tested below, each on a carrier
-// that disagrees for a DIFFERENT reason. Only the aircraft-type table here and /aircraft's
-// carrier table have no discriminating page anywhere in the warehouse; those two are pinned on
+// that disagrees for a DIFFERENT reason. AIRCRAFT-CARRIERTABLE now has exactly one discriminating
+// page too (CE-206/7) -- noted, not built into a fourth fixture below, because one page is a thin
+// instrument to invent a second time. Only the aircraft-type table here has no discriminating page
+// anywhere in the warehouse; it is pinned on
 // the prop instead, in app/floorPartition.callsites.test.tsx, which states why.
 describe("/carrier/<code> sorts below-floor rows last", () => {
   /** One table's rendered rows: the below-floor flag, and seats as the page PRINTED them --

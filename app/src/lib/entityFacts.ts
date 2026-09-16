@@ -100,13 +100,13 @@ export function sumTotals(rows: Record<string, unknown>[]): EntityTotals {
   // arrives NULL, and this used to restate that as zero TWICE OVER: `?? 0` in the mapper, and a
   // `+` fold that would have coerced it anyway. Deleting one and not the other is not a fix.
   //
-  // Measured over the trailing 12 (2026-05 warehouse), and the page count is the one that
-  // matters: 11 route pairs have no un-quarantined filing at all, of which 10 are REACHABLE
-  // pages -- the eleventh is VEE-VEE, which `lib/routePair.ts` 404s as a same-airport slug
-  // before any lookup. Two aircraft types are in the same state (BTS 201 `/aircraft/TRISLNDR`
-  // and 489 `/aircraft/SHORT360`, both F4 in 2025-08 with 5 and 27 PERFORMED departures against
-  // a filed seat count of 0), which issue #121 did not measure and which is why the footprint
-  // is 12 pages and not 10. No carrier is in that state in this window.
+  // Measured over the trailing 12 (2026-06 warehouse), and the page count is the one that
+  // matters: 12 route pairs have no un-quarantined filing at all, and all 12 are REACHABLE
+  // pages -- none is same-airport this window. Two aircraft types are in the same state (BTS 201
+  // `/aircraft/TRISLNDR` and 489 `/aircraft/SHORT360`, both F4 in 2025-08 with 5 and 27
+  // PERFORMED departures against a filed seat count of 0), which issue #121 did not measure and
+  // which is why the footprint is 14 pages and not 12. No carrier is in that state in this
+  // window.
   const seats = sumColumn(rows, "seats");
   const passengers = sumColumn(rows, "passengers");
   const departures = sumColumn(rows, "departures_performed");

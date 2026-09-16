@@ -244,12 +244,17 @@
 -- Ranking on fall also lets a thinly flown route lead: DL's leader is BNA-JFK at TWO performed
 -- departures and AA's is BOS-STL at one.
 --
--- The volume term in the ORDER BY below does NOT address this and is not claimed to. Measured on
--- all four panels, it moves ZERO routes into or out of the drawn 400: it breaks exact ties only,
--- and no over-cap panel has one at its cut. (NOT because fall is continuous -- 125 of OO's 584
--- falls are whole numbers. The ties are at the panel MAXIMUM; see the tiebreak section.) What it
--- does fix is which of a tied set leads: OO's leader
--- moves from ACV-FAT (1 departure) to ATW-SBN (4), and WN's from BDL-STL (1) to JAN-MCI (2).
+-- The volume term in the ORDER BY below does NOT decide who leads a panel (that's the paragraph
+-- above), and it used to move zero routes into or out of the drawn 400 on every panel -- that no
+-- longer holds for DL on this warehouse. DL's downgauged panel has a 6-way tie in fall AT THE
+-- CUT: rows 397-402 all fall at 2.0 seats per departure, departures {2, 2, 2, 1, 1, 1}, so the
+-- volume term decides which three of the six make row 400 (the three 2-departure routes) and
+-- which three don't. (NOT because fall is continuous -- 125 of OO's 584 falls are whole
+-- numbers.) AA, OO and WN still have no tie at their own cut -- a panel's tie at its CUT and its
+-- tie at its MAXIMUM (the leader; see the tiebreak section) are different rows and can disagree,
+-- as DL's now do. Away from any cut, what the term still fixes is which of a leader-tied set
+-- leads: OO's leader moves from ACV-FAT (1 departure) to ATW-SBN (4), and WN's from BDL-STL (1)
+-- to JAN-MCI (2).
 --
 -- IT HELPS EXACTLY HALF THE AFFECTED PANELS, and nothing here should let a reader think
 -- otherwise: DL and AA have UNIQUE maxima, so no tiebreak can reach them and their leaders remain
@@ -296,11 +301,12 @@
 -- added 237 tied at 175; OO dropped 225 tied at 76. Without the tiebreak, WHICH of those 317 are
 -- drawn is SQL-unspecified and moves between runs.
 --
--- The four downgauged panels do not tie AT THE CUT, but not for the reason an earlier revision of
--- this comment gave: gauge fall is NOT free of round numbers -- 125 of OO's 584 falls are whole
--- numbers. Downgauged ties land at the panel MAXIMUM instead, where 12 carriers have a multi-way
--- tie and the worst is 17-way. That is what the volume term above addresses; the id terms remain
--- the final total order, because the triple is unique within a (carrier, category).
+-- Three of the four downgauged panels (AA, OO, WN) do not tie AT THE CUT; DL now does -- see the
+-- volume-term paragraph above. That the other three don't is NOT because gauge fall is free of
+-- round numbers -- 125 of OO's 584 falls are whole numbers. Their ties land at the panel MAXIMUM
+-- instead, where 12 carriers have a multi-way tie and the worst is 17-way. That leader tie is
+-- what the volume term above addresses; the id terms remain the final total order, because the
+-- triple is unique within a (carrier, category).
 --
 -- category_total is count(*) OVER (PARTITION BY category), computed in `ranked` over the full
 -- partition BEFORE `rn <= $cap` filters it, so it is the TRUE pre-cap count and cannot be the
@@ -393,12 +399,13 @@
 -- segmentMap.ts's quarantinedNote returns null at 0.
 --
 -- A THIRD GROUP REACHES NO COUNT AT ALL, and this section would read as exhaustive without it:
--- 2 carrier-routes are BOTH wholly quarantined AND same-airport. `undrawable_routes` carries
--- `route_key_low <> route_key_high`, so they are not an arc, not in category_total, not in
--- same_airport_seats and not in undrawable_routes either. They are the "vanish with no trace"
--- this field exists to prevent, at 2 instead of 25. Left that way deliberately: counting them in
--- undrawable_routes would state them on a map face as routes that could not be drawn, when the
--- reason they cannot be drawn is that they are not routes -- two different absences summed into
+-- 1 carrier-route is BOTH wholly quarantined AND same-airport -- `2NQ`'s STT-STT, wholly
+-- quarantined in the prior window (8V's VEE-VEE no longer is one: it flew for real in 2026-06).
+-- `undrawable_routes` carries `route_key_low <> route_key_high`, so it is not an arc, not in
+-- category_total, not in same_airport_seats and not in undrawable_routes either. It is the
+-- "vanish with no trace" this field exists to prevent. Left that way deliberately: counting it in
+-- undrawable_routes would state it on a map face as a route that could not be drawn, when the
+-- reason it cannot be drawn is that it is not a route -- two different absences summed into
 -- one number is what the same-airport split exists to avoid.
 --
 -- Quarantine is a per-aggregate FILTER and never a WHERE (100_fct_route_month.sql:56-59): a
@@ -540,11 +547,12 @@ panel AS (
 -- one: `?? 0` said "no seats are being withheld" about a pair that IS being withheld by an
 -- amount nobody can state.
 --
--- LATENT, NOT LIVE. The wholly-quarantined same-airport pair is real (8V's VEE-VEE in the
--- trailing 12, airline 21745's STT-STT in the prior 12), but a panel folds every same-airport
--- pair in its category together and every such fold on this warehouse contains at least one
--- stateable pair -- measured across all 115 carriers, zero panels return NULL. No page renders
--- the wrong sentence today; the coercion is one refresh away from making it do so.
+-- LATENT, NOT LIVE. The wholly-quarantined same-airport pair is real (airline 21745's, 2NQ,
+-- STT-STT in the prior 12 -- 8V's VEE-VEE no longer is one: it flew for real in 2026-06), but a
+-- panel folds every same-airport pair in its category together and every such fold on this
+-- warehouse contains at least one stateable pair -- measured across all 114 carriers with
+-- route-month rows, zero panels return NULL. No page renders the wrong sentence today; the
+-- coercion is one refresh away from making it do so.
 -- `100_fct_route_month.sql` states the rule this disambiguation serves, in its own comment:
 -- "do NOT wrap these in COALESCE(..., 0)".
 same_airport AS (

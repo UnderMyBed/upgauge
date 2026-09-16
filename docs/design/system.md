@@ -372,7 +372,7 @@ page gating on the second asks the wrong one. It bites twice:
 - **Arc rendering** — every row in that group describes an *arc*, and a map can render without one.
   A hub map always paints its origin disc (`/airport/A18`, `/airport/OQZ`), and
   `fetchCarrierTypeNetwork` deliberately returns a zero-segment map so its quarantine disclosure
-  reaches the reader (`/carrier/F4?type=SHORT360`, `/aircraft/AS350-B2?carrier=8E`). The predicates
+  reaches the reader (`/carrier/F4?type=SHORT360`, `/aircraft/SHORT360?carrier=F4`). The predicates
   are `segmentArcsDrawn` / `networkArcsDrawn`, both reading the renderer's own `drawableSegments`.
   Gating on "a map exists" would delete the map to satisfy the rail, which is the wrong repair: the
   map stays, the group goes.
@@ -1103,9 +1103,9 @@ denominator would need a pivot grouped by endpoint airport, and `endpoint_airpor
 `filter_only` in the catalog. A quietly wrong mark is worse than a narrower true one.
 
 **A same-airport row is never an arc, on any page, standing rule.** `fct_segment_month`
-really carries rows whose origin and destination are the same airport — 359 of 1,049
+really carries rows whose origin and destination are the same airport — 354 of 1,049
 fact-present airports have at least one over the trailing 12 months; ORD alone is 53 rows,
-76,236 seats. Such a row's great circle has zero angular length, and `greatCircle`'s own
+77,795 seats. Such a row's great circle has zero angular length, and `greatCircle`'s own
 degenerate-endpoint branch (`om < 1e-9`) would emit `steps + 1` identical points — several
 hundred bytes of polyline drawing an invisible mark directly on top of the origin disc. So
 the drawn arc set always excludes any row whose two endpoints are the same airport

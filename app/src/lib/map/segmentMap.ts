@@ -187,10 +187,12 @@ export interface SegmentMapInput {
    *  and #121 exists because a `?? 0` collapsed it into the first: the map would say nothing was
    *  being withheld while a pair was being withheld by an unstateable amount.
    *
-   *  LATENT on today's warehouse -- the quarantined same-airport pair is real (`8V`'s VEE-VEE),
-   *  but every producer folds it in with stateable pairs, so no panel actually returns NULL
-   *  (measured across all 115 carriers). The state is admitted because the producer's own SQL
-   *  can return it, not because a page shows it. Still REQUIRED: pass `0` to say "none". */
+   *  LATENT on today's warehouse -- the quarantined same-airport pair is real (airline 21745's,
+   *  `2NQ`, STT-STT in the prior 12 -- `8V`'s VEE-VEE no longer is one: it flew for real in
+   *  2026-06), but every producer folds it in with stateable pairs, so no panel actually returns
+   *  NULL (measured across all 114 carriers with route-month rows). The state is admitted
+   *  because the producer's own SQL can return it, not because a page shows it. Still REQUIRED:
+   *  pass `0` to say "none". */
   sameAirportSeats: number | null;
   basemapPaths?: string;
   /** SMALL MULTIPLES ONLY (#123): the exact window to emit, replacing the one this map would
@@ -570,8 +572,8 @@ export interface CropWindow {
  * WHY IT EXISTS: `renderMapCore` already emits an inset FRAME only for a panel the network
  * reaches (`fits.has(panel)` below). The canvas was not subject to the same rule, so an
  * Alaska-only network drew a small ALASKA inset under ~320px of empty conterminous panel --
- * measured on `/airport/BET`, `/airport/A18`, `/airport/JZM` and `/airport/OQZ`. One predicate
- * now decides both, which is why this reads `fits` rather than re-deriving reach.
+ * measured on `/airport/BET`, `/airport/JZM` and `/airport/OQZ`. One predicate now decides
+ * both, which is why this reads `fits` rather than re-deriving reach.
  *
  * VERTICAL ONLY. The footer stack is painted at x=8 and runs the full 960px -- `SegmentMap.tsx`
  * documents the 158-character budget as a hard requirement, because those sentences reach the
@@ -618,8 +620,9 @@ function cropWindow(
   // padding -- it is a live, linked page. `fetchCarrierTypeNetwork` DELIBERATELY returns a
   // non-null input with zero segments on two arms (`carrierTypeNetwork.ts`): a pair whose every
   // route is quarantined, and one whose only filing is same-airport. `/carrier/F4?type=SHORT360`
-  // and `/aircraft/AS350-B2?carrier=8E` are both of those, and the second is one click from its
-  // own page's `MapPicker`. The whole reason those arms return a map rather than `null` is that
+  // and `/aircraft/SHORT360?carrier=F4` are the same pair from each page's own query, both on the
+  // first arm -- one click from the aircraft page's own `MapPicker`. The whole reason those arms
+  // return a map rather than `null` is that
   // the disclosure has to reach the reader -- returning null "hides a data-quality fact behind a
   // missing panel" -- so this is exactly where a broken canvas costs the most.
   //

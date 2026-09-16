@@ -339,7 +339,7 @@ describe("renderNetworkMap", () => {
   });
 
   it("still draws the origin disc for a network whose every pair was quarantined", () => {
-    // /airport/A18, /airport/JZM and /airport/OQZ over the trailing 12: nothing drawable and
+    // /airport/JZM and /airport/OQZ over the trailing 12: nothing drawable and
     // something real to say. The map must still render -- a subject disc, its label, and the
     // disclosure -- because the alternative leaves no trace on the page that anything was filed.
     const svg = renderNetworkMap({
