@@ -232,7 +232,7 @@ function displayRows(
  * airport and itself -- not a data error -- but `/route/`'s own resolver refuses to name one a
  * "route" (routePair.ts), and every watch_*.sql file already excludes them
  * (`WHERE route_key_low <> route_key_high`). Stated once, identically, on all four presets --
- * measured: 6 of the 5,675 rows mart_route_health carries over the current window. */
+ * measured: 5 of the 5,675 rows mart_route_health carries over the current window. */
 function SameAirportNote() {
   return (
     <p className="foot">

@@ -32,9 +32,9 @@ def con():
 
 # completion_capped mirrors 200_mart_route_health.sql's own CASE guard, not a bare least():
 # DuckDB's least(NULL, 1.5) returns 1.5 (ignores NULL rather than propagating it), which
-# fabricates a completion rate for the 89 carrier-route pairs with no filed schedule -- the
+# fabricates a completion rate for the 93 carrier-route pairs with no filed schedule -- the
 # same NULL trap the mart SQL's comment on `completion_capped` documents. A bare least() here
-# would pollute this axis's population avg/stddev with 89 fabricated 1.5s before the outer
+# would pollute this axis's population avg/stddev with 93 fabricated 1.5s before the outer
 # `WHERE health_score IS NOT NULL` ever drops those rows (they are dropped too late --
 # the window functions already ran over the polluted population). Confirmed: this guarded
 # form reconstructs the stored health_score to within 1.58e-14 over every scored row;

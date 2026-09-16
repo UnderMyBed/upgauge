@@ -422,7 +422,7 @@ def test_health_score_is_bounded_by_the_clamp(con):
 def test_the_completion_cap_is_null_safe(adversarial_con):
     """DuckDB's least() IGNORES NULLs: least(NULL, 1.5) returns 1.5, not NULL. Written as a
     bare least(), the cap fabricates a 1.5 completion rate for every carrier-route pair that
-    filed no schedule at all -- 89 of them on the real warehouse -- and each then gets a
+    filed no schedule at all -- 93 of them on the real warehouse -- and each then gets a
     health_score it has no basis for.
 
     RUNS ON THE ADVERSARIAL WAREHOUSE BECAUSE IT HAS TO. On the committed fixture this test was

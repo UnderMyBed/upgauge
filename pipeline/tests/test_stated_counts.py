@@ -336,7 +336,7 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
 
 def _fmt(template: str, value: int) -> str:
     """Render a needle. `{v}` is the measure's own value; any other `{name}` is another
-    measure, so a phrase like `215 of 22,509` moves in BOTH of its halves when the dataset
+    measure, so a phrase like `215 of 22,635` moves in BOTH of its halves when the dataset
     does -- a needle that hard-coded the denominator would be a stale literal inside the very
     gate that exists to catch stale literals."""
     others = {k: f"{n:,}" for k, n in MEASURES.items() if isinstance(n, int)}

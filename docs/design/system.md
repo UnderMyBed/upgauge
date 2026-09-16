@@ -1432,7 +1432,7 @@ rule and the rest of the evidence.
 **Every filter a preset applies that a reader could otherwise not infer is stated on the
 preset's own page**, in a `.foot` note, or the page cannot be reproduced from what it says.
 Empty Planes has exactly one of its own, `gauge_t12 >= 50`, and states it. The universal form of
-that sentence is false and was: Gauge Watch's `gauge_delta IS NOT NULL` excludes 297 carrier-route
+that sentence is false and was: Gauge Watch's `gauge_delta IS NOT NULL` excludes 281 carrier-route
 pairs with no prior window and is disclosed nowhere — a real gap, pre-dating #148 and not closed
 here. The departure floor is **not** a per-preset filter: it is
 `mart_route_health`'s admission gate, so it holds on all four leaderboards and is stated on all
