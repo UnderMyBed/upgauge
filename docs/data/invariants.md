@@ -692,10 +692,10 @@ being a live one.
 `null` seed means an entity that is fact-present but filed **nothing** inside the window reports its
 sums as unknowable rather than as zero. **State the grain with the figure, because these three are
 counted at two of them.** At warehouse grain: **12,201** route pairs, **45** `airline_id`s and
-**37** BTS aircraft codes. At PAGE grain — which is what "renders an absence" means — they are
-**11,939**, **44** and **36**: 176 of the stale pairs are same-airport and 404 before any lookup,
-one dormant `airline_id` carries no `dim_carrier` row, and `CE-180` resolves to two fact-present
-airframes and 404s as ambiguous. This is the same warehouse-grain-versus-page-grain split the
+**39** BTS aircraft codes. At PAGE grain — which is what "renders an absence" means — they are
+**11,939**, **45** and **38**: 178 of the stale pairs are same-airport and 404 before any lookup,
+none of the 45 stale `airline_id`s lacks a `dim_carrier` row, and `CE-180` resolves to two
+fact-present airframes and 404s as ambiguous. This is the same warehouse-grain-versus-page-grain split the
 wholly-quarantined set draws above, one level up. Against the 290 airports
 `airportTotals` has answered that way since #118. (Those three, like
 the 290, are measurements stated here, not gated figures; only the route count is generated.) They

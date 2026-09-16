@@ -10,9 +10,13 @@
 --
 -- EVERY FIGURE BELOW was measured on the 2026-05 warehouse over t12 = 2025-06..2026-05 and
 -- p12 = 2024-06..2025-05, against THIS file's own category definitions, and counts ARCS ONLY
--- (same-airport pairs excluded -- see the section on them). Each figure states the predicate
--- that produced it precisely enough to re-derive; a figure whose definition is not stated is
--- one nobody can reconcile after the next BTS refresh.
+-- (same-airport pairs excluded -- see the section on them), WITH NAMED EXCEPTIONS: the
+-- same-airport quarantine examples ("LATENT, NOT LIVE" and the "1 carrier-route" paragraph),
+-- the DL-tie paragraph and its tiebreak-section recap, the undrawable-routes counts, and the
+-- per-carrier same-airport table state the 2026-06 warehouse instead (t12 = 2025-07..2026-06,
+-- p12 = 2024-07..2025-06). Each figure states the predicate that produced it precisely enough
+-- to re-derive; a figure whose definition is not stated is one nobody can reconcile after the
+-- next BTS refresh.
 --
 -- ============================================================================================
 -- WHY THIS READS fct_route_month AND NOT mart_route_health
@@ -54,7 +58,7 @@
 -- former into the latter and FABRICATE a category: 8V BTI-VEE filed in the trailing window and
 -- had it wholly quarantined, and under a coalesce it becomes a claim that 8V DROPPED that route.
 -- NULL is not TRUE, so no CASE arm below matches such a row and the exclusion needs no clause of
--- its own. 25 carrier-routes are excluded this way; they are COUNTED and returned, not silently
+-- its own. 27 carrier-routes are excluded this way; they are COUNTED and returned, not silently
 -- dropped -- see the quarantine section.
 --
 -- WHY 1 AND NOT THE MART'S FLOOR. That floor is a RATE -- >= 30 departures per month FLOWN
@@ -93,7 +97,7 @@
 --   * No carrier-route has departures >= 1 with NULL or zero seats, in either window (measured:
 --     0 rows, both). That is what lets SegmentDatum.seats be a non-nullable number honestly.
 --   * arcs.ts's sub-30-departure "barely flown" dotted encoding stays reachable in ALL THREE
---     panels, identically -- AS carries 186 of 225 added, 133 of 138 dropped and 48 of 128
+--     panels, identically -- AS carries 174 of 212 added, 139 of 144 dropped and 58 of 139
 --     downgauged below 30. Under different per-category floors that encoding would be reachable
 --     in one panel only, and a VISUAL difference would read as a DATA difference.
 --
@@ -248,8 +252,11 @@
 -- above), and it used to move zero routes into or out of the drawn 400 on every panel -- that no
 -- longer holds for DL on this warehouse. DL's downgauged panel has a 6-way tie in fall AT THE
 -- CUT: rows 397-402 all fall at 2.0 seats per departure, departures {2, 2, 2, 1, 1, 1}, so the
--- volume term decides which three of the six make row 400 (the three 2-departure routes) and
--- which three don't. (NOT because fall is continuous -- 125 of OO's 584 falls are whole
+-- volume term decides which FOUR of the six make the cut at row 400: the three 2-departure
+-- routes (BNA-MCI, BWI-FLL, MSY-SAT) plus one of the three 1-departure ones (BDL-SAT, at rn
+-- 400). Against an id-only tiebreak the net effect is one route in, one out -- MSY-SAT enters
+-- the cut and DFW-ICT leaves it; BDL-SAT, BNA-MCI and BWI-FLL land in the cut set either way. (NOT
+-- because fall is continuous -- 125 of OO's 584 falls are whole
 -- numbers.) AA, OO and WN still have no tie at their own cut -- a panel's tie at its CUT and its
 -- tie at its MAXIMUM (the leader; see the tiebreak section) are different rows and can disagree,
 -- as DL's now do. Away from any cut, what the term still fixes is which of a leader-tied set
@@ -345,9 +352,9 @@
 -- The figures this file produces, which are the ones page copy must use:
 --
 --        dropped   added   downgauged
---   AS       138     225          128
---   DL       573     780          512
---   OO     1,026   1,624          584        (the plan's 1,042 / 1,651 include same-airport pairs)
+--   AS       144     212          139
+--   DL       623     711          514
+--   OO     1,021   1,653          570        (the plan's 1,042 / 1,651 include same-airport pairs)
 --
 -- ============================================================================================
 -- QUARANTINE: TWO DIFFERENT QUANTITIES, AND ONLY ONE OF THEM IS A FIELD
@@ -359,9 +366,9 @@
 -- there. That is SegmentMapInput.quarantinedRoutes' PURPOSE, but NOT the letter of its current
 -- doc, and the difference is not cosmetic because #104's renderer emits that doc's sentence into
 -- a footer and an aria-label. It says "every filing behind them was quarantined". Measured over
--- these 25: ZERO have both windows quarantined. 14 are trailing-window-only and 11 prior-only,
+-- these 27: ZERO have both windows quarantined. 16 are trailing-window-only and 11 prior-only,
 -- and 7 performed real departures in the window that stayed clean -- 8V BTI-VEE has 8 clean
--- prior-window departures. 8V's own 16 split 10 trailing / 6 prior. The property they all share
+-- prior-window departures. 8V's own 19 split 12 trailing / 7 prior. The property they all share
 -- is narrower and exact: the window that DECIDES the category was wholly quarantined, so no
 -- category could be assigned. #105's 34 groups are all-quarantined and satisfy both readings;
 -- these satisfy only the second, so the shared sentence has to be the second.

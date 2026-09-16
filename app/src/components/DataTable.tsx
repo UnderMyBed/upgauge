@@ -170,7 +170,7 @@ function partitionByFloor(rows: Record<string, unknown>[]): Record<string, unkno
  * `—`: docs/design/system.md says such a row is "sorted below scored rows, excluded from
  * ranking", and a number printed against it would be neither its position by measure nor a
  * withheld one. Measured on the real warehouse, this is not hypothetical -- `/carrier`'s Top
- * routes table renders 297 below-floor rows across 33 of 70 carriers. Twelve of those pages
+ * routes table renders 297 below-floor rows across 32 of 69 active carriers. Twelve of those pages
  * carry ten or more such rows; by the position of their FIRST one they are `4W` (2 of 25, 24
  * below), `JN` (2 of 16, 15), `V8` (3 of 21, 19), `TJ` (3 of 15, 13), `K3` (4 of 25, 22),
  * `7S` (5 of 25, 17), `5V` (6 of 25, 19), `2O` (6 of 25, 20), `AN` (7 of 25, 16), `6F`

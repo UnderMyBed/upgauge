@@ -689,7 +689,7 @@ specific panels ever run. The extra panels exist precisely because a two-test sp
 **The canvas is 960×544, and each page's `viewBox` is cropped to the panels its own network
 reaches.** A page that reaches no inset must not spend the tray's height on blank canvas: an
 Alaska-only network drew a small ALASKA inset under ~320px of empty conterminous panel, on
-`/airport/BET`, `/airport/A18`, `/airport/JZM` and `/airport/OQZ`. Those pages now serve
+`/airport/BET`, `/airport/JZM` and `/airport/OQZ`. Those pages now serve
 `viewBox="0 354 960 190"` against a conterminous page's `0 12 960 532` — measured on a served
 build, and `.map svg { height: auto }` means the intrinsic ratio is what the page actually spends.
 
