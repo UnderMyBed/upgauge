@@ -13,12 +13,11 @@ describe("notFoundFamilyFromPath", () => {
     expect(notFoundFamilyFromPath(pathname)).toBe(family);
   });
 
-  // THE BUG THIS EXISTS TO CATCH: every entity slug reader is a bare prefix test that does not
-  // stop at one segment, so carrierSlugFromPath("/carrier/DL/opengraph-image") is
-  // "DL/opengraph-image", not null. proxy.ts already orders its OG loop above its entity
-  // branches for exactly this reason. A dispatcher that tests the entity prefixes first would
-  // render the carrier 404 view for a card URL, and the fixture that catches it MUST be an OG
-  // path -- a "/carrier/DL" fixture cannot fail this way.
+  // THE BUG THIS EXISTS TO CATCH: a reader that accepts a nested remainder -- so
+  // carrierSlugFromPath("/carrier/DL/opengraph-image") returns "DL/opengraph-image" instead of
+  // null -- would send a card URL to the carrier 404 view instead of recognizing it as
+  // not-an-entity-page. A "/carrier/DL" fixture cannot catch this: only a path whose remainder
+  // past the slug is itself a second raw segment (the `opengraph-image` suffix) can.
   it.each([
     "/route/JFK-LAX/opengraph-image",
     "/airport/ORD/opengraph-image",
