@@ -212,8 +212,8 @@ function identityNote(carrier: CarrierRef): string {
 }
 
 /** A carrier that resolved but filed nothing in the trailing 12 months. Not an error and not
- * an oddity: 45 of this database's 114 fact-present carriers last filed before the current
- * window (measured, 39%) -- Virgin America stopped in 2018-03 and is still a real carrier with
+ * an oddity: 46 of this database's 115 fact-present `airline_id`s last filed before the current
+ * window (measured, 40%) -- Virgin America stopped in 2018-03 and is still a real carrier with
  * a real history, which the chart above this state is drawing. State the finding in words and
  * offer the widened permalink, never a blank panel. */
 function CarrierEmptyState({ query, carrier }: { query: PivotQuery; carrier: CarrierRef }) {
@@ -432,8 +432,8 @@ export async function CarrierView({
     selected: typeFilter.kind === "ok" ? slugFor(typeFilter.code) : null,
   });
 
-  // The range the chart can DRAW, which is not the range it was fetched over. 45 of 114
-  // fact-present carriers last filed before the trailing-12 window, so a chart whose x axis
+  // The range the chart can DRAW, which is not the range it was fetched over. 46 of 115
+  // fact-present `airline_id`s last filed before the trailing-12 window, so a chart whose x axis
   // ends years before `asOf` is routine here -- naming the requested window over it would be
   // the same fabrication as interpolating across a gap (M4c, Finding 1). Months are
   // zero-padded YYYY-MM, so lexical min/max IS chronological.
@@ -479,7 +479,7 @@ export async function CarrierView({
           <div>
             {/* Above the table, mirroring /route and docs/design/mockups/entity-route.html.
                 Drawn whenever there is anything to draw, INCLUDING when the trailing-12 table
-                below is empty -- for 39% of this database's carriers the chart is the only
+                below is empty -- for 40% of this database's carriers the chart is the only
                 panel on the page with anything in it, and the empty state under it is what
                 says the flying stopped. */}
             {hasMix ? <AircraftMixChart rows={mix} title={carrier.code} /> : null}
@@ -620,7 +620,7 @@ export async function CarrierView({
           {/* The rail describes the encodings THIS page uses and no others; the fleet-shading
               group is asked for only when a chart is actually drawn, and the rank group only
               where a rank column exists. `ranked` shipped as a literal when #127's partition and
-              #123's rail gating were merged, and the integration gap pass caught it: 44 of the
+              #123's rail gating were merged, and the integration gap pass caught it: 45 of the
               114 carrier pages file nothing in the trailing 12, so `isEmpty` suppresses the main
               table and BOTH ranked tables, and the rail explained a column the page did not
               render. `hasRoutes || hasOrigins` is the same gate those two tables already use

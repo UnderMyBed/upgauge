@@ -39,7 +39,7 @@ export const DIFF_CATEGORY_LABELS: Record<DiffCategory, string> = {
  *
  * WHY the page needs a different string from the bare label the producer sets: `renderSegmentMap`
  * composes the map's whole accessible name as `${title}. Route map, ${window}.` plus
- * `arcsSentence`, and `arcsSentence` emits "225 routes drawn" -- shared #104 copy, correctly
+ * `arcsSentence`, and `arcsSentence` emits "212 routes drawn" -- shared #104 copy, correctly
  * uncarrier-qualified because the hub map uses it too. A screen-reader user reaching
  * `role="img"` by graphic navigation never sees the section heading above it, so a bare "Added"
  * leaves the map announcing a COUNT that does not name the carrier. This grain is
@@ -169,9 +169,9 @@ function toSegment(row: DiffRow): SegmentDatum {
  * as one `SegmentMapInput` per category.
  *
  * EVERY ROW IS A CARRIER-ROUTE PAIR, NEVER A ROUTE, and the copy rendering these panels has to say
- * so: 3,640 of 5,959 dropped carrier-routes (61.1%) had a DIFFERENT carrier flying the same pair
- * inside the trailing window, and 4,608 of 8,357 added ones (55.1%) had one inside the prior
- * window. "Added" is re-entry, not first appearance -- 4,691 of 8,357 (56.1%) had filed that pair
+ * so: 3,770 of 6,260 dropped carrier-routes (60.2%) had a DIFFERENT carrier flying the same pair
+ * inside the trailing window, and 4,447 of 8,129 added ones (54.7%) had one inside the prior
+ * window. "Added" is re-entry, not first appearance -- 4,549 of 8,129 (56.0%) had filed that pair
  * before the prior window. `map_carrier_diff.sql`'s header states each of these with the exact
  * predicate that produced it; take page copy from there, not from issue #109, whose per-carrier
  * table has the dropped and added labels swapped.
@@ -179,13 +179,13 @@ function toSegment(row: DiffRow): SegmentDatum {
  * THE PANELS DO NOT SHARE A RANKING KEY. Added and dropped rank on seats, because seats is the
  * magnitude of what those labels claim. Downgauged ranks on the FALL IN GAUGE, because seats is
  * orthogonal to what that label claims -- ranking it by seats drew the smallest downgauges and
- * cut the largest. #110's disclosure for that panel must name its key: "400 of 584" alone reads
+ * cut the largest. #110's disclosure for that panel must name its key: "400 of 570" alone reads
  * as the largest 400 routes, which is not what the cut selects.
  *
  * ONLY NON-EMPTY CATEGORIES ARE RETURNED, so this is a 0-to-3 length array in
  * `DIFF_CATEGORIES` order. That is `fetchAirportNetwork`'s rule -- no panel rather than an empty
- * panel -- and it is live, not theoretical: 26 of the 66 carriers with any change at all have at
- * least one empty category, and ZW has 92 dropped, 0 added and 0 downgauged. A caller rendering a
+ * panel -- and it is live, not theoretical: 24 of the 66 carriers with any change at all have at
+ * least one empty category, and ZW has 86 dropped, 0 added and 0 downgauged. A caller rendering a
  * fixed three-panel layout must handle a missing category.
  *
  * `asOf` is checked, not used to compute: the windows are derived inside the SQL from
@@ -259,7 +259,7 @@ export function toPanels(rows: DiffRow[], cap: number = NETWORK_ARC_CAP): Carrie
   // key with a total-order tiebreak -- seats for added and dropped, GAUGE FALL for downgauged.
   // So `segments[0]` is the largest of whatever that panel ranks on, which on a downgauged panel
   // is NOT the heaviest arc: OO leads with ATW-SBN at 200 seats over 4 departures, while its
-  // widest drawn arc carries 367,195 -- three orders of magnitude more. (ATW-SBN's 50 is its seats
+  // widest drawn arc carries 368,207 -- three orders of magnitude more. (ATW-SBN's 50 is its seats
   // PER DEPARTURE, the unit the fall is measured in, not a seat count: anything writing "the
   // biggest" about a panel must name which quantity.) `segmentMap.ts`'s `segmentOrder` still
   // imposes its own thinnest-first stroke order downstream; this order is the ranking, not the
@@ -333,11 +333,10 @@ export function toPanels(rows: DiffRow[], cap: number = NETWORK_ARC_CAP): Carrie
         // quarantined. Rendering that as 0 told the reader nothing was withheld.
         //
         // LATENT, NOT LIVE, and the two are one measurement apart. The wholly-quarantined
-        // same-airport PAIR is real (8V's VEE-VEE in the trailing 12, airline 21745's STT-STT in
-        // the prior 12), but a panel folds every same-airport pair in its category together and
-        // every such fold on this warehouse includes at least one stateable pair -- measured
-        // across all 115 carriers with route-month rows, zero panels come back NULL. So no page
-        // renders the wrong sentence today. The coercion is removed regardless: it is one refresh
+        // same-airport PAIR is real (airline 21745's STT-STT in the prior 12), but a panel folds
+        // every same-airport pair in its category together and every such fold on this warehouse
+        // includes at least one stateable pair -- measured across all 115 carriers with
+        // route-month rows, zero panels come back NULL. So no page renders the wrong sentence today. The coercion is removed regardless: it is one refresh
         // from being live, and the SQL it reads from states the rule itself.
         sameAirportSeats: head.same_airport_pairs === null ? 0 : numOrNull(head.same_airport_seats),
         // SET HERE, not left to the consumer, because `title` is the ONLY channel into the map's

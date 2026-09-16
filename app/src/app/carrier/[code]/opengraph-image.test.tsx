@@ -96,7 +96,7 @@ describe("/carrier/<code> opengraph-image", () => {
   // VX stopped filing in 2018-03 (measured) -- the trailing-12 query returns zero rows, so the
   // stat row is all dashes and only the chart has anything in it. A card that threw here, or
   // that printed 0.00% load factor for "nobody flew", would be the absence-as-measurement bug
-  // lib/format.ts exists to prevent, on the 39% of this dataset's carriers that are dormant.
+  // lib/format.ts exists to prevent, on the 40% of this dataset's carriers that are dormant.
   it("still renders for a carrier that has stopped filing", async () => {
     const res = await Image({ params: Promise.resolve({ code: "VX" }) });
     expect(res.status).toBe(200);
@@ -119,10 +119,10 @@ describe("the default export's card input", () => {
   }
 
   // QUARANTINE BESIDE REAL TRAFFIC, and this carrier is the extreme of it: Wright Air Service
-  // filed 118 quarantined rows in this window alongside stateable traffic on 3 aircraft types.
-  // Its figures are honest, and a card that answered them with "Quarantined 118" would describe
+  // filed 115 quarantined rows in this window alongside stateable traffic on 3 aircraft types.
+  // Its figures are honest, and a card that answered them with "Quarantined 115" would describe
   // the page as the opposite of what it is.
-  // MUTANT: key `cardSixthStat` on `quarantinedRows > 0` alone -> `Quarantined 118` -> red.
+  // MUTANT: key `cardSixthStat` on `quarantinedRows > 0` alone -> `Quarantined 115` -> red.
   it("keeps the aircraft-type count where quarantined rows sit beside stateable traffic", async () => {
     const input = await cardInputFor("8V");
     expect(input.stats[5]).toEqual({ label: "Aircraft types", value: "3" });
@@ -130,7 +130,7 @@ describe("the default export's card input", () => {
   });
 
   // VX has been dormant since 2018-03, so the trailing-12 pivot returns no rows and the five
-  // measures are absent for a reason quarantine had no part in -- 45 of this dataset's carriers
+  // measures are absent for a reason quarantine had no part in -- 46 of this dataset's carriers
   // are in that state.
   // MUTANT: key `cardSixthStat` on `totals.seats === null` alone -> `Quarantined 0`, naming the
   // one cause it is not -> red.
@@ -147,7 +147,7 @@ describe("the card's sixth stat is chosen by the shared rule, not by this route"
   // place of the `cardSixthStat(...)` call -> the spy records no call -> red. Verified: that
   // mutant survives every other test in this file.
   //
-  // The OPERANDS are asserted, not just the fact of a call. 8V filed 118 quarantined rows in
+  // The OPERANDS are asserted, not just the fact of a call. 8V filed 115 quarantined rows in
   // this window, which is a value nothing else on the page carries -- so passing `0`, or
   // `result.rows.length` (3), or `totals.seats` in that slot is separable from passing the
   // page's real quarantined count. A call-count-only assertion would admit all three.
@@ -156,11 +156,11 @@ describe("the card's sixth stat is chosen by the shared rule, not by this route"
     await Image({ params: Promise.resolve({ code: "8V" }) });
     expect(sixthSpy).toHaveBeenCalledTimes(1);
     const [totals, quarantinedRows, fallback] = sixthSpy.mock.calls[0];
-    expect(quarantinedRows).toBe(118);
+    expect(quarantinedRows).toBe(115);
     expect(fallback).toEqual({ label: "Aircraft types", value: "3" });
     // The FIRST operand is the same totals object the five measures were formatted from -- a
     // route that passed a freshly-summed second copy here could disagree with its own card.
-    expect(totals.seats).toBe(160353);
+    expect(totals.seats).toBe(160233);
   });
 });
 

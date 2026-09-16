@@ -49,26 +49,26 @@ import { fetchCarrierDiff } from "@/lib/map/carrierDiff";
 import { resolveCarrier } from "@/lib/carrier";
 
 /** Every figure asserted below was measured against the built warehouse for
- * op_airline_id 19790 over 2025-06..2026-05 (the trailing 12 months this page shows):
+ * op_airline_id 19790 over 2025-07..2026-06 (the trailing 12 months this page shows):
  *
- *   17 aircraft types · seats 167,780,538 · passengers 139,046,982 · departures 1,025,515
- *   load factor  139,046,982 / 167,780,538 = 82.87%   (mean of the 17 rows: 83.33%)
- *   avg gauge    167,780,538 /   1,025,515 = 163.6    (mean of the 17 rows: 194.7)
+ *   17 aircraft types · seats 167,574,148 · passengers 139,095,825 · departures 1,025,028
+ *   load factor  139,095,825 / 167,574,148 = 83.01%   (mean of the 17 rows: 83.36%)
+ *   avg gauge    167,574,148 /   1,025,028 = 163.5    (mean of the 17 rows: 194.6)
  *
  * The two means are the point. CLAUDE.md calls averaging a derived measure "the #1 bug in
- * every homemade T-100 tool", and both wrong answers are within a plausible range -- 83.34% is
- * not obviously wrong next to 82.87%. Asserting the exact figure is what tells them apart;
- * asserting "a percentage renders" would not. The gauge pair (163.6 vs 194.7) is the same test
+ * every homemade T-100 tool", and both wrong answers are within a plausible range -- 83.36% is
+ * not obviously wrong next to 83.01%. Asserting the exact figure is what tells them apart;
+ * asserting "a percentage renders" would not. The gauge pair (163.5 vs 194.6) is the same test
  * with a much wider gap, so a rounding change cannot make it accidentally pass. */
 const DL = {
   id: 19790,
   name: "Delta Air Lines Inc.",
   types: 17,
-  seats: "167,780,538",
-  passengers: "139,046,982",
-  departures: "1,025,515",
-  loadFactor: "82.87%",
-  avgGauge: "163.6",
+  seats: "167,574,148",
+  passengers: "139,095,825",
+  departures: "1,025,028",
+  loadFactor: "83.01%",
+  avgGauge: "163.5",
 } as const;
 
 /** `permanentRedirect`/`notFound` throw rather than return -- same helper, same reasoning, as
@@ -138,8 +138,8 @@ describe("/carrier/<code>", () => {
     expect(stats).toContain(DL.avgGauge);
     // The wrong answers, named explicitly. A mean-of-rows implementation renders these
     // instead, and both look entirely reasonable on screen.
-    expect(stats).not.toContain("83.33%");
-    expect(stats).not.toContain("194.7");
+    expect(stats).not.toContain("83.36%");
+    expect(stats).not.toContain("194.6");
   });
 
   it("shows the additive totals and the type count", async () => {
@@ -254,8 +254,8 @@ describe("/carrier/<code> aircraft-mix chart", () => {
 });
 
 // Virgin America: airline_id 21171, 4,275 filed rows over 2015-01..2018-03 and nothing since
-// (measured). 45 of this database's 115 fact-present `airline_id`s last filed before the current
-// trailing-12 window -- 39%, so a resolvable carrier with an empty table is a normal case here,
+// (measured). 46 of this database's 115 fact-present `airline_id`s last filed before the current
+// trailing-12 window -- 40%, so a resolvable carrier with an empty table is a normal case here,
 // not an oddity, and the chart is the only panel with anything in it.
 describe("/carrier/<code> with nothing in the trailing 12 months", () => {
   it("states the finding in words and offers the widened window", async () => {
@@ -287,7 +287,7 @@ describe("/carrier/<code> with nothing in the trailing 12 months", () => {
 
   it("still states both caveats when there is no table to qualify", async () => {
     // The claims are about the SUBJECT, not about the rows: a page that only rendered them
-    // alongside a populated table would drop them on 39% of carriers.
+    // alongside a populated table would drop them on 40% of carriers.
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
     const text = content(container);
     expect(text).toMatch(/no marketing-carrier field/i);
@@ -300,7 +300,7 @@ describe("/carrier/<code> with nothing in the trailing 12 months", () => {
     // beside it were live values. A dormant carrier renders no main table (`isEmpty`) and
     // neither ranked table (`hasRoutes`/`hasOrigins` both false), so there is no rank column on
     // the page at all -- and the rail still said "in the rank column: below the floor, so not
-    // ranked". 44 of the 114 carrier pages file nothing in the trailing 12.
+    // ranked". 45 of the 114 carrier pages file nothing in the trailing 12.
     //
     // MUTANT: `ranked` back to a literal -> red here, and the SEA control below stays green.
     // The control is the half that keeps this honest: the rail IS mounted and does carry its
@@ -693,7 +693,7 @@ describe("/carrier/<code> diff map (#110)", () => {
   }
 
   it("renders all three panels, in order, on a carrier that has all three", async () => {
-    // AS: 225 added, 138 dropped, 128 downgauged, every panel UNDER the cap
+    // AS: 212 added, 144 dropped, 139 downgauged, every panel UNDER the cap
     // (map_carrier_diff.sql's per-carrier table), so nothing here is masked by truncation.
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "AS" }) }));
     const labels = diffPanels(container).map(
@@ -717,10 +717,10 @@ describe("/carrier/<code> diff map (#110)", () => {
   });
 
   it("labels a single-category carrier by ITS category, not by panel index", async () => {
-    // ZW (Air Wisconsin): 92 dropped, 0 added, 0 downgauged. A component that labelled panels by
+    // ZW (Air Wisconsin): 86 dropped, 0 added, 0 downgauged. A component that labelled panels by
     // POSITION in DIFF_CATEGORIES rather than by each panel's own `category` calls this one
     // "Added" -- and on AS, where all three are present, index and category agree, so the test
-    // above cannot fail that way. 26 of the 66 carriers with any change have an empty category.
+    // above cannot fail that way. 24 of the 66 carriers with any change have an empty category.
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "ZW" }) }));
     const panels = diffPanels(container);
     expect(panels).toHaveLength(1);
@@ -765,7 +765,7 @@ describe("/carrier/<code> diff map (#110)", () => {
       expected.panels.map((d) => ({ category: d.category, total: d.map.totalRoutes })),
     );
     // The fixture only bites if the categories actually carry different totals -- otherwise a
-    // wrong-carrier id could coincide. AS's three are 225 / 138 / 128 on the 2026-05 warehouse.
+    // wrong-carrier id could coincide. AS's three are 212 / 144 / 139 on the 2026-06 warehouse.
     expect(new Set(rendered.map((x) => x.total)).size).toBe(rendered.length);
   });
 
@@ -875,9 +875,9 @@ describe("/carrier/<code> sorts below-floor rows last", () => {
     // monthly floor 2O's Top routes goes to 20 below-floor rows of 25, and no below-floor row
     // out-seats a scored one any more -- the orderings agree, so the order half would have been
     // exactly the half-disguised vacuum this comment was written about. M5 keeps the
-    // disagreement: 25 rows, 6 below floor, the first of them at index 13 in the measure order,
-    // and a below-floor route (2,072 seats on 259 departures across 9 months -- 28.8 a month)
-    // out-seating a scored one (889 seats, 118 departures across 3 months -- 39.3 a month).
+    // disagreement: 25 rows, 7 below floor, the first of them at index 14 in the measure order,
+    // and a below-floor route (1,755 seats on 217 departures across 9 months -- 24.1 a month)
+    // out-seating a scored one (1,277 seats, 158 departures across 5 months -- 31.6 a month).
     //
     // MUTANT: `partition={false}` at the Top routes DataTable -> red here.
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "M5" }) }));
@@ -929,7 +929,7 @@ function statStrip(container: HTMLElement): string[] {
 }
 
 describe("a carrier that filed nothing in the window states absence, not zero", () => {
-  // VX has been dormant since 2018-03. 45 `airline_id`s are, of which 44 have a `dim_carrier`
+  // VX has been dormant since 2018-03. 46 `airline_id`s are, of which 45 have a `dim_carrier`
   // row and therefore a page -- state the grain, because these are counted at two of them.
   // MUTANT: seed `sumColumn` at 0 -> `["0", "0", "—", "—", "0", "0", "0"]` -> red.
   it("renders the measures as absence while still stating the counts", async () => {
@@ -949,7 +949,7 @@ describe("a carrier that filed nothing in the window states absence, not zero", 
     expect(feet).toContain("never averaged");
   });
 
-  // QUARANTINE BESIDE REAL TRAFFIC, at this dataset's extreme: Wright Air Service filed 118
+  // QUARANTINE BESIDE REAL TRAFFIC, at this dataset's extreme: Wright Air Service filed 115
   // quarantined rows in this window AND stateable traffic on 3 aircraft types. Its figures are
   // honest, its ordinary clause is the true one, and without this the check_nots above could
   // pass against a page that had stopped rendering a strip.
@@ -961,7 +961,7 @@ describe("a carrier that filed nothing in the window states absence, not zero", 
     expect(strip.slice(0, 5)).not.toContain("—");
     expect(strip[5]).toBe("3");
     const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
-    expect(feet).toContain("118 quarantined rows excluded from these totals");
+    expect(feet).toContain("115 quarantined rows excluded from these totals");
     expect(feet).not.toContain("is quarantined");
   });
 });
@@ -981,7 +981,7 @@ describe("the foot's quarantine clause comes from the shared rule, with this pag
     expect(arg.subject).toBe("by 8V");
     // /carrier's entity count is aircraft types, not carriers -- the one page where it differs.
     expect(arg.counts).toBe("The aircraft-type count is");
-    expect(arg.quarantinedRows).toBe(118);
+    expect(arg.quarantinedRows).toBe(115);
     expect(arg.seatsAreNull).toBe(false);
   });
 });
