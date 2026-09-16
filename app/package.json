@@ -14,9 +14,9 @@
     "@duckdb/node-api": "^1.5.5-r.4",
     "@observablehq/plot": "^0.6.17",
     "jsdom": "^30.0.1",
-    "next": "16.3.4",
-    "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "next": "16.3.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -27,7 +27,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
-    "eslint-config-next": "16.3.4",
+    "eslint-config-next": "16.3.5",
     "tailwindcss": "^4",
     "typescript": "^6",
     "vitest": "^4.1.11"
