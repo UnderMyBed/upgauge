@@ -27,7 +27,7 @@ const OG_PREFIXES: readonly string[] = [ROUTE_PREFIX, AIRPORT_PREFIX, CARRIER_PR
  *
  * Null is also the answer for any path carrying more than one raw segment past an entity
  * prefix (`/carrier/DL/x`) -- every reader below refuses that shape, matching what the
- * `[param]` folder itself routes: a leaf segment, nothing beneath it.
+ * `[param]` folder's PAGE itself receives: exactly one segment, or none.
  *
  * Null is not a failure -- it is the answer for a URL this app never routes (`/wp-login.php`
  * and every other scanner probe, plus the four `opengraph-image` card paths), and the root

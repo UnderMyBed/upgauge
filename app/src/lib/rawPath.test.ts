@@ -60,7 +60,8 @@ describe("routeSlugFromPath", () => {
 
   // M5 Task 6: routeSlugFromPath is now a one-line wrapper around lib/entitySlug.ts's
   // entitySlugFromPath, and this pins the two shapes it refuses: a bare prefix and a nested
-  // path, matching what the `[pair]` folder itself routes: a leaf segment, nothing beneath it.
+  // path, matching what the `[pair]` folder's page itself receives: exactly one segment, or
+  // none.
   it("returns null for a bare trailing slash", () => {
     expect(routeSlugFromPath("/route/")).toBeNull();
   });

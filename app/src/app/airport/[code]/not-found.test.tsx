@@ -106,8 +106,8 @@ describe("airportSlugFromPath", () => {
 
   // M5 Task 6: airportSlugFromPath is now a thin wrapper (lib/airport.ts) around
   // lib/entitySlug.ts's entitySlugFromPath, which refuses a nested path exactly as it refuses
-  // the bare prefix above -- matching what the `[code]` folder itself routes: a leaf segment,
-  // nothing beneath it.
+  // the bare prefix above -- matching what the `[code]` folder's page itself receives: exactly
+  // one segment, or none.
   it("returns null when more than one raw segment follows the prefix", () => {
     expect(airportSlugFromPath("/airport/SEA/extra")).toBeNull();
   });

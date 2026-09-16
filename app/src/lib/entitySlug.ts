@@ -9,12 +9,13 @@
  * once all three existed, and `CLAUDE.md`'s M5 punch list is where that follow-up landed.
  *
  * Exactly one non-empty RAW segment follows the prefix, or this returns null -- the same shape
- * a `[param]` folder accepts: `/carrier/DL` reaches `[code]` with `code` = `"DL"`, while
- * `/carrier/` and `/carrier/DL/x` reach no page at all, since `[code]` is a leaf segment with
- * nothing routed beneath it. The check runs on the RAW text, before decoding: an encoded slash
- * (`%2F`) stays inside one segment -- `/carrier/D%2FL` is a single path segment, and Next routes
- * it to `[code]` with `code` = `"D/L"` -- so checking after decoding would wrongly split a
- * legitimate slug in two.
+ * a `[param]` folder's PAGE receives: `/carrier/DL` reaches `[code]`'s page with `code` =
+ * `"DL"`, while `/carrier/` and `/carrier/DL/x` reach no page there. (The one route `[code]`
+ * carries besides the page is its `opengraph-image` card, which `ogSlugFromPath` below reads by
+ * stripping that suffix first.) The check runs on the RAW text, before decoding: an encoded
+ * slash (`%2F`) stays inside one segment -- `/carrier/D%2FL` is a single path segment, and Next
+ * routes it to `[code]`'s page with `code` = `"D/L"` -- so checking after decoding would wrongly
+ * split a legitimate slug in two.
  *
  * `decodeURIComponent` THROWS on a malformed percent-escape (`%zz`, or the more exotic
  * `%E0%A4%A`) -- bug #2 on `smoke.sh`'s list of production-only failures, found once and never
