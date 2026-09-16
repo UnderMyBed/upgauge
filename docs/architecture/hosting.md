@@ -731,6 +731,19 @@ being invisible to whoever added a route:
 > as not its own.** `config.matcher` is `/:path*`, so the proxy runs on every request and sets both
 > headers before anything else; a path no row declares returns straight after the `RSC` guard with
 > those two headers and nothing more — no canonical-query gate, no `Cache-Control`, no database.
+>
+> **Running on every request costs a static asset about 0.2 ms at the origin**, measured 2026-09-16
+> on Next 16.3.5, not assumed. In process, `proxy()` on one `new
+> NextRequest("http://localhost/_next/static/chunks/app.js")` (the not-ours return) has a median of
+> **4.1 µs** a call over 10,000 calls after 1,000 warm-up (three runs: 4.11, 4.12, 4.24 µs; a
+> throwaway test file run with `npx vitest run --root app --dir <scratch>`). Served (`next start app
+> -p <port>`, one build per matcher), the CSS chunk `/airport/BET` links, fetched 2,000 times in
+> sequence over keep-alive from one Node `fetch` loop with the first 200 discarded, has a p50 of
+> **2.67 ms** (p95 3.16) under `/:path*` against **2.47 ms** (p95 2.85–2.88) from the same tree
+> built with the page-only 17-entry matcher — 8% slower, the same in two alternating build-and-serve
+> rounds (2.669 against 2.465, 2.668 against 2.472). The proxy's own work measures 4 µs of that;
+> the rest is Next invoking a proxy at all. It is the price of an unforgeable path header, and it is paid.
+>
 > `canonicalQuery.test.ts` reads the `app/src/app` tree and fails when a route file has no row and
 > is not in its pinned `NOT_OURS` set (`/api/health` and `/favicon.ico`, each with its reason). It
 > models `page`, `route`, `opengraph-image`, `sitemap` and `robots` in any of Next's four code
@@ -825,6 +838,12 @@ resolves its 404 verdict, so `notFoundRewrite()` never fires and every 404 on it
 `__next_error__` shell (§ A 404's body reaches the served HTML only through the proxy's
 `/_not-found` rewrite). The status stays 404 through all of that, which is why the served-build
 half of this is `app/smoke.sh`'s per-page header and 404-body checks, never a status check.
+Measured 2026-09-16 by deleting the `/airport/:code` row and serving the build: every check
+expecting `HTML_CACHE` on an `/airport` page went red (the 200, the 308, `?y=2019` twice, `GUM`,
+and the gap check's `HTML_CACHE` on a 500), as did all three `check_rendered_404 "airport"` checks
+and the five `/airport/ORD` canonical-query redirect checks. Both 404 status checks, every
+`no-store` and never-long-cached check on the page, and all four 404-sentence checks stayed green —
+the sentences ride in the flight payload of the empty shell.
 
 ## `proxy.ts` is load-bearing — both query entry points break without it
 

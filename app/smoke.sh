@@ -575,12 +575,14 @@ assert_identity "$BASE"
 # in either mode -- the guard reads only whether it answered 200, and assert_identity reads only
 # build.sha/build.warehouse out of the body.
 #
-# `no-store` is this route's defining property and the reason it is the ONE route deliberately
-# absent from proxy.ts's matcher (route.ts's header comment). proxy.test.ts pins that absence in
-# the matcher ARRAY; the vitest at api/health/route.test.ts calls GET() directly. Neither crosses
-# a served response, so a Next upgrade -- or an "add every route to the matcher" sweep -- could
-# ship the project's 30-day s-maxage on this endpoint with all 805 app tests and both smoke gates
-# green, and a shared CDN would pin `{"status":"ok"}` for a month in front of a degraded container.
+# `no-store` is this route's defining property. The proxy runs on this request like every other,
+# but the route is not one of ours -- it is in `NOT_OURS` in canonicalQuery.test.ts, with no
+# `QUERY_ROWS` row -- so the proxy sets no `Cache-Control` on it and the handler's own `no-store`
+# stands. canonicalQuery.test.ts pins that set, proxy.test.ts pins the proxy adding nothing here,
+# and the vitest at api/health/route.test.ts calls GET() directly. None of them crosses a served
+# response, so only this gate sees the header that reaches the wire -- and the project's 30-day
+# s-maxage on this endpoint would let a shared CDN pin `{"status":"ok"}` for a month in front of a
+# degraded container.
 HDRS=$(curl -s -o /dev/null -D - --max-time 10 "${BASE}/api/health")
 # The needle is the header LINE, not the bare value: Next's own fallback for a route that set no
 # header at all is `private, no-cache, no-store, max-age=0, must-revalidate`, which contains the
@@ -658,7 +660,7 @@ check_not "explore: the builder emits no button"   "$BUILDER" '<button'
 check_not "explore: the builder emits no input"    "$BUILDER" '<input'
 
 # THE INBOUND LINK THAT ENDS /explore/filter's ISLAND. Task 5 shipped that route with nothing
-# linking to it; CLAUDE.md's rule is that neither sitemap.ts nor proxy.ts's matcher counts, and
+# linking to it; CLAUDE.md's rule is that neither sitemap.ts nor a `QUERY_ROWS` row counts, and
 # `/watch` shipped exactly this way one milestone after a review existed to prevent it. Asserted
 # on the SERVED bytes, because that is the only place "a visitor can reach it" is actually true.
 check     "explore: links into the filter value list" \
@@ -700,9 +702,10 @@ check "api: does not cache an error" "$HDRS" "no-store"
 # 5b. /explore/filter/:dim -- the Explorer builder's value list (epic #6).
 #
 # THE ONLY GATE THAT CAN SEE ANY OF THIS. proxy.test.ts calls proxy() directly and never crosses
-# Next's routing layer, so a route missing from `config.matcher` keeps every unit test green
-# while shipping uncached, with no raw-query header, and with its 404 reduced to Next's error
-# shell (docs/architecture/hosting.md § "What omitting one actually costs" has the measurement).
+# Next's routing layer. A route with no `QUERY_ROWS` row fails canonicalQuery.test.ts, but what one
+# ships -- uncached, with its 404 reduced to Next's error shell -- and a declared route whose
+# Cache-Control no proxy branch decides are visible only on a served build
+# (docs/architecture/hosting.md § "What omitting a `QUERY_ROWS` row costs").
 EXPLORE_Q='v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op'
 ROUTE_Q='v=1&k=route&d=route&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op'
 
@@ -723,15 +726,15 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore/filter/op_airlin
 check     "filter: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 # Not redundant with the line above, and the same discriminator `/` uses: Next's own
 # force-dynamic fallback CONTAINS the substring "no-store", so a positive HTML_CACHE check plus a
-# negative "no-store" check would BOTH stay green under a "remove this route from the matcher"
-# mutant. `must-revalidate` is the one token in Next's fallback that no header proxy.ts sets has.
-check_not "filter: is not Next's own force-dynamic fallback (proves proxy.ts ran)" \
+# negative "no-store" check would BOTH stay green if this route lost its `QUERY_ROWS` row.
+# `must-revalidate` is the one token in Next's fallback that no header proxy.ts sets has.
+check_not "filter: is not Next's own force-dynamic fallback (proves proxy.ts set the header)" \
   "$HDRS" "must-revalidate"
 
 # TWO WAYS TO 404, AND THE PROBE MUST DECLINE THE CACHE FOR BOTH. `filterListVerdict` returning
 # an unconditional `cacheable` -- or gating on `allowlist.dims.has(dim)` instead of on the grain --
 # leaves these long-cached, and the dataset is rebuilt monthly, so a cached 404 outlives the
-# condition that caused it. The bodies are checked too: a missing matcher entry keeps the 404
+# condition that caused it. The bodies are checked too: a dropped `QUERY_ROWS` row keeps the 404
 # STATUS and destroys the MESSAGE, which is the failure mode no header check can see.
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore/filter/not_a_dimension?${EXPLORE_Q}")
 HDRS=$(curl -s -o /dev/null -D -             --max-time 15 "${BASE}/explore/filter/not_a_dimension?${EXPLORE_Q}")
@@ -766,7 +769,7 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore/fil
 HDRS=$(curl -s -o /dev/null -D -             --max-time 15 "${BASE}/explore/filter/op_airline_id?${EXPLORE_Q}&bogus=1")
 check "filter: a junk key is a 307"        "$CODE" '307'
 check "filter: a junk key is not cached"   "$HDRS" 'no-store'
-# Totality, the axis that 500ed every matcher path once: `proxy.ts` strips ONE leading `?`.
+# Totality, the axis that 500ed every gated path once: `proxy.ts` strips ONE leading `?`.
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore/filter/op_airline_id??${EXPLORE_Q}")
 check "filter: a doubled question mark redirects rather than 500ing" "$CODE" '307'
 
@@ -782,20 +785,19 @@ check     "home: renders our own front door"        "$BODY" 'Is this route healt
 check     "home: DATA AS OF is present"             "$BODY" 'DATA AS OF'
 check_not "home: no create-next-app boilerplate"    "$BODY" 'vercel.com/new'
 
-# M8 Task 1 (#13): the header, not just the content. `/` was absent from proxy.ts's matcher
-# (eleven entries through M7 Task 9), so it served Next's own force-dynamic fallback --
-# `private, no-cache, no-store, max-age=0, must-revalidate` -- which forbids caching at the CDN
-# too, on the most-requested URL of the site. Only THIS gate can see it: proxy.test.ts calls
-# proxy() directly and never crosses Next's routing layer, so a missing matcher entry leaves
-# every one of its tests green.
+# M8 Task 1 (#13): the header, not just the content. A `/` the proxy does not answer for -- no
+# `QUERY_ROWS` row, or no branch deciding its header -- serves Next's own force-dynamic fallback,
+# `private, no-cache, no-store, max-age=0, must-revalidate`, which forbids caching at the CDN too,
+# on the most-requested URL of the site. Only THIS gate sees what reaches the wire: proxy.test.ts
+# calls proxy() directly and never crosses Next's routing layer.
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/")
 check     "home: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 # Not decoration, and not redundant with the check above. Next's own fallback string CONTAINS
 # the substring "no-store", so a positive HTML_CACHE check paired with a negative "no-store"
-# check would BOTH stay green under a "remove / from the matcher" mutant. `must-revalidate` is
-# the one token present in Next's fallback and absent from every header proxy.ts sets -- the
-# same discriminator the /search block and the /explore gap check already use.
-check_not "home: is not Next's own force-dynamic fallback (proves proxy.ts ran)" "$HDRS" "must-revalidate"
+# check would BOTH stay green if `/` lost its `QUERY_ROWS` row. `must-revalidate` is the one
+# token present in Next's fallback and absent from every header proxy.ts sets -- the same
+# discriminator the /search block and the /explore gap check already use.
+check_not "home: is not Next's own force-dynamic fallback (proves proxy.ts set the header)" "$HDRS" "must-revalidate"
 
 # 7. Resolution: the reader must see codes, never the catalog's ids.
 BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=op")
@@ -913,10 +915,10 @@ check_not "route 404: LHR is not reported as an unknown code"      "$BODY" 'unkn
 # 8b. THE OTHER BRANCH OF THE SAME 404 BOUNDARY: a URL matching no route at all.
 #
 # Every `check_rendered_404` in this file lands in `app/not-found.tsx`, which dispatches on the
-# pathname `proxy.ts` forwarded. This URL is outside the matcher, so it arrives with no pathname
-# header at all and takes the `pathname === null` branch -- the paired negative the entity checks
-# need, because a dispatch that answered an entity family for an unrecognised path would satisfy
-# every one of them and be visible only here.
+# pathname `proxy.ts` forwarded. The proxy runs on every request, so this URL arrives WITH that
+# header, set to `/nope`; `notFoundFamilyFromPath` answers null for it and the generic view renders
+# -- the paired negative the entity checks need, because a dispatch that answered an entity family
+# for an unrecognised path would satisfy every one of them and be visible only here.
 #
 # `DATA AS OF` is asserted ABSENT, and that is a cost control, not a styling rule: the generic
 # branch deliberately runs no `dataAsOf()`, so it serves every scanner probe and every typo -- an
@@ -928,29 +930,35 @@ check     "unrouted: an unmatched URL is a 404"                      "$CODE" '40
 check     "unrouted: the generic view is in the served HTML"         "$BODY" '<h1>Page not found</h1>'
 check_not "unrouted: no DATA AS OF -- this branch reads no database" "$BODY" 'DATA AS OF'
 
-# 8c. THE PATH HEADER IS AUTHORITATIVE ONLY WHERE THE PROXY RUNS, and the check above is scoped to
-# that: it says this branch reads no database, not that no forged request can reach one. Next
-# deletes every request header outside the middleware's override set
-# (`server/lib/router-utils/resolve-routes.js`), so on a path in `proxy.ts`'s matcher the proxy's
-# own `x-upgauge-path` always wins and a client cannot forge it. `/nope` is OUTSIDE the matcher,
-# so the proxy never runs and the header arrives exactly as the client wrote it -- the dispatch in
-# `app/not-found.tsx` honours it and renders the CARRIER view, `dataAsOf()` and `resolveCarrier()`
-# included, on a path none of `deploy/cloudflare/rate-limit.json`'s prefixes (`/api/`, `/explore`,
-# the four entity prefixes, `*/opengraph-image`) covers.
+# 8c. A FORGED PATH HEADER LOSES, ON EVERY SHAPE OF UNROUTED URL.
 #
-# That is ORIGIN COST and nothing else -- the status stays 404 and React escapes the echoed slug --
-# so what follows asserts what this build DOES, not a defect it has. It is a tripwire, and the
-# change that trips it is the deferred follow-up: widening the matcher to `/:path*` makes the proxy
-# set the header on `/nope` too, the forged value loses, and the heading below becomes `Page not
-# found`. Verified by exactly that mutant, not inferred.
-#
-# The needles are the same emitted bytes every other 404 check in this file uses, for the same
-# reason -- `check_rendered_404` is the helper, and `class="asof"` is what makes "it paid for a
-# database read" an assertion rather than a claim.
-CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}/nope")
-BODY=$(curl -s --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}/nope")
-check "unrouted+forged header: still a 404" "$CODE" '404'
-check_rendered_404 "unrouted+forged header" "$BODY" 'Carrier not found'
+# `app/not-found.tsx` dispatches on `x-upgauge-path`. `proxy.ts` runs on every request and sets
+# that header before anything else, so a client-supplied value is overwritten whatever the path:
+# an unrouted top-level URL, a non-page prefix, a path under a metadata file, and a NESTED path
+# under an entity prefix (which the one-segment slug readers give no family). Each must render the
+# database-free generic view. `Carrier not found` here would be a DuckDB read reachable from a
+# URL the edge rate limit does not cover.
+for P in /nope /api/nope /favicon.ico/x /carrier/DL/x /watch/gauge/x /explore/filter/origin_state/x; do
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}${P}")
+  BODY=$(curl -s --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}${P}")
+  check     "forged path header on ${P}: a 404"                          "$CODE" '404'
+  check     "forged path header on ${P}: the proxy's own path wins"      "$BODY" '<h1>Page not found</h1>'
+  check_not "forged path header on ${P}: no DATA AS OF -- no database"   "$BODY" 'DATA AS OF'
+done
+
+# One raw segment is one segment even when it encodes a slash: `/carrier/D%2FL` is the carrier
+# page for slug `D/L`, so its 404 is the carrier view, rendered into the served HTML.
+BODY=$(curl -s --max-time 15 "${BASE}/carrier/D%2FL")
+check_rendered_404 "carrier with an encoded slash" "$BODY" 'Carrier not found'
+
+# Paths the proxy also runs on that are not ours keep Next's own response: a missing static asset is
+# Next's plain-text 404, never the app's 404 page, and favicon.ico is served.
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}/_next/static/nope.js")
+BODY=$(curl -s --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}/_next/static/nope.js")
+check     "forged path header on a missing static asset: a 404"              "$CODE" '404'
+check_not "forged path header on a missing static asset: no app 404 render"  "$BODY" 'not found</h1>'
+CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/favicon.ico")
+check     "favicon.ico: still served"                                        "$CODE" '200'
 
 # 9. M4c: the aircraft-mix chart, in the SERVED HTML.
 #
@@ -1057,16 +1065,19 @@ printf '  note %s bytes of HTML for /route/JFK-LAX (32,087 before the chart, M4c
 #   d. the chart's <svg> and ramp fills are in the SERVED bytes (M4c's gate, per page)
 #   e. its 404 names the code AND is no-store, and its 308 keeps the long cache
 #
-# (b) and (e) exist because `proxy.ts`'s matcher is invisible to every other gate in this repo.
-# A page missing from it builds, serves, renders and passes (a), (c) and (d) -- while shipping
-# `private, no-cache, no-store` on the 200 AND turning every 404 on that page into a **500**
-# (each `not-found.tsx` reads the pathname header the proxy sets, and throws without it). M4b
-# shipped exactly that on /route because this file copied /explore's BODY checks and not its
-# HEADER check. Both halves are mandatory for any page added after this one.
+# (b) and (e) exist because what a page ships when the proxy does not answer for it is invisible
+# to every other gate in this repo. canonicalQuery.test.ts fails on a route file with no
+# `QUERY_ROWS` row, but a page that lost its row -- or has one and no branch deciding its header --
+# still builds, serves, renders and passes (a), (c) and (d), while shipping no project
+# Cache-Control on the 200 and the empty `__next_error__` shell as every 404's body, status still
+# 404. M4b shipped the header half of that on /route because this file copied /explore's BODY
+# checks and not its HEADER check. Both halves are mandatory for any page added after this one.
 #
-# Verified by mutation on a served build, not by inspection (M4d task 5): removing
-# `/airport/:code` from the matcher turns (b) red and takes the airport 404s to 500; widening
-# `isCacheable` to `!== "notFound"` turns exactly the CE-180 no-store check red.
+# Verified by mutation on a served build, not by inspection. Deleting the `/airport/:code` row
+# from `QUERY_ROWS` turns (b) and the 308's header check red, and all three of `check_rendered_404
+# "airport"`'s checks -- while (e)'s status, `no-store` and 404-sentence checks all stay green,
+# because the sentences ride in the shell's flight payload. Widening `isCacheable` to
+# `!== "notFound"` turns exactly the CE-180 no-store check red (M4d task 5).
 
 # 10. /airport/<code> -- the airport is both endpoints.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA")
@@ -1129,7 +1140,9 @@ for A in ZZZZ LHR; do
 done
 # 404 body, paired the way /route's is: each case asserts a phrase only ITS reason produces AND
 # the absence of the sibling case's, because one generic sentence listing every cause would
-# satisfy any lone positive. A 500 from a missing matcher entry fails all four.
+# satisfy any lone positive. A page the proxy does not answer for passes all four -- measured by
+# deleting the `/airport/:code` row, the sentences survive in the flight payload of the empty
+# `__next_error__` shell -- which is why `check_rendered_404` closes this block.
 BODY=$(curl -s --max-time 15 "${BASE}/airport/ZZZZ")
 check     "airport 404: names the offending code"       "$BODY" "unknown airport code 'ZZZZ'"
 check_not "airport 404: not every cause at once"        "$BODY" 'domestic-only'
@@ -1145,8 +1158,8 @@ BODY=$(curl -s --max-time 15 "${BASE}/airport/ZZZZ")
 check_re  "airport 404: the SENTENCE carries the requested code" "$BODY" 'We can.{1,3}t show .{1,12}ZZZZ'
 check_rendered_404 "airport" "$BODY" 'Airport not found'
 
-# 10b. M7 Task 9: /airport/<code>?y=<year>, and the cache-header split proxy.ts's matcher
-# section warns can only be seen by a served build. asOf is 2026-06 as measured (M4d's own
+# 10b. M7 Task 9: /airport/<code>?y=<year>, and the cache-header split hosting.md's § What
+# `proxy.ts` owns warns can only be seen by a served build. asOf is 2026-06 as measured (M4d's own
 # convention of hardcoding the current measured asOf elsewhere in this file, e.g. the carrier
 # chart-window check below) -- 2015-2025 are complete calendar years and 2026 is partial.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA?y=2019")
@@ -1165,7 +1178,7 @@ check     "airport?y=2019: a valid year still gets the project Cache-Control" "$
 # The pair this task's own mutant table exists to prove: a `no-store`-everywhere regression
 # would pass the "declines" half below vacuously, so BOTH must be checked against a served
 # build, not just the unit suite -- proxy.test.ts pins the same pair, but only a served build
-# proves proxy.ts's matcher and cacheability branch actually run together in production.
+# proves proxy.ts's `QUERY_ROWS` row and cacheability branch actually run together in production.
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/SEA?y=1999")
 check     "airport?y=1999: an out-of-range year is no-store"          "$HDRS" "no-store"
 check_not "airport?y=1999: ...and is never long-cached"              "$HDRS" "s-maxage"
@@ -2313,7 +2326,7 @@ done
 # ---------------------------------------------------------------------------------------------
 # 13. M5 "connect the graph" -- cross-linking, the omnibox, and the crawl graph. This is the
 #     task the milestone's Critical (M4b's cache-matcher bug) was hiding in a second time: three
-#     new routes, each needing the same matcher-entry-plus-header discipline § 8-12's comment
+#     new routes, each needing the same row-plus-header discipline § 8-12's comment
 #     block states, plus a route (`/search`) whose correct Cache-Control is the ONE VALUE every
 #     other row in this file argues against -- `no-store`, unconditionally, never the long cache.
 
@@ -2392,14 +2405,14 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/search?q=zzzzzzzzzz")
 check "search: is no-store" "$HDRS" "no-store"
 check_not "search: is never the project's long cache" "$HDRS" "s-maxage"
 # The positive check above cannot, by itself, tell proxy.ts's bare `no-store` apart from a
-# request that never reached proxy.ts at all -- a page missing from the matcher falls back to
-# Next's OWN default for a force-dynamic page, `private, no-cache, no-store, max-age=0,
-# must-revalidate`, which also CONTAINS the substring "no-store". Verified by mutation
-# (removing "/search" from the matcher): the check above stayed green under that mutant, which
-# is exactly the vacuous-check failure this project's own working agreement calls out --
-# `must-revalidate` is the token that is present in Next's fallback and absent from proxy.ts's
-# own value, so this is the one that actually distinguishes "proxy.ts ran" from "it didn't".
-check_not "search: is not Next's own force-dynamic fallback (proves proxy.ts ran)" "$HDRS" "must-revalidate"
+# response the proxy did not answer for -- a page with no `QUERY_ROWS` row falls back to Next's
+# OWN default for a force-dynamic page, `private, no-cache, no-store, max-age=0,
+# must-revalidate`, which also CONTAINS the substring "no-store", so the check above would stay
+# green without the row: exactly the vacuous-check failure this project's own working agreement
+# calls out. `must-revalidate` is the token that is present in Next's fallback and absent from
+# proxy.ts's own value, so this is the one that actually distinguishes "proxy.ts set the header"
+# from "it didn't".
+check_not "search: is not Next's own force-dynamic fallback (proves proxy.ts set the header)" "$HDRS" "must-revalidate"
 
 # The sitemap and robots.txt. Both get CLAUDE.md's project-wide value (they carry none of the
 # entity pages' per-request resolution risk -- proxy.ts's own doc comment on the branch).
@@ -2531,24 +2544,17 @@ if [ "$SMOKE_MODE" = "container" ]; then
 fi
 
 # ---------------------------------------------------------------------------------------------
-# 14. M6 Task 8: /watch and the four Top-N leaderboard presets. proxy.ts's matcher grew to
-#     ELEVEN entries for this (M6 Task 7) -- `/watch` (exact path, same shape as `/search`) and
-#     `/watch/:preset` (dynamic segment, the same shape an entity page's slug has, but gated by
-#     a static slug registry plus `isDataLayerHealthy()` rather than a per-slug resolve()). This
-#     is the section that closes the one gap M5's own whole-branch review left explicit in
-#     hosting.md: "unit-verified only, not yet smoke-curled" -- proxy.test.ts calls proxy()
-#     directly and never crosses Next's own routing, so a matcher entry silently dropped from
-#     `config.matcher` cannot fail any unit test, only a served build. Verified by mutation, not
-#     by inspection: removing "/watch/:preset" from the matcher, rebuilding and serving turned
-#     `/watch/nope`'s 404 body from one naming the preset to a bare error shell -- 9,941 bytes
-#     to 7,816 on the pre-#157 tree the mutant ran against, matching the ~7,740-byte shell M4d
-#     measured for the same failure one page family over -- AND degraded /watch/gauge's own
-#     Cache-Control from HTML_CACHE to Next's own
-#     force-dynamic fallback, `private, no-cache, no-store, max-age=0, must-revalidate` -- on a
-#     PAGE THAT RENDERS FINE, which is exactly the M4b-shaped bug this file's matcher discipline
-#     exists to catch a second time. Reverted before commit; not re-run automatically here for
-#     the same reason mutant A never is anywhere else in this file (it requires editing source
-#     and rebuilding, which is a one-time verification exercise, not a repeatable gate).
+# 14. M6 Task 8: /watch and the four Top-N leaderboard presets. Two `QUERY_ROWS` rows (M6 Task
+#     7) -- `/watch` (exact path, same shape as `/search`) and `/watch/:preset` (dynamic segment,
+#     the same shape an entity page's slug has, but gated by a static slug registry plus
+#     `isDataLayerHealthy()` rather than a per-slug resolve()). This is the section that closes
+#     the one gap M5's own whole-branch review left explicit in hosting.md: "unit-verified only,
+#     not yet smoke-curled" -- proxy.test.ts calls proxy() directly and never crosses Next's own
+#     routing, so what a preset page ships when the proxy does not answer for it is visible only
+#     on a served build: `/watch/nope`'s 404 as a bare error shell instead of a body naming the
+#     preset, and /watch/gauge's Cache-Control as Next's own force-dynamic fallback, `private,
+#     no-cache, no-store, max-age=0, must-revalidate`, on a PAGE THAT RENDERS FINE -- exactly the
+#     M4b-shaped bug this file's per-route header discipline exists to catch a second time.
 
 # 14a. /watch, the index: four links, no table, no per-slug resolution -- so only the first two
 # of the five things every leaderboard page below asserts apply.
@@ -2812,7 +2818,7 @@ check_rendered_404 "watch" "$BODY" 'Preset not found'
 # minted an unbounded family of long-cached entries on every cacheable path -- measured on a
 # served build at 4aa8087, on all TEN that the proxy gates, `/sitemap.xml?x=1` at 30 days and
 # 2.4 MB. `/api/pivot` is an ELEVENTH cacheable path, closed in its own handler with a 400 rather
-# than here with a 307 (below); `/search` is the twelfth matcher entry and never cacheable at all.
+# than here with a 307 (below); `/search` is declared too and never cacheable at all.
 # Each entry is a guaranteed origin miss, against the exact cost model the CDN exists to protect.
 #
 # `check` is `grep -F`, a SUBSTRING test, which is a trap for a Location assertion: a needle of
@@ -2837,7 +2843,7 @@ check_rendered_404 "watch" "$BODY" 'Preset not found'
 # `.search.replace(/^\?/, "")` -- non-global, so it strips one `?` of two -- and canonicalize()
 # used to THROW on a leading `?`, documented as "a wiring bug, not something a real request can
 # trigger". proxy() has no try/catch around that call, so `GET /watch??x=1` was a 500 on every one
-# of the twelve matcher paths, `/` and `/sitemap.xml` included, for any client. Measured at
+# of the twelve routes the proxy answered for, `/` and `/sitemap.xml` included, for any client. Measured at
 # d109845, and re-measured against a served build by restoring the throw on top of the fix: the
 # seven doubled-`?` rows below all 500, while their single-`?` neighbours all stay 307 -- so the
 # branch that exists to bound an unbounded cache family had introduced an unbounded family of
@@ -3437,21 +3443,21 @@ check_png "card: /airport/ORD is a 1200x630 PNG"     "/airport/ORD/opengraph-ima
 check_png "card: /carrier/DL is a 1200x630 PNG"      "/carrier/DL/opengraph-image"
 check_png "card: /aircraft/B737-8 is a 1200x630 PNG" "/aircraft/B737-8/opengraph-image"
 
-# ONE HEADER ASSERTION PER MATCHER ROW, not one for the four of them. proxy.ts's matcher comment
-# states the invariant this restores: every row in that list has a served-build header assertion
-# and a served-build no-store assertion here, because nothing else in the repo crosses the
-# matcher at all. A single /route assertion would leave three of the sixteen rows deletable with
-# every gate green -- which is precisely what the check below is written to catch, since the card
-# routes are the first matcher entries that are not pages (#8) and a sweep over "pages" misses
-# them.
+# ONE HEADER ASSERTION PER `QUERY_ROWS` ROW, not one for the four of them. Every declared route
+# has a served-build header assertion and a served-build no-store assertion here (hosting.md
+# § What `proxy.ts` owns), because canonicalQuery.test.ts proves a card HAS a row and nothing but a
+# served build proves the proxy's branch answered for it on the wire. A single /route assertion
+# would leave three of the four card branches unasserted there -- which is precisely what the
+# check below is written to catch, since the card routes are the declared routes that are not
+# pages (#8) and a sweep over "pages" misses them.
 #
 # `max-age=0` names the failure rather than leaving it as "some value other than HTML_CACHE":
-# Next's own header for a card no proxy touched is `public, max-age=0, must-revalidate`, measured
-# on a served build with exactly that mutation (M4, task-9-report.md).
+# Next's own header for a card whose Cache-Control the proxy did not set is `public, max-age=0,
+# must-revalidate`, measured on a served build (M4, task-9-report.md).
 for C in /route/JFK-LAX /airport/ORD /carrier/DL /aircraft/B737-8; do
   HDRS=$(curl -s -o /dev/null -D - --max-time 60 "${BASE}${C}/opengraph-image")
   check     "card: ${C} sets the HTML Cache-Control"                  "$HDRS" "$HTML_CACHE_EXPECTED"
-  check_not "card: ${C} is not under Next's own header (proxy.ts ran)" "$HDRS" 'max-age=0'
+  check_not "card: ${C} is not under Next's own header (proxy.ts set it)" "$HDRS" 'max-age=0'
 done
 # Once, not per row: `check_png` above already proves each card IS a PNG, so this is the header
 # contract for the type, and a fifth copy of it would assert nothing a fourth did not.
@@ -3489,17 +3495,17 @@ check_png "card: ...and the bytes at that exact URL are the card"    "$OG_PATH"
 
 # An unknown slug's card 404s and is never cached -- the dataset is rebuilt monthly, so a card
 # 404 pinned in a shared cache outlives the condition that caused it, exactly as the page's does.
-# Again one row of the matcher each, and on the same fixtures their PAGES already use in sections
+# Again one `QUERY_ROWS` row each, and on the same fixtures their PAGES already use in sections
 # 8, 10 and 11: `ZZZZ` is no airport code at all, `ZZ` is in dim_carrier not at all, and
 # `ZZZZ-LAX` is the route pair built from the first. Verified 404 on a served build before being
 # relied on here, all three with `cache-control: no-store` and an empty body.
 #
-# The needle is the header LINE, not the bare value -- and it is also what proves proxy.ts ran on
-# this path. A card 404 that fell out of the matcher carries NO Cache-Control at all (measured,
-# M4), so a bare `no-store` needle would still be red for the right reason here, but a
-# `must-revalidate` negative of the kind section 16 uses would NOT: there is no header to contain
-# it. What a check can see depends on what the framework emits when the code under test is absent,
-# and on this path it emits nothing.
+# The needle is the header LINE, not the bare value -- and it is also what proves proxy.ts set the
+# header on this path. `cache-control: no-store` is the proxy's exact value, so the line is red when
+# a card 404 the proxy does not answer for carries no Cache-Control at all, where a
+# `must-revalidate` negative of the kind section 16 uses would stay green: with no header there is
+# nothing to contain it. What a check can see depends on what the framework emits when the code
+# under test is absent.
 for C in /route/ZZZZ-LAX /airport/ZZZZ /carrier/ZZ; do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 "${BASE}${C}/opengraph-image")
   HDRS=$(curl -s -o /dev/null -D -            --max-time 30 "${BASE}${C}/opengraph-image")
@@ -3559,6 +3565,13 @@ CSS_BODY=$(curl -s --max-time 30 "${BASE}${CSS_HREF}")
 # regex instead of by adjacency.
 check "responsive: the served file is the stylesheet, not an error page" "$CSS_BODY" \
   '.table-scroll{'
+# The proxy runs on this request too, and a static chunk is not one of its routes, so it must
+# neither add nor replace a cache header: the chunk keeps the long immutable header Next's static
+# server sets. The needle is the header LINE as Next emits it (capitalised, unlike the lower-case
+# lines the page and route-handler responses above carry), read off the served response.
+CSS_HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}${CSS_HREF}")
+check "static asset: the proxy leaves Next's own Cache-Control on a built chunk" "$CSS_HDRS" \
+  'Cache-Control: public, max-age=31536000, immutable'
 check_re "responsive: the table keeps its own scroll container" "$CSS_BODY" \
   '\.table-scroll\{[^}]*overflow-x:auto'
 # The collapsed single-column grid keeps its zero minimum. This is the bug. `[^@]*` cannot run
@@ -3729,14 +3742,14 @@ else
     check_not "gap: /explore is never HTML_CACHE here either"    "$HDRS" "s-maxage=3600"
     # Final whole-branch review, M2: the positive "declines the cache" check above repeats the
     # vacuity /search's own "is no-store" check (~100 lines up) was already fixed for -- Next's
-    # OWN fallback header for a force-dynamic route that fell through proxy.ts's matcher
-    # entirely (e.g. "/explore" dropped from `config.matcher`) is
+    # OWN fallback header for a force-dynamic route the proxy does not answer for (e.g.
+    # "/explore" with no `QUERY_ROWS` row) is
     # `private, no-cache, no-store, max-age=0, must-revalidate`, which also contains the
-    # substring "no-store". All four checks in this block stay green under a "remove /explore
-    # from the matcher" mutant unless something here checks for the ONE token present in
-    # Next's fallback and absent from proxy.ts's own `no-store` -- `must-revalidate`, the same
-    # discriminator the /search block above already uses.
-    check_not "gap: /explore is not Next's own force-dynamic fallback (proves proxy.ts ran)" "$HDRS" "must-revalidate"
+    # substring "no-store". All four checks in this block would stay green without that row
+    # unless something here checks for the ONE token present in Next's fallback and absent from
+    # proxy.ts's own `no-store` -- `must-revalidate`, the same discriminator the /search block
+    # above already uses.
+    check_not "gap: /explore is not Next's own force-dynamic fallback (proves proxy.ts set the header)" "$HDRS" "must-revalidate"
   fi
   kill "$GAP_PID" 2>/dev/null; wait "$GAP_PID" 2>/dev/null; GAP_PID=
   kill_port "$GAP_PORT"
