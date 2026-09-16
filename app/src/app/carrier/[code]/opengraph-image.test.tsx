@@ -96,7 +96,7 @@ describe("/carrier/<code> opengraph-image", () => {
   // VX stopped filing in 2018-03 (measured) -- the trailing-12 query returns zero rows, so the
   // stat row is all dashes and only the chart has anything in it. A card that threw here, or
   // that printed 0.00% load factor for "nobody flew", would be the absence-as-measurement bug
-  // lib/format.ts exists to prevent, on the 40% of this dataset's carriers that are dormant.
+  // lib/format.ts exists to prevent, on the 39% of this dataset's carriers that are dormant.
   it("still renders for a carrier that has stopped filing", async () => {
     const res = await Image({ params: Promise.resolve({ code: "VX" }) });
     expect(res.status).toBe(200);
@@ -130,7 +130,7 @@ describe("the default export's card input", () => {
   });
 
   // VX has been dormant since 2018-03, so the trailing-12 pivot returns no rows and the five
-  // measures are absent for a reason quarantine had no part in -- 46 of this dataset's carriers
+  // measures are absent for a reason quarantine had no part in -- 45 of this dataset's carriers
   // are in that state.
   // MUTANT: key `cardSixthStat` on `totals.seats === null` alone -> `Quarantined 0`, naming the
   // one cause it is not -> red.

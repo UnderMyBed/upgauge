@@ -254,8 +254,8 @@ describe("/carrier/<code> aircraft-mix chart", () => {
 });
 
 // Virgin America: airline_id 21171, 4,275 filed rows over 2015-01..2018-03 and nothing since
-// (measured). 46 of this database's 115 fact-present `airline_id`s last filed before the current
-// trailing-12 window -- 40%, so a resolvable carrier with an empty table is a normal case here,
+// (measured). 45 of this database's 114 fact-present `airline_id`s last filed before the current
+// trailing-12 window -- 39%, so a resolvable carrier with an empty table is a normal case here,
 // not an oddity, and the chart is the only panel with anything in it.
 describe("/carrier/<code> with nothing in the trailing 12 months", () => {
   it("states the finding in words and offers the widened window", async () => {
@@ -287,7 +287,7 @@ describe("/carrier/<code> with nothing in the trailing 12 months", () => {
 
   it("still states both caveats when there is no table to qualify", async () => {
     // The claims are about the SUBJECT, not about the rows: a page that only rendered them
-    // alongside a populated table would drop them on 40% of carriers.
+    // alongside a populated table would drop them on 39% of carriers.
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
     const text = content(container);
     expect(text).toMatch(/no marketing-carrier field/i);
@@ -929,8 +929,9 @@ function statStrip(container: HTMLElement): string[] {
 }
 
 describe("a carrier that filed nothing in the window states absence, not zero", () => {
-  // VX has been dormant since 2018-03. 46 `airline_id`s are, of which 45 have a `dim_carrier`
-  // row and therefore a page -- state the grain, because these are counted at two of them.
+  // VX has been dormant since 2018-03. 45 `airline_id`s are, and every one has a `dim_carrier`
+  // row and therefore a page. The fact table's NULL `op_airline_id` group is not a carrier and is
+  // not in that count.
   // MUTANT: seed `sumColumn` at 0 -> `["0", "0", "—", "—", "0", "0", "0"]` -> red.
   it("renders the measures as absence while still stating the counts", async () => {
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));

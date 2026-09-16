@@ -212,8 +212,8 @@ function identityNote(carrier: CarrierRef): string {
 }
 
 /** A carrier that resolved but filed nothing in the trailing 12 months. Not an error and not
- * an oddity: 46 of this database's 115 fact-present `airline_id`s last filed before the current
- * window (measured, 40%) -- Virgin America stopped in 2018-03 and is still a real carrier with
+ * an oddity: 45 of this database's 114 fact-present `airline_id`s last filed before the current
+ * window (measured, 39%) -- Virgin America stopped in 2018-03 and is still a real carrier with
  * a real history, which the chart above this state is drawing. State the finding in words and
  * offer the widened permalink, never a blank panel. */
 function CarrierEmptyState({ query, carrier }: { query: PivotQuery; carrier: CarrierRef }) {
@@ -432,7 +432,7 @@ export async function CarrierView({
     selected: typeFilter.kind === "ok" ? slugFor(typeFilter.code) : null,
   });
 
-  // The range the chart can DRAW, which is not the range it was fetched over. 46 of 115
+  // The range the chart can DRAW, which is not the range it was fetched over. 45 of 114
   // fact-present `airline_id`s last filed before the trailing-12 window, so a chart whose x axis
   // ends years before `asOf` is routine here -- naming the requested window over it would be
   // the same fabrication as interpolating across a gap (M4c, Finding 1). Months are
@@ -479,7 +479,7 @@ export async function CarrierView({
           <div>
             {/* Above the table, mirroring /route and docs/design/mockups/entity-route.html.
                 Drawn whenever there is anything to draw, INCLUDING when the trailing-12 table
-                below is empty -- for 40% of this database's carriers the chart is the only
+                below is empty -- for 39% of this database's carriers the chart is the only
                 panel on the page with anything in it, and the empty state under it is what
                 says the flying stopped. */}
             {hasMix ? <AircraftMixChart rows={mix} title={carrier.code} /> : null}

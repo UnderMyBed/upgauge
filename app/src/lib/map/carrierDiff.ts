@@ -252,7 +252,7 @@ export async function fetchCarrierDiff(
  * THE EXTRACTION DOES NOT PIN THE WIRING -- `fetchCarrierDiff`'s own live tests do, since they
  * assert panel order and panel contents that only exist if this function is called. What the
  * extraction buys is the ability to hand this a head row whose same-airport pairs are ALL
- * quarantined, which no carrier on this warehouse has (measured: all 115 scanned, zero such
+ * quarantined, which no carrier on this warehouse has (measured: all 114 scanned, zero such
  * panels) and which a live fixture therefore cannot reach. */
 export function toPanels(rows: DiffRow[], cap: number = NETWORK_ARC_CAP): CarrierDiff[] {
   // Grouped in arrival order, which the query has already sorted by each category's OWN ranking
@@ -335,9 +335,10 @@ export function toPanels(rows: DiffRow[], cap: number = NETWORK_ARC_CAP): Carrie
         // LATENT, NOT LIVE, and the two are one measurement apart. The wholly-quarantined
         // same-airport PAIR is real (airline 21745's STT-STT in the prior 12), but a panel folds
         // every same-airport pair in its category together and every such fold on this warehouse
-        // includes at least one stateable pair -- measured across all 115 carriers with
-        // route-month rows, zero panels come back NULL. So no page renders the wrong sentence today. The coercion is removed regardless: it is one refresh
-        // from being live, and the SQL it reads from states the rule itself.
+        // includes at least one stateable pair -- measured across all 114 carriers with
+        // route-month rows, zero panels come back NULL. So no page renders the wrong sentence
+        // today. The coercion is removed regardless: it is one refresh from being live, and the
+        // SQL it reads from states the rule itself.
         sameAirportSeats: head.same_airport_pairs === null ? 0 : numOrNull(head.same_airport_seats),
         // SET HERE, not left to the consumer, because `title` is the ONLY channel into the map's
         // accessible name and without it two of these three panels announce themselves

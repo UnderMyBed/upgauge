@@ -472,7 +472,7 @@ describe("toPanels tells an absent same-airport pair from an unstateable one", (
 
   // THE MUTANT THIS EXISTS FOR: `head.same_airport_seats ?? 0`, which reads the two NULLs as one
   // and tells the reader nothing is withheld while a pair is. No carrier on this warehouse
-  // produces this row (measured across all 115), which is exactly why it needs a constructed one.
+  // produces this row (measured across all 114), which is exactly why it needs a constructed one.
   it("reports null when a pair exists whose seats cannot be summed", () => {
     const [panel] = toPanels(headRow({ same_airport_pairs: 1, same_airport_seats: null }));
     expect(panel.map.sameAirportSeats).toBeNull();
