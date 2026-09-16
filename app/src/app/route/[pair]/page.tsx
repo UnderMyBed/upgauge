@@ -201,7 +201,7 @@ export async function RouteView({
   const chartDrawn = mixChartDraws(mix);
   // The range the chart can DRAW, which is not the range it was fetched over. The fetch asks
   // for EARLIEST_MONTH -> asOf; a subject that stopped filing in 2022 yields an x axis ending
-  // in 2022, and 12,115 of 23,041 route pairs last filed before the current trailing-12 window,
+  // in 2022, and 12,201 of 23,167 route pairs last filed before the current trailing-12 window,
   // so this is over half of them rather than a corner case. Naming the requested window in the
   // line below put "2015-01 → 2026-04" over a chart stopping in 2022 -- the same fabrication as
   // interpolating across a gap, and the exact inverse of what the comment above warns about.
@@ -279,7 +279,7 @@ export async function RouteView({
             {/* Above the table, in the content column, mirroring
                 docs/design/mockups/entity-route.html. Rendered whenever there is anything to
                 draw -- INCLUDING when the trailing-12 table below is empty, which is not a
-                corner case: 12,115 of the 23,041 route pairs in this database last filed
+                corner case: 12,201 of the 23,167 route pairs in this database last filed
                 before 2025-05 (measured), so for over half of them the chart is the only thing
                 on the page with anything in it, and the empty state under it is what says the
                 service has stopped. When there is nothing in the full window either (BNH-JFK),
@@ -358,7 +358,7 @@ export async function generateMetadata({
   // is also the exact order this page's `.entity .code` AND `.entity .ename` render in --
   // `RouteView`'s `[a, b] = routeEndpoints(low, high, canonical)` re-pairs BOTH halves of the
   // heading to `canonical.split("-")`, not to `low`/`high`'s airport-ID order, so the heading
-  // can never disagree with the URL it is the heading of. The 215-of-22,509 CLAUDE.md figure
+  // can never disagree with the URL it is the heading of. The 215-of-22,635 CLAUDE.md figure
   // (id order vs. alphabetical order disagreeing) describes a DIFFERENT rendering site --
   // composite route-CELL columns built straight from id-ordered `origin_airport_id`/
   // `dest_airport_id` (or `route_key_low`/`route_key_high`) in other pages' tables, e.g.

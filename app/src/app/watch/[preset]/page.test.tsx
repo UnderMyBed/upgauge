@@ -132,7 +132,7 @@ describe("/watch/<preset>", () => {
   // Death Watch row that watch_death_watch.sql can never actually produce (its own `WHERE
   // health_score IS NOT NULL` excludes it). Neither proves the path that actually fires in
   // production: Route Birth Tracker's `p12_months_present = 0` filter means EVERY one of its
-  // 297 rows has a NULL health_score (measured against the real warehouse -- 297 of 297, 100%),
+  // 281 rows has a NULL health_score (measured against the real warehouse -- 281 of 281, 100%),
   // so "insufficient data" is not an edge case on this preset, it is the entire page, reached
   // through the REAL column-building path (buildColumns -> displayRows -> DataTable), not a
   // direct call to the helper. A regression here -- an accidental dimKey or href on the
@@ -180,10 +180,10 @@ describe("/watch/<preset>", () => {
     expect(container.querySelector('a[href^="/route/"]')).not.toBeNull();
   });
 
-  it("states the same-airport exclusion (6 of 5,611) on every preset", async () => {
+  it("states the same-airport exclusion (5 of 5,675) on every preset", async () => {
     for (const slug of PRESETS) {
       const { container } = await renderPreset(slug);
-      expect(content(container)).toContain("6 of 5,611");
+      expect(content(container)).toContain("5 of 5,675");
     }
   });
 
@@ -220,7 +220,7 @@ describe("/watch/<preset>", () => {
 
   it("states that unscored routes are excluded from Death Watch, not silently ranked worst", async () => {
     const { container } = await renderPreset("death-watch");
-    expect(content(container)).toContain("373 of 5,611");
+    expect(content(container)).toContain("361 of 5,675");
   });
 
   // Final whole-branch review (M6), CRITICAL. This test previously read:
@@ -337,7 +337,7 @@ describe("/watch/<preset>", () => {
 // hand a page a NULL score, so this is the only place the null branch is reachable at all.
 describe("formatHealthScore", () => {
   it("renders NULL as insufficient data, never an em-dash and never 'unhealthy'", () => {
-    // features.md's standing UI requirement: all 373 NULL carrier-route pairs are NULL for
+    // features.md's standing UI requirement: all 361 NULL carrier-route pairs are NULL for
     // data-availability reasons, not low-score reasons, and an em-dash in a column sorted
     // ascending reads as 'worst'.
     expect(formatHealthScore(null)).toBe("insufficient data");

@@ -105,7 +105,7 @@ function leadersByYear(rows: readonly CrossoverRow[]): [string, Leader][] {
  * total must be null, i.e. every cell it filed that year was quarantined. That is a strictly
  * smaller set than "pairs carrying an unstateable cell" (768 cells / 302 pairs), and quoting the
  * cell figure here would be measuring a different question -- the refusal fires on **214 pairs
- * across 273 pair-years** of 23,041.
+ * across 273 pair-years** of 23,167.
  *
  * WHAT A READER ACTUALLY SEES CHANGE is smaller again, because most refused years were never the
  * year the annotation named: the rendered annotation differs on **18 pairs** -- 6 lose it, 12

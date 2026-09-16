@@ -77,7 +77,7 @@ export interface DrawableView {
  * whole result, never a `>=` on the page). This file mirrors that as closely as the pivot path
  * permits: fetch under a ceiling nothing can reach, then floor, rank, count and slice in TS.
  *
- * 25,000 is derived, not guessed: the whole dataset holds 23,041 distinct undirected pairs
+ * 25,000 is derived, not guessed: the whole dataset holds 23,167 distinct undirected pairs
  * (10,926 inside the trailing 12), which is a hard ceiling on what any single (carrier, type)
  * view can contain. The worst view measured is 1,559. That derivation WILL rot as BTS grows,
  * which is why `drawableRoutes` throws rather than trusting it -- see the guard below. */

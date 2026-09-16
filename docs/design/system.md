@@ -307,10 +307,10 @@ the same component, calls per row for any non-dimension identifier column that s
 **The href is the code-alphabetical pair, never the displayed (airport-id) order**: `/explore`
 renders `route_key_low, route_key_high` — airport-id order — and `routeHrefFromCodes` re-sorts
 alphabetically by code before building `/route/<pair>`, because the two orderings disagree for
-215 of 22,509 pairs (measured; `CLAUDE.md`). Reusing the displayed order would be wrong
+215 of 22,635 pairs (measured; `CLAUDE.md`). Reusing the displayed order would be wrong
 for every one of those 215 — IFP/IAH is one of them: airport-id order displays `IFP–IAH`, but
 the canonical `/route/` URL is `/route/IAH-IFP`, the reverse. A fixture built on an
-order-agreeing pair like JFK–LAX (22,294 of 22,509) cannot catch that class of bug — both
+order-agreeing pair like JFK–LAX (22,420 of 22,635) cannot catch that class of bug — both
 orderings produce the same, coincidentally correct, href.
 
 ### The gauge rail — signature, 1 of 3
@@ -559,7 +559,7 @@ below — it binds every time-series mark, not only lines.
   seats) filed nothing for **2020-04 … 2020-09** and the chart drew one edge from 37,441 seats
   down to 6,804 across all six — inside the `--panel-2` band the same chart labels *"COVID —
   in window on purpose."* The one feature whose stated purpose is refusing to smooth COVID
-  away was smoothing away the actual COVID shutdown. **14,293 of 23,041 route pairs (62%) have
+  away was smoothing away the actual COVID shutdown. **14,378 of 23,167 route pairs (62%) have
   at least one interior gap**; `LGB–SJC` has a 21-month one.
 
   Three consequences for any chart built here:
@@ -608,7 +608,7 @@ below — it binds every time-series mark, not only lines.
   rather than treated as a wall, so the annotation is derived from the years that can be ranked.
   Measured **at year × type grain**, which is the grain the refusal fires at — a type's
   whole-year total must be unstateable, a strictly smaller set than "pairs carrying an
-  unstateable cell": **214 pairs across 273 pair-years** of 23,041. What a reader sees change is
+  unstateable cell": **214 pairs across 273 pair-years** of 23,167. What a reader sees change is
   smaller again, because most refused years were never the year the annotation named — the
   rendered annotation differs on **18 pairs**, 6 losing it and 12 moving year or direction.
 
@@ -620,7 +620,7 @@ below — it binds every time-series mark, not only lines.
   *requested* window and read `chart: the full window · 2015-01 → 2026-04` above a chart that
   stopped in 2022 — on `/route/ATL-CAK`, which filed 67 months, 2015-01 → 2022-06, and nothing
   since (measured). The `aria-label` was already correct, so only the text a sighted reader
-  sees was wrong, which is the worse half. 12,115 of 23,041 route pairs last filed before the
+  sees was wrong, which is the worse half. 12,201 of 23,167 route pairs last filed before the
   current trailing-12 window, so this is over half of them rather than a corner case. It is the
   same fabrication as interpolating across a gap, and the exact inverse of the mistake the
   two-window line exists to prevent: claiming a window you are not drawing. `page.test.tsx`
@@ -745,7 +745,7 @@ basemapPaths.generated.ts`) starts at Natural Earth **1:110m**, which has no pol
 Guam/CNMI/American Samoa/Midway or Puerto Rico/the USVI, which on its own leaves those insets
 empty. Measured against the real warehouse over the trailing 12 months, in which **757**
 airports are fact-present: **79** of them reach `car` and **7** reach a Pacific panel (GUM, HNL,
-PPG, ROP, SFO, SPN, TIQ). 757 is the denominator these two are shares of — 1,047 is the
+PPG, ROP, SFO, SPN, TIQ). 757 is the denominator these two are shares of — 1,049 is the
 fact-present population across the *whole* window and is the wrong one to read them against.
 `/airport/SJU` alone drew 65 arcs inside a labelled Caribbean frame with no landmass under it,
 and San Juan is a major airport, not an edge case. None of 757, 79 or 7 is generated; all three
@@ -962,7 +962,7 @@ point exactly on the rect's floor still paints a 4.5px subject disc or a label d
 y+5.
 
 Three gates hold it, and they are deliberately different instruments: `albers.test.ts` asserts the
-clearance structurally and needs no warehouse; `panelContainment.test.ts` sweeps all 1,047
+clearance structurally and needs no warehouse; `panelContainment.test.ts` sweeps all 1,049
 fact-present airports against all six frames; `segmentMap.test.ts` renders `MIA → SJU`, the near
 miss, because a fixture without an airport near the frame cannot fail. `basemap.test.ts` holds every
 inset frame clear of drawn conterminous land **with no exemption** — `car` is in that list like any
@@ -1103,7 +1103,7 @@ denominator would need a pivot grouped by endpoint airport, and `endpoint_airpor
 `filter_only` in the catalog. A quietly wrong mark is worse than a narrower true one.
 
 **A same-airport row is never an arc, on any page, standing rule.** `fct_segment_month`
-really carries rows whose origin and destination are the same airport — 359 of 1,047
+really carries rows whose origin and destination are the same airport — 359 of 1,049
 fact-present airports have at least one over the trailing 12 months; ORD alone is 53 rows,
 76,236 seats. Such a row's great circle has zero angular length, and `greatCircle`'s own
 degenerate-endpoint branch (`om < 1e-9`) would emit `steps + 1` identical points — several
@@ -1260,7 +1260,7 @@ JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
   table's trailing 12. The two windows differ because a twelve-point fleet-mix stack shows
   nothing, and **the page states both**: a decade drawn under a line reading "Trailing 12
   months" claims a window it is not showing. It is drawn whenever the *full* window has
-  filings, including when the trailing-12 table below is empty (12,115 of 23,041 pairs last
+  filings, including when the trailing-12 table below is empty (12,201 of 23,167 pairs last
   filed before the current trailing-12 window — the majority, not an edge case); when neither
   window has anything, no chart is drawn and the empty state below carries the finding alone.
 - **Table.** The standard data table, one row per operating carrier, trailing 12 months,

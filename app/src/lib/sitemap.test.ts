@@ -9,7 +9,7 @@ import sitemap from "@/app/sitemap";
 
 describe("sitemapEntries", () => {
   it("emits exactly the measured URL count per kind, quarantine included", async () => {
-    // docs/product/scope.md § D2's 23,785 breakdown (23,780 through M5; M6 Task 7 added
+    // docs/product/scope.md § D2's 23,913 breakdown (23,908 through M5; M6 Task 7 added
     // `/watch` plus its four presets, +5, which this file's four ENTITY counts do not carry --
     // they are appended by app/sitemap.ts). Each of the four counts is measured
     // against the built database; a regression here is a real count drift, not a guess.
@@ -25,7 +25,7 @@ describe("sitemapEntries", () => {
     expect(aircraft).toHaveLength(110);
   });
 
-  // (a) Quarantine scoping. Filtering `NOT is_quarantined` gives 1,043 airports, not 1,047.
+  // (a) Quarantine scoping. Filtering `NOT is_quarantined` gives 1,045 airports, not 1,049.
   // Anchor on a SPECIFIC entity that resolves only because quarantined rows are counted:
   // A18, DJN, OQZ and POB are the four airports (measured) whose ONLY fct_segment_month rows
   // are quarantined -- excluding quarantine drops all four, which is exactly the class of bug
@@ -70,8 +70,8 @@ describe("sitemapEntries", () => {
   // sitemap_routes.sql returns. Anchored on HPN/BNH -- the exact pair routePair.test.ts
   // anchors its own id-vs-alphabetical trap on: id order is HPN-BNH (HPN=12197, BNH=16954)
   // while the alphabetical canonical, and the only URL /route/<pair> itself ever 200s on, is
-  // BNH-HPN. A fixture built on a pair where the two orderings agree (JFK-LAX, 22,294 of
-  // 22,509) cannot fail this way.
+  // BNH-HPN. A fixture built on a pair where the two orderings agree (JFK-LAX, 22,420 of
+  // 22,635) cannot fail this way.
   it("emits the code-alphabetical route URL, not the id-ordered pair", async () => {
     const routes = await sitemapEntries("routes");
     const urls = new Set(routes.map((e) => e.url));

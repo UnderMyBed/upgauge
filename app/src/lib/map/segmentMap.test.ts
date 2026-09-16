@@ -389,7 +389,7 @@ describe("renderSegmentMap", () => {
     // CHARACTERIZATION, not endorsement. `sameAirport` keys on the display code, which departs
     // from CLAUDE.md's "key on AIRPORT_ID, never letter codes" -- see its comment for why
     // (`GeoNode` carries no id and `NetworkMapInput` is pinned without one), for the
-    // measurement that makes it safe today (zero collisions among the 1,047 fact-present
+    // measurement that makes it safe today (zero collisions among the 1,049 fact-present
     // airports; `dim_airport` has 20+ overall, `AUS` being both 10423 and 16440), and for what
     // a fact-present collision would cost: a legitimate route between two DISTINCT airports
     // read as a self-segment and dropped.

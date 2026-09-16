@@ -469,7 +469,7 @@ happen.** A pair that filed and never flew has `t12_months_flown = 0` and a depa
 so the rate comparison alone reads `0 >= 30 * 0` and **admits** it — 7 such rows on the real
 warehouse. (A wholly-quarantined window sums to `NULL` instead, and `NULL` fails both arms on
 its own.) The multiplication form is deliberate over
-`t12_departures_performed / t12_months_flown >= 30`: same 5,611 rows either way, but the
+`t12_departures_performed / t12_months_flown >= 30`: same 5,675 rows either way, but the
 division form hides the never-flown case inside a `nullif`, and this form is exact integer
 arithmetic at the boundary.
 
@@ -515,11 +515,11 @@ defence against a future `coalesce` on the p12 sums, just not what "enforces" th
 today. The row itself still exists (it is the Route Birth Tracker's input); only its
 deltas are unknown.
 
-Measured over the full 2015–2026 window: the table holds **5,611** surviving carrier–route
-pairs over only **3,198** distinct route pairs — the grain is `(op_airline_id, route)`, so a
-row count is never a route count. Of those 5,611 rows, **297** have no prior-window data
+Measured over the full 2015–2026 window: the table holds **5,675** surviving carrier–route
+pairs over only **3,219** distinct route pairs — the grain is `(op_airline_id, route)`, so a
+row count is never a route count. Of those 5,675 rows, **281** have no prior-window data
 (`p12_months_present = 0`, `new_routes`) and are correctly `NULL`-delta rows; the other
-**5,314** have `p12_months_present >= 1`.
+**5,394** have `p12_months_present >= 1`.
 
 **"No prior window" and "zero-measure prior window" are two different things and must not be
 conflated.** A row can carry `p12_months_present >= 1` and still have filed `p12_seats = 0`
@@ -562,7 +562,7 @@ ln(seats_t12 / seats_p12) ≡ ln(dep_t12 / dep_p12) + ln(gauge_t12 / gauge_p12)
 
 i.e. in log space, capacity change is *exactly* frequency change plus gauge change — not
 approximately correlated, identically decomposed, because `seats = departures × gauge` by
-construction. Measured: max `|residual|` **1.33e-15** over all **5,314** finite rows (the
+construction. Measured: max `|residual|` **1.33e-15** over all **5,394** finite rows (the
 `p12_months_present >= 1` population — see above), which is floating-point noise, not a
 near-identity. In raw (unlogged) form the same relationship shows up as `corr(capacity_delta,
 frequency_delta) = 0.9856`; in logs it is **1.00**. Scoring `capacity_delta` alongside
@@ -629,10 +629,10 @@ DuckDB directly, and **resolve it inside-out or you will transpose which bound w
 way a value is fabricated instead of `NULL` propagating. A bare `least(completion_factor,
 1.5)` therefore **fabricates a near-perfect completion rate of `1.5`** for every carrier–route
 pair with no filed schedule at all (`t12_departures_scheduled = 0`, so `completion_factor` is
-itself `NULL`) — **89 invented completion rates**. Left unguarded through to the clamp, the same
+itself `NULL`) — **93 invented completion rates**. Left unguarded through to the clamp, the same
 behaviour on `greatest(least(z_completion, 3), -3)` would score **every** row with an
-unknown axis, destroying the three-reason NULL contract below: **5,611 rows scored instead of
-the correct 5,238**. Both are `CASE WHEN … IS NULL THEN NULL ELSE least/greatest(...) END` in
+unknown axis, destroying the three-reason NULL contract below: **5,675 rows scored instead of
+the correct 5,314**. Both are `CASE WHEN … IS NULL THEN NULL ELSE least/greatest(...) END` in
 `sql/02_marts/200_mart_route_health.sql` — a `CASE`, not a bare call, for exactly this reason.
 This is not a hypothetical: `pipeline/tests/test_route_health_real_data.py`'s own reference SQL
 (written to independently re-derive the axes from raw columns and check the mart's arithmetic)
@@ -643,13 +643,13 @@ the test's own SQL to match the mart's.
 **The clamp.** Each of the four z-scores is clamped to `±3` before the weighted sum, so no
 single axis can move `health_score` by more than `0.75` and `|health_score| ≤ 3.0` **by
 construction** (four axes × 0.25 weight × a 3.0 clamp bound). Measured on the real
-2015–2026 warehouse: the clamp binds (at least one axis `|z| > 3`) on **289 of the 5,238**
+2015–2026 warehouse: the clamp binds (at least one axis `|z| > 3`) on **298 of the 5,314**
 scored rows — a real minority, not decoration and not a rank transform wearing a z-score's
-name. Observed maximum `|health_score|`: **2.33977**, comfortably inside the 3.0 construction
-bound. Unclamped, the worst single axis (`VD` `CPX–VQS`) reaches `z_gauge = -18.91` on this
+name. Observed maximum `|health_score|`: **2.33923**, comfortably inside the 3.0 construction
+bound. Unclamped, the worst single axis (`VD` `CPX–VQS`) reaches `z_gauge = -18.18` on this
 warehouse — the reason a per-axis clamp exists at all, not just an overall cap on the sum.
 
-> ⚠️ **`health_score` is `NULL` for three distinct reasons, not one — 373 of 5,611 rows,
+> ⚠️ **`health_score` is `NULL` for three distinct reasons, not one — 361 of 5,675 rows,
 > measured over the full 2015–2026 window** (`t12 = 2025-06..2026-05`,
 > `p12 = 2024-06..2025-05`). The product-facing writeup (what the UI must do about each) lives
 > in
@@ -658,12 +658,12 @@ warehouse — the reason a per-axis clamp exists at all, not just an overall cap
 >
 > | Reason | Count | Why |
 > |---|---|---|
-> | No prior window | 297 | `p12_months_present = 0` — this carrier filed nothing on this pair in the prior window. Not necessarily a new route: see § Route Birth Tracker in ../product/features.md. |
+> | No prior window | 281 | `p12_months_present = 0` — this carrier filed nothing on this pair in the prior window. Not necessarily a new route: see § Route Birth Tracker in ../product/features.md. |
 > | Zero-measure prior window | 0 | `p12_months_present >= 1` but `p12_seats = 0` and `p12_departures_performed = 0` — `nullif` makes `lf_p12`/`gauge_p12` NULL despite the window being "present." Empty today, not structurally impossible. |
-> | Zero scheduled departures | 89 | `t12_departures_scheduled = 0` despite real `t12_departures_performed` (on-demand/charter-style operators) — `completion_factor = t12_departures_performed / nullif(t12_departures_scheduled, 0)` is computed from `t12_*` sums alone and has nothing to do with `p12_months_present`. |
+> | Zero scheduled departures | 93 | `t12_departures_scheduled = 0` despite real `t12_departures_performed` (on-demand/charter-style operators) — `completion_factor = t12_departures_performed / nullif(t12_departures_scheduled, 0)` is computed from `t12_*` sums alone and has nothing to do with `p12_months_present`. |
 > | *(overlap: no-prior-window AND zero-scheduled)* | **-13** | 13 rows are in both categories at once. |
 >
-> **The reasons OVERLAP — never sum them.** `297 + 0 + 89 - 13 = 373`; a query adding the
+> **The reasons OVERLAP — never sum them.** `281 + 0 + 93 - 13 = 361`; a query adding the
 > three counts without subtracting the overlap overcounts by 13. Non-overlap is a property of
 > whichever window is current, never a guarantee.
 >

@@ -319,7 +319,7 @@ gauge_delta_column() { # gauge_delta_column <table-html>
 # -- which would break monotonicity on a page that is entirely correct. It cannot here:
 # mart_route_health's own admission gate is `t12_departures_performed >= 30 * t12_months_flown`
 # (200_mart_route_health.sql), the SAME rule lib/floor.ts applies, so every row it emits is on or
-# above the floor. Measured: 0 of 5,611 mart rows are below floor, and the two rendered tables
+# above the floor. Measured: 0 of 5,675 mart rows are below floor, and the two rendered tables
 # bottom out at 34.75 and 31.22 departures/month. If that gate and floor.ts ever diverge this
 # goes red -- correctly, because a ranked leaderboard would then be reordering itself under the
 # reader.
@@ -1010,7 +1010,7 @@ check_dataset check "chart: a route with one gets the derived annotation (ATL-MC
 # labels "COVID -- in window on purpose." The shipped M4c built its x domain from the months
 # PRESENT in the pivot result, so those six were not on the axis and Plot drew one straight
 # edge from 37,441 seats down to 6,804 across them; a reader read roughly 30k, 22k, 15k seats
-# for months that filed nothing. 14,293 of 23,041 route pairs (62%) have such a gap.
+# for months that filed nothing. 14,378 of 23,167 route pairs (62%) have such a gap.
 #
 # Two claims, because the sentence alone would be satisfied by a chart that says "6 months"
 # and still draws across them: the page STATES the absence, and the darkest band arrives as
@@ -1027,7 +1027,7 @@ check_re "chart: the band BREAKS at them, drawn as two paths (HNL-LAS)" "$(count
 # 2022-06, and nothing since; the chart is fetched over the full window but can only draw to
 # 2022-06. The line shipped naming the REQUESTED window, putting "the full window · 2015-01 →
 # 2026-05" above a chart that stops in 2022 -- the aria-label was already right, so only the
-# text a sighted reader sees was wrong. 12,115 of 23,041 pairs last filed before the current
+# text a sighted reader sees was wrong. 12,201 of 23,167 pairs last filed before the current
 # trailing-12 window, so this branch is the majority case, not an edge.
 #
 # Checked HERE and not only in page.test.tsx because the fix's first form was `chart: {a} → {b}`
@@ -1611,9 +1611,9 @@ check_dataset check_not "route A18-LMA: ...and claims no exclusion that could no
 check_dataset check_not "route A18-LMA: the foot agrees with its own count on the plural" \
   "$BODY" '1 rows, each having failed'
 
-# THE OTHER ABSENCE. ATL-CAK filed 67 months and nothing since 2022-06; 12,115 route pairs are in
+# THE OTHER ABSENCE. ATL-CAK filed 67 months and nothing since 2022-06; 12,201 route pairs are in
 # that state, against the 10 above. Quarantine had no part in it, and a surface keying on "the sum
-# is null" alone answers the wrong one of the two -- on the 12,115 rather than the 10.
+# is null" alone answers the wrong one of the two -- on the 12,201 rather than the 10.
 BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-CAK")
 check_dataset check "route ATL-CAK: an unfiled window is unknowable, not zero traffic" "$BODY" \
   '<div class="k">Seats</div><div class="v">—</div>'
@@ -2319,7 +2319,7 @@ check "cross-link: /carrier/DL links an aircraft cell to /aircraft/B737-8" "$BOD
 
 # The milestone's sharpest trap (docs/design/system.md § The data table): /explore's route cell
 # displays the two codes in AIRPORT-ID order but must LINK to the code-alphabetical canonical
-# /route/ URL, and the two orderings disagree for 215 of 22,509 pairs. IFP/IAH is the fixture
+# /route/ URL, and the two orderings disagree for 215 of 22,635 pairs. IFP/IAH is the fixture
 # explore/page.test.tsx and DataTable.test.tsx already use for exactly this reason -- a
 # JFK-LAX-shaped fixture cannot catch this class of bug, because JFK-LAX's two orderings agree.
 BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=route&d=route&m=seats&t=2015-01:2016-12&f=route:10590-12266&s=-seats&n=5&g=op")

@@ -100,11 +100,11 @@ excluded, trailing 12 (2025-05 → 2026-04) and all-time (2015-01 → 2026-04):
 sitemap** — do not quote them as "how many entity pages exist." A quarantined row
 (`load_factor > 1.0`, CLAUDE.md) is still a real filing and its page still 200s, so excluding it
 silently undercounts. `docs/product/scope.md` § D2 has the number that answers "how many entity
-pages get indexed" — `/sitemap.xml`, **quarantine-INCLUDED**: 1,047 airports, 114 carriers, 110
-aircraft, 22,509 routes, **23,785** total (which includes `/watch` and its four presets — not
+pages get indexed" — `/sitemap.xml`, **quarantine-INCLUDED**: 1,049 airports, 114 carriers, 110
+aircraft, 22,635 routes, **23,913** total (which includes `/watch` and its four presets — not
 entity pages, and not part of this table's breakdown).
 
-Airports and carriers happen to land close to those figures (1,041 vs. 1,047; 114 both ways — no
+Airports and carriers happen to land close to those figures (1,041 vs. 1,049; 114 both ways — no
 fact-present carrier's entire row history is quarantined). **Aircraft types' `110` here is a
 different count entirely, and its match to the sitemap's `110` is coincidence, not agreement:**
 this row counts distinct BTS `aircraft_type` CODES, quarantine excluded (112 all-time, 110 once
@@ -116,13 +116,13 @@ the moment either side changes.
 
 The three page types together are ~1,265 all-time URLs, three orders of magnitude below the
 20,000-file cap above and nowhere near a build-time problem. Route pages are the set that is not
-finite in the same sense — **22,509** undirected pairs — which is why the split is entity pages
+finite in the same sense — **22,635** undirected pairs — which is why the split is entity pages
 static, routes served.
 
-**22,509 and 23,041 are both real and answer different questions.** 23,041 is
-same-airport-INCLUSIVE; 22,509 excludes the 532 same-airport pairs (`docs/data/invariants.md`
+**22,635 and 23,167 are both real and answer different questions.** 23,167 is
+same-airport-INCLUSIVE; 22,635 excludes the 532 same-airport pairs (`docs/data/invariants.md`
 § Route identity). A same-airport "route" has no `/route/<pair>` page at all — `routePair.ts`
-404s it as "not a route between two airports" — so only 22,509 belongs in a count of pages.
+404s it as "not a route between two airports" — so only 22,635 belongs in a count of pages.
 
 **Count airports at both endpoints, or the number is wrong by a third.** Origin-only gives 741
 / 993, and that is not a rounding difference: it is the same silent halving
@@ -2320,7 +2320,7 @@ about it are easy to get wrong, and all four matter here:
   multiplies the site's cacheable surface: 114 fact-present carrier codes x 110 admissible
   aircraft slugs (111 minus `CE-180`, which is ambiguous and therefore never cacheable) is 12,540
   URLs on `/carrier/:code`, and the same product again on `/aircraft/:name` — **25,080 new
-  cacheable URLs**, against the 23,785 the site has today. It roughly doubles them, and both
+  cacheable URLs**, against the 23,913 the site has today. It roughly doubles them, and both
   value sets are fully published in `sitemap.xml`, so enumerating the space needs no guessing.
   Each is an ~80 ms origin render on its first hit and again after every `s-maxage`, and the edge
   rule matches these paths since #113 — which caps how fast the space can be walked and does
@@ -2381,8 +2381,8 @@ about it are easy to get wrong, and all four matter here:
   Since #117 that bucket is shared with ordinary browsing of all four entity page types,
   `/route/` included — the most-shared page type on the site, and the widest this coupling has
   been. **The accepted consequences, stated rather than hedged.** First and
-  largest: this puts **23,780 of the 23,785 URLs `sitemap.xml` publishes (99.98%)** under a rule
-  that blocks past 1 req/s per `(ip.src, cf.colo.id)` and counts cache HITs — 22,509 of them
+  largest: this puts **23,908 of the 23,913 URLs `sitemap.xml` publishes (99.98%)** under a rule
+  that blocks past 1 req/s per `(ip.src, cf.colo.id)` and counts cache HITs — 22,635 of them
   route pages. The **five** URLs left outside are `/watch` and its four presets. The quantity
   this paragraph is about is the ENTITY total against the sitemap total; a share computed from
   the route count alone answers a different question and understates the coverage. `robots.ts`

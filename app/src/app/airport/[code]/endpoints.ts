@@ -37,7 +37,7 @@ import type { Resolved } from "@/lib/resolve";
  * route (an SEA->PDX row and a PDX->SEA row are different `(origin, dest)` groups) and same-
  * airport rows still exist -- `origin = dest` rows: 3,177 of them over the TRAILING 12 MONTHS
  * (2025-06..2026-05) across 356 airports, 598,829 seats, QUARANTINED ROWS INCLUDED -- 3,173 /
- * 355 / 598,829 without them, and 12,995 / 532 / 1,933,052 (12,953 / 532 / 1,932,821 without)
+ * 355 / 598,829 without them, and 13,278 / 532 / 1,933,052 (12,953 / 532 / 1,932,821 without)
  * over the full 2015-01..2026-05 window. The window and the quarantine qualifier are both
  * load-bearing: the four answers differ by 4x, and this file's own window is the trailing 12
  * for the table and the FULL window for the chart. docs/data/invariants.md § Route identity

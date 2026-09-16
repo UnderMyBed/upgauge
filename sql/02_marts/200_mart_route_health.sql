@@ -107,7 +107,7 @@ derived AS (
     -- instead, and NULL fails both arms on its own.)
     --
     -- Multiplication rather than `t12_departures_performed / t12_months_flown >= 30`: the
-    -- same 5,611 rows either way, but the division form hides the never-flown case inside a
+    -- same 5,675 rows either way, but the division form hides the never-flown case inside a
     -- nullif, and this form is exact integer arithmetic at the boundary.
     WHERE t12_months_flown > 0
       AND t12_departures_performed >= 30 * t12_months_flown   -- performed, NOT scheduled
@@ -125,7 +125,7 @@ deltas AS (
     FROM derived
 ),
 -- Four INDEPENDENT axes, equal 0.25. capacity_delta is deliberately NOT among them: in log
--- space it is exactly frequency + gauge (verified to 1.33e-15 over all 5,314 finite rows --
+-- space it is exactly frequency + gauge (verified to 1.33e-15 over all 5,394 finite rows --
 -- docs/data/model.md), so scoring it scores those two a second time. It keeps its column and
 -- stays on the page; it is the COMPOSITE it has no place in.
 --
@@ -160,7 +160,7 @@ axes AS (
         ln(nullif(t12_departures_performed, 0)
            / nullif(p12_departures_performed, 0))                          AS freq_log,
         -- CASE, not a bare least(): DuckDB's least() IGNORES NULLs, so least(NULL, 1.5)
-        -- returns 1.5 and fabricates a near-perfect completion rate for the 89 carrier-route
+        -- returns 1.5 and fabricates a near-perfect completion rate for the 93 carrier-route
         -- pairs that filed no schedule at all. See docs/data/model.md.
         CASE WHEN completion_factor IS NULL THEN NULL
              ELSE least(completion_factor, 1.5) END                        AS completion_capped
@@ -178,11 +178,11 @@ z AS (
 -- Clamped at +/-3 so no single axis can move the composite by more than 0.75. Uniform, with no
 -- per-component threshold to invent. Logging alone fixes capacity and frequency but BREAKS
 -- gauge: a three-seat change on a nine-seat aircraft is a huge log ratio, and VD CPX-VQS
--- reaches z_gauge = -18.91 unclamped. Touches 289 of the 5,238 scored rows.
+-- reaches z_gauge = -18.18 unclamped. Touches 298 of the 5,314 scored rows.
 --
 -- Every clamp is a CASE for the same reason the cap above is: greatest(least(NULL,3),-3)
 -- returns 3 (least(NULL,3) is 3, then greatest(3,-3) is 3), not NULL, which would score all
--- 5,611 rows and destroy the three-reason NULL contract (docs/product/features.md).
+-- 5,675 rows and destroy the three-reason NULL contract (docs/product/features.md).
 scored AS (
     SELECT
         * EXCLUDE (gauge_log, freq_log, completion_capped, z_lf, z_gauge, z_freq, z_completion),

@@ -30,7 +30,7 @@ const COORDS = {
   // and the airport `US_EXTENT_ANCHORS` exists to keep inside it. Its subject disc reaches 5.4px
   // past its own point, which is the crop's `ink.bottom` term's own case.
   EYW: { lat: 24.55611111, lon: -81.76 }, // us, on the rect's southern edge
-  // Bellingham -- the NORTHERNMOST fact-present `us` airport (measured over all 1,047), and the
+  // Bellingham -- the NORTHERNMOST fact-present `us` airport (measured over all 1,049), and the
   // one fixture that exercises the crop's ink term. Its subject marker's own label is drawn at
   // y-8 in 11px type, so its ink reaches y=2.93 while the `us` panel band starts at 18.
   BLI: { lat: 48.79277778, lon: -122.5375 }, // us, at the top of the rect

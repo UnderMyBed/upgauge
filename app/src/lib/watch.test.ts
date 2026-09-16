@@ -320,7 +320,7 @@ describe("preset ORDER BY", () => {
   });
 });
 
-// Any limit above mart_route_health's 5,611 rows returns a preset's whole qualifying set, so
+// Any limit above mart_route_health's 5,675 rows returns a preset's whole qualifying set, so
 // this is not a window a warehouse refresh can slide a tie group out of.
 const WHOLE_QUALIFYING_SET = 100_000;
 

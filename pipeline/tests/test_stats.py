@@ -182,7 +182,7 @@ def test_each_page_count_equals_the_sitemap_query_it_mirrors(con):
     -- admitting CE-180, the ambiguous short name that renders a 404 rather than a page -- and
     every total still balanced, because the totals are sums of the very measure that moved.
     Adding `NOT is_quarantined` to sitemap_routes is the same shape of error in the opposite
-    direction (22,509 -> 22,478).
+    direction (22,635 -> 22,604).
 
     Comparing against the shipped query is the only assertion that distinguishes them: a measure
     that stops mirroring its query fails here, however self-consistent the artifact stays.
@@ -202,7 +202,7 @@ def test_route_order_halves_account_for_every_pair(con):
 
     Deriving the agreeing half made this vacuous: it moved with the disagreeing half, so
     reversing `a.code > b.code` to `<` left the suite green while the two figures swapped
-    (215 and 22,294). Measured separately, the identity also proves no pair has two endpoints
+    (215 and 22,420). Measured separately, the identity also proves no pair has two endpoints
     resolving to the same current code -- such a pair is in neither half and would show up here
     as a shortfall rather than as a silently wrong percentage on the route page.
     """

@@ -65,7 +65,7 @@ describe("sumTotals refuses to state a total it cannot state", () => {
     expect(Number.isNaN(t.avgGauge as unknown as number)).toBe(false);
   });
 
-  // THE SEED. 12,115 route pairs, 45 carriers and 37 aircraft types are fact-present and filed
+  // THE SEED. 12,201 route pairs, 45 carriers and 37 aircraft types are fact-present and filed
   // nothing inside the trailing 12, so this is the widest branch of the fix -- and the /airport
   // equivalent (`airportTotals([])`) has answered `null` here since #118.
   // MUTANT: seed `sumColumn`'s reduce at `0` -> three zeroes -> red.

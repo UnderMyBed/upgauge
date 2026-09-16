@@ -7,9 +7,9 @@
 -- ORDER BY. This is the one preset whose direction varies; the other three watch_*.sql files
 -- hardcode their ORDER BY because each of them only ever renders one table.
 --
--- gauge_delta IS NOT NULL excludes the 297 carrier-route pairs with no prior-window data
+-- gauge_delta IS NOT NULL excludes the 281 carrier-route pairs with no prior-window data
 -- (p12_months_present = 0, measured: gauge_delta IS NULL count matches it exactly). That is a
--- SINGLE cause, not health_score's three-reason union (373 -- docs/product/features.md) --
+-- SINGLE cause, not health_score's three-reason union (361 -- docs/product/features.md) --
 -- gauge_delta only depends on gauge_t12/gauge_p12, and gauge_t12 is never NULL for any row
 -- that reaches mart_route_health at all (the rate floor in 200_mart_route_health.sql's
 -- `derived` CTE admits only pairs performing >= 30 departures per month flown, so
@@ -31,7 +31,7 @@ WHERE route_key_low <> route_key_high
 -- column, so rows tying on it AT THE LIMIT BOUNDARY are returned in DuckDB's merge order rather
 -- than by the query -- the same class of gap #136 closed for the pivot templates. The grain,
 -- (op_airline_id, route_key_low, route_key_high), is 200_mart_route_health.sql's own GROUP BY
--- and is unique per row of that table (5,611 rows, 5,611 distinct triples, no NULL in any of the
+-- and is unique per row of that table (5,675 rows, 5,675 distinct triples, no NULL in any of the
 -- three); these presets neither join nor aggregate, so one output row is one mart row and
 -- appending the triple makes the ordering total. It is a SUFFIX -- gauge_delta still ranks.
 --

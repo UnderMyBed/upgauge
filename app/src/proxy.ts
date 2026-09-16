@@ -365,7 +365,7 @@ export async function proxy(request: NextRequest) {
   // `lib/db.ts`'s own docstring is explicit that loadAllowlist() is "Read fresh on every call,
   // never cached at the module level" -- the globalThis memo holds the DuckDBInstance, nothing
   // else -- so each call is a connection plus two catalog queries, each preceded by a
-  // readFileSync. That is nothing against app/sitemap.ts's four DuckDB queries over 23,785 URLs.
+  // readFileSync. That is nothing against app/sitemap.ts's four DuckDB queries over 23,913 URLs.
   // It is not nothing per branch: read as free, it invites a second probe on one request, which
   // is exactly what #157's first filter-branch shape did.
   if (pathname === "/sitemap.xml" || pathname === "/robots.txt") {
@@ -1128,7 +1128,7 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // segment, same shape as the four ENTITY_ROUTES entries -- but it has no ENTITY_ROUTES row of
 // its own, because its cacheability branch (above) answers "known" from the static `PRESETS`
 // registry rather than a database resolve(). `app/sitemap.ts` is a single default export
-// (23,785 URLs -- was 23,780 through M5, +5 for `/watch` and its four presets -- well under
+// (23,913 URLs -- was 23,908 through M5, +5 for `/watch` and its four presets -- well under
 // the sitemap protocol's 50,000-per-file limit, see that file's own header), not
 // `generateSitemaps()`'s multi-file convention, so there is exactly one `/sitemap.xml` route to
 // list, not a family of numbered children.
@@ -1151,7 +1151,7 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // path and no 404-into-500 failure mode -- the second of the two reasons at the top of this
 // comment does not apply to them. The FIRST one does, and it is the whole reason they are listed:
 // without an entry each card ships `public, max-age=0, must-revalidate` (`ImageResponse`'s own
-// default, measured on a served build) -- uncacheable at the CDN, on 23,780 URLs whose entire
+// default, measured on a served build) -- uncacheable at the CDN, on 23,908 URLs whose entire
 // traffic is crawlers re-fetching them.
 //
 // SEVENTEEN as of epic #6 -- `/explore/filter/:dim`, the Explorer builder's value list. It is a

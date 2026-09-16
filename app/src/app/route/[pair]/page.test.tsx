@@ -39,8 +39,8 @@ describe("/route/<pair>", () => {
   // Final whole-branch review, F5: the spec required "both airport names in the title block
   // -> /airport/<code>", and it was never carried in -- `{a.name} ↔ {b.name}` rendered as
   // plain text. Measured consequence: no page in the product links to /airport/ or /route/ at
-  // all, so 23,556 of the sitemap's 23,780 URLs at the time (23,785 as of M6 Task 7, whose
-  // five `/watch` pages do not change this 23,556 numerator) (/airport 1,047 + /route 22,509) have zero
+  // all, so 23,684 of the sitemap's 23,908 URLs at the time (23,913 as of M6 Task 7, whose
+  // five `/watch` pages do not change this 23,684 numerator) (/airport 1,049 + /route 22,635) have zero
   // inbound internal links. This is the fix at the one place that can carry it: both airport
   // halves of the title block link to their own /airport/<code>.
   it("links both airport names in the title block to their own /airport/<code>", async () => {
@@ -334,7 +334,7 @@ describe("/route/<pair> aircraft-mix chart", () => {
   });
 
   it("still draws the history when the trailing-12 table is empty", async () => {
-    // ATL-CAK: 67 months of filings, none since 2022-06 (measured). 12,115 of this database's
+    // ATL-CAK: 67 months of filings, none since 2022-06 (measured). 12,201 of this database's
     // route pairs last filed before the current trailing-12 window, so this is over half of
     // them, not an oddity. Gating the chart on `!isEmpty` -- the obvious way to write the
     // mount -- would blank the only panel on the page with anything in it, and would pass
@@ -530,10 +530,10 @@ describe("a route whose every filing was quarantined states absence, not zero", 
 });
 
 describe("a route that filed nothing in the window states absence too", () => {
-  // THE OTHER ABSENCE, and the wider one: 12,115 route pairs last filed before this window.
+  // THE OTHER ABSENCE, and the wider one: 12,201 route pairs last filed before this window.
   // Their sums are unknowable for a reason quarantine had no part in, and the two must stay
   // separable -- a consumer keying on "the sum is null" alone answers the wrong one of them, and
-  // answers it on the 12,115 rather than the 10.
+  // answers it on the 12,201 rather than the 10.
   // MUTANT: seed `sumColumn` at 0 -> `["0", "0", "—", "—", "0", "0", "0"]` -> red.
   it("renders the measures as absence while still stating the counts", async () => {
     const { container } = render(
@@ -546,7 +546,7 @@ describe("a route that filed nothing in the window states absence too", () => {
   // been excluded from -- and must NOT blame quarantine, which had no part in this absence.
   // `RouteEmptyState` carries the real finding.
   // MUTANT: key the clause on `totals.seats === null` alone -> "Every filing on ATL–CAK in this
-  // window is quarantined — 0 rows", a finding invented on 12,115 pages to fix it on 10 -> red.
+  // window is quarantined — 0 rows", a finding invented on 12,201 pages to fix it on 10 -> red.
   it("names neither an exclusion nor quarantine, and leaves the finding to the empty state", async () => {
     const { container } = render(
       await RoutePage({ params: Promise.resolve({ pair: "ATL-CAK" }) }),

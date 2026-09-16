@@ -184,12 +184,19 @@ STATED: dict[str, tuple[str, ...]] = {
     # mart_route_health cardinality (#146, #148). The grain is a carrier-route PAIR, so `rows`
     # and `pairs` are different questions and both are gated -- stating one as the other is the
     # defect #146 closed.
+    #
+    # docs/architecture/hosting.md was registered here once (70f4e704), but its only site was
+    # always the leaderboard-precompute retirement paragraph, pinned to a specific build --
+    # "Measured 2026-08-30 at `9b358aa`, against a served build on that commit's warehouse" --
+    # one of the measurements-attributed-to-a-specific-build/date this file's own convention
+    # protects from a sweep (CLAUDE.md Global Constraints, and the plan's own exemption for
+    # hosting.md). Registering it here forced that pinned figure to drift to the CURRENT
+    # warehouse on every refresh, which is the opposite of what "measured at 9b358aa" means.
     "route_health_rows": (
         "app/smoke.sh",
         "app/src/app/watch/[preset]/page.test.tsx",
         "app/src/app/watch/[preset]/page.tsx",
         "app/src/lib/watch.test.ts",
-        "docs/architecture/hosting.md",
         "docs/architecture/pipeline.md",
         "docs/data/model.md",
         "docs/product/features.md",
@@ -211,12 +218,17 @@ STATED: dict[str, tuple[str, ...]] = {
         "pipeline/tests/test_route_health.py",
         "sql/02_marts/200_mart_route_health.sql",
     ),
+    # docs/architecture/hosting.md was registered here once, but never stated this measure --
+    # its only digit match was "12,995" as a substring of an unrelated image byte count
+    # (412,995,560), confirmed back to the registering commit (12ec015). hosting.md's real
+    # same-airport mention is the 532-pairs sentence, already correctly gated in ANCHORED
+    # under same_airport_pairs below. Re-registering it here would gate a coincidence, not a
+    # statement.
     "same_airport_filings": (
         "app/src/app/airport/[code]/endpoints.ts",
         "app/src/app/explore/page.test.tsx",
         "app/src/lib/pivot/render.ts",
         "app/src/lib/routePair.test.ts",
-        "docs/architecture/hosting.md",
         "docs/architecture/pipeline.md",
         "docs/data/invariants.md",
         "pipeline/pivot.py",

@@ -220,7 +220,7 @@ export function renderPivot(
     // least()/greatest() rather than trusting stored column order: the filter must be
     // correct however the fact row was written. Filtering the underlying columns separately
     // -- what this branch used to tell callers to do -- is NOT equivalent and is silently
-    // wrong: `origin IN (a,b) AND dest IN (a,b)` also matches a->a and b->b, and 12,995 such
+    // wrong: `origin IN (a,b) AND dest IN (a,b)` also matches a->a and b->b, and 13,278 such
     // (full window 2015-01..2026-04, quarantined included -- matching is what a filter does,
     // and quarantine does not change it; invariants.md § Route identity)
     // same-airport filings exist across 532 airports. On JFK-LAX that inflates seats by

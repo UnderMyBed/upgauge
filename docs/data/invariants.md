@@ -194,7 +194,7 @@ Store both directional (`PDX→AUS`) and undirected (`AUS-PDX`) keys. The undire
 the two airport IDs sorted, so it is stable regardless of filing order.
 
 **A route filter must not become `origin IN (a,b) AND dest IN (a,b)`.** That form also
-matches same-airport filings (`a→a`, `b→b`), and those are not a curiosity: **12,995 of them
+matches same-airport filings (`a→a`, `b→b`), and those are not a curiosity: **13,278 of them
 exist across 532 airports** — full window (2015-01 → 2026-05), *including* quarantined rows,
 which is the right pair of qualifiers here because a filter matches a row whether or not that
 row's measures are counted. See the table below for the other three answers. Measured on
@@ -228,7 +228,7 @@ it is a number the next milestone will pin an acceptance criterion to. Measured 
 | trailing 12 (2025-06 → 2026-05) | excluded | 3,173 | 355 | 598,829 |
 | trailing 12 (2025-06 → 2026-05) | **included** | **3,177** | **356** | **598,829** |
 | full window (2015-01 → 2026-05) | excluded | 12,953 | 532 | 1,932,821 |
-| full window (2015-01 → 2026-05) | **included** | **12,995** | **532** | **1,933,052** |
+| full window (2015-01 → 2026-05) | **included** | **13,278** | **532** | **1,933,052** |
 
 The bolded rows are the ones quoted elsewhere in this repo, because the question everywhere else
 is *which rows a filter matches* — quarantine changes what a row **contributes**, never whether
@@ -262,12 +262,12 @@ great circle has zero length. The unbolded column is what the naive `count(disti
 far_endpoint)` returns.
 
 **A fixture built on an airport with no same-airport rows cannot catch this** — but 359 of the
-1,047 fact-present airports have at least one in the trailing 12 window (the `359` in the table
+1,049 fact-present airports have at least one in the trailing 12 window (the `359` in the table
 above), so the population that can catch it is a third of all airports, not a curiosity. SEA and
 ORD are both in it.
 
 **Route storage order (by airport ID) and the alphabetical order a person would type
-disagree for 215 of 22,509 routes (0.96%, excluding the 532 same-airport "routes" just
+disagree for 215 of 22,635 routes (0.96%, excluding the 532 same-airport "routes" just
 above, which are not routes)** — e.g. `HPN` (12197) and `BNH` (16954): id order is
 `HPN-BNH`, but the alphabetical form — used as `/route/<pair>`'s canonical URL — is `BNH-HPN`.
 `/route/<pair>` (`app/src/lib/routePair.ts`) computes both explicitly rather than assuming one
@@ -575,7 +575,7 @@ only the second describes what a visitor sees.
 
 **Those 3 are not the whole footprint; 293 pages is.** The table above scopes to pages holding a
 quarantined group, but `airportTotals` folds from a `null` seed, so an airport with *no rows at
-all* in the window reports its sums as unknowable rather than as zero. **290** of the 1,047
+all* in the window reports its sums as unknowable rather than as zero. **290** of the 1,049
 fact-present airports are in that state (`/airport/05A` is one). They render the same `—` for a
 different reason — nothing was filed, rather than nothing filed can be trusted — and both are the
 `—` this section requires, since a month with no row is neither "nobody flew" nor "0 seats flew".
@@ -668,7 +668,7 @@ month that was filed.
 a type whose seats cannot be stated has no leader — "B overtakes A" is a claim about which type was
 biggest, and an unknown rival cannot be shown to have lost. **State the grain**: the refusal is at
 year × type — a type's WHOLE-YEAR total must be unstateable — which fires on **214 pairs across
-273 pair-years** of 23,041, and changes the rendered annotation on **18** of them (6 lose it, 12
+273 pair-years** of 23,167, and changes the rendered annotation on **18** of them (6 lose it, 12
 move year or direction). The cell-grain figure two paragraphs up (768 cells / 302 pairs) answers a
 different question and is not this one.
 
@@ -689,7 +689,7 @@ being a live one.
 **The wider branch is the empty one, and the two absences must stay separable.** `sumColumn`'s
 `null` seed means an entity that is fact-present but filed **nothing** inside the window reports its
 sums as unknowable rather than as zero. **State the grain with the figure, because these three are
-counted at two of them.** At warehouse grain: **12,115** route pairs, **45** `airline_id`s and
+counted at two of them.** At warehouse grain: **12,201** route pairs, **45** `airline_id`s and
 **37** BTS aircraft codes. At PAGE grain — which is what "renders an absence" means — they are
 **11,939**, **44** and **36**: 176 of the stale pairs are same-airport and 404 before any lookup,
 one dormant `airline_id` carries no `dim_carrier` row, and `CE-180` resolves to two fact-present
@@ -699,7 +699,7 @@ set, one level up. Against the 290 airports
 the 290, are measurements stated here, not gated figures; only the route count is generated.) They
 render the same `—` for a different reason — nothing was filed, rather than nothing filed can be
 trusted — and both are the `—` this section requires. **A consumer keying on "the sum is null" alone
-answers the wrong one of them, and answers it on the 12,115 rather than the 10.** So the card's
+answers the wrong one of them, and answers it on the 12,201 rather than the 10.** So the card's
 sixth stat and the page's foot are both gated on **two** operands, and every surface tests both
 absences: `RouteEmptyState` / `CarrierEmptyState` / `AircraftEmptyState` name which one a page is
 in, and the foot claims an exclusion only where there was one.
@@ -767,21 +767,21 @@ is the tell that it was re-scanning the fact table rather than probing a hash ta
 *Exactly* the same is the load-bearing half, and it is measured rather than argued:
 `test_reverse_lookup_selects_exactly_the_fact_present_current_airports` runs the shipped
 `.sql` file over **every** `is_latest` code and diffs its result set against the `EXISTS`
-form's in both directions (1,047 airports, 0 either way). Both forms are equivalent by
+form's in both directions (1,049 airports, 0 either way). Both forms are equivalent by
 construction — membership in `origin ∪ dest` *is* what that `EXISTS` tests, NULLs included —
 but the same test rejects a plausible near-miss: an `origin`-only predicate loses 50
 destination-only airports. Two other rewrites were measured and rejected: `id IN (origins) OR
 id IN (dests)` is 80 ms (two mark joins, no shared scan), and `UNION ALL` in place of `UNION`
-is 21–22 ms (6.7 M probe values instead of 1,047 distinct ones).
+is 21–22 ms (6.7 M probe values instead of 1,049 distinct ones).
 
 ### Airport coordinates, and the six that are east of the antimeridian
 
-Measured 2026-08-01 against the 1,047 fact-present airports (`fct_segment_month`'s origin ∪
+Measured 2026-08-01 against the 1,049 fact-present airports (`fct_segment_month`'s origin ∪
 dest, joined on `is_latest`). Recorded here because anything that places an airport
 geographically depends on both facts, and neither is guessable from the schema.
 
 **Every fact-present airport has coordinates.** `lat` and `lon` are NULL for **0** of the
-1,047. A geographic view needs no "not drawn, coordinates missing" disclosure, which is
+1,049. A geographic view needs no "not drawn, coordinates missing" disclosure, which is
 otherwise exactly the kind of gap this repo insists on stating.
 
 **Six carry a POSITIVE longitude**, and a naive `lon < some_western_bound` test silently
@@ -892,7 +892,7 @@ be an arbitrary, confident answer about the wrong airline. `app/src/lib/carrier.
 114 fact-present airlines last filed before 2025-05** (measured, 39%) — Virgin America's last
 month is 2018-03 — which is why `/carrier/<code>` renders the full-window chart independently
 of the trailing-12 table and names the range the chart can actually draw. Same shape as the
-12,115-of-23,041 route pairs recorded under § Route identity.
+12,201-of-23,167 route pairs recorded under § Route identity.
 
 **For aircraft the filter is not enough, and this is where the airport result stops
 generalising.** 12 `short_name`s map to more than one `code` across `dim_aircraft_type`;

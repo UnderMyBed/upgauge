@@ -149,7 +149,7 @@ describe("the default export's card input", () => {
 
   // THE OTHER ABSENCE. ATL-CAK filed 67 months and nothing since 2022-06, so the trailing-12
   // pivot returns NO rows -- unknowable for a reason quarantine had no part in, which is the
-  // state 12,115 of this database's route pairs are in.
+  // state 12,201 of this database's route pairs are in.
   // MUTANT: key `cardSixthStat` on `totals.seats === null` alone -> `Quarantined 0` here, naming
   // the one cause it is not and withholding nothing that would explain the dashes -> red.
   // MUTANT: seed `sumColumn` at 0 -> the first five stop being dashes -> red.

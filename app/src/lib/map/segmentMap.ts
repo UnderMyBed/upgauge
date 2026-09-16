@@ -848,7 +848,7 @@ function fitPointsOf(segments: SegmentDatum[]): GeoPoint[] {
  * none either (`ArcDatum` is code/lat/lon), and it is pinned, so the hub adapter could not
  * supply one without breaking `/airport`'s byte-identical guard.
  *
- * SAFE TODAY, MEASURED: zero display-code collisions among the 1,047 fact-present airports.
+ * SAFE TODAY, MEASURED: zero display-code collisions among the 1,049 fact-present airports.
  * `dim_airport` carries 20+ overall -- `AUS` is both 10423 and 16440 -- but none of the
  * colliding pairs is fact-present, so no two endpoints the producers can emit share a code.
  *

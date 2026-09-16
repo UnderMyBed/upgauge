@@ -66,7 +66,7 @@ function routeColumns(allowlist: Allowlist): string[] {
 /** The two resolved codes for a route row, in the order the columns hold them (airport-id
  * order). The DISPLAY joins these with an en dash; the HREF must re-sort them alphabetically
  * by code -- routeHrefFromCodes owns that, because the two orderings disagree for 154 of
- * 22,509 pairs and reusing the display order is wrong for every one of them. Shared with
+ * 22,635 pairs and reusing the display order is wrong for every one of them. Shared with
  * `routeHref` below so the display string and the link read the same two `displayValue()`
  * calls rather than two independently maintained copies. */
 function routeCodes(
