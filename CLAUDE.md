@@ -480,10 +480,10 @@ signature element; it does not own these.
   only, and even those are per-route (`/sitemap.xml`/`/robots.txt` 404 the same way any Next
   route does, uncached by `proxy.ts` since they never leave the 200 path in practice).
   **`proxy.ts`'s matcher is `/:path*`, and a route is ours only if `QUERY_ROWS` (`lib/canonicalQuery.ts`)
-  declares it.** Anything else gets both headers and nothing more — no `Cache-Control`, no
-  canonical-query gate, no database — and `canonicalQuery.test.ts` fails on a route file under
-  `app/src/app` it does not model, or with no row and not in its pinned `NOT_OURS` set. A listed
-  matcher left every other URL's `x-upgauge-path` to the client, and a forged one reached
+  declares it.** Anything else gets both headers and nothing more — no canonical-query gate, no database,
+  no `Cache-Control` but the `no-store` every `RSC` request gets — and `canonicalQuery.test.ts` fails on
+  a route file under `app/src/app` it does not model, or with no row and not in its pinned `NOT_OURS`
+  set. A listed matcher left every other URL's `x-upgauge-path` to the client, and a forged one reached
   `CarrierNotFound`'s DuckDB query from outside the edge rate limit. A static, closed slug set (like
   `/watch`'s four presets) is necessary but not sufficient for a route's cacheability branch to skip a
   database probe — every preset page runs a `mart_route_health` query the proxy commits to a cache

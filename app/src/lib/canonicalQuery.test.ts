@@ -510,14 +510,39 @@ describe("servedRoutePatterns", () => {
     expect(servedRoutePatterns(root).sort()).toEqual(["/", "/x/:id/opengraph-image"]);
   });
 
-  it("refuses twitter-image.tsx with the unmodeled-file guard, naming the file", () => {
-    const root = build({ "x/twitter-image.tsx": "" });
+  // A file for every alternative `UNMODELED_FILE` lists, and deleting an alternative reddens
+  // exactly the cases whose file passes through it. A file can pass through two: the first
+  // pattern multiplies a name group by an extension group, and the second nests its extension
+  // group inside the static branch, so deleting a name or that branch reddens every case under it.
+  // Each comment names the alternatives its file passes through.
+  it.each([
+    "x/icon.ico", // icon, ico
+    "x/icon.svg", // icon, svg
+    "x/icon.tsx", // icon, [jt]sx?
+    "x/apple-icon.png", // apple-icon, png
+    "x/apple-icon.jpg", // apple-icon, jpe?g
+    "x/twitter-image.gif", // twitter-image, gif
+    "x/twitter-image.alt.txt", // twitter-image, alt\.txt
+    "x/opengraph-image.jpg", // the static branch, jpe?g
+    "x/opengraph-image.png", // the static branch, png
+    "x/opengraph-image.gif", // the static branch, gif
+    "x/opengraph-image.alt.txt", // the static branch, alt\.txt
+    "x/opengraph-image1.tsx", // the numbered code branch
+    "manifest.json", // json
+    "manifest.webmanifest", // webmanifest
+    "manifest.ts", // [jt]sx?
+    "sitemap.xml", // sitemap\.xml
+    "robots.txt", // robots\.txt
+  ])("refuses %s with the unmodeled-file guard, naming the file", (file) => {
+    const root = build({ [file]: "" });
     expect(() => servedRoutePatterns(root)).toThrow(
-      "servedRoutePatterns does not model the file convention 'x/twitter-image.tsx'",
+      `servedRoutePatterns does not model the file convention '${file}'`,
     );
   });
 
-  it.each(["[[...slug]]", "[...slug]"])(
+  // Every alternative in the folder guard: the three members of `^[(@_]` -- a route group, a
+  // parallel-route slot and a private folder -- and both spellings `^\[\[?\.\.\.` accepts.
+  it.each(["(group)", "@slot", "_private", "[[...slug]]", "[...slug]"])(
     "refuses a %s folder with the folder-convention guard, naming the folder",
     (folder) => {
       const root = build({ [`${folder}/page.tsx`]: "" });
@@ -527,10 +552,13 @@ describe("servedRoutePatterns", () => {
     },
   );
 
-  it("refuses an exported generateSitemaps with the URL-moving-export guard, naming it", () => {
-    const root = build({ "sitemap.ts": "export async function generateSitemaps() {}\n" });
+  it.each([
+    ["generateSitemaps", "sitemap.ts", "export async function generateSitemaps() {}\n"],
+    ["generateImageMetadata", "x/opengraph-image.tsx", "export function generateImageMetadata() {}\n"],
+  ])("refuses an exported %s with the URL-moving-export guard, naming it", (name, file, body) => {
+    const root = build({ [file]: body });
     expect(() => servedRoutePatterns(root)).toThrow(
-      "servedRoutePatterns does not model the URL-moving export 'generateSitemaps' in 'sitemap.ts'",
+      `servedRoutePatterns does not model the URL-moving export '${name}' in '${file}'`,
     );
   });
 });

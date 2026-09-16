@@ -2829,9 +2829,10 @@ check_rendered_404 "watch" "$BODY" 'Preset not found'
 #
 # Cloudflare's default cache key includes the full query string, so before this gate `?x=1..N`
 # minted an unbounded family of long-cached entries on every cacheable path -- measured on a
-# served build at 4aa8087, on all TEN that the proxy gates, `/sitemap.xml?x=1` at 30 days and
-# 2.4 MB. `/api/pivot` is an ELEVENTH cacheable path, closed in its own handler with a 400 rather
-# than here with a 307 (below); `/search` is declared too and never cacheable at all.
+# served build at 4aa8087, `/sitemap.xml?x=1` at 30 days and 2.4 MB. The proxy gates fifteen
+# paths, one per `QUERY_ROWS` row with no `exempt`; `/api/pivot` is a sixteenth cacheable path,
+# closed in its own handler with a 400 rather than here with a 307 (below); `/search` is declared
+# too and never cacheable at all.
 # Each entry is a guaranteed origin miss, against the exact cost model the CDN exists to protect.
 #
 # `check` is `grep -F`, a SUBSTRING test, which is a trap for a Location assertion: a needle of

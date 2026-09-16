@@ -35,6 +35,12 @@ import { canonicalize } from "@/lib/canonicalQuery";
 const CACHE = "public, s-maxage=3600, stale-while-revalidate=86400";
 // proxy.ts's own `NO_STORE`, restated as `CACHE` is: proxy.ts exports only `proxy` and `config`.
 const NO_STORE = "no-store";
+// Client-supplied values for both headers the proxy owns. The path names a real 404 family, so a
+// proxy that let it through would send app/not-found.tsx to `CarrierNotFound` and its DuckDB
+// lookup; the query is what that boundary hands the filter view. Each differs from every value the
+// proxy derives for the requests it is sent with, or an assertion that the proxy's own value won
+// could not tell the two apart.
+const FORGED = { [RAW_PATH_HEADER]: "/carrier/ZZ", [RAW_QUERY_HEADER]: "v=1" };
 
 // These tests pin what proxy.ts controls: the headers it sets and the values it copies. They
 // CANNOT pin the thing that broke twice in production -- whether Next hands this function a
@@ -207,9 +213,12 @@ describe("proxy", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  // The header the three M4d not-found.tsx files read. Without it each of them throws
-  // MissingRawPathError -- a 500 where a 404 was the answer -- so this is a 500-vs-404 test, not
-  // a cosmetic one. (Again: only smoke.sh can see whether Next runs the proxy at all.)
+  // The header each of these 404s is rendered from. The proxy rewrites all three to `/_not-found`,
+  // and the root not-found.tsx dispatches on this header: without it that boundary renders its
+  // generic "Page not found" view instead of the entity's own sentence. The segment not-found.tsx,
+  // which an RSC request still renders, reads it through `rawPathFromHeaders` and throws
+  // MissingRawPathError when it is absent. (Again: only smoke.sh can see whether Next runs the
+  // proxy at all.)
   it.each([
     ["/airport/ZZZZ"],
     ["/carrier/ZZ"],
@@ -342,9 +351,10 @@ describe("proxy", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  // The header /watch/[preset]/not-found.tsx reads. Without it that not-found.tsx throws
-  // MissingRawPathError -- a 500 where a 404 was the answer, same
-  // shape as the ENTITY_ROUTES pages' equivalent test above.
+  // The header /watch/nope's 404 is rendered from, the same shape as the entity pages' test above:
+  // rewritten to `/_not-found`, the root not-found.tsx dispatches on it to the watch view and
+  // renders the generic one without it, and /watch/[preset]/not-found.tsx, which an RSC request
+  // still renders, throws MissingRawPathError when it is absent.
   it("copies the pathname for /watch/nope, without which its not-found.tsx throws", async () => {
     const res = await proxy(new NextRequest("http://localhost/watch/nope"));
     expect(getReqHeader(res, RAW_PATH_HEADER)).toBe("/watch/nope");
@@ -894,6 +904,9 @@ describe("proxy", () => {
 });
 
 describe("a request for a path that is not one of ours", () => {
+  // Every request forges both headers. A proxy that kept a client-supplied value would hand
+  // `/carrier/ZZ` to app/not-found.tsx, which dispatches on it -- #172 -- and the two header
+  // assertions below are what refuse that, one per header.
   it.each([
     "/nope",
     "/wp-login.php",
@@ -905,11 +918,16 @@ describe("a request for a path that is not one of ours", () => {
     "/carrier/DL/x",
     "/watch/gauge/x",
     "/explore/filter/origin_state/x",
+    // A malformed escape. Decoding the pathname anywhere on the proxy path, ahead of the slug
+    // readers' guarded decode, throws `URIError` here -- a 500 on every such URL, routed or not.
+    "/%zz/x",
   ])("%s gets both headers and nothing else", async (pathname) => {
     vi.mocked(canonicalize).mockClear();
     vi.mocked(dataAsOf).mockClear();
     vi.mocked(loadAllowlist).mockClear();
-    const res = await proxy(new NextRequest(`http://localhost${pathname}?x=1`));
+    const res = await proxy(
+      new NextRequest(`http://localhost${pathname}?x=1`, { headers: FORGED }),
+    );
     expect(getReqHeader(res, RAW_PATH_HEADER)).toBe(pathname);
     expect(getReqHeader(res, RAW_QUERY_HEADER)).toBe("x=1");
     expect(res.headers.get("Cache-Control")).toBeNull();
@@ -1087,6 +1105,16 @@ describe("proxy 404 rewrite (#157)", () => {
     // "not part of Upgauge" view instead of the entity's own sentence.
     const res = await proxy(new NextRequest("http://localhost/carrier/ZZ"));
     expect(getReqHeader(res, RAW_PATH_HEADER)).toBe("/carrier/ZZ");
+  });
+
+  it("carries the proxy's own headers through the rewrite, not client-supplied ones", async () => {
+    // The not-ours cases forge both headers on the passthrough response; this is the rewrite, the
+    // other response a forged value could ride. `/watch/nope` forging `/carrier/ZZ` would send the
+    // root not-found to the carrier view and its database lookup instead of the watch sentence.
+    const res = await proxy(new NextRequest("http://localhost/watch/nope", { headers: FORGED }));
+    expect(rewritePath(res)).toBe("/_not-found");
+    expect(getReqHeader(res, RAW_PATH_HEADER)).toBe("/watch/nope");
+    expect(getReqHeader(res, RAW_QUERY_HEADER)).toBe("");
   });
 
   it("carries the raw query through the rewrite, which the filter 404 renders", async () => {
