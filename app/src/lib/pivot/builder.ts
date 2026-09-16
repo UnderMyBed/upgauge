@@ -196,8 +196,8 @@ export function filterListHref(q: PivotQuery, dim: string): string {
  *  Delegates the whole reader to `entitySlugFromPath`, whose guard exists because
  *  `decodeURIComponent` THROWS on `%zz` and an uncaught throw on the proxy path is a 500 on the
  *  request (`canonicalQuery.ts`'s own leading-`?` incident), and whose one-non-empty-segment
- *  rule refuses the bare prefix and any nested path -- exactly what a `:param` matcher entry and
- *  the `[dim]` folder it forwards to both accept. */
+ *  rule refuses the bare prefix and any nested path -- exactly what the `[dim]` folder itself
+ *  accepts. */
 export function filterDimFromPath(pathname: string): string | null {
   return entitySlugFromPath(pathname, FILTER_PREFIX);
 }

@@ -256,8 +256,7 @@ describe("aircraftSlugFromPath", () => {
   // M5 Task 6: aircraftSlugFromPath is now a one-line wrapper around lib/entitySlug.ts's
   // entitySlugFromPath. Pinned here so the collapse cannot smuggle in a behaviour change --
   // a bare prefix and a nested path are both refused, exactly as every other entity reader
-  // refuses them, because config.matcher's `:param` entry and the `[param]` folder both accept
-  // exactly one non-empty raw segment.
+  // refuses them, because the `[name]` folder itself accepts exactly one non-empty raw segment.
   it("returns null for a bare trailing slash", () => {
     expect(aircraftSlugFromPath("/aircraft/")).toBeNull();
   });

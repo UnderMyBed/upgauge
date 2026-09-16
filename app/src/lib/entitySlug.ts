@@ -9,10 +9,12 @@
  * once all three existed, and `CLAUDE.md`'s M5 punch list is where that follow-up landed.
  *
  * Exactly one non-empty RAW segment follows the prefix, or this returns null -- the same shape
- * a `:param` matcher entry and the `[param]` folder it forwards to both accept, so the slug this
- * function names is always a slug Next would actually route. The check runs on the RAW text,
- * before decoding: an encoded slash (`%2F`) stays inside one segment, exactly as Next's own
- * router treats it, so checking after decoding would wrongly split a legitimate slug in two.
+ * a `[param]` folder accepts: `/carrier/DL` reaches `[code]` with `code` = `"DL"`, while
+ * `/carrier/` and `/carrier/DL/x` reach no page at all, since `[code]` is a leaf segment with
+ * nothing routed beneath it. The check runs on the RAW text, before decoding: an encoded slash
+ * (`%2F`) stays inside one segment -- `/carrier/D%2FL` is a single path segment, and Next routes
+ * it to `[code]` with `code` = `"D/L"` -- so checking after decoding would wrongly split a
+ * legitimate slug in two.
  *
  * `decodeURIComponent` THROWS on a malformed percent-escape (`%zz`, or the more exotic
  * `%E0%A4%A`) -- bug #2 on `smoke.sh`'s list of production-only failures, found once and never

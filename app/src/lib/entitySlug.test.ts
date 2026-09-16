@@ -60,8 +60,8 @@ describe("entitySlugFromPath", () => {
   });
 
   it("decides one segment on the RAW text, so an encoded slash stays inside the slug", () => {
-    // `/carrier/D%2FL` is ONE path segment -- Next routes it to `[code]` with code `D/L`, and a
-    // `/carrier/:code` matcher entry forwards it. Checking after decoding would call it two.
+    // `/carrier/D%2FL` is ONE path segment -- Next routes it to `[code]` with code `D/L`.
+    // Checking after decoding would call it two.
     for (const prefix of PREFIXES) {
       expect(entitySlugFromPath(`${prefix}D%2FL`, prefix)).toBe("D/L");
     }

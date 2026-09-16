@@ -150,8 +150,8 @@ describe("carrierSlugFromPath", () => {
 
   // M5 Task 6: carrierSlugFromPath is now a one-line wrapper around lib/entitySlug.ts's
   // entitySlugFromPath. Pinned here so the collapse cannot smuggle in a behaviour change --
-  // a bare prefix and a nested path are both refused, matching what a `/carrier/:code` matcher
-  // entry and its `[code]` folder actually route.
+  // a bare prefix and a nested path are both refused, matching what the `[code]` folder itself
+  // routes: a leaf segment, nothing beneath it.
   it("returns null for a bare trailing slash", () => {
     expect(carrierSlugFromPath("/carrier/")).toBeNull();
   });
