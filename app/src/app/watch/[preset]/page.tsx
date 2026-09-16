@@ -292,12 +292,12 @@ function DeparturesFloorNote() {
  * the trailing 12. Two things follow, and the page shipped a false claim about each:
  *
  *   1. It is a RE-ENTRY, not a first appearance. mart_route_health carries no lookback past
- *      that window, so the query cannot distinguish one from the other -- 174 of the 297
- *      qualifying rows (58.6%) filed in some earlier month, B6 AUS-FLL as far back as 2015-01
- *      with 106 distinct months on file. (M6 shipped "first appearance since 2015".)
+ *      that window, so the query cannot distinguish one from the other -- 160 of the 281
+ *      qualifying rows (56.9%) filed in some earlier month, B6 AUS-FLL as far back as 2015-01
+ *      with 107 distinct months on file. (M6 shipped "first appearance since 2015".)
  *   2. It is a CARRIER-ROUTE PAIR, not a route. The mart's grain is (op_airline_id, route), so
- *      this filter is silent about every OTHER carrier on the same airport pair -- 245 of the
- *      297 (82.5%), and all 25 rows this page renders, had another carrier flying that pair
+ *      this filter is silent about every OTHER carrier on the same airport pair -- 224 of the
+ *      281 (79.7%), and all 25 rows this page renders, had another carrier flying that pair
  *      inside the prior window. (M6 shipped "new service nobody flew last year", and the fix
  *      wave for #1 carried that clause over unexamined.)
  *
@@ -315,9 +315,9 @@ function ReEntryNote({ p12From, p12To }: { p12From: string; p12To: string }) {
       qualifies when this carrier filed nothing at all on this route in the prior 12 months (
       {p12From} to {p12To}) and something in the trailing 12. mart_route_health carries no
       lookback beyond that window, so it cannot tell a brand-new pair from a resumed one:
-      measured, 174 of the 297 qualifying pairs (58.6%) had already filed in some earlier month,
-      one of them in 106 distinct months going back to 2015-01. Nor does it mean the route was
-      unserved &mdash; 245 of the 297 (82.5%) had a <em>different</em> carrier flying the same
+      measured, 160 of the 281 qualifying pairs (56.9%) had already filed in some earlier month,
+      one of them in 107 distinct months going back to 2015-01. Nor does it mean the route was
+      unserved &mdash; 224 of the 281 (79.7%) had a <em>different</em> carrier flying the same
       airport pair inside that prior window. A pair that stopped and resumed <em>within</em>
       these two windows is excluded for the mirror-image reason.
     </p>

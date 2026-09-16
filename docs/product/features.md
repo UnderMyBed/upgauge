@@ -285,25 +285,25 @@ by any reader who tries to reproduce Gauge Watch in `/explore` and cannot.
   `p12_months_present = 0` and nothing else; `mart_route_health` carries **no lookback past the
   prior 12 months**, so the query cannot distinguish a brand-new route from a resumed one.
 
-  Measured on the 2026-05 warehouse: **174 of the 297 qualifying rows (58.6%) filed in at least
-  one month before the p12 window**, including **19 of the 25 the page renders**. Worst case
-  `B6 AUS–FLL` — **106 distinct months filed, first filed 2015-01** — was presented as brand-new
-  service. Also `MQ AZO–ORD` (105 months), `MQ ALO–ORD` (103), `OO ORD–PAH` (100), `OH CLT–DSM`
-  (99). The old reasoning here ("a route flown in 2014 and resumed in 2019 looks new") had the
-  right failure mode and stopped one rung too high: a route flown in **2023** and resumed in
-  2025 looks new too, and that is well over half the rows. The mirror-image limitation is
-  unchanged — a carrier–route that stopped and resumed *within* the p12/t12 windows has some p12
-  presence and never appears here at all.
+  Measured on the 2026-06 warehouse: **160 of the 281 qualifying rows (56.9%) filed in at least
+  one month before the p12 window**, including **22 of the 25 the page renders**. Worst case
+  `B6 AUS–FLL` — **107 distinct months filed, first filed 2015-01** — which "first appearance
+  since 2015" presents as brand-new service. Also `OO ORD–PAH` (101 months), `OH CLT–DSM` (99),
+  `OO AUS–DEN` (97), `MQ BPT–DFW` (94). The old reasoning here ("a route flown in 2014 and
+  resumed in 2019 looks new") had the right failure mode and stopped one rung too high: a route
+  flown in **2023** and resumed in 2025 looks new too, and that is more than half the rows. The
+  mirror-image limitation is unchanged — a carrier–route that stopped and resumed *within* the
+  p12/t12 windows has some p12 presence and never appears here at all.
 
   **And the grain is the pair, not the route — so "nobody flew it last year" is false too.**
   `mart_route_health` is one row per **(op_airline_id, undirected route)**, which is why this
   bullet says "carrier × O&D pair". `p12_months_present = 0` is therefore silent about every
-  *other* carrier on the same airport pair. Measured: **245 of the 297 qualifying rows (82.5%),
+  *other* carrier on the same airport pair. Measured: **224 of the 281 qualifying rows (79.7%),
   and 25 of the 25 the page renders**, had a different carrier flying that pair inside the p12
   window. The page's own #1 row, `AS HNL–ITO`, ranks first while HA, UA and WN filed
-  **1,786,963 seats** on that pair in the prior window — **3.7×** the subject's own trailing 12.
-  `AS DEN–SAN` had **seven** other operators and 1.88M seats, 14× its own; `AA FLL–LGA` three
-  and 1.52M, 10.8×. This one is worth recording as a process finding, not just a data one: it was
+  **1,786,963 seats** on that pair in the prior window — **3.1×** the subject's own trailing 12.
+  `AS DEN–SAN` had **six** other operators and 1.86M seats, 12.6× its own; `AA FLL–LGA` three
+  and 1.50M, 9.5×. This one is worth recording as a process finding, not just a data one: it was
   **introduced by the fix wave that corrected the "since 2015" claim** — "new service nobody
   flew last year" read as the *accurate* half of the old sentence and was carried over
   unexamined, so a wave fixing one false claim shipped another of the same class. Any sentence

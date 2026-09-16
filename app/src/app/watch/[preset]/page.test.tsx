@@ -232,9 +232,9 @@ describe("/watch/<preset>", () => {
   // and this test enforced it, so the eighth test in this milestone unable to fail for the
   // reason it names: it asserted a phrase, not a fact, and the phrase was wrong.
   // watch_new_routes.sql selects `p12_months_present = 0` -- nothing filed in the PRIOR 12
-  // months -- which is a re-entry, not a first appearance. Measured on the 2026-05 warehouse:
-  // 174 of 297 qualifying rows (58.6%) filed before that window, 19 of the 25 the page renders,
-  // worst case B6 AUS-FLL at 106 distinct months back to 2015-01.
+  // months -- which is a re-entry, not a first appearance. Measured on the 2026-06 warehouse:
+  // 160 of 281 qualifying rows (56.9%) filed before that window, 22 of the 25 the page renders,
+  // worst case B6 AUS-FLL at 107 distinct months back to 2015-01.
   //
   // The replacement asserts the accurate claim AND the absence of the false one -- the pair is
   // the point. `toContain("...first appearance")` alone would still pass against the old
@@ -244,7 +244,7 @@ describe("/watch/<preset>", () => {
     const text = content(container);
     expect(text).toContain("not necessarily a first appearance");
     expect(text).toContain("Re-entry, not first appearance");
-    expect(text).toContain("174 of the 297");
+    expect(text).toContain("160 of the 281");
     expect(text).not.toContain("since 2015");
     expect(text).not.toContain("first ever");
   });
@@ -254,9 +254,9 @@ describe("/watch/<preset>", () => {
   // pair -- so `p12_months_present = 0` is silent about every OTHER carrier on the same airport
   // pair. Two strings described it at ROUTE grain: the frame's "nobody flew last year" (carried
   // over from the original sentence unexamined, because it read as its accurate half) and
-  // ReEntryNote's "A route qualifies by...". Measured: 245 of the 297 qualifying rows (82.5%),
+  // ReEntryNote's "A route qualifies by...". Measured: 224 of the 281 qualifying rows (79.7%),
   // and 25 of the 25 the page renders, had a different carrier flying that pair inside the p12
-  // window -- the #1 row AS HNL-ITO while HA, UA and WN filed 1,786,963 seats on it, 3.7x the
+  // window -- the #1 row AS HNL-ITO while HA, UA and WN filed 1,786,963 seats on it, 3.1x the
   // subject's own trailing 12. So the claim was false about EVERY row on the page.
   //
   // Both directions, as always: the carrier-grain phrasing present AND the two route-grain
@@ -267,7 +267,7 @@ describe("/watch/<preset>", () => {
     const text = content(container);
     expect(text).toContain("this carrier flew nothing on");
     expect(text).toContain("this carrier filed nothing at all on this route");
-    expect(text).toContain("245 of the 297");
+    expect(text).toContain("224 of the 281");
     expect(text).not.toContain("nobody flew");
     expect(text).not.toMatch(/\bA route qualifies\b/);
   });

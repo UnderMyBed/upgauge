@@ -7,21 +7,21 @@
 -- claims do NOT follow from that, and this file's own header asserted both through M6.
 --
 -- 1. NOT "first appearance since 2015". This filter says nothing about the years before the p12
---    window, because mart_route_health carries no lookback beyond it. Measured on the 2026-05
---    warehouse: 174 of the 297 qualifying rows (58.6%) filed in at least one month BEFORE the
---    p12 window, and 19 of the 25 rows the page actually renders. Worst case B6 AUS-FLL -- 106
+--    window, because mart_route_health carries no lookback beyond it. Measured on the 2026-06
+--    warehouse: 160 of the 281 qualifying rows (56.9%) filed in at least one month BEFORE the
+--    p12 window, and 22 of the 25 rows the page actually renders. Worst case B6 AUS-FLL -- 107
 --    distinct months on file, first filed 2015-01 -- which "first appearance since 2015"
---    presented as brand-new service. features.md's older reasoning ("a route flown in 2014 and
+--    presents as brand-new service. features.md's older reasoning ("a route flown in 2014 and
 --    resumed in 2019 looks new") had the right failure mode and the wrong window: a route flown
---    in 2023 and resumed in 2025 looks new too, and that is half of these rows.
+--    in 2023 and resumed in 2025 looks new too, and that is more than half of these rows.
 --
 -- 2. NOT "new service nobody flew last year". THE GRAIN IS (op_airline_id, route_key_low,
 --    route_key_high) -- one row per carrier per undirected route, never one row per route -- so
---    this filter is silent about every OTHER carrier on the same airport pair. Measured: 245 of
---    the 297 (82.5%), and 25 of the 25 rows this page renders, had a different carrier flying
+--    this filter is silent about every OTHER carrier on the same airport pair. Measured: 224 of
+--    the 281 (79.7%), and 25 of the 25 rows this page renders, had a different carrier flying
 --    that pair inside the p12 window. The #1 row is AS HNL-ITO, where HA, UA and WN filed
---    1,786,963 seats in that window -- 3.7x the subject's own trailing 12. AS DEN-SAN had SEVEN
---    other operators and 1.88M seats, 14x its own; AA FLL-LGA had three and 1.52M, 10.8x.
+--    1,786,963 seats in that window -- 3.1x the subject's own trailing 12. AS DEN-SAN had SIX
+--    other operators and 1.86M seats, 12.6x its own; AA FLL-LGA had three and 1.50M, 9.5x.
 --
 --    This one survived the fix wave that caught (1): "nobody flew last year" reads as the
 --    accurate half of the old sentence and was carried over unexamined. Anything written about
@@ -52,7 +52,7 @@ WHERE route_key_low <> route_key_high
 -- three columns, never the route pair alone: the grain is a carrier-route PAIR. watch_gauge.sql
 -- carries the full rule and the measurement that proves route alone is not total.
 --
--- Ties are real here: 4 tie runs covering 9 of the 297 qualifying rows, the largest three
--- Alaska routes all filing exactly 55,944 t12 seats.
+-- Ties are real here: 5 tie runs covering 11 of the 281 qualifying rows, the largest of them
+-- three Alaska routes all filing exactly 67,284 t12 seats.
 ORDER BY t12_seats DESC, op_airline_id, route_key_low, route_key_high
 LIMIT $limit

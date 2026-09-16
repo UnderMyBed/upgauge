@@ -1413,14 +1413,14 @@ page still said otherwise — a rule in a doc does not enforce itself.
 `p12_months_present = 0` means *this carrier filed nothing on this route in the prior 12
 months*, full stop. Two things it does **not** mean, each measured:
 
-- **Not a first appearance.** The mart has no lookback past that window. 174 of 297 qualifying
-  rows (58.6%), and 19 of the 25 rendered, had already filed earlier — `B6 AUS–FLL` in 106
+- **Not a first appearance.** The mart has no lookback past that window. 160 of 281 qualifying
+  rows (56.9%), and 22 of the 25 rendered, had already filed earlier — `B6 AUS–FLL` in 107
   distinct months back to 2015-01.
 - **Not an unserved route.** `mart_route_health`'s grain is **(op_airline_id, route)**, so the
-  filter is silent about every other carrier on the same airport pair. **245 of 297 (82.5%), and
+  filter is silent about every other carrier on the same airport pair. **224 of 281 (79.7%), and
   25 of the 25 rendered**, had a different carrier flying that pair inside the prior window —
   `AS HNL–ITO` leads the page while HA, UA and WN filed **1,786,963 seats** on it in that
-  window, 3.7× the subject's own trailing 12.
+  window, 3.1× the subject's own trailing 12.
 
 **Grain is a copy problem, not just a data problem.** The second bullet was introduced by the
 fix wave that closed the first: "nobody flew last year" read as the accurate half of the old

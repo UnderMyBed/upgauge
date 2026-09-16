@@ -2744,22 +2744,22 @@ check "watch/new-routes: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EX
 check     "watch/new-routes: renders a carrier code"     "$BODY" '>AS<'
 check_not "watch/new-routes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
 # Final whole-branch review (M6), CRITICAL: this page told visitors "First appearance since
-# 2015" about rows that had filed for years. `p12_months_present = 0` is a RE-ENTRY -- 174 of
-# 297 qualifying rows (58.6%) and 19 of the 25 rendered had filed before the p12 window, worst
-# case B6 AUS-FLL at 106 distinct months back to 2015-01. Both halves, in the served bytes: the
+# 2015" about rows that had filed for years. `p12_months_present = 0` is a RE-ENTRY -- 160 of
+# 281 qualifying rows (56.9%) and 22 of the 25 rendered had filed before the p12 window, worst
+# case B6 AUS-FLL at 107 distinct months back to 2015-01. Both halves, in the served bytes: the
 # accurate claim present AND the false one gone. All-ASCII needles for the reason above; the
 # frame itself is a plain TS string literal (lib/watch.ts), not JSX, so it ships verbatim.
 check     "watch/new-routes: states re-entry, not first appearance" "$BODY" 'not necessarily a first appearance'
-check_dataset check "watch/new-routes: carries the measured count"        "$BODY" '174 of the 297'
+check_dataset check "watch/new-routes: carries the measured count"        "$BODY" '160 of the 281'
 check_not "watch/new-routes: no longer claims 'since 2015'"         "$BODY" 'since 2015'
 # The SECOND false claim on this page, found by the re-review of the wave that fixed the first:
 # mart_route_health's grain is (op_airline_id, route), so `p12_months_present = 0` says nothing
-# about the OTHER carriers on that airport pair -- 245 of 297 (82.5%) and 25 of the 25 rendered
+# about the OTHER carriers on that airport pair -- 224 of 281 (79.7%) and 25 of the 25 rendered
 # had one, the #1 row (AS HNL-ITO) while HA/UA/WN filed 1,786,963 seats on it. This page has now
 # shipped a false claim twice, so every one of them gets a served-byte guard, both directions.
 check     "watch/new-routes: names the carrier, not the route (frame)" "$BODY" 'A route this carrier flew nothing on last year'
 check     "watch/new-routes: names the carrier, not the route (note)"  "$BODY" 'this carrier filed nothing at all on this route'
-check_dataset check "watch/new-routes: carries the unserved-route measurement" "$BODY" '245 of the 297'
+check_dataset check "watch/new-routes: carries the unserved-route measurement" "$BODY" '224 of the 281'
 check_not "watch/new-routes: never claims nobody flew it"              "$BODY" 'nobody flew'
 check_re     "watch/new-routes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/new-routes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'
