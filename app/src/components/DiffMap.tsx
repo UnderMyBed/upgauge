@@ -41,7 +41,7 @@ const COUNT_CLAUSE: Record<DiffCategory, string> = {
 function countNote(carrier: string, d: CarrierDiff): string {
   // The TRUE pre-cap count, straight off `totalRoutes`. Never `segments.length`: the producer
   // cut this panel at NETWORK_ARC_CAP, so on OO's added panel that would read 400 instead of
-  // 1,624 -- and SegmentMap's own "400 of 1,624 routes drawn." sentence sits directly above it.
+  // 1,653 -- and SegmentMap's own "400 of 1,653 routes drawn." sentence sits directly above it.
   const n = d.map.totalRoutes;
   const noun = `route pair${n === 1 ? "" : "s"}`;
   return `${diffPanelTitle(carrier, d.category)} ${n.toLocaleString("en-US")} ${noun} — ${COUNT_CLAUSE[d.category]}.`;
@@ -63,8 +63,9 @@ function quarantineNote(carrier: string, routes: number): string {
   );
 }
 
-/** map_carrier_diff.sql:97 -- 4,691 of 8,357 added carrier-routes (56.1%) had already FILED that
- * pair before the prior window, so "first appearance" is false of the majority of this panel.
+/** map_carrier_diff.sql header, point 1 -- 4,549 of 8,129 added carrier-routes (56.0%) had
+ * already FILED that pair before the prior window, so "first appearance" is false of the majority
+ * of this panel.
  * PREDICATE: EXISTS a fct_route_month row, same op_airline_id, same (route_key_low,
  * route_key_high), year_month < p12_start_month. The figures stay in this comment rather than in
  * the served copy deliberately: they are dataset-wide, they move on every BTS refresh, and
@@ -79,11 +80,12 @@ function reEntryNote(carrier: string): string {
   );
 }
 
-/** map_carrier_diff.sql:111 -- 3,640 of 5,959 dropped carrier-routes (61.1%) had a DIFFERENT
- * carrier flying the same pair inside the trailing window; the largest is F9 DFW-IAH, where 10
- * other carriers filed 1,704,401 seats on the pair F9 left. Same predicate as the added one with
- * the trailing window substituted. "New service nobody flew last year" is the exact sentence
- * /watch/new-routes shipped wrong, on this same grain; this is the other direction of it. */
+/** map_carrier_diff.sql header, point 3 -- 3,770 of 6,260 dropped carrier-routes (60.2%) had a
+ * DIFFERENT carrier flying the same pair inside the trailing window; the largest by prior-window
+ * seats is 3M FLL-TPA, where 6 other carriers filed 503,670 seats on the pair 3M left. Same
+ * predicate as the added one with the trailing window substituted. "New service nobody flew last
+ * year" is the exact sentence /watch/new-routes shipped wrong, on this same grain; this is the
+ * other direction of it. */
 function otherCarrierNote(carrier: string): string {
   return (
     `A dropped pair is dropped by ${carrier}, not by the industry — another carrier may still ` +

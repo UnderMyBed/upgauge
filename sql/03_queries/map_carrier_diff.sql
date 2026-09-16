@@ -8,15 +8,11 @@
 -- about a route the query never made. That rule cost this repo a shipped page
 -- (watch_new_routes.sql's header records it), and it applies here in both directions.
 --
--- EVERY FIGURE BELOW was measured on the 2026-05 warehouse over t12 = 2025-06..2026-05 and
--- p12 = 2024-06..2025-05, against THIS file's own category definitions, and counts ARCS ONLY
--- (same-airport pairs excluded -- see the section on them), WITH NAMED EXCEPTIONS: the
--- same-airport quarantine examples ("LATENT, NOT LIVE" and the "1 carrier-route" paragraph),
--- the DL-tie paragraph and its tiebreak-section recap, the undrawable-routes counts, and the
--- per-carrier same-airport table state the 2026-06 warehouse instead (t12 = 2025-07..2026-06,
--- p12 = 2024-07..2025-06). Each figure states the predicate that produced it precisely enough
--- to re-derive; a figure whose definition is not stated is one nobody can reconcile after the
--- next BTS refresh.
+-- EVERY FIGURE BELOW was measured on the 2026-06 warehouse over t12 = 2025-07..2026-06 and
+-- p12 = 2024-07..2025-06, against THIS file's own category definitions, and counts ARCS ONLY
+-- (same-airport pairs excluded -- see the section on them). Each figure states the predicate
+-- that produced it precisely enough to re-derive; a figure whose definition is not stated is
+-- one nobody can reconcile after the next BTS refresh.
 --
 -- ============================================================================================
 -- WHY THIS READS fct_route_month AND NOT mart_route_health
@@ -31,11 +27,11 @@
 -- the database. docs/data/model.md owns that rule.
 --
 -- The floor does not only remove dropped routes, and that is the part that decides this file's
--- shape. Measured over the 27,232 arc-forming carrier-route triples in the 24-month span: 96.4%
--- of added carrier-routes are ALSO invisible to the mart. (96.5% counting same-airport pairs in,
+-- shape. Measured over the 27,476 arc-forming carrier-route triples in the 24-month span: 96.5%
+-- of added carrier-routes are ALSO invisible to the mart. (96.6% counting same-airport pairs in,
 -- which is the convention docs/data/model.md states it in; this file counts arcs only.)
 -- Sourcing "dropped" here and "added" from the mart would floor two panels of one small
--- multiple differently by a factor of 28, and the panels would not be comparable -- mutual
+-- multiple differently by a factor of 29, and the panels would not be comparable -- mutual
 -- exclusivity is necessary and not sufficient.
 --
 -- So ALL THREE categories come from fct_route_month, out of ONE aggregation and ONE CASE. That
@@ -76,22 +72,23 @@
 --                absence of any t12 row), not the `flew` rule at a higher threshold
 --
 --                          floor 1    mart floor
---   added                    8,357           297
---   dropped                  5,959           219
---   downgauged               5,012         2,033
+--   added                    8,129           281
+--   dropped                  6,260           247
+--   downgauged               4,994         2,077
 --
 -- At the mart's floor -- the SAME "mart floor" predicate as the column above, not the `flew`
--- rule evaluated at a higher threshold, which is a third rule again and gives 25 and 19 -- the
--- panel labelled "dropped" would draw 6 of Delta's 573 dropped carrier-routes and the panel
--- labelled "added" 10 of its 780. A map that renders 1% of the thing its label names is a
--- worse false claim than one that includes a route flown five times
+-- rule evaluated at a higher threshold, which is a third rule again and gives 19 dropped and
+-- 23 added -- the panel labelled "dropped" would draw 4 of Delta's 623 dropped carrier-routes
+-- and the panel labelled "added" 9 of its 711. A map that renders about 1% of the thing its
+-- label names is a worse false claim than one that includes a route flown five times
 -- -- and the mart's floor guts the two categories the map exists for while leaving the third
 -- mostly intact, breaking panel comparability in the other direction.
 --
 -- 1 is the weakest floor that makes each category's own sentence true. It removes only what
--- falsifies it: 5 added and 3 dropped carrier-routes that filed in the deciding window and
--- performed zero departures there. (7 and 4 route-windows file with zero performed departures
--- altogether; most of those routes are excluded by something else first.)
+-- falsifies it: 7 added and 3 dropped carrier-routes that filed in the deciding window and
+-- performed zero departures there. (8 trailing and 5 prior carrier-route windows file with zero
+-- performed departures altogether; the other 1 and 2 flew in the opposite window, so they are
+-- categorized dropped and added respectively rather than removed.)
 -- Two properties fall out and are relied on downstream:
 --
 --   * No carrier-route has departures >= 1 with NULL or zero seats, in either window (measured:
@@ -115,13 +112,13 @@
 --
 -- 1. "ADDED" IS RE-ENTRY, NOT FIRST APPEARANCE. The filter is "did not fly it in the prior 12
 --    months", and that is the whole of it; this query has no lookback beyond the p12 window.
---    4,691 of 8,357 (56.1%) added carrier-routes had already filed that pair before the prior
+--    4,549 of 8,129 (56.0%) added carrier-routes had already filed that pair before the prior
 --    window. PREDICATE: EXISTS a fct_route_month row with the same op_airline_id, the same
 --    (route_key_low, route_key_high), and year_month < p12_start_month. AS ORD-SAN first filed
 --    2019-08, AA FLL-LGA 2016-09. The #1 added row by seats, AS HNL-ITO, genuinely is a first
 --    appearance (first filed 2026-01); most are not.
 --
--- 2. "ADDED" SAYS NOTHING ABOUT ANY OTHER CARRIER. 4,608 of 8,357 (55.1%) had a DIFFERENT
+-- 2. "ADDED" SAYS NOTHING ABOUT ANY OTHER CARRIER. 4,447 of 8,129 (54.7%) had a DIFFERENT
 --    carrier flying the same pair inside the prior window. PREDICATE: EXISTS a fct_route_month
 --    row with a different op_airline_id, the same pair, and year_month BETWEEN p12_start_month
 --    AND p12_end_month -- FILED AT ALL, with no departures floor applied to the other carrier.
@@ -129,11 +126,12 @@
 --    do not write it here.
 --
 -- 3. "DROPPED" IS A DROPPED CARRIER-ROUTE, NOT A DROPPED ROUTE. A pair a carrier stops flying
---    while three others keep flying it has not died. 3,640 of 5,959 (61.1%) dropped carrier-
+--    while three others keep flying it has not died. 3,770 of 6,260 (60.2%) dropped carrier-
 --    routes had a different carrier flying the pair inside the TRAILING window -- same predicate
---    as (2), with the trailing window substituted. The largest is F9 DFW-IAH: F9 filed 168,946
---    seats in the prior window and none in the trailing one, while 10 OTHER carriers filed
---    1,704,401 seats on that pair in the trailing window, 10.1x F9's own prior 12.
+--    as (2), with the trailing window substituted. The largest by prior-window seats is 3M
+--    FLL-TPA: 3M filed 177,188 seats in the prior window and none in the trailing one, while 6
+--    OTHER carriers filed 503,670 seats on that pair in the trailing window, 2.8x 3M's own prior
+--    12.
 --
 -- 4. "DROPPED" IS ALSO NOT "GONE FOR GOOD". A 12-month absence is an absence from one window,
 --    not an exit; the converse limitation of (1), and unfixable without a longer lookback than
@@ -141,28 +139,28 @@
 --
 -- 5. "DOWNGAUGED" IS A FALL OF ANY SIZE, AND THE TAIL IS MOSTLY TINY. The test is
 --    gauge_t12 < gauge_p12 on a route flown in both windows, with no magnitude threshold, so a
---    one-seat fall qualifies and so does a hundredth of a seat. Measured over the 5,012:
+--    one-seat fall qualifies and so does a hundredth of a seat. Measured over the 4,994:
 --
---      313 (6.2%)   fall by less than 0.1 seats per departure
---    1,439 (28.7%)  by less than 1
---    3,233 (64.5%)  by less than 5
---    median 2.83, max 86.25
+--      315 (6.3%)   fall by less than 0.1 seats per departure
+--    1,496 (30.0%)  by less than 1
+--    3,246 (65.0%)  by less than 5
+--    median 2.64, max 94.00
 --
 --    So "downgauged" is TRUE of a route and can mean nothing about it. AS SEA-SFO is a
---    929,745-seat arc that fell 1.42 seats per departure; AS SEA-SJC is 642,685 seats and fell
---    0.393. Copy that presents membership in this panel as a finding, rather than as a
+--    921,190-seat arc that fell 1.18 seats per departure; AS SEA-SJC is 638,656 seats and fell
+--    0.441. Copy that presents membership in this panel as a finding, rather than as a
 --    direction of travel, overstates two thirds of it.
 --
 --    Gauge is SUM(seats) / SUM(departures_performed) per window -- a RATIO OF SUMS, never an
 --    average of monthly ratios (CLAUDE.md's #1 homemade-tool bug). This is not a decorative
---    distinction: averaging the monthly ratios instead yields 5,030 downgauged carrier-routes
---    rather than 5,012, and moves the count for 32 carriers. Both denominators are >= 1 by the
+--    distinction: averaging the monthly ratios instead yields 4,991 downgauged carrier-routes
+--    rather than 4,994, and moves the count for 27 carriers. Both denominators are >= 1 by the
 --    floor, so neither ratio can divide by zero.
 --
 --    IT HAS TWO CONSUMERS, and they fail differently. The category CASE decides MEMBERSHIP, and
 --    averaging there moves the counts above. `gauge_fall` decides the downgauged panel's RANKING,
 --    and averaging only THAT leaves every count identical while replacing routes in every
---    over-cap panel's drawn 400 -- 26 of OO's, 19 of WN's, 17 each of DL's and AA's, so 52/38/34/34
+--    over-cap panel's drawn 400 -- 27 of OO's, 23 of WN's, 15 each of DL's and AA's, so 54/46/30/30
 --    routes change places counting both directions. AA's first ten reorder. A test asserting
 --    only counts cannot see the second one; carrierDiff.test.ts asserts AA's leading order for
 --    exactly that reason.
@@ -178,8 +176,8 @@
 -- ============================================================================================
 --
 -- $cap is NETWORK_ARC_CAP (app/src/lib/map/segmentMap.ts) -- one cap across all three maps in
--- epic #5. 14 of the 162 non-empty (carrier, category) panels exceed it; the worst is OO added
--- at 1,624, and the median panel is 24.5 routes.
+-- epic #5. 15 of the 163 non-empty (carrier, category) panels exceed it; the worst is OO added
+-- at 1,653, and the median panel is 26 routes.
 --
 -- For ADDED and DROPPED the claim's magnitude IS seats, so seats ranks them. For DOWNGAUGED it
 -- is NOT: the claim is a fall in gauge, and seats is orthogonal to it. Ranking the downgauged
@@ -188,13 +186,13 @@
 -- SEATS ranking draws against the ones it cuts, and the largest fall it discards:
 --
 --          n    med drawn   med cut   largest fall cut
---   OO   584         1.50      7.50      26.00  (the largest in the set)
---   WN   535         3.01     16.00      38.00  (the largest in the set)
---   DL   512         6.48     23.42      86.25  (the largest in the set)
---   AA   442         6.00     29.30      65.00  (the largest in the set)
+--   OO   570         1.44      7.92      26.00  (the largest in the set)
+--   WN   557         2.85     16.00      38.00  (the largest in the set)
+--   DL   514         5.49     22.00      86.25  (the largest in the set)
+--   AA   439         6.21     44.00      94.00  (the largest in the set)
 --
 -- Each panel drew the SMALLEST downgauges and cut the largest, and in all four the biggest fall
--- in the whole set was discarded -- under a disclosure reading "400 of 584", which any reader
+-- in the whole set was discarded -- under a disclosure reading "400 of 570", which any reader
 -- takes to mean the biggest 400. arcs.ts encodes seats as stroke width, so the visually dominant
 -- arcs were the least downgauged ones. That is /watch/new-routes' failure shape exactly: a label
 -- true row by row while the rendering encodes something else. DL, AA and WN are the three
@@ -217,12 +215,12 @@
 -- the three candidate keys, median gauge fall among the routes drawn vs the routes cut:
 --
 --                       med drawn   med cut   largest fall cut
---   fall                     5.00      0.39               1.12
---   seats removed            2.44      3.06              23.00
---   seats (the old key)      1.50      7.50              26.00
+--   fall                     4.94      0.41               0.96
+--   seats removed            2.20      3.77              20.00
+--   seats (the old key)      1.44      7.92              26.00
 --
 -- Seats-removed still discards a larger median fall than it draws, and still throws away a
--- 23-seat downgauge. Only ranking on the fall itself makes the disclosure true. It is also the
+-- 20-seat downgauge. Only ranking on the fall itself makes the disclosure true. It is also the
 -- key that avoids smuggling frequency into a gauge claim: capacity is frequency plus gauge in
 -- log space (docs/data/model.md verifies the identity to 2.66e-15), which is why health_score
 -- excludes capacity_delta from its composite.
@@ -233,39 +231,38 @@
 --
 --        sub-30-dep    of which in    corr(seats, fall)
 --        of the 400     the top 100   inside the drawn 400
---   OO          230              89                -0.29
---   WN          178              97                -0.39
---   DL          222              82                -0.32
+--   OO          233              90                -0.30
+--   WN          179              94                -0.39
+--   DL          221              78                -0.29
 --   AA          199              76                -0.37
 --
 -- Two mechanisms, and neither is reachable from this file. arcs.ts:82-83 gives EVERY
--- sub-30-departure arc the same fixed 1px dotted --ink-3 stroke, so 178-230 of each panel's 400
+-- sub-30-departure arc the same fixed 1px dotted --ink-3 stroke, so 179-233 of each panel's 400
 -- arcs are visually identical -- a reader cannot tell rank 1 from rank 400 in the very region the
--- disclosure points at, and 76-97 of each top 100 are in it. Meanwhile the one channel that DOES
+-- disclosure points at, and 76-94 of each top 100 are in it. Meanwhile the one channel that DOES
 -- vary, width, encodes seats, which correlates NEGATIVELY with the ranking key inside the drawn
 -- set: the widest arcs are among the least downgauged.
 --
 -- Ranking on fall also lets a thinly flown route lead: DL's leader is BNA-JFK at TWO performed
--- departures and AA's is BOS-STL at one.
+-- departures and AA's is MDT-SFO at one.
 --
 -- The volume term in the ORDER BY below does NOT decide who leads a panel (that's the paragraph
--- above), and it used to move zero routes into or out of the drawn 400 on every panel -- that no
--- longer holds for DL on this warehouse. DL's downgauged panel has a 6-way tie in fall AT THE
--- CUT: rows 397-402 all fall at 2.0 seats per departure, departures {2, 2, 2, 1, 1, 1}, so the
--- volume term decides which FOUR of the six make the cut at row 400: the three 2-departure
--- routes (BNA-MCI, BWI-FLL, MSY-SAT) plus one of the three 1-departure ones (BDL-SAT, at rn
--- 400). Against an id-only tiebreak the net effect is one route in, one out -- MSY-SAT enters
--- the cut and DFW-ICT leaves it; BDL-SAT, BNA-MCI and BWI-FLL land in the cut set either way. (NOT
--- because fall is continuous -- 125 of OO's 584 falls are whole
--- numbers.) AA, OO and WN still have no tie at their own cut -- a panel's tie at its CUT and its
--- tie at its MAXIMUM (the leader; see the tiebreak section) are different rows and can disagree,
--- as DL's now do. Away from any cut, what the term still fixes is which of a leader-tied set
--- leads: OO's leader moves from ACV-FAT (1 departure) to ATW-SBN (4), and WN's from BDL-STL (1)
--- to JAN-MCI (2).
+-- above). It moves a route into or out of the drawn 400 only where a panel ties in fall AT ITS
+-- CUT, and of the four over-cap downgauged panels only DL's does: rows 397-402 all fall at 2.0
+-- seats per departure, departures {2, 2, 2, 1, 1, 1}, so the volume term decides which FOUR of
+-- the six make the cut at row 400: the three 2-departure routes (BNA-MCI, BWI-FLL, MSY-SAT) plus
+-- one of the three 1-departure ones (BDL-SAT, at rn 400). Against an id-only tiebreak the net
+-- effect is one route in, one out -- MSY-SAT enters the cut and DFW-ICT leaves it; BDL-SAT,
+-- BNA-MCI and BWI-FLL land in the cut set either way. AA, OO and WN have no tie at their cut (NOT
+-- because fall is continuous -- 125 of OO's 570 falls are whole numbers). A panel's tie at its
+-- CUT and its tie at its MAXIMUM (the leader; see the tiebreak section) are different rows and
+-- need not coincide. Away from any cut, what the term fixes is which of a leader-tied set leads:
+-- OO's leader moves from ACV-FAT (1 departure) to ATW-SBN (4), and WN's from ABQ-ORF (1) to
+-- JAN-MCI (2).
 --
 -- IT HELPS EXACTLY HALF THE AFFECTED PANELS, and nothing here should let a reader think
 -- otherwise: DL and AA have UNIQUE maxima, so no tiebreak can reach them and their leaders remain
--- BNA-JFK at 2 performed departures and BOS-STL at 1. A thinly flown route still leads two of the
+-- BNA-JFK at 2 performed departures and MDT-SFO at 1. A thinly flown route still leads two of the
 -- four cut panels, and that is the readability defect above, not something this term addresses.
 --
 -- Nothing stronger is available here without breaking a claim. Demoting the thin arcs in the
@@ -274,14 +271,14 @@
 --
 -- FOR #110, and this is the real fix: the panel cannot render the ordering it is cut by. Either
 -- the caption says so, or arcs.ts needs a channel for fall. The disclosure must also name the key
--- -- "400 of 584" alone reads as the largest 400 ROUTES, not the largest 400 falls.
+-- -- "400 of 570" alone reads as the largest 400 ROUTES, not the largest 400 falls.
 --
--- NO PANEL HAS A UNIQUE TOP DOWNGAUGED ROUTE, so nothing may write "the biggest downgauge is X":
--- 17 OO routes tie at the panel maximum of 26.0 seats per departure, and 13 WN routes at 38.0.
--- Which of them leads is decided by the tiebreak, not by the data.
+-- A PANEL'S TOP DOWNGAUGED ROUTE NEED NOT BE UNIQUE, so nothing may write "the biggest downgauge
+-- is X": 16 OO routes tie at the panel maximum of 26.0 seats per departure, and 16 WN routes at
+-- 38.0. Which of them leads is decided by the tiebreak, not by the data.
 --
 -- THE VOLUME TERM, downgauged only. `rank_key DESC` alone leaves an exact tie in gauge fall to be
--- broken by airport id, which on OO and WN is a 17-way and a 13-way tie AT THE PANEL MAXIMUM --
+-- broken by airport id, which on OO and WN is a 16-way tie apiece AT THE PANEL MAXIMUM --
 -- so the arc a reader sees first was chosen alphabetically. Ordering the tied set by performed
 -- departures picks the most-flown of them instead. The CASE evaluates to NULL for every row of a
 -- non-downgauged partition, so those partitions compare equal on it and fall straight through to
@@ -289,10 +286,10 @@
 --
 -- IT IS CATEGORY-SCOPED AS DEFENCE, not because it changes a cut today -- and the difference is
 -- worth stating, because the obvious justification is wrong. Applying it to all three categories
--- moves NO added or dropped panel's cut at all: every one of the 10 tie-at-cut blocks has a
+-- moves NO added or dropped panel's cut at all: every one of the 11 tie-at-cut blocks has a
 -- SINGLE distinct departure count, so ordering the tied set by departures is a no-op there (MQ's
--- 317 routes tied at 76 seats all performed exactly 1 departure -- 76 seats is one flight of a
--- 76-seat aircraft, so equal seats forces equal departures at the cut). What it DOES move is 7
+-- 330 routes tied at 76 seats all performed exactly 1 departure -- 76 seats is one flight of a
+-- 76-seat aircraft, so equal seats forces equal departures at the cut). What it DOES move is 6
 -- carriers' panel INTERIORS, where seats tie at a value two different frequencies can reach: in
 -- 8V's dropped panel ANV-KYU and KGX-NUL both file 6 seats over 1 and 2 departures, and an
 -- unscoped term would swap them. So the scope is kept for the same reason the id tiebreak is
@@ -303,15 +300,15 @@
 -- had, where un-scoping one copy was a semantic no-op no data-driven test could have caught.
 --
 -- THE TIEBREAK. The ranking ORDER BY carries route_key_low, route_key_high after rank_key
--- because 10 of the 14 over-cap panels have a tie sitting exactly on the cut -- every added and
--- dropped one. Worst: MQ added, where 317 routes tie at exactly 76 seats spanning row 400; WN
--- added 237 tied at 175; OO dropped 225 tied at 76. Without the tiebreak, WHICH of those 317 are
--- drawn is SQL-unspecified and moves between runs.
+-- because 12 of the 15 over-cap panels have a tie sitting exactly on the cut -- every added and
+-- dropped one, and DL's downgauged one. Worst: MQ added, where 330 routes tie at exactly 76 seats
+-- spanning row 400; WN added 234 tied at 175; among dropped, OO's 201 tied at 76. Without the
+-- tiebreak, WHICH of those 330 are drawn is SQL-unspecified and moves between runs.
 --
--- Three of the four downgauged panels (AA, OO, WN) do not tie AT THE CUT; DL now does -- see the
--- volume-term paragraph above. That the other three don't is NOT because gauge fall is free of
--- round numbers -- 125 of OO's 584 falls are whole numbers. Their ties land at the panel MAXIMUM
--- instead, where 12 carriers have a multi-way tie and the worst is 17-way. That leader tie is
+-- Three of the four downgauged panels (AA, OO, WN) do not tie AT THE CUT, and DL's does -- see
+-- the volume-term paragraph above. That the three don't is NOT because gauge fall is free of
+-- round numbers -- 125 of OO's 570 falls are whole numbers. Their ties land at the panel MAXIMUM
+-- instead, where 14 carriers have a multi-way tie and the worst is 16-way. That leader tie is
 -- what the volume term above addresses; the id terms remain the final total order, because the
 -- triple is unique within a (carrier, category).
 --
@@ -337,11 +334,11 @@
 -- contract and states that such a pair is counted in neither totalRoutes nor the renderer's own
 -- derived drawn count).
 --
--- Measured: 500 same-airport triples in the span, 308 of them categorizable -- 84 added
--- (8,180 seats), 145 downgauged (304,457) and 79 dropped (9,251), 321,888 seats across 32
--- carriers. OO alone accounts for 111 of the downgauged ones.
+-- Measured: 499 same-airport triples in the span, 305 of them categorizable -- 80 added
+-- (7,424 seats), 143 downgauged (298,012) and 82 dropped (9,394), 314,830 seats across 33
+-- carriers. OO alone accounts for 109 of the downgauged ones.
 --
--- KNOWN GAP, stated rather than papered over: for 5 (carrier, category) pairs the ONLY member is
+-- KNOWN GAP, stated rather than papered over: for 4 (carrier, category) pairs the ONLY member is
 -- a same-airport pair. There are no arcs, so no panel is emitted, so those seats reach no map
 -- face at all. Emitting an arc-less panel to carry them would be a worse trade -- it would put
 -- an empty map on the page. Unlike the quarantine count above, these seats are per CATEGORY, so
@@ -367,14 +364,14 @@
 -- doc, and the difference is not cosmetic because #104's renderer emits that doc's sentence into
 -- a footer and an aria-label. It says "every filing behind them was quarantined". Measured over
 -- these 27: ZERO have both windows quarantined. 16 are trailing-window-only and 11 prior-only,
--- and 7 performed real departures in the window that stayed clean -- 8V BTI-VEE has 8 clean
+-- and 11 performed real departures in the window that stayed clean -- 8V BTI-VEE has 8 clean
 -- prior-window departures. 8V's own 19 split 12 trailing / 7 prior. The property they all share
 -- is narrower and exact: the window that DECIDES the category was wholly quarantined, so no
 -- category could be assigned. #105's 34 groups are all-quarantined and satisfy both readings;
 -- these satisfy only the second, so the shared sentence has to be the second.
 --
 -- SEPARATELY, and NOT this field: 87 of the drawn carrier-routes touch at least one quarantined
--- row in EITHER window without being wholly quarantined -- 75 of them downgauged, where a
+-- row in EITHER window without being wholly quarantined -- 77 of them downgauged, where a
 -- partially quarantined window shifts the very gauge ratio that assigns the category. Those arcs
 -- ARE drawn and ARE counted; their measures are computed from the non-quarantined remainder,
 -- which is what CLAUDE.md's quarantine rule requires. Both windows are counted because both
@@ -400,16 +397,16 @@
 -- SO IT IS HOISTED OFF THE PANELS ENTIRELY. fetchCarrierDiff returns
 -- `{ panels, quarantinedRoutes }`, and the count rides on the record where a carrier-wide fact
 -- belongs. That fixes both disclosed defects at once: F4 gets its count with no panel to hang it
--- on, and 8V stops stating the same 16 routes on three faces (a reader summing the small multiple
--- got 48). Each panel now passes 0 for SegmentMapInput's required field, which is true of it --
--- no route of THAT category went undrawn -- and renders no footer sentence, since
--- segmentMap.ts's quarantinedNote returns null at 0.
+-- on, and 8V's 19 are stated once rather than on each of its three faces, where a reader summing
+-- the small multiple would count 57. Each panel now passes 0 for SegmentMapInput's required
+-- field, which is true of it -- no route of THAT category went undrawn -- and renders no footer
+-- sentence, since segmentMap.ts's quarantinedNote returns null at 0.
 --
 -- A THIRD GROUP REACHES NO COUNT AT ALL, and this section would read as exhaustive without it:
 -- 1 carrier-route is BOTH wholly quarantined AND same-airport -- `2NQ`'s STT-STT, wholly
--- quarantined in the prior window (8V's VEE-VEE no longer is one: it flew for real in 2026-06).
--- `undrawable_routes` carries `route_key_low <> route_key_high`, so it is not an arc, not in
--- category_total, not in same_airport_seats and not in undrawable_routes either. It is the
+-- quarantined in the prior window. `undrawable_routes` carries `route_key_low <> route_key_high`,
+-- so it is not an arc, not in category_total, not in same_airport_seats and not in
+-- undrawable_routes either. It is the
 -- "vanish with no trace" this field exists to prevent. Left that way deliberately: counting it in
 -- undrawable_routes would state it on a map face as a route that could not be drawn, when the
 -- reason it cannot be drawn is that it is not a route -- two different absences summed into
@@ -555,11 +552,10 @@ panel AS (
 -- amount nobody can state.
 --
 -- LATENT, NOT LIVE. The wholly-quarantined same-airport pair is real (airline 21745's, 2NQ,
--- STT-STT in the prior 12 -- 8V's VEE-VEE no longer is one: it flew for real in 2026-06), but a
--- panel folds every same-airport pair in its category together and every such fold on this
--- warehouse contains at least one stateable pair -- measured across all 114 carriers with
--- route-month rows, zero panels return NULL. No page renders the wrong sentence today; the
--- coercion is one refresh away from making it do so.
+-- STT-STT in the prior 12), but a panel folds every same-airport pair in its category together
+-- and every such fold on this warehouse contains at least one stateable pair -- measured across
+-- all 114 carriers with route-month rows, zero panels return NULL. No page renders the wrong
+-- sentence today; the coercion is one refresh away from making it do so.
 -- `100_fct_route_month.sql` states the rule this disambiguation serves, in its own comment:
 -- "do NOT wrap these in COALESCE(..., 0)".
 same_airport AS (

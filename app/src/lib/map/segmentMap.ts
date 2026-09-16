@@ -1149,7 +1149,7 @@ export function segmentArcsDrawn(input: SegmentMapInput): boolean {
  * It costs a second render of each panel in a set, and the reason that is affordable is NOT
  * that diff panels are small -- they are capped AT `NETWORK_ARC_CAP` like any other map, which
  * `DiffMap`'s own `countNote` says out loud ("on OO's added panel that would read 400 instead of
- * 1,624"). It is affordable because rendering is cheap. Measured on a 400-arc captioned panel,
+ * 1,653"). It is affordable because rendering is cheap. Measured on a 400-arc captioned panel,
  * 20 iterations after warmup: `renderSegmentMap` 1.83ms, `segmentMapWindow` 2.29ms -- so the
  * worst case, three capped panels on `/carrier/OO`, pays about 6.9ms extra, a rounding error
  * beside the DuckDB work that produced the diff. `DiffMap` is the only caller and no other

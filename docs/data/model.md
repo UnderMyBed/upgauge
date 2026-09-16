@@ -490,10 +490,10 @@ side reads `fct_route_month` directly, as `sql/03_queries/map_carrier_diff.sql` 
 
 The floor is not confined to dropped carrier–routes either, which matters to anything
 comparing two populations across it: of the added carrier–routes in the same 24-month span
-(nothing flown in the prior window, something flown in the trailing one), **96.5% are also
-below the floor** — 96.4% counting arcs only, i.e. excluding same-airport pairs. So a
+(nothing flown in the prior window, something flown in the trailing one), **96.6% are also
+below the floor** — 96.5% counting arcs only, i.e. excluding same-airport pairs. So a
 query sourcing one category from this table and another from `fct_route_month` floors the two
-by a factor of 28 and they are not comparable — the categories must share one floor, applied in
+by a factor of 29 and they are not comparable — the categories must share one floor, applied in
 one place.
 
 **`p12_months_present` (like `t12_months_present`) is a 0–12 *count* of distinct months
