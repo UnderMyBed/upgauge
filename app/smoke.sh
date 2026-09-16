@@ -734,8 +734,11 @@ check_not "filter: is not Next's own force-dynamic fallback (proves proxy.ts set
 # TWO WAYS TO 404, AND THE PROBE MUST DECLINE THE CACHE FOR BOTH. `filterListVerdict` returning
 # an unconditional `cacheable` -- or gating on `allowlist.dims.has(dim)` instead of on the grain --
 # leaves these long-cached, and the dataset is rebuilt monthly, so a cached 404 outlives the
-# condition that caused it. The bodies are checked too: a dropped `QUERY_ROWS` row keeps the 404
-# STATUS and destroys the MESSAGE, which is the failure mode no header check can see.
+# condition that caused it. The bodies are checked too, and `check_rendered_404` is the check that
+# sees a route the proxy does not answer for. Measured by deleting the `/airport/:code` row and,
+# separately, the `/watch/:preset` row, then serving each build: the 404 kept its status, its
+# `no-store` and its sentence -- the sentence rides in the flight payload of the empty
+# `__next_error__` shell -- and of that 404's checks only the rendered-HTML ones went red.
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/explore/filter/not_a_dimension?${EXPLORE_Q}")
 HDRS=$(curl -s -o /dev/null -D -             --max-time 15 "${BASE}/explore/filter/not_a_dimension?${EXPLORE_Q}")
 BODY=$(curl -s                               --max-time 15 "${BASE}/explore/filter/not_a_dimension?${EXPLORE_Q}")
@@ -936,8 +939,9 @@ check_not "unrouted: no DATA AS OF -- this branch reads no database" "$BODY" 'DA
 # that header before anything else, so a client-supplied value is overwritten whatever the path:
 # an unrouted top-level URL, a non-page prefix, a path under a metadata file, and a NESTED path
 # under an entity prefix (which the one-segment slug readers give no family). Each must render the
-# database-free generic view. `Carrier not found` here would be a DuckDB read reachable from a
-# URL the edge rate limit does not cover.
+# database-free generic view. `Carrier not found` here would be a client-selected DuckDB read, and
+# three of these shapes -- `/nope`, `/favicon.ico/x`, `/watch/gauge/x` -- match none of the
+# prefixes in `deploy/cloudflare/rate-limit.json`, so on those the edge would not bound it.
 for P in /nope /api/nope /favicon.ico/x /carrier/DL/x /watch/gauge/x /explore/filter/origin_state/x; do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}${P}")
   BODY=$(curl -s --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}${P}")
@@ -956,6 +960,9 @@ check_rendered_404 "carrier with an encoded slash" "$BODY" 'Carrier not found'
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}/_next/static/nope.js")
 BODY=$(curl -s --max-time 15 -H 'x-upgauge-path: /carrier/ZZ' "${BASE}/_next/static/nope.js")
 check     "forged path header on a missing static asset: a 404"              "$CODE" '404'
+# Paired, so the negative below cannot pass on an empty or failed fetch: the whole body is Next's
+# own nine bytes, `Not Found`, read off the served response.
+check_re  "forged path header on a missing static asset: Next's plain-text body" "$BODY" '^Not Found$'
 check_not "forged path header on a missing static asset: no app 404 render"  "$BODY" 'not found</h1>'
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/favicon.ico")
 check     "favicon.ico: still served"                                        "$CODE" '200'
@@ -2551,10 +2558,12 @@ fi
 #     the one gap M5's own whole-branch review left explicit in hosting.md: "unit-verified only,
 #     not yet smoke-curled" -- proxy.test.ts calls proxy() directly and never crosses Next's own
 #     routing, so what a preset page ships when the proxy does not answer for it is visible only
-#     on a served build: `/watch/nope`'s 404 as a bare error shell instead of a body naming the
-#     preset, and /watch/gauge's Cache-Control as Next's own force-dynamic fallback, `private,
-#     no-cache, no-store, max-age=0, must-revalidate`, on a PAGE THAT RENDERS FINE -- exactly the
-#     M4b-shaped bug this file's per-route header discipline exists to catch a second time.
+#     on a served build. Measured by deleting the `/watch/:preset` row and serving the build: all
+#     four presets' `sets the project Cache-Control` checks, the gap check's HTML_CACHE on a 500 and
+#     the three `check_rendered_404 "watch"` checks went red, on PAGES THAT STILL RENDER -- exactly
+#     the M4b-shaped bug this file's per-route header discipline exists to catch a second time.
+#     `/watch/nope` kept its 404 status, its `no-store` and its sentence, which rides in the flight
+#     payload of the empty `__next_error__` shell (14f).
 
 # 14a. /watch, the index: four links, no table, no per-slug resolution -- so only the first two
 # of the five things every leaderboard page below asserts apply.
@@ -2790,13 +2799,17 @@ BODY=$(curl -s --max-time 15 "${BASE}/watch/nope")
 check     "watch: unknown preset is a 404"          "$CODE" '404'
 check_not "watch: 404 is not long-cached"           "$HDRS" "s-maxage"
 check     "watch: 404 is no-store"                  "$HDRS" "no-store"
-# The SENTENCE, not just the router-state echo: the RSC flight payload always contains the
-# requested pathname ("c":["","watch","nope"]) regardless of what the page renders -- proven by
-# mutant A above, where the 7,816-byte error shell still contains the bare string "nope" in its
-# router state despite naming nothing. The needle below spans the JSON string-escaping between
-# "preset" and the interpolated slug (`preset '","nope","'`, the {slug} JSX expression breaking
-# the sentence into three flight-payload string fragments) the same way §8's ZZZZ-LAX check
-# spans its own escaping, and requires the actual composed sentence, not the router state alone.
+# The SENTENCE, not just the router-state echo: the RSC flight payload carries the requested
+# pathname in its router state (`\"c\":[\"\",\"watch\",\"nope\"]`) whatever the page renders. The
+# needle below spans the JSON string-escaping between "preset" and the interpolated slug
+# (`preset '","nope","'`, the {slug} JSX expression breaking the sentence into three flight-payload
+# string fragments) the same way §8's ZZZZ-LAX check spans its own escaping, and requires the
+# actual composed sentence, not the router state alone.
+#
+# It is NOT a rendered-HTML check on its own; `check_rendered_404` below is. With the
+# `/watch/:preset` row deleted from `QUERY_ROWS` and the build served, `/watch/nope` was the empty
+# `__next_error__` shell with no `<h1>`, the router state and the sentence both still in its
+# payload: this check stayed green and all three `check_rendered_404 "watch"` checks went red.
 check_re "watch 404: names the offending slug" "$BODY" "We don.{1,3}t recognize the preset .{1,10}nope"
 check_rendered_404 "watch" "$BODY" 'Preset not found'
 
@@ -3565,13 +3578,18 @@ CSS_BODY=$(curl -s --max-time 30 "${BASE}${CSS_HREF}")
 # regex instead of by adjacency.
 check "responsive: the served file is the stylesheet, not an error page" "$CSS_BODY" \
   '.table-scroll{'
-# The proxy runs on this request too, and a static chunk is not one of its routes, so it must
-# neither add nor replace a cache header: the chunk keeps the long immutable header Next's static
-# server sets. The needle is the header LINE as Next emits it (capitalised, unlike the lower-case
-# lines the page and route-handler responses above carry), read off the served response.
+# The proxy runs on this request too, and a static chunk is not one of its routes, so the chunk
+# must keep the long immutable header Next's static server sets. Whatever the proxy puts in
+# Cache-Control reaches the wire as the chunk's ONE Cache-Control line, in place of Next's --
+# measured on a served build with the not-ours return setting `no-store` and, separately,
+# appending it: each served the single line `cache-control: no-store`. So the needle is that line
+# anchored whole, value read off the served response, and a replaced, appended or comma-joined
+# value all miss it. Case-tolerant like the Location needles: Next's static server writes
+# `Cache-Control:`, while a value the proxy sets goes out as `cache-control:`.
 CSS_HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}${CSS_HREF}")
-check "static asset: the proxy leaves Next's own Cache-Control on a built chunk" "$CSS_HDRS" \
-  'Cache-Control: public, max-age=31536000, immutable'
+CSS_CC=$(printf '%s' "$CSS_HDRS" | grep -i '^cache-control:' | tr -d '\r')
+check_re "static asset: the proxy leaves Next's own Cache-Control on a built chunk" "$CSS_CC" \
+  '^[Cc]ache-[Cc]ontrol: public, max-age=31536000, immutable$'
 check_re "responsive: the table keeps its own scroll container" "$CSS_BODY" \
   '\.table-scroll\{[^}]*overflow-x:auto'
 # The collapsed single-column grid keeps its zero minimum. This is the bug. `[^@]*` cannot run

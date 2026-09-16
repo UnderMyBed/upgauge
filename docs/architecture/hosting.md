@@ -837,7 +837,8 @@ is never canonicalized, its `Cache-Control` is whatever Next emits on its own (f
 resolves its 404 verdict, so `notFoundRewrite()` never fires and every 404 on it ships the empty
 `__next_error__` shell (§ A 404's body reaches the served HTML only through the proxy's
 `/_not-found` rewrite). The status stays 404 through all of that, which is why the served-build
-half of this is `app/smoke.sh`'s per-page header and 404-body checks, never a status check.
+half of this is `app/smoke.sh`'s per-page header, rendered-404-body and canonical-redirect checks,
+never its 404 status checks.
 Measured 2026-09-16 by deleting the `/airport/:code` row and serving the build: every check
 expecting `HTML_CACHE` on an `/airport` page went red (the 200, the 308, `?y=2019` twice, `GUM`,
 and the gap check's `HTML_CACHE` on a 500), as did all three `check_rendered_404 "airport"` checks
