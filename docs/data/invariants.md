@@ -693,7 +693,7 @@ being a live one.
 sums as unknowable rather than as zero. **State the grain with the figure, because these three are
 counted at two of them.** At warehouse grain: **12,201** route pairs, **45** `airline_id`s and
 **39** BTS aircraft codes. At PAGE grain — which is what "renders an absence" means — they are
-**11,939**, **45** and **38**: 178 of the stale pairs are same-airport and 404 before any lookup,
+**12,023**, **45** and **38**: 178 of the stale pairs are same-airport and 404 before any lookup,
 none of the 45 stale `airline_id`s lacks a `dim_carrier` row, and `CE-180` resolves to two
 fact-present airframes and 404s as ambiguous. This is the same warehouse-grain-versus-page-grain split the
 wholly-quarantined set draws above, one level up. Against the 290 airports

@@ -45,7 +45,7 @@ export function quarantineClause({
     // GATED ON BOTH, and the second half is not redundant. `seatsAreNull` covers TWO absences:
     // every filing quarantined, and nothing filed at all. Only the first is a quarantine story.
     // Telling the second one that "every filing is quarantined — 0 rows" would invent a finding
-    // on 11,939 route pages, 44 carriers and 36 aircraft types to fix it on 12.
+    // on 12,023 route pages, 45 carriers and 38 aircraft types to fix it on 12.
     if (quarantinedRows === 0) return "";
     // "EVERY filing is quarantined" is INFERRED, not counted: it follows from the sums being
     // null only because `fct_segment_month` carries no NULL `seats`/`passengers`/
