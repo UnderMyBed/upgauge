@@ -41,7 +41,7 @@ const QUERIES_DIR = path.join(ROOT, "sql", "03_queries");
 // process.cwd() at all: confirmed empirically (see task-7-report.md) that a query against a
 // Parquet-backed view succeeds with cwd left at app/ once file_search_path: ROOT is set.
 // Vitest gets a belt-and-braces process.chdir() of its own in vitest.config.ts's
-// setupFiles -- safe there only because Vitest 4's default pool is forks (main thread).
+// setupFiles -- safe there only because Vitest's default pool is forks (main thread).
 
 // The memo lives on `globalThis`, NOT in a module-level `let`, and that is not a style
 // choice -- a module-level `let` here was measurably THREE memos, not one.
