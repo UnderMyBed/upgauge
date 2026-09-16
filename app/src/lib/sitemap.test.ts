@@ -19,8 +19,8 @@ describe("sitemapEntries", () => {
       sitemapEntries("carriers"),
       sitemapEntries("aircraft"),
     ]);
-    expect(routes).toHaveLength(22509);
-    expect(airports).toHaveLength(1047);
+    expect(routes).toHaveLength(22635);
+    expect(airports).toHaveLength(1049);
     expect(carriers).toHaveLength(114);
     expect(aircraft).toHaveLength(110);
   });
@@ -43,7 +43,7 @@ describe("sitemapEntries", () => {
   // (b) lastmod is the entity's OWN last-filed month, never the build/current date.
   // /carrier/VX (Virgin America) last filed 2018-03 -- a fixture on an ACTIVE carrier cannot
   // fail this way, because its last filed month and the current window (data_as_of ==
-  // 2026-05) coincide. This is the anchor the brief requires.
+  // 2026-06) coincide. This is the anchor the brief requires.
   it("dates a dormant carrier by ITS last filed month, not by the current window", async () => {
     const carriers = await sitemapEntries("carriers");
     const vx = carriers.find((e) => e.url.endsWith("/VX"));
@@ -55,15 +55,16 @@ describe("sitemapEntries", () => {
   });
 
   // Companion fixture: an ACTIVE carrier's lastModified equals the dataset's current window
-  // (2026-05). On its own this assertion is NOT sufficient to catch a build-date bug (the
-  // brief's own point: "a fixture on an active entity cannot fail" that way) -- it exists so
-  // the VX test above can be shown to be load-bearing by contrast (see task-5-report.md's
-  // mutant 2).
+  // (2026-06). On its own this assertion is NOT sufficient to catch a lastmod pinned to the
+  // current window (the brief's own point: "a fixture on an active entity cannot fail" that way)
+  // -- that mutant leaves it green and reddens only VX above, which is how the VX test is shown to
+  // be load-bearing by contrast (see task-5-report.md's mutant 2). It does separate the last
+  // filed month from the wall-clock date: the data lags the calendar, so `new Date()` reddens it.
   it("dates an active carrier by its last filed month too, which happens to be the current window", async () => {
     const carriers = await sitemapEntries("carriers");
     const dl = carriers.find((e) => e.url.endsWith("/DL"));
     expect(dl).toBeDefined();
-    expect(dl?.lastModified.toISOString()).toBe(new Date("2026-05-01T00:00:00Z").toISOString());
+    expect(dl?.lastModified.toISOString()).toBe(new Date("2026-06-01T00:00:00Z").toISOString());
   });
 
   // (c) Route URLs are the CODE-ALPHABETICAL canonical form, not the id-ordered pair

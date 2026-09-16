@@ -280,12 +280,12 @@ export async function RouteView({
                 docs/design/mockups/entity-route.html. Rendered whenever there is anything to
                 draw -- INCLUDING when the trailing-12 table below is empty, which is not a
                 corner case: 12,201 of the 23,167 route pairs in this database last filed
-                before 2025-05 (measured), so for over half of them the chart is the only thing
-                on the page with anything in it, and the empty state under it is what says the
-                service has stopped. When there is nothing in the full window either (BNH-JFK),
-                nothing is drawn and nothing is claimed: the empty state below already states
-                that finding in words, and a second panel repeating it in the chart's own voice
-                would be the card soup CLAUDE.md's density rule rules out. */}
+                before the trailing-12 window (measured), so for over half of them the chart is
+                the only thing on the page with anything in it, and the empty state under it is
+                what says the service has stopped. When there is nothing in the full window
+                either (BNH-JFK), nothing is drawn and nothing is claimed: the empty state below
+                already states that finding in words, and a second panel repeating it in the
+                chart's own voice would be the card soup CLAUDE.md's density rule rules out. */}
             {hasMix ? <AircraftMixChart rows={mix} title={title} /> : null}
             {isEmpty ? (
               // `a`/`b` (alphabetical, same order as the header above), NOT `low`/`high`

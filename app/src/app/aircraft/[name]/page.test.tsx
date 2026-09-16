@@ -108,17 +108,17 @@ describe("/aircraft/<slug>", () => {
   });
 
   it("computes the stat strip from summed parts, not by averaging the carrier rows", async () => {
-    // Measured over the trailing 12 months (2025-06..2026-05) for BTS type 614:
-    // seats 165,826,686 · passengers 129,838,662 · departures 970,584.
-    // Sum(pax)/Sum(seats) = 78.30%; Sum(seats)/Sum(dep) = 170.9. A mean of the seven carrier
-    // rows gives different numbers for both, so these two assertions distinguish them --
+    // Measured over the trailing 12 months (2025-07..2026-06) for BTS type 614:
+    // seats 165,204,182 · passengers 129,452,717 · departures 967,055.
+    // Sum(pax)/Sum(seats) = 78.36%; Sum(seats)/Sum(dep) = 170.8. The mean of the seven carrier
+    // rows is 79.62% and 171.8, so these two assertions distinguish them --
     // CLAUDE.md's #1 bug in every homemade T-100 tool.
     const { container } = render(await page("B737-8"));
     const stats = container.querySelector(".stats")!.textContent ?? "";
-    expect(stats).toContain("165,826,686");
-    expect(stats).toContain("129,838,662");
-    expect(stats).toContain("78.30%");
-    expect(stats).toContain("170.9");
+    expect(stats).toContain("165,204,182");
+    expect(stats).toContain("129,452,717");
+    expect(stats).toContain("78.36%");
+    expect(stats).toContain("170.8");
     expect(stats).toContain("Carriers");
   });
 
@@ -571,7 +571,7 @@ describe("/aircraft/<slug> network map on a type with nothing in the window", ()
  * aircraft grain, BTS types 201 and 489 have no un-quarantined filing in the trailing 12
  * either -- both F4 in 2025-08, 5 and 27 PERFORMED departures against a filed seat count of
  * zero. `/aircraft/TRISLNDR` and `/aircraft/SHORT360` rendered three fabricated zeros, so the
- * reachable footprint is 12 pages and not 10.
+ * reachable footprint is 14 pages, not the route grain's 12.
  *
  * The strip is read as an ORDERED LIST, never searched for a dash: load factor and average gauge
  * rendered `—` under the bug too, so the buggy page read `0 · 0 · — · — · 0`. */
@@ -599,7 +599,7 @@ describe("an aircraft type whose every filing was quarantined states absence, no
 });
 
 describe("an aircraft type that filed nothing in the window states absence too", () => {
-  // The MD-80 stopped filing in 2023-04. 37 of this dataset's fact-present types are in that
+  // The MD-80 stopped filing in 2023-04. 39 of this dataset's fact-present types are in that
   // state -- unknowable for a reason quarantine had no part in.
   // MUTANT: seed `sumColumn` at 0 -> three zeroes -> red.
   it("renders the measures as absence while still stating the counts", async () => {
@@ -666,15 +666,21 @@ describe("/aircraft/<name>: the legend rail follows the CHART, not the rows (#12
 describe("/aircraft/<name>: the legend rail's arc group follows the ARCS (#123)", () => {
   // EVERY ROW IN THAT GROUP DESCRIBES AN ARC -- width by seats, dashed below the load-factor
   // floor, dotted-muted below the departure floor, and why a cross-panel arc is a straight line.
-  // A map can render with none of them, so "a map was drawn" is the wrong gate: `fetchCarrierTypeNetwork` returns a map with ZERO segments when a
-  // pair's only filing is same-airport -- `8E x AS350-B2` is that view, pinned at the producer
-  // by `carrierTypeNetwork.test.ts`.
+  // A map can render with none of them, so "a map was drawn" is the wrong gate: `fetchCarrierTypeNetwork` returns a map with ZERO segments when
+  // every route pair is quarantined -- `F4 x SHORT360` is that view, pinned at the producer by
+  // `carrierTypeNetwork.test.ts` as `F4` x `489` -- or when the only filing is same-airport.
+  //
+  // DATASET-PINNED SUBJECT, and it expires: F4's five SHORT360 filings are all 2025-08, all
+  // quarantined `zero_seats`, across three pairs, and they leave the trailing 12 at asOf 2026-08.
+  // No view with a map and no arc lasts longer in this window: the other two are F4 x TRISLNDR
+  // (same month) and 8E x R44 (one same-airport filing, 2025-07). When this reddens, re-derive a
+  // carrier x type whose trailing-12 groups are all quarantined or same-airport.
   //
   // Asserted as an ABSENCE, because the presence form passes under the bug. And per CALL SITE:
   // each page decides for itself what to pass, so reverting one is a live defect on that surface
   // alone. Mutant: pass `hasMap` back to `<LegendRail map={...}>` here and this goes red.
   it("renders NO arc-rendering group when no arc was drawn", async () => {
-    const { container } = render(await filtered("AS350-B2", "carrier=8E"));
+    const { container } = render(await filtered("SHORT360", "carrier=F4"));
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).not.toContain("Arc rendering");
     expect(rail.textContent).not.toContain("width scales with seats");

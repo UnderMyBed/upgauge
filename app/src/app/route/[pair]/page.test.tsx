@@ -73,7 +73,7 @@ describe("/route/<pair>", () => {
     // Important 3, final whole-branch review: `routeTotals` already computed `passengers`
     // (it's the load-factor numerator) but nothing rendered it, though four docs -- CLAUDE.md,
     // features.md, system.md, and this spec's own mockup -- all listed it. Measured for this
-    // route and window (same query the page runs): seats=3,464,803 pax=3,005,548. Fails if
+    // route and window (same query the page runs): seats=3,463,479 pax=3,015,755. Fails if
     // the Passengers stat is removed, or if it's ever rendered from a different column
     // (e.g. seats again).
     const { container } = render(
@@ -83,15 +83,15 @@ describe("/route/<pair>", () => {
     // unscoped getByText would match twice and throw.
     const stats = container.querySelector(".stats");
     expect(stats?.textContent).toContain("Passengers");
-    expect(stats?.textContent).toContain("3,005,548");
+    expect(stats?.textContent).toContain("3,015,755");
   });
 
   it("computes totals from summed parts, not by averaging the carrier rows", async () => {
     // The whole point: Sum(pax)/Sum(seats), never mean(per-carrier lf). Measured for this
-    // route and window: seats 3,464,803, pax 3,005,548 -> 86.75%. A mean of the carrier
-    // load factors gives a different number, so this assertion distinguishes them.
+    // route and window (2025-07..2026-06): seats 3,463,479, pax 3,015,755 -> 87.07%. The mean
+    // of the five carrier load factors is 87.92%, so this assertion distinguishes them.
     render(await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }));
-    expect(screen.getByText("86.75%")).toBeDefined();
+    expect(screen.getByText("87.07%")).toBeDefined();
   });
 
   // Fix round 1 (task-6, pre-implementation falsifiability check): the brief's own version of
@@ -279,10 +279,10 @@ describe("/route/<pair> aircraft-mix chart", () => {
 
   it("gives the chart the FULL window, not the table's trailing 12 months", async () => {
     // The one wiring bug this mount can have that still looks completely fine on screen: a
-    // chart drawn over `query.timeFrom` (2025-05) instead of 2015-01 renders a perfectly
-    // plausible twelve-point stacked area under a page that claims a decade. The chart's own
-    // aria-label names the window it actually drew, so it is the honest witness -- read here
-    // rather than counting paths, which a shorter window would not change. Fails if
+    // chart drawn over `query.timeFrom` (the trailing 12's first month) instead of 2015-01
+    // renders a perfectly plausible twelve-point stacked area under a page that claims a decade.
+    // The chart's own aria-label names the window it actually drew, so it is the honest witness
+    // -- read here rather than counting paths, which a shorter window would not change. Fails if
     // `fetchAircraftMix` is handed TRAILING_12_FROM.
     const asOf = await dataAsOf();
     const { container } = render(
@@ -436,7 +436,7 @@ describe("/route/<pair> sorts below-floor rows last", () => {
   }
 
   it("renders the below-floor carriers as one contiguous block at the foot", async () => {
-    // CLT-ORD: 10 carrier rows in the trailing 12, 7 of them below floor.
+    // CLT-ORD: 10 carrier rows in the trailing 12, 6 of them below floor.
     // MUTANT: `partition={false}` at page.tsx's DataTable -> red here only.
     const { container } = render(
       await RoutePage({ params: Promise.resolve({ pair: "CLT-ORD" }) }),
@@ -464,11 +464,11 @@ describe("/route/<pair> sorts below-floor rows last", () => {
     // could no longer fail. The guard went red rather than the suite going quietly vacuous,
     // which is the whole reason it is an assertion and not a comment.
     //
-    // MECHANISM ON CLT-ORD, and it is the defect in one row: F9 files 66,374 seats on 323
-    // departures across all twelve months -- 26.9 a month, below the floor, and a trailing-12
-    // sum of 323 that cleared the old rule by 10x. It out-seats scored YX (47,544 seats, 630
-    // departures over 10 months, 63.0 a month), so the measure sort puts a below-floor row at 3
-    // of 10 and the partition has to move it. If a refresh ends that, THIS goes red and the
+    // MECHANISM ON CLT-ORD, and it is the defect in one row: F9 files 62,810 seats on 305
+    // departures across 11 months -- 27.7 a month, below the floor, and a trailing-12 sum of 305
+    // that cleared the old rule by 10x. It out-seats scored YX (55,296 seats, 732 departures over
+    // 11 months, 66.5 a month), so the measure sort puts a below-floor row at 3 of 10 and the
+    // partition has to move it. If a refresh ends that, THIS goes red and the
     // fixture moves; the test above does not quietly stop testing anything.
     const { container } = render(
       await RoutePage({ params: Promise.resolve({ pair: "CLT-ORD" }) }),
@@ -495,10 +495,17 @@ function statStrip(container: HTMLElement): string[] {
 }
 
 describe("a route whose every filing was quarantined states absence, not zero", () => {
-  // A18-LMA (Kantishna-Lake Minchumina): ONE filing in the entire trailing 12 -- 2025-06,
-  // op_airline 20333, seats 0, departures_performed 1, quarantined `zero_seats`. Ten route pairs
-  // are in this state and reachable; an eleventh (VEE-VEE) is in the quarantine set but 404s as
-  // a same-airport slug before any lookup, so 11 is the pair count and 10 the page count.
+  // AET-AIN (Allakaket-Wainwright): ONE filing in the entire trailing 12 -- 2026-03, op_airline
+  // 20333, seats 0, departures_performed 1, quarantined `zero_seats`. Twelve route pairs are in
+  // this state, every one a single such row and none a same-airport slug, so 12 is both the pair
+  // count and the page count.
+  //
+  // DATASET-PINNED SUBJECT, and it expires: that row leaves the trailing 12 at asOf 2027-03, and
+  // any un-quarantined filing on the pair inside the window ends the property sooner -- AET-AIN's
+  // only other filing is 2023-11. When this reddens, re-derive a pair whose trailing-12
+  // `SUM(seats) FILTER (WHERE NOT is_quarantined)` is NULL over exactly one quarantined row (the
+  // singular assertion below needs exactly one), preferring the latest such row on a pair that
+  // rarely files.
   //
   // MUTANT: restore `?? 0` inside `sumColumn` -> the first five read
   // `["0", "0", "—", "—", "0"]` -> red.
@@ -506,7 +513,7 @@ describe("a route whose every filing was quarantined states absence, not zero", 
   // assertion, and #121 exists because fixing only the first leaves the second.
   it("renders the five measures as absence and keeps the counts", async () => {
     const { container } = render(
-      await RoutePage({ params: Promise.resolve({ pair: "A18-LMA" }) }),
+      await RoutePage({ params: Promise.resolve({ pair: "AET-AIN" }) }),
     );
     expect(statStrip(container)).toEqual(["—", "—", "—", "—", "—", "1", "1"]);
   });
@@ -518,10 +525,10 @@ describe("a route whose every filing was quarantined states absence, not zero", 
   // MUTANT: drop the `totals.seats === null` branch -> the foot claims the exclusion -> red.
   it("explains the dashes instead of miscounting them", async () => {
     const { container } = render(
-      await RoutePage({ params: Promise.resolve({ pair: "A18-LMA" }) }),
+      await RoutePage({ params: Promise.resolve({ pair: "AET-AIN" }) }),
     );
     const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
-    expect(feet).toContain("Every filing on A18–LMA in this window is quarantined");
+    expect(feet).toContain("Every filing on AET–AIN in this window is quarantined");
     expect(feet).toContain("1 row, each having failed an invariant");
     expect(feet).not.toContain("excluded from these totals");
     // Singular, on the only prose left explaining five em dashes.
@@ -533,7 +540,7 @@ describe("a route that filed nothing in the window states absence too", () => {
   // THE OTHER ABSENCE, and the wider one: 12,201 route pairs last filed before this window.
   // Their sums are unknowable for a reason quarantine had no part in, and the two must stay
   // separable -- a consumer keying on "the sum is null" alone answers the wrong one of them, and
-  // answers it on the 12,201 rather than the 10.
+  // answers it on the 12,201 rather than the 12.
   // MUTANT: seed `sumColumn` at 0 -> `["0", "0", "—", "—", "0", "0", "0"]` -> red.
   it("renders the measures as absence while still stating the counts", async () => {
     const { container } = render(
@@ -546,7 +553,7 @@ describe("a route that filed nothing in the window states absence too", () => {
   // been excluded from -- and must NOT blame quarantine, which had no part in this absence.
   // `RouteEmptyState` carries the real finding.
   // MUTANT: key the clause on `totals.seats === null` alone -> "Every filing on ATL–CAK in this
-  // window is quarantined — 0 rows", a finding invented on 12,201 pages to fix it on 10 -> red.
+  // window is quarantined — 0 rows", a finding invented on 12,201 pages to fix it on 12 -> red.
   it("names neither an exclusion nor quarantine, and leaves the finding to the empty state", async () => {
     const { container } = render(
       await RoutePage({ params: Promise.resolve({ pair: "ATL-CAK" }) }),
@@ -579,13 +586,15 @@ describe("/route/<pair>: the legend rail follows the CHART, not the rows (#123)"
   // those four call sites to `hasMix` is a live defect on that surface alone. A rule-level test
   // cannot see that: CLAUDE.md's "enumerate the matrix per CALL SITE".
   //
-  // DATASET-PINNED SUBJECT. BUR-HNL files exactly ONE month (2026-05, 5,949 seats) over the whole
-  // window, so its stacked area has a degenerate x domain and `AircraftMixChart` prints its
+  // DATASET-PINNED SUBJECT. IND-OGG files exactly ONE month (2019-07, one row, 364 seats) over the
+  // whole window, so its stacked area has a degenerate x domain and `AircraftMixChart` prints its
   // absence note instead. JFK-LAX is the file's standing many-month subject.
+  // A pair that has filed nothing since is the stable choice: a subject whose one month is recent
+  // is new service, and its second month turns the chart on.
   // If this reddens after a BTS refresh, re-derive a one-month subject rather than deleting the
   // test: the pair with `count(DISTINCT year_month) = 1` in `fct_segment_month`.
   it("renders NO fleet-shading group for a subject whose chart cannot draw", async () => {
-    const { container } = render(await RoutePage({ params: Promise.resolve({ pair: "BUR-HNL" }) }));
+    const { container } = render(await RoutePage({ params: Promise.resolve({ pair: "IND-OGG" }) }));
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).not.toContain("Fleet shading");
     expect(rail.textContent).not.toContain("COVID is in the window on purpose");
