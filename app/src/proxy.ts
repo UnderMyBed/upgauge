@@ -1100,7 +1100,8 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // What is OURS is decided by `QUERY_ROWS` (`lib/canonicalQuery.ts`), never by this config: a
 // path no row declares returns straight after the RSC branch with both headers and nothing else.
 // `canonicalQuery.test.ts` binds `QUERY_ROWS` to the `app/src/app` file tree, so a new route
-// file with no row fails that test unless it joins the pinned `NOT_OURS` set with its reason.
+// file with no row fails that test unless it joins the pinned `NOT_OURS` set with its reason,
+// and a route or metadata file convention that test's walker does not model fails it outright.
 //
 // A new page therefore needs a `QUERY_ROWS` row AND a branch above that decides its
 // Cache-Control -- an `ENTITY_ROUTES` row when the slug is its only cacheability input, its own

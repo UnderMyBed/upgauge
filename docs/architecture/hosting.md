@@ -732,7 +732,14 @@ being invisible to whoever added a route:
 > headers before anything else; a path no row declares returns straight after the `RSC` guard with
 > those two headers and nothing more — no canonical-query gate, no `Cache-Control`, no database.
 > `canonicalQuery.test.ts` reads the `app/src/app` tree and fails when a route file has no row and
-> is not in its pinned `NOT_OURS` set (`/api/health` and `/favicon.ico`, each with its reason).
+> is not in its pinned `NOT_OURS` set (`/api/health` and `/favicon.ico`, each with its reason). It
+> models `page`, `route`, `opengraph-image`, `sitemap` and `robots` in any of Next's four code
+> extensions, plus `favicon.ico`, and THROWS, naming the file, on the other route and metadata file
+> conventions Next documents (`twitter-image`, `icon`, `apple-icon`, `manifest`, a static
+> `sitemap.xml`/`robots.txt`/`opengraph-image.png`, a numbered variant), on a
+> `generateSitemaps`/`generateImageMetadata` export, and on a private, group, parallel, catch-all or
+> optional catch-all folder. Without the throw, a `twitter-image.tsx` beside a card would be silently
+> not ours and ship `ImageResponse`'s own `public, max-age=0, must-revalidate`.
 > What that test cannot see is a declared route whose `Cache-Control` no branch decides: it builds,
 > serves, typechecks, passes its unit tests, and looks correct in a browser. `/route/<pair>`
 > shipped `private, no-cache, no-store, max-age=0, must-revalidate` because the proxy never decided

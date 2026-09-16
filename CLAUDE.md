@@ -481,13 +481,13 @@ signature element; it does not own these.
   route does, uncached by `proxy.ts` since they never leave the 200 path in practice).
   **`proxy.ts`'s matcher is `/:path*`, and a route is ours only if `QUERY_ROWS` (`lib/canonicalQuery.ts`)
   declares it.** Anything else gets both headers and nothing more — no `Cache-Control`, no
-  canonical-query gate, no database — and `canonicalQuery.test.ts` fails when a route file under
-  `app/src/app` has no row and is not in its pinned `NOT_OURS` set. A listed matcher left every other
-  URL's `x-upgauge-path` to the client, and a forged one reached `CarrierNotFound`'s DuckDB query from
-  outside the edge rate limit. A static, closed slug set (like `/watch`'s four presets) is necessary
-  but not sufficient for a route's cacheability branch to skip a database probe — every preset page
-  still runs a `mart_route_health` query the proxy commits to a cache header before, so
-  `isDataLayerHealthy()` gates it exactly like `/explore` and `/sitemap.xml`/`robots.txt` do.
+  canonical-query gate, no database — and `canonicalQuery.test.ts` fails on a route file under
+  `app/src/app` it does not model, or with no row and not in its pinned `NOT_OURS` set. A listed
+  matcher left every other URL's `x-upgauge-path` to the client, and a forged one reached
+  `CarrierNotFound`'s DuckDB query from outside the edge rate limit. A static, closed slug set (like
+  `/watch`'s four presets) is necessary but not sufficient for a route's cacheability branch to skip a
+  database probe — every preset page runs a `mart_route_health` query the proxy commits to a cache
+  header before, so `isDataLayerHealthy()` gates it like `/explore` and `/sitemap.xml`/`robots.txt` do.
 - **Every declared route declares its legitimate query keys (`lib/canonicalQuery.ts`), and a
   non-canonical query is never a cached 200:** 307 + `no-store` on every path the proxy gates,
   400 + `no-store` from `/api/pivot`'s own handler (a JSON endpoint must not 307), nothing on

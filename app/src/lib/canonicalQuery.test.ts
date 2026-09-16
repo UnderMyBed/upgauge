@@ -1,29 +1,66 @@
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { canonicalize, isOurs, queryVerdict, QUERY_ROWS } from "@/lib/canonicalQuery";
 
 const APP_DIR = path.resolve(__dirname, "../app");
 
-/** Every URL pattern a file under src/app serves, for the App Router conventions this app uses.
- * Throws on a convention it does not model, so a new one is a red test rather than a route this
- * agreement silently cannot see. */
+/** Next's route and metadata file conventions this walker does not model -- from the
+ * file-conventions docs and `next/dist/lib/metadata/is-metadata-route.js`, which also accepts a
+ * one-digit variant (`icon1.png`, `opengraph-image2.tsx`). Each serves a URL no pattern below
+ * produces, so a match throws rather than leaving a route this agreement cannot see. */
+const UNMODELED_FILE = [
+  /^(?:icon|apple-icon|twitter-image)\d?\.(?:ico|jpe?g|png|svg|gif|[jt]sx?|alt\.txt)$/,
+  /^opengraph-image(?:\d?\.(?:jpe?g|png|gif|alt\.txt)|\d\.[jt]sx?)$/,
+  /^manifest\.(?:json|webmanifest|[jt]sx?)$/,
+  /^(?:sitemap\.xml|robots\.txt)$/,
+];
+
+/** An export that moves a code metadata route off the URL its file name gives: `generateSitemaps`
+ * serves `/sitemap/<id>.xml`, and `generateImageMetadata` puts an `/<id>` segment under a card. */
+const URL_MOVING_EXPORT =
+  /^\s*export\s+(?:async\s+)?(?:function|const|let)\s+generate(?:Sitemaps|ImageMetadata)\b/m;
+
+/** The last URL segment each modeled code metadata file serves. */
+const METADATA_URL: Record<string, string> = {
+  "opengraph-image": "opengraph-image",
+  sitemap: "sitemap.xml",
+  robots: "robots.txt",
+};
+
+/** Every URL pattern a file under src/app serves: `page`/`route`, `opengraph-image`, `sitemap` and
+ * `robots` in any of Next's four code extensions (`[jt]sx?`), plus `favicon.ico`. THROWS, naming
+ * the file, on every other route or metadata file convention (`UNMODELED_FILE`), on a code
+ * metadata file carrying a URL-moving export, and on a private, route-group, parallel, catch-all
+ * or optional catch-all folder -- so a new convention is a red test rather than a route this
+ * agreement silently cannot see. Any other file (`layout`, `not-found`, tests, helpers) serves no
+ * URL of its own. */
 function servedRoutePatterns(dir: string = APP_DIR, prefix = ""): string[] {
   const out: string[] = [];
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const file = path.relative(APP_DIR, path.join(dir, entry.name));
     if (entry.isDirectory()) {
-      if (/^[(@_]|^\[\.\.\./.test(entry.name)) {
-        throw new Error(`servedRoutePatterns does not model the folder convention '${entry.name}'`);
+      if (/^[(@_]|^\[\[?\.\.\./.test(entry.name)) {
+        throw new Error(`servedRoutePatterns does not model the folder convention '${file}'`);
       }
       const segment = entry.name.replace(/^\[(.+)\]$/, ":$1");
       out.push(...servedRoutePatterns(path.join(dir, entry.name), `${prefix}/${segment}`));
       continue;
     }
-    if (/^(page|route)\.tsx?$/.test(entry.name)) out.push(prefix === "" ? "/" : prefix);
-    else if (/^opengraph-image\.tsx?$/.test(entry.name)) out.push(`${prefix}/opengraph-image`);
-    else if (entry.name === "sitemap.ts") out.push(`${prefix}/sitemap.xml`);
-    else if (entry.name === "robots.ts") out.push(`${prefix}/robots.txt`);
-    else if (entry.name === "favicon.ico") out.push(`${prefix}/favicon.ico`);
+    if (UNMODELED_FILE.some((re) => re.test(entry.name))) {
+      throw new Error(`servedRoutePatterns does not model the file convention '${file}'`);
+    }
+    const metadata = /^(opengraph-image|sitemap|robots)\.[jt]sx?$/.exec(entry.name)?.[1];
+    if (metadata !== undefined) {
+      if (URL_MOVING_EXPORT.test(readFileSync(path.join(dir, entry.name), "utf8"))) {
+        throw new Error(`servedRoutePatterns does not model the URL-moving export in '${file}'`);
+      }
+      out.push(`${prefix}/${METADATA_URL[metadata]}`);
+    } else if (/^(page|route)\.[jt]sx?$/.test(entry.name)) {
+      out.push(prefix === "" ? "/" : prefix);
+    } else if (entry.name === "favicon.ico") {
+      out.push(`${prefix}/favicon.ico`);
+    }
   }
   return out;
 }

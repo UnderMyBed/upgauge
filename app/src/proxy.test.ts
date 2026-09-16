@@ -1061,12 +1061,13 @@ describe("proxy 404 rewrite (#157)", () => {
   // `carrierSlugFromPath("/carrier/ZZ/opengraph-image")` would be `"ZZ/opengraph-image"` rather
   // than null -- and with that entity branch's rewrite also above the OG_ROUTES loop, that string
   // resolves as a carrier code, 404s, and the card gets rewritten to an HTML page. MUTANTS RUN: the
-  // OG loop moved below the `/airport`, `/carrier` and `/aircraft` branches plus a reader accepting
-  // a `/` turns those three cases red; either defect alone leaves all four green, and no mutant
-  // run reddens the route case, which only the `ENTITY_ROUTES` loop answers. An
-  // `opengraph-image.tsx` compiles to a ROUTE HANDLER returning an ImageResponse: there is no
-  // not-found.tsx on that path, nothing for the root boundary to dispatch to, and a crawler asking
-  // for a PNG would be handed a document.
+  // OG loop moved below the `ENTITY_ROUTES` loop plus a reader accepting a `/` turns all four cases
+  // red -- the route case through that loop's own `notFoundRewrite`, since
+  // `resolveRoutePair("ZZZZ-LAX/opengraph-image")` 404s. Moved only below the `/airport`,
+  // `/carrier` and `/aircraft` branches, the same pair reddens those three and not the route case.
+  // Either defect alone leaves all four green. An `opengraph-image.tsx` compiles to a ROUTE
+  // HANDLER returning an ImageResponse: there is no not-found.tsx on that path, nothing for the
+  // root boundary to dispatch to, and a crawler asking for a PNG would be handed a document.
   it.each([
     ["/route/ZZZZ-LAX/opengraph-image"],
     ["/airport/ZZZZ/opengraph-image"],
