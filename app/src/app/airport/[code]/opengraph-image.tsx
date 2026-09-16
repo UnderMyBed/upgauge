@@ -19,8 +19,8 @@ export const contentType = "image/png";
 /** `og:image:alt`. A module constant, not a per-airport sentence -- see the route card's own
  * copy of this note for why Next can only read a static export here. It names the both-endpoint
  * rule, because that is the one thing about this page's figures a reader could otherwise get
- * wrong: an origin-only reading is silently about half the airport (measured at SEA: 53,372,100
- * seats both ways against 26,710,000 departing only). */
+ * wrong: an origin-only reading is silently about half the airport (measured at SEA: 53,343,024
+ * seats both ways against 26,695,264 departing only). */
 export const alt =
   "Upgauge data card: an airport's trailing-12-month seats, passengers, load factor, average " +
   "gauge, departures and operating carriers, counted at both endpoints, above a stacked area " +

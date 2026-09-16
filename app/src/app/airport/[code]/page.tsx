@@ -82,8 +82,8 @@ function Stat({ label, value, derived }: { label: string; value: string; derived
  * `endpoint_airport_id` (M7 Task 3, `filter_only`, `filter_mode='either'`) compiles to
  * `(origin_airport_id IN (...) OR dest_airport_id IN (...))`, so one filter on it reproduces
  * exactly what the carriers table above sums -- verified against the real warehouse: this
- * query returns 53,372,100 seats for SEA over 2025-06..2026-05, the same figure the stat strip
- * prints, not the 26,708,918 an origin-only (or dest-only) half would show.
+ * query returns 53,343,024 seats for SEA over 2025-07..2026-06, the same figure the stat strip
+ * prints, not the 26,695,264 an origin-only half would show.
  *
  * Without an either-endpoint dimension this page can only offer two half permalinks, each
  * labelled as a half -- see endpoints.ts's header for the mechanism and
@@ -137,8 +137,8 @@ function AirportEmptyState({
 
 /** The whole render for a resolved airport, taking the row limit as an explicit input for the
  * same reason `RouteView` does: nothing in production data reaches either truncation branch
- * (measured worst case 1,732 carrier-origin-dest groups against a 5,000 limit, and 4,118
- * (month, type) cells against 10,000 -- both at ORD, M7 Task 3), so the disclosures would be
+ * (measured worst case 1,700 carrier-origin-dest groups against a 5,000 limit, and 4,181
+ * (month, type) cells against 10,000 -- both at ORD), so the disclosures would be
  * untestable without them. Split from the default export so a test can drive a real,
  * live-database render without going near Next's routing plumbing. */
 /** Every month name, so the partial-year disclosure on the track can say "through April 2026"
@@ -282,7 +282,7 @@ export async function AirportView({
 
   const hasNetwork = network !== null;
   /** WHETHER AN ARC WAS DRAWN, which is not whether a map was (#123). A hub map always paints
-   *  its origin disc, so `/airport/A18` and `/airport/OQZ` render a map with zero polylines --
+   *  its origin disc, so `/airport/JZM` and `/airport/OQZ` render a map with zero polylines --
    *  and the rail's "Arc rendering" group describes three arc encodings and nothing else. Same
    *  rule as `chartDrawn` above, applied to the group beside it. */
   const arcsDrawn = network !== null && networkArcsDrawn(network);
@@ -309,7 +309,7 @@ export async function AirportView({
   // React's SSR emits `<!-- -->` between adjacent expression children, which `textContent`
   // skips and a grep over the served bytes (app/smoke.sh) does not.
   //
-  // Pluralised because the count is 1 on the three pages this page's null branch exists for,
+  // Pluralised because the count is 1 on the two pages this page's null branch exists for,
   // and "1 destinations" under a DATA AS OF badge is the kind of small wrongness that makes a
   // reader doubt the large numbers. Its other half two clauses along has always agreed with
   // its count; this half did not.
