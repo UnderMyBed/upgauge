@@ -151,7 +151,7 @@ before anyone read the plugin. It also means `<Link>` is not confined to what th
 **Every `<Link>` carries `prefetch={false}`**, and `app/src/prefetchPolicy.test.ts` enforces that
 repo-wide as an exact set that may only ever shrink — a gate, not a convention, and no count of
 the sites belongs here. The wordmark sits above the fold on every page, and `Link`'s default
-prefetches on viewport entry. `/` **is** in `proxy.ts`'s matcher and gets `HTML_CACHE`, so the CDN
+prefetches on viewport entry. `/` **is** declared in `QUERY_ROWS` and gets `HTML_CACHE`, so the CDN
 would happily cache the page — what it cannot absorb is the prefetch itself: `proxy.ts` answers
 any request carrying the `RSC` header `no-store`, unconditionally, so every prefetch reaches the
 origin. The default would buy one uncached origin request per page view on a box whose whole cost

@@ -1,6 +1,41 @@
+import { readdirSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { canonicalize, queryVerdict, QUERY_ROWS } from "@/lib/canonicalQuery";
-import { config } from "@/proxy";
+import { canonicalize, isOurs, queryVerdict, QUERY_ROWS } from "@/lib/canonicalQuery";
+
+const APP_DIR = path.resolve(__dirname, "../app");
+
+/** Every URL pattern a file under src/app serves, for the App Router conventions this app uses.
+ * Throws on a convention it does not model, so a new one is a red test rather than a route this
+ * agreement silently cannot see. */
+function servedRoutePatterns(dir: string = APP_DIR, prefix = ""): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      if (/^[(@_]|^\[\.\.\./.test(entry.name)) {
+        throw new Error(`servedRoutePatterns does not model the folder convention '${entry.name}'`);
+      }
+      const segment = entry.name.replace(/^\[(.+)\]$/, ":$1");
+      out.push(...servedRoutePatterns(path.join(dir, entry.name), `${prefix}/${segment}`));
+      continue;
+    }
+    if (/^(page|route)\.tsx?$/.test(entry.name)) out.push(prefix === "" ? "/" : prefix);
+    else if (/^opengraph-image\.tsx?$/.test(entry.name)) out.push(`${prefix}/opengraph-image`);
+    else if (entry.name === "sitemap.ts") out.push(`${prefix}/sitemap.xml`);
+    else if (entry.name === "robots.ts") out.push(`${prefix}/robots.txt`);
+    else if (entry.name === "favicon.ico") out.push(`${prefix}/favicon.ico`);
+  }
+  return out;
+}
+
+/** Routes this app serves that the proxy deliberately treats as not its own. PINNED: growing
+ * this is how a page loses its cache header and its canonical-query gate while the diff looks
+ * like tidying, so each name carries its reason and the set is asserted exactly. */
+const NOT_OURS: Record<string, string> = {
+  "/api/health":
+    "must never be cached; the handler sets its own no-store, it takes no query and has no not-found path",
+  "/favicon.ico": "a static metadata file; nothing to canonicalize or cache-decide",
+};
 
 // The permalink fixture from app/smoke.sh:388 -- every reserved character this format has to
 // survive, in one filter value. Used here because the whole point of comparing keys TEXTUALLY
@@ -23,9 +58,9 @@ describe("canonicalize", () => {
     // wiring bug could hand this function a `?`-prefixed rawQuery. proxy.ts's
     // `.search.replace(/^\?/, "")` is NON-GLOBAL, so `GET /airport/ORD??y=2019` (`search` ===
     // "??y=2019") strips one `?` of two and delivers exactly this input -- and the throw escaped
-    // proxy(), which has no try/catch around it, as a 500 on every one of the twelve matcher
-    // paths. Measured on a served build at d109845: `/watch?x=1` 307, `/watch??x=1` 500. A
-    // leading `?` is a non-canonical spelling, and this module already has an answer for those.
+    // proxy(), which has no try/catch around it, as a 500 on every gated path. Measured on a
+    // served build at d109845: `/watch?x=1` 307, `/watch??x=1` 500. A leading `?` is a
+    // non-canonical spelling, and this module already has an answer for those.
     expect(canonicalize("/airport/ORD", "?y=2019")).toEqual({
       kind: "strip",
       location: "/airport/ORD?y=2019",
@@ -272,15 +307,15 @@ describe("canonicalize", () => {
     expect(canonicalize("/search", "q=DL&x=1")).toEqual({ kind: "clean" });
   });
 
-  it("leaves an off-matcher path's query alone rather than stripping it", () => {
-    // The safe default. A route added to the matcher without a row here loses the protection,
-    // which the agreement test below makes unreachable -- but it must never lose its query.
+  it("leaves an undeclared path's query alone rather than stripping it", () => {
+    // The safe default. A path no row declares is not one of ours, so its query is not this
+    // module's to rewrite -- and a route FILE with no row fails the route-tree agreement below.
     expect(canonicalize("/api/health", "x=1")).toEqual({ kind: "clean" });
   });
 
   // Totality, asserted rather than claimed. This module runs on the proxy path, where an uncaught
   // throw is a 500 on a request that was only ever going to be a redirect -- and it has thrown
-  // for real once, on the first entry below, taking every one of the twelve matcher paths with it
+  // for real once, on the first entry below, taking every gated path with it
   // because proxy() has no try/catch around the call. `%zz` and a lone `%` are the malformed
   // escapes `entitySlugFromPath` exists to survive; the rest are the shapes a hostile client is
   // free to send.
@@ -298,7 +333,7 @@ describe("canonicalize", () => {
     ["", ""],
     // #8. The OG rows add a regex to the walk and a new reader to the predicates, on the same
     // no-try/catch path -- so the same corpus, aimed at them. The doubled `?` is the shape that
-    // 500ed all twelve matcher paths at d109845.
+    // 500ed every gated path at d109845.
     ["/route/JFK-LAX/opengraph-image", "?083d4242d9090de4"],
     ["/route/%zz/opengraph-image", "083d4242d9090de4"],
     ["/aircraft/%/opengraph-image", "?%"],
@@ -315,7 +350,7 @@ describe("canonicalize", () => {
     // ever claimed a `//`-leading pathname. None can: every `matches` predicate is either an
     // exact `p === "/literal"` or an `entitySlugFromPath` prefix test requiring `/<prefix>/` at
     // position 0. This pins that as an asserted property rather than a fact someone re-derives by
-    // reading twelve predicates. (Next answers `GET //evil.com` with its own 308 before proxy()
+    // reading every predicate. (Next answers `GET //evil.com` with its own 308 before proxy()
     // runs -- app/smoke.sh asserts that second, independent reason on a served build.)
     expect(canonicalize("//evil.com", "x=1")).toEqual({ kind: "clean" });
     expect(canonicalize("//evil.com/watch", "x=1")).toEqual({ kind: "clean" });
@@ -399,17 +434,14 @@ describe("queryVerdict vs canonicalize on an exempt row", () => {
 });
 
 describe("QUERY_ROWS", () => {
-  it("has exactly one row per proxy matcher entry", () => {
-    // The third list that must agree with config.matcher -- and with THAT list only. This comment
-    // used to name ENTITY_ROUTES as well, which the assertion below does not check and could not:
-    // QUERY_ROWS (one row per matcher entry) is a strict superset of ENTITY_ROUTES (1 row since
-    // #106 -- `/route/:pair` alone; the other three entity pages each grew a second cacheability
-    // input and moved to their own proxy branch), so
-    // row-for-row agreement with the latter is not a property that holds. docs/architecture/
-    // hosting.md § "One canonical key set per cacheable URL" states the same thing. A row missing
-    // here ships a path with no query protection; a matcher entry missing ships a page with no
-    // Cache-Control at all and turns each of its 404s into a 500.
-    expect(QUERY_ROWS.map((r) => r.matcher).sort()).toEqual([...config.matcher].sort());
+  it("declares every route the app serves, except the pinned NOT_OURS set", () => {
+    expect(Object.keys(NOT_OURS).sort()).toEqual(["/api/health", "/favicon.ico"]);
+    const served = servedRoutePatterns();
+    expect(served.length).toBeGreaterThan(Object.keys(NOT_OURS).length); // anti-vacuity
+    for (const route of Object.keys(NOT_OURS)) expect(served).toContain(route);
+    expect(QUERY_ROWS.map((r) => r.route).sort()).toEqual(
+      served.filter((route) => !(route in NOT_OURS)).sort(),
+    );
   });
 
   it.each([
@@ -425,20 +457,21 @@ describe("QUERY_ROWS", () => {
     ["/robots.txt", "/robots.txt"],
     ["/api/pivot", "/api/pivot"],
     ["/search", "/search"],
-    // #8. These four are the ones the ordering actually decides, and they are why the OG rows sit
-    // ABOVE the entity rows in QUERY_ROWS. Every entity slug reader is a bare prefix test that
-    // does not stop at one segment, so `routeSlugFromPath("/route/JFK-LAX/opengraph-image")` is
-    // `"JFK-LAX/opengraph-image"` -- below the entity rows, `/route/:pair` claims every card,
-    // answers it with NO_KEYS and no cache-buster, and 307s the URL this site emits in its own
-    // `og:image` tag. This case goes red on a reorder; nothing else in the file does.
+    // #8. The four cards, which an entity row claims only under TWO defects together: the OG rows
+    // moved BELOW the entity rows in QUERY_ROWS, AND an entity slug reader accepting a `/`, so
+    // that `routeSlugFromPath("/route/JFK-LAX/opengraph-image")` is `"JFK-LAX/opengraph-image"`
+    // rather than null. Then `/route/:pair` claims every card, answers it with NO_KEYS and no
+    // cache-buster, and 307s the URL this site emits in its own `og:image` tag. MUTANTS RUN: the
+    // reorder alone and the reader regression alone each leave these cases green; both together
+    // turn them red. The reader regression alone is caught by "no OG row claims %s" below.
     ["/route/:pair/opengraph-image", "/route/JFK-LAX/opengraph-image"],
     ["/airport/:code/opengraph-image", "/airport/ORD/opengraph-image"],
     ["/carrier/:code/opengraph-image", "/carrier/DL/opengraph-image"],
     ["/aircraft/:name/opengraph-image", "/aircraft/B737-8/opengraph-image"],
-  ])("row %s is the first to claim %s", (matcher, pathname) => {
-    // Agreement on names is not agreement on behaviour: a row could carry the right `matcher`
+  ])("row %s is the first to claim %s", (route, pathname) => {
+    // Agreement on names is not agreement on behaviour: a row could carry the right `route`
     // string and a predicate that never fires, or fire on a path an earlier row should own.
-    expect(QUERY_ROWS.find((r) => r.matches(pathname))?.matcher).toBe(matcher);
+    expect(QUERY_ROWS.find((r) => r.matches(pathname))?.route).toBe(route);
   });
 
   it.each([
@@ -447,14 +480,13 @@ describe("QUERY_ROWS", () => {
     ["the bare suffix", "/opengraph-image"],
     ["the suffix in the middle", "/route/JFK-LAX/opengraph-image/x"],
   ])("no OG row claims %s", (_label, pathname) => {
-    // `config.matcher` forwards `/<entity>/:slug/opengraph-image` -- exactly ONE dynamic segment.
-    // A row claiming more would describe traffic the proxy never sees, and `proxy.ts`'s OG branch
-    // shares this same reader, so it would resolve a slug like `"JFK-LAX/extra"` against the
-    // warehouse on a request that cannot reach it. (These pathnames still fall to the entity
-    // rows' own prefix tests, which is unchanged pre-existing behaviour and unreachable for the
-    // same matcher reason -- what is asserted here is only that no OG row takes them.)
+    // A card is `/<entity>/[param]/opengraph-image` -- exactly ONE dynamic segment. A row claiming
+    // more would declare a route the app does not serve, and `proxy.ts`'s OG branch shares this
+    // same reader, so it would resolve a slug like `"JFK-LAX/extra"` against the warehouse on
+    // every such request. What is asserted here is only that no OG row takes them; whether any
+    // row does is `isOurs`'s question.
     const row = QUERY_ROWS.find((r) => r.matches(pathname));
-    expect(row?.matcher.endsWith("/opengraph-image") ?? false).toBe(false);
+    expect(row?.route.endsWith("/opengraph-image") ?? false).toBe(false);
   });
 
   it("never declares a repeatable key it does not also allow", () => {
@@ -464,4 +496,28 @@ describe("QUERY_ROWS", () => {
       }
     }
   });
+});
+
+describe("isOurs", () => {
+  it.each([
+    ["/", true],
+    ["/carrier/DL", true],
+    ["/carrier/D%2FL", true],
+    ["/explore/filter/origin_state", true],
+    ["/api/pivot", true],
+    ["/carrier/DL/x", false],
+    ["/explore/filter/origin_state/x", false],
+    ["/api/health", false],
+    ["/_next/static/chunks/app.js", false],
+    ["/nope", false],
+  ])("isOurs(%j) is %s", (pathname, expected) => {
+    expect(isOurs(pathname)).toBe(expected);
+  });
+
+  it.each(["/%zz", "/carrier/%E0%A4%A", "//", "/carrier//x", `/${"a/".repeat(2000)}`, "/ ", "/carrier/%2F%2F"])(
+    "never throws on %j -- it runs on every request",
+    (pathname) => {
+      expect(() => isOurs(pathname)).not.toThrow();
+    },
+  );
 });

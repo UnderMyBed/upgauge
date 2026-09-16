@@ -75,7 +75,7 @@ describe("ExplorerBuilder", () => {
   });
 
   // `/explore/filter/:dim` was an ISLAND: nothing in the app linked to it, and CLAUDE.md's rule
-  // is that neither `sitemap.ts` nor `proxy.ts`'s matcher counts as an inbound link. Composing
+  // is that neither `sitemap.ts` nor a `QUERY_ROWS` row counts as an inbound link. Composing
   // `FilterChips` into the builder is what closes that, so the anchor is asserted here at the
   // composition and again on the served page (page.test.tsx, app/smoke.sh).
   it("links to the value-list route, which nothing else in the app reaches", () => {

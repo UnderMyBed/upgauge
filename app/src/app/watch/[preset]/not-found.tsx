@@ -70,7 +70,6 @@ export default async function NotFound() {
   // Fails loudly if proxy.ts did not run, exactly as every other entity page's not-found.tsx
   // does for its own header. There is deliberately no fallback: a 404 page that quietly stops
   // naming the offending slug, with every gate green, is the precise failure this header
-  // exists to make impossible. NOTE for the proxy: `/watch/:preset` must be in its matcher
-  // (Task 7), or this throws.
+  // exists to make impossible.
   return <NotFoundView pathname={rawPathFromHeaders(requestHeaders)} />;
 }

@@ -269,7 +269,7 @@ describe("checkSpelling -- one value, one spelling", () => {
   });
 
   it("never throws, on any input, because it runs on the proxy path", () => {
-    // canonicalize() threw on a leading `?` once and 500ed all twelve matcher paths. Anything
+    // canonicalize() threw on a leading `?` once and 500ed every gated path. Anything
     // reachable from proxy.ts is total or it is that bug again.
     for (const hostile of ["", "?", "??n=1", "&&", "n", "n=", "=25", "%", "n=%", "n=%zz"]) {
       expect(() => checkSpelling(hostile)).not.toThrow();

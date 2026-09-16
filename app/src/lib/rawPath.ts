@@ -31,7 +31,7 @@ export class MissingRawPathError extends Error {
       `request header '${RAW_PATH_HEADER}' is absent -- proxy.ts did not run for this ` +
         "request. A not-found.js render has no props and no route params, so it cannot " +
         "name the requested route without this header. Check that app/src/proxy.ts is " +
-        "deployed and that its matcher covers this route.",
+        "deployed.",
     );
     this.name = "MissingRawPathError";
   }

@@ -365,7 +365,7 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
             share this one return, and the view that most needs its query adjusted must not be the
             one without the controls to adjust it. This is also what ends `/explore/filter/:dim`'s
             island: nothing linked to that route until `FilterChips`'s "add filter" half did, and
-            neither `sitemap.ts` nor `proxy.ts`'s matcher counts as an inbound link (CLAUDE.md --
+            neither `sitemap.ts` nor a `QUERY_ROWS` row counts as an inbound link (CLAUDE.md --
             `/watch` shipped with zero, one milestone after a review existed to catch exactly
             that). page.test.tsx asserts the anchor, and smoke.sh asserts it in the served bytes. */}
         <ExplorerBuilder

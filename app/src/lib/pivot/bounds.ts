@@ -46,7 +46,7 @@ import { decode, splitPairs, UrlStateError } from "@/lib/pivot/urlstate";
  * Pure: no database, no Next imports, no I/O, and (like `canonicalQuery.ts`, and for the same
  * measured reason) it never throws on any input. `proxy.ts` runs this before every `/explore`
  * request and has no try/catch around its gate; `canonicalize()` once threw on a leading `?`
- * that "only a wiring bug could produce" and 500ed all twelve matcher paths. `decodeRequest`
+ * that "only a wiring bug could produce" and 500ed every gated path. `decodeRequest`
  * below is the one function here that throws, and it throws only `UrlStateError` -- the
  * exception all three entry points already catch. */
 

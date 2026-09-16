@@ -72,7 +72,6 @@ export default async function NotFound() {
   const requestHeaders = await headers();
   // Fails loudly if proxy.ts did not run. There is deliberately no fallback: a 404 page that
   // quietly stops naming the offending code, with every gate green, is the precise failure
-  // this header was introduced to make impossible (lib/rawPath.ts). NOTE FOR THE PROXY: this
-  // means `/carrier/:code` MUST be in proxy.ts's matcher, or every carrier 404 is a 500.
+  // this header was introduced to make impossible (lib/rawPath.ts).
   return <NotFoundView pathname={rawPathFromHeaders(requestHeaders)} />;
 }

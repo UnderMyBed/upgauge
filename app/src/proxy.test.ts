@@ -14,17 +14,27 @@ vi.mock("@/lib/db", async (importOriginal) => {
   };
 });
 
+// Same partial-mock shape, for the same reason: the real `canonicalize` runs on every request, and
+// the spy is only there so a test can ask whether the proxy called it at all.
+vi.mock("@/lib/canonicalQuery", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/canonicalQuery")>();
+  return { ...actual, canonicalize: vi.fn(actual.canonicalize) };
+});
+
 import { NextRequest } from "next/server";
 import { proxy } from "@/proxy";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { RAW_PATH_HEADER } from "@/lib/rawPath";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
+import { canonicalize } from "@/lib/canonicalQuery";
 
 // M5 Task 7, Part B fallback: /explore and every entity page get the shorter HTML_CACHE value
 // (proxy.ts's own constant, renamed and re-documented there), not CLAUDE.md's project-wide
 // 30-day value -- see proxy.ts's HTML_CACHE doc comment and docs/architecture/hosting.md §
 // "The gap" for the measured reason a route-handler fix was not reachable.
 const CACHE = "public, s-maxage=3600, stale-while-revalidate=86400";
+// proxy.ts's own `NO_STORE`, restated as `CACHE` is: proxy.ts exports only `proxy` and `config`.
+const NO_STORE = "no-store";
 
 // These tests pin what proxy.ts controls: the headers it sets and the values it copies. They
 // CANNOT pin the thing that broke twice in production -- whether Next hands this function a
@@ -115,11 +125,10 @@ describe("proxy", () => {
   });
 
   it("sets the project's Cache-Control on a real /route/<pair>", async () => {
-    // Critical fix, final whole-branch review: the matcher used to omit /route/<pair>
-    // entirely, so page.tsx's own `force-dynamic` export made Next emit `no-store` for
-    // every shared /route permalink -- the exact bug this file exists to prevent, just on a
-    // different path. Fails if the matcher regresses to ["/explore", "/api/pivot"] or the
-    // pathname check reverts to an exact `=== "/explore"`.
+    // Critical fix, final whole-branch review: with nothing in proxy.ts answering /route/<pair>,
+    // page.tsx's own `force-dynamic` export made Next emit `no-store` for every shared /route
+    // permalink -- the exact bug this file exists to prevent, just on a different path. Fails if
+    // nothing answers /route/<pair> or the pathname check reverts to an exact `=== "/explore"`.
     const res = await proxy(new NextRequest("http://localhost/route/JFK-LAX"));
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
@@ -146,14 +155,14 @@ describe("proxy", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  // M4d. Three more entity pages, one matcher entry each -- but no longer one ENTITY_ROUTES row
+  // M4d. Three more entity pages, one QUERY_ROWS row each -- but no longer one ENTITY_ROUTES row
   // each: since #106 only `/route/:pair` is answered by that table, and the cases below exercise
   // THREE different mechanisms (`/airport` its own branch since M7 Task 9, `/carrier` and
   // `/aircraft` theirs since #106, `/route` the table). That is the point of asserting them
   // together: the header must be identical whichever branch answers.
-  // These tests cannot see the matcher at all -- they call `proxy()` directly, so a
-  // matcher entry could be missing and every one of them would still pass. That gap is the whole
-  // reason `app/smoke.sh` asserts the same header against a served build; see the file header.
+  // These tests call `proxy()` directly, so they cannot see whether Next runs it for a served
+  // request at all. That gap is the whole reason `app/smoke.sh` asserts the same header against a
+  // served build; see the file header.
   it.each([
     ["a real airport", "/airport/SEA"],
     ["a real carrier", "/carrier/DL"],
@@ -198,9 +207,9 @@ describe("proxy", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  // The header the three M4d not-found.tsx files read. Without a matcher entry it is absent and
-  // each of them throws MissingRawPathError -- a 500 where a 404 was the answer -- so this is a
-  // 500-vs-404 test, not a cosmetic one. (Again: only smoke.sh can see the matcher itself.)
+  // The header the three M4d not-found.tsx files read. Without it each of them throws
+  // MissingRawPathError -- a 500 where a 404 was the answer -- so this is a 500-vs-404 test, not
+  // a cosmetic one. (Again: only smoke.sh can see whether Next runs the proxy at all.)
   it.each([
     ["/airport/ZZZZ"],
     ["/carrier/ZZ"],
@@ -333,8 +342,8 @@ describe("proxy", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  // The header /watch/[preset]/not-found.tsx reads. Without a matcher entry it is absent and
-  // that not-found.tsx throws MissingRawPathError -- a 500 where a 404 was the answer, same
+  // The header /watch/[preset]/not-found.tsx reads. Without it that not-found.tsx throws
+  // MissingRawPathError -- a 500 where a 404 was the answer, same
   // shape as the ENTITY_ROUTES pages' equivalent test above.
   it("copies the pathname for /watch/nope, without which its not-found.tsx throws", async () => {
     const res = await proxy(new NextRequest("http://localhost/watch/nope"));
@@ -408,15 +417,13 @@ describe("proxy", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  it("declines to cache /explore/filter with no dimension at all", async () => {
-    // The bare prefix reaches the branch (a `startsWith` test, deliberately) and must not be
-    // cached: `filterDimFromPath` returns null and the probe refuses rather than throwing.
+  it("treats /explore/filter/ with no dimension as a path that is not one of ours", async () => {
+    // No dimension follows the prefix, so no `[dim]` page serves it: `filterDimFromPath` is null,
+    // no `QUERY_ROWS` row declares the path, and the proxy sets no Cache-Control on it.
     const res = await proxy(new NextRequest(`http://localhost/explore/filter/?${FILTER_Q}`));
-    expect(res.headers.get("Cache-Control")).toBe("no-store");
-    // ...and it is `unknown`, not `notFound`: a rewrite response carries `no-store` too, so the
-    // line above cannot tell the two apart. There is no dim here to be missing from the catalog --
-    // this URL names no dimension at all, Next never routes it to the filter page, and claiming
-    // the filter family for it would dispatch the root 404 to a view with nothing to say.
+    expect(res.headers.get("Cache-Control")).toBeNull();
+    // ...and no rewrite. There is no dim here to be missing from the catalog, and claiming the
+    // filter family for this URL would dispatch the root 404 to a view with nothing to say.
     expect(rewritePath(res)).toBeNull();
   });
 
@@ -443,7 +450,7 @@ describe("proxy", () => {
   // and a range with no database read; these values are resolved against the warehouse, which is
   // what makes an unresolvable one a declined cache instead of a long-cached 200.
   //
-  // These tests cannot see proxy.ts's matcher (they call `proxy()` directly), so `app/smoke.sh`
+  // These tests call `proxy()` directly and cannot see whether Next runs it, so `app/smoke.sh`
   // asserts every one of these headers against a served build too.
   it.each([
     ["a carrier page with a resolvable type filter", "/carrier/DL?type=B737-8"],
@@ -551,8 +558,8 @@ describe("proxy", () => {
     expect(res.headers.get("Cache-Control")).toBe(CACHE);
   });
 
-  // #8. The four OG card routes. Before this they were absent from the matcher entirely, so each
-  // shipped `ImageResponse`'s own default -- measured on a served build, `next start` on :3251:
+  // #8. The four OG card routes. Without the OG branch each ships `ImageResponse`'s own default
+  // -- measured on a served build, `next start` on :3251:
   // `cache-control: public, max-age=0, must-revalidate`, which forbids a shared cache from
   // serving the card without revalidating, on 23,908 URLs whose only traffic is crawlers
   // re-fetching them.
@@ -572,18 +579,19 @@ describe("proxy", () => {
   });
 
   // THE ORDERING TEST for the `/airport` branch, and it has to be a 404 card rather than a real
-  // one. Every entity slug reader is a bare prefix test that does not stop at one segment, so
-  // `airportSlugFromPath("/airport/SEA/opengraph-image")` is `"SEA/opengraph-image"` -- and with
-  // the OG loop moved BELOW the airport branch, that branch claims the request and hands that
-  // string to `resolveAirportCode`, which UPPERCASES BEFORE IT LOOKS ANYTHING UP: the lowercase
-  // `opengraph-image` in the slug makes it answer `redirect`, which `isCacheable` allows. So the
-  // real card above still gets HTML_CACHE under the mutant -- the right header for entirely the
-  // wrong reason, pointing at a 308 to `/airport/SEA%2FOPENGRAPH-IMAGE`. MUTANT RUN: moving the
-  // OG loop below the airport branch leaves every "real card" case green and reddens exactly the
-  // 404 cards, because `LHR/opengraph-image` is a `redirect` too and the correct answer for a
-  // non-domestic code is `no-store`. This is CLAUDE.md's rule about asserting the outcome a buggy
-  // implementation also produces, met head-on: the discriminating input is the one where the two
-  // branches DISAGREE, not the one where both happen to say CACHE.
+  // one. It catches TWO defects together and neither alone: the OG loop moved BELOW the airport
+  // branch, AND an entity slug reader accepting a `/`, so that
+  // `airportSlugFromPath("/airport/SEA/opengraph-image")` is `"SEA/opengraph-image"` rather than
+  // null. Then that branch claims the request and hands that string to `resolveAirportCode`,
+  // which UPPERCASES BEFORE IT LOOKS ANYTHING UP: the lowercase `opengraph-image` in the slug
+  // makes it answer `redirect`, which `isCacheable` allows. So the real card above still gets
+  // HTML_CACHE under the mutant -- the right header for entirely the wrong reason, pointing at a
+  // 308 to `/airport/SEA%2FOPENGRAPH-IMAGE`. MUTANTS RUN: with both defects the real airport card
+  // above stays green and this test goes red, because `LHR/opengraph-image` is a `redirect` too
+  // and the correct answer for a non-domestic code is `no-store`; the reorder alone and the reader
+  // regression alone each leave it green. This is CLAUDE.md's rule about asserting the outcome a
+  // buggy implementation also produces, met head-on: the discriminating input is the one where the
+  // two branches DISAGREE, not the one where both happen to say CACHE.
   it("resolves an airport CARD from the OG branch, not from the /airport branch below it", async () => {
     const res = await proxy(new NextRequest("http://localhost/airport/LHR/opengraph-image"));
     expect(res.headers.get("Cache-Control")).toBe("no-store");
@@ -638,8 +646,8 @@ describe("proxy", () => {
     // A reader that tested the suffix without also requiring a non-empty slug under a known
     // prefix would send `""` into a resolver here. The other shapes the reader must refuse --
     // two dynamic segments, an empty slug -- are asserted in canonicalQuery.test.ts against
-    // `QUERY_ROWS.find`, because at THIS layer they fall through to the entity branches and get
-    // `no-store` either way, so the assertion could not discriminate.
+    // `QUERY_ROWS.find` and `isOurs`, where the reader is exercised directly rather than through
+    // whichever branch happens to answer.
     const res = await proxy(new NextRequest("http://localhost/opengraph-image"));
     expect(res.headers.get("Cache-Control")).toBeNull();
   });
@@ -679,7 +687,7 @@ describe("proxy", () => {
   it("307s a doubled '?' on a card instead of 500ing on it", async () => {
     // CLAUDE.md's rule, re-run against the new predicates: `rawQuery` is
     // `.search.replace(/^\?/, "")`, NON-global, and proxy() has no try/catch, so a doubled `?`
-    // reaching a throwing predicate is a 500 on every matcher path at once. `ogSlugFromPath`
+    // reaching a throwing predicate is a 500 on every gated path at once. `ogSlugFromPath`
     // delegates its decode to lib/entitySlug.ts's guard for the same reason.
     const res = await proxy(
       new NextRequest("http://localhost/route/JFK-LAX/opengraph-image??083d4242d9090de4"),
@@ -694,37 +702,21 @@ describe("proxy", () => {
   it("copies the pathname for an OG card request", async () => {
     // An opengraph-image.tsx compiles to a route handler, so there is no not-found.tsx on this
     // path and no MissingRawPathError to trigger -- but the header rides the same
-    // NextResponse.next({request:{headers}}) every matcher path gets, and a branch that built a
+    // NextResponse.next({request:{headers}}) every request gets, and a branch that built a
     // fresh response would silently drop it for a future reader of it.
     const res = await proxy(new NextRequest("http://localhost/route/JFK-LAX/opengraph-image"));
     expect(getReqHeader(res, RAW_PATH_HEADER)).toBe("/route/JFK-LAX/opengraph-image");
   });
 
-  it("lists all four OG card routes in the matcher", async () => {
-    // proxy() takes a request, not a matcher, so every test above passes just as well with the
-    // matcher entries missing -- and then NOTHING in this file runs in production, because the
-    // proxy is never invoked for those paths. Only `app/smoke.sh` sees the real thing; this is
-    // the cheapest guard short of it. MUTANT RUN: removing "/route/:pair/opengraph-image" from
-    // config.matcher turns this red, and canonicalQuery.test.ts's agreement test with it.
+  it("runs on every request", async () => {
+    // A proxy that runs only on listed paths leaves every other URL's x-upgauge-path to the
+    // client, and the root not-found boundary dispatches on it (#172).
     const { config } = await import("@/proxy");
-    expect(config.matcher).toContain("/route/:pair/opengraph-image");
-    expect(config.matcher).toContain("/airport/:code/opengraph-image");
-    expect(config.matcher).toContain("/carrier/:code/opengraph-image");
-    expect(config.matcher).toContain("/aircraft/:name/opengraph-image");
+    expect(config.matcher).toEqual(["/:path*"]);
   });
 
-  it("deliberately leaves /api/health out of the matcher", async () => {
-    const { config } = await import("@/proxy");
-    // Not a style preference. The matcher grants cacheability; the healthcheck must never be
-    // cached, sets its own no-store, takes no query and has no not-found path. This test exists
-    // so a future "add every route to the matcher" sweep cannot quietly make it cacheable.
-    expect(config.matcher).not.toContain("/api/health");
-    // Anti-vacuity: prove this test is reading the real matcher.
-    expect(config.matcher).toContain("/api/pivot");
-  });
-
-  // M8 Task 1 (#13). `/` was the one page route missing from config.matcher, so it fell through
-  // to Next's own force-dynamic fallback: measured on a served build at 4aa8087:
+  // M8 Task 1 (#13). Without its branch `/` falls through to Next's own force-dynamic fallback:
+  // measured on a served build at 4aa8087:
   // `private, no-cache, no-store, max-age=0, must-revalidate` -- which forbids caching
   // EVERYWHERE including the CDN, on the front door, which queries DuckDB for DATA AS OF.
   it("sets the project's Cache-Control on /", async () => {
@@ -759,11 +751,11 @@ describe("proxy", () => {
 
   // M8 Task 3 (epic #3). Cloudflare's default cache key includes the full query string, so
   // before this gate `?x=1..N` minted an unbounded family of long-cached entries on every
-  // cacheable path -- measured at 4aa8087, on all TEN that this gate answers for. `/api/pivot` is
-  // an ELEVENTH cacheable path (its own successes take the same 30-day PROJECT_CACHE) and it
+  // cacheable path -- measured at 4aa8087, on every path this gate answers for. `/api/pivot` is
+  // one more cacheable path (its own successes take the same 30-day PROJECT_CACHE) and it
   // carried the same disease on a different axis, closed in its own handler rather than here --
   // see app/api/pivot/route.ts and lib/canonicalQuery.ts's `queryVerdict`. `/search` is the
-  // twelfth matcher entry and the only one that is never cacheable at all.
+  // one declared route that is never cacheable at all.
   //
   // DEVIATION from the task brief's literal code, measured rather than assumed (see the doc
   // comment on this gate in proxy.ts, and this task's report for the exact served-build error):
@@ -793,7 +785,7 @@ describe("proxy", () => {
   // `new URL(request.url).search.replace(/^\?/, "")` and that regex is NOT global, so a doubled
   // `?` in the request line reaches canonicalize() with one `?` still on the front. It used to
   // throw there ("a wiring bug, not something a real request can trigger"), proxy() has no
-  // try/catch around the call, and Next answered 500 -- on all twelve matcher paths, `/` and
+  // try/catch around the call, and Next answered 500 -- on every gated path, `/` and
   // `/sitemap.xml` included, to any client with no auth and no unusual encoding. Measured on a
   // served build at d109845, and re-measured by restoring the throw on top of the fix:
   // `/watch?x=1` 307, `/watch??x=1` 500, and the same for every other doubled-`?` row in
@@ -898,6 +890,41 @@ describe("proxy", () => {
   it("...and the control: the identical URL without the RSC header still 307s", async () => {
     const res = await proxy(new NextRequest("http://localhost/watch?x=1"));
     expect(res.status).toBe(307);
+  });
+});
+
+describe("a request for a path that is not one of ours", () => {
+  it.each([
+    "/nope",
+    "/wp-login.php",
+    "/api/health",
+    "/api/nope",
+    "/favicon.ico",
+    "/favicon.ico/x",
+    "/_next/static/chunks/app.js",
+    "/carrier/DL/x",
+    "/watch/gauge/x",
+    "/explore/filter/origin_state/x",
+  ])("%s gets both headers and nothing else", async (pathname) => {
+    vi.mocked(canonicalize).mockClear();
+    vi.mocked(dataAsOf).mockClear();
+    vi.mocked(loadAllowlist).mockClear();
+    const res = await proxy(new NextRequest(`http://localhost${pathname}?x=1`));
+    expect(getReqHeader(res, RAW_PATH_HEADER)).toBe(pathname);
+    expect(getReqHeader(res, RAW_QUERY_HEADER)).toBe("x=1");
+    expect(res.headers.get("Cache-Control")).toBeNull();
+    expect(res.headers.get("Location")).toBeNull();
+    expect(res.headers.get("x-middleware-rewrite")).toBeNull();
+    // The discriminating assertion: without the early return every row predicate and the
+    // canonical-query gate run on every asset request, and nothing else here would notice.
+    expect(canonicalize).not.toHaveBeenCalled();
+    expect(dataAsOf).not.toHaveBeenCalled();
+    expect(loadAllowlist).not.toHaveBeenCalled();
+  });
+
+  it("still answers an RSC request no-store", async () => {
+    const res = await proxy(new NextRequest("http://localhost/nope", { headers: { RSC: "1" } }));
+    expect(res.headers.get("Cache-Control")).toBe(NO_STORE);
   });
 });
 
@@ -1030,14 +1057,16 @@ describe("proxy 404 rewrite (#157)", () => {
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
 
-  // BRANCH ORDER, and the only test that defends it. Every entity slug reader is a bare prefix
-  // test that does not stop at one segment, so `carrierSlugFromPath("/carrier/ZZ/opengraph-image")`
-  // is `"ZZ/opengraph-image"`, not null -- move any entity branch's rewrite above the OG_ROUTES
-  // loop and that string resolves as a carrier code, 404s, and the card gets rewritten to an HTML
-  // page. An `opengraph-image.tsx` compiles to a ROUTE HANDLER returning an ImageResponse: there
-  // is no not-found.tsx on that path, nothing for the root boundary to dispatch to, and a crawler
-  // asking for a PNG would be handed a document. Until this test, only prose defended that
-  // ordering.
+  // BRANCH ORDER AND THE ONE-SEGMENT READERS, together. Were a reader to accept a `/`,
+  // `carrierSlugFromPath("/carrier/ZZ/opengraph-image")` would be `"ZZ/opengraph-image"` rather
+  // than null -- and with that entity branch's rewrite also above the OG_ROUTES loop, that string
+  // resolves as a carrier code, 404s, and the card gets rewritten to an HTML page. MUTANTS RUN: the
+  // OG loop moved below the `/airport`, `/carrier` and `/aircraft` branches plus a reader accepting
+  // a `/` turns those three cases red; either defect alone leaves all four green, and no mutant
+  // run reddens the route case, which only the `ENTITY_ROUTES` loop answers. An
+  // `opengraph-image.tsx` compiles to a ROUTE HANDLER returning an ImageResponse: there is no
+  // not-found.tsx on that path, nothing for the root boundary to dispatch to, and a crawler asking
+  // for a PNG would be handed a document.
   it.each([
     ["/route/ZZZZ-LAX/opengraph-image"],
     ["/airport/ZZZZ/opengraph-image"],

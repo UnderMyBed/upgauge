@@ -200,7 +200,7 @@ through `/sitemap.xml`. The top bar carries a standing `/watch` link (`TopBar`'s
 covers all eleven pages in one place, and the front door names it in prose. `TopBar.test.tsx`'s
 "links to /watch from every page" is what makes removing it red. **The lesson generalizes: a
 new top-level route is not shipped until something already-reachable links to it**, and neither
-`sitemap.ts` nor `proxy.ts`'s matcher counts, because both are satisfied by a page no visitor
+`sitemap.ts` nor a `QUERY_ROWS` row counts, because both are satisfied by a page no visitor
 can navigate to.
 
 > **Build the aircraft-type-mix chart before the load-factor chart.** Everyone does load

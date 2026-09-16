@@ -497,7 +497,7 @@ describe("/explore's empty-state 'wider window' link", () => {
 
 // `/explore/filter/:dim` shipped in Task 5 with NOTHING linking to it -- reachable only by typing
 // the URL. CLAUDE.md: "A new top-level route is not shipped until something already-reachable
-// links to it. Neither `sitemap.ts` nor `proxy.ts`'s matcher counts." `/watch` shipped that way
+// links to it. Neither `sitemap.ts` nor a `QUERY_ROWS` row counts." `/watch` shipped that way
 // one milestone after a review existed to prevent it, which is why this is a test and not a note.
 describe("/explore is the inbound link that ends /explore/filter's island", () => {
   it("emits real anchors into the value-list route", async () => {

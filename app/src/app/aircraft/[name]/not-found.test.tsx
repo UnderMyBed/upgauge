@@ -132,7 +132,7 @@ describe("/aircraft/<slug> not-found", () => {
 
   it("falls back to a generic message when the path is not an aircraft page", async () => {
     // Must degrade to a page that still renders, never throw a 500 out of a 404 -- the last
-    // line of defence if proxy.ts's matcher ever sends something else here.
+    // line of defence if a pathname that is not an aircraft page ever reaches this view.
     render(await NotFoundView({ pathname: "/somewhere/else" }));
     expect(screen.getByRole("alert").textContent).toBe("We don’t recognize this page.");
     expect(screen.queryByText(/unknown aircraft type/)).toBeNull();

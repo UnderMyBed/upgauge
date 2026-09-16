@@ -173,6 +173,6 @@ export default async function NotFound() {
   // Fails loudly if proxy.ts did not run, exactly as /route and /explore do for their own
   // headers. There is deliberately no fallback: a 404 page that quietly stops naming the
   // offending slug, with every gate green, is the precise failure this header exists to make
-  // impossible. NOTE for the proxy: `/aircraft/:name` must be in its matcher, or this throws.
+  // impossible.
   return <NotFoundView pathname={rawPathFromHeaders(requestHeaders)} />;
 }

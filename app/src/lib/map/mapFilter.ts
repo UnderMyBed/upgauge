@@ -59,7 +59,7 @@ import { resolveAircraftSlug } from "@/lib/aircraftSlug";
  *
  * NOTHING HERE MAY THROW ON A MALFORMED INPUT. `proxy.ts` has no try/catch outside its four
  * probes and that is deliberate (`proxy.ts:164-175`); `canonicalize()` once threw on a leading
- * `?` that "only a wiring bug could produce" and 500ed every matcher path. The two resolvers
+ * `?` that "only a wiring bug could produce" and 500ed every gated path. The two resolvers
  * below propagate a genuine DATABASE failure -- that is not a malformed input, and swallowing
  * it would turn a broken warehouse into a silent "no such carrier" -- and `proxy.ts`'s own
  * `isFilterCacheable` probe catches it there, exactly as `isCacheable` already does. */

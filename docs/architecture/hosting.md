@@ -552,10 +552,11 @@ the argument is the ratio of noise to cause) — and it has been red by name twi
 HTTP 503. `assert_identity` would not stop such a run either: it reads `build.sha`/`build.warehouse`,
 which a degraded 503 body still carries — identity and health are separate questions, and that is
 correct. `no-store` is the property that justifies
-this route being the one deliberate omission from `proxy.ts`'s matcher, and nothing verified it on
-a served response — `proxy.test.ts` pins the absence from the matcher *array*, and
-`api/health/route.test.ts` calls `GET()` directly. Both would stay green if a Next upgrade or an
-"add every route to the matcher" sweep put the project's 30-day `s-maxage` on this endpoint, which
+this route being one of the two served routes `QUERY_ROWS` deliberately does not declare (the pinned
+`NOT_OURS` set in `canonicalQuery.test.ts`), and nothing verified it on a served response — that
+pinned set holds only the declaration, and `api/health/route.test.ts` calls `GET()` directly. Both
+would stay green if a Next upgrade, or a sweep giving this route a row and a proxy cache branch, put
+the project's 30-day `s-maxage` on this endpoint, which
 would pin `{"status":"ok"}` in a shared CDN for a month in front of a degraded container. The
 negative check is not redundant with the positive one: a response carrying *two* `Cache-Control`
 values still contains `cache-control: no-store`.
@@ -726,29 +727,33 @@ being invisible to whoever added a route:
 | Request pathname → the app | `x-upgauge-path` request header (`lib/rawPath.ts`) | *the pathname header*, below |
 | The project `Cache-Control` | Set on the proxy's own response | *Cache-Control lives here*, below |
 
-> **Adding a page route? You must add it to `config.matcher` in `proxy.ts`, or it ships
-> uncached, without either header, and with its 404 page destroyed.** This is not optional and
-> nothing else enforces it: a route missing from the matcher builds, serves, typechecks, passes
-> its unit tests, and looks correct in a browser. `/route/<pair>` shipped
-> `private, no-cache, no-store, max-age=0, must-revalidate` for exactly this reason — the
-> matcher listed only `/explore` and `/api/pivot`, and every gate stayed green.
+> **Adding a route? Declare it in `QUERY_ROWS` (`lib/canonicalQuery.ts`), or the proxy treats it
+> as not its own.** `config.matcher` is `/:path*`, so the proxy runs on every request and sets both
+> headers before anything else; a path no row declares returns straight after the `RSC` guard with
+> those two headers and nothing more — no canonical-query gate, no `Cache-Control`, no database.
+> `canonicalQuery.test.ts` reads the `app/src/app` tree and fails when a route file has no row and
+> is not in its pinned `NOT_OURS` set (`/api/health` and `/favicon.ico`, each with its reason).
+> What that test cannot see is a declared route whose `Cache-Control` no branch decides: it builds,
+> serves, typechecks, passes its unit tests, and looks correct in a browser. `/route/<pair>`
+> shipped `private, no-cache, no-store, max-age=0, must-revalidate` because the proxy never decided
+> its header, and every gate stayed green.
 >
-> **Three lines per page, and all three are load-bearing:** a `matcher` entry, a cacheability
+> **Three things per page, and all three are load-bearing:** a `QUERY_ROWS` row, a cacheability
 > answer (a row in `ENTITY_ROUTES` if the slug is the page's ONLY cacheability input, its own
 > `if` branch otherwise — see below), and *both* a header assertion and a `no-store` assertion
 > in `app/smoke.sh`.
-> **The matcher holds seventeen entries**: `/`, `/explore`, `/explore/filter/:dim`, `/api/pivot`,
-> the four entity pages
+> **Every route under `app/src/app` but the `NOT_OURS` pair is declared**: `/`, `/explore`,
+> `/explore/filter/:dim`, `/api/pivot`, the four entity pages
 > (`/route/:pair`, `/airport/:code`, `/carrier/:code`, `/aircraft/:name`), those four pages'
 > `opengraph-image` children (§ The OG cards, below), `/search`,
-> `/sitemap.xml`, `/robots.txt`, `/watch` and `/watch/:preset`. Ten are dynamic segments — the
-> four entity pages, their four card routes, `/watch/:preset` and `/explore/filter/:dim`; the rest
-> are exact paths with no per-slug resolution.
-> The rule is the same for all of them: a route absent from the matcher gets
+> `/sitemap.xml`, `/robots.txt`, `/watch` and `/watch/:preset`. The four entity pages, their four
+> card routes, `/watch/:preset` and `/explore/filter/:dim` are dynamic segments; the rest are exact
+> paths with no per-slug resolution.
+> The rule is the same for all of them: a declared route no branch answers gets
 > no `Cache-Control` from this file at all, which for `/search` happens to be harmless (Next's
 > own `no-store` for `dynamic = "force-dynamic"` covers the gap) but for `/sitemap.xml` and
 > `/robots.txt` is not — neither sets its own header the way `/api/pivot`'s route handler does,
-> so omitting either from the matcher ships it with literally no shared-cache header, forever,
+> so either one without its branch ships with literally no shared-cache header, forever,
 > not merely mis-cached. `/search` gets `no-store` **unconditionally** (`q` is an unbounded,
 > attacker-chosen string, and there is no proxy-side resolution that would make caching any of
 > it safe — see `proxy.ts`'s own doc comment on that branch); `/sitemap.xml` and `/robots.txt`
@@ -788,7 +793,9 @@ being invisible to whoever added a route:
 > type on a route-grain row. Both are the "cacheability is an AND of two allow-lists, never a
 > negation" rule the `/airport` and `/carrier` branches already state. The route runs a live
 > pivot after the header is committed, so it joins § "The gap" below rather than closing it.
-> matcher row — and stay invisible to every gate but one.** `app/src/app/sitemap.ts` and
+>
+> **A route can be *structurally* wrong — missing a required page-level export, not merely a
+> `QUERY_ROWS` row — and stay invisible to every gate but one.** `app/src/app/sitemap.ts` and
 > `app/src/app/robots.ts` carry `export const dynamic = "force-dynamic"`, the same export every
 > other DB-touching route has. Without it Next tries to prerender them at `next build` time, and
 > `next build` runs with `cwd` wherever the build tool started it (`npm --prefix app run build`,
@@ -799,41 +806,18 @@ being invisible to whoever added a route:
 > That is the whole argument for treating a served-build pass as a first-class deliverable
 > rather than a nice-to-have at the end.
 
-### What omitting one actually costs — measured, not assumed
+### What omitting a `QUERY_ROWS` row costs
 
-A missing matcher entry looks like it should make every 404 on the affected page a **500**,
-because `not-found.tsx` reads `x-upgauge-path` and throws `MissingRawPathError` without it.
-Measured against a served build with `/airport/:code` deliberately removed from the matcher,
-the truth is narrower, and worse:
-
-| | With the matcher entry | Without it |
-|---|---|---|
-| `/airport/SEA` | 200, `public, s-maxage=3600, …` | 200, `private, no-cache, no-store, max-age=0, must-revalidate` |
-| `/airport/sea` | 308, long-cached | 308, `private, no-cache…` |
-| `/airport/ZZZZ` | 404, `no-store`, names the code | **404**, `private, no-cache…`, **7,740-byte `<html id="__next_error__">` shell** |
-
-> The **shape** of the finding — present vs. absent, not the literal number — is what the table
-> exists to show, and that shape is unchanged by which constant HTML pages carry. `/airport/SEA`
-> is an entity page, so its long cache is `HTML_CACHE`'s `s-maxage=3600`, not the
-> project's 30-day value.
-
-So the status stays 404 — Next catches the throw inside the 404 render — but the page is gone:
-no reason, no code named, no `DATA AS OF`, no recovery link, and `MissingRawPathError` in the
-server log with a digest. **A 404 that has lost its entire message, on every unknown code, with
-nothing red anywhere else.** That is worse than the 500 the reports expected, because a 500 is
-loud. `app/smoke.sh`'s per-page 404-body checks are what catch it; the three matcher-removal
-mutants below each turned exactly those checks red.
-
-**A page that reads `RAW_QUERY_HEADER` itself fails louder, and that difference is worth knowing
-before reading the table above as universal.** The four entity pages take their slug from route
-params, so only their `not-found.tsx` needs a header and only the 404 degrades. `/explore` and
-`/explore/filter/:dim` read the raw query on the SUCCESS path, so a missing matcher entry throws
-`MissingRawQueryError` out of the page itself. Measured on a served build with
-`/explore/filter/:dim` removed from the matcher (epic #6's mutant 4): **500** on every request,
-`private, no-cache, no-store, max-age=0, must-revalidate`, an `__next_error__` shell for a body,
-and fourteen red checks in `app/smoke.sh` — against **one** red unit test (`canonicalQuery.test
-.ts`'s three-lists-agree case, which sees the missing entry but nothing downstream of it). The
-rule is unchanged; only the symptom is, and this one is the easier of the two to notice.
+A route file with no row fails `canonicalQuery.test.ts` before anything ships, unless the same diff
+adds it to the pinned `NOT_OURS` set — the one-line edit that set is pinned against. Past that test,
+the route is simply not the proxy's. It still receives both headers, so no `not-found.tsx` throws
+`MissingRawPathError` and no page throws `MissingRawQueryError`; nothing else runs for it. Its query
+is never canonicalized, its `Cache-Control` is whatever Next emits on its own (for a
+`force-dynamic` page, `private, no-cache, no-store, max-age=0, must-revalidate`), and no branch
+resolves its 404 verdict, so `notFoundRewrite()` never fires and every 404 on it ships the empty
+`__next_error__` shell (§ A 404's body reaches the served HTML only through the proxy's
+`/_not-found` rewrite). The status stays 404 through all of that, which is why the served-build
+half of this is `app/smoke.sh`'s per-page header and 404-body checks, never a status check.
 
 ## `proxy.ts` is load-bearing — both query entry points break without it
 
@@ -909,9 +893,9 @@ sentence enumerating all the causes would satisfy any lone positive check, and t
 is precisely what shipped before.
 
 **Six 404 views depend on this header** (`/route`, `/airport`, `/carrier`, `/aircraft`,
-`/watch/:preset`, `/explore/filter/:dim`), each re-running its own resolver against the pathname,
-so the matcher rule above is not a caching concern with a 404 side-effect — it is the other way
-round on most of them. The `/aircraft` one does the most with it: it catches
+`/watch/:preset`, `/explore/filter/:dim`), each re-running its own resolver against the pathname.
+The proxy sets it on every request, so while `proxy.ts` is deployed none of them can find it
+absent, and `MissingRawPathError` means exactly that the proxy did not run. The `/aircraft` one does the most with it: it catches
 `AmbiguousCodeError`, resolves both colliding BTS codes to their full designations, and renders
 each with an Explorer permalink.
 
@@ -946,28 +930,27 @@ other four families resolve one each. Measured on a served build, not inferred:
 | body | the family's own view, in the emitted HTML | `<h1>Carrier not found</h1>` and the `class="asof"` badge, in the document rather than only in the payload |
 
 `app/src/app/not-found.tsx` is the boundary the rewrite lands on and **the only 404 view whose
-body reaches the served HTML**; `lib/notFoundFamily.ts` owns the dispatch. That dispatch tests the
-four `opengraph-image` prefixes BEFORE the entity prefixes, because every entity slug reader is a
-bare prefix test that does not stop at one segment — `carrierSlugFromPath("/carrier/DL/opengraph-image")`
-returns `"DL/opengraph-image"`, not null — and the four card routes deliberately do not rewrite at
+body reaches the served HTML**; `lib/notFoundFamily.ts` owns the dispatch. That dispatch names a
+family only for a pathname one entity reader accepts, and every reader takes exactly one non-empty
+raw segment after its prefix — `carrierSlugFromPath("/carrier/DL/opengraph-image")` is null — so a
+card path has no family. The four card routes deliberately do not rewrite at
 all: an `opengraph-image.tsx` compiles to a route handler returning an `ImageResponse`, so a
 crawler asking for a PNG would be handed an HTML document. A pathname the app does not route at
 all (`/wp-login.php` and every other scanner probe) is `null`, and gets a **database-free** generic
 view: a `dataAsOf()` there would put a DuckDB read on every probe that lands on it.
 
-**Which probes land on it is decided by the path header, and the header is the proxy's own for
-every request the matcher covers — and only those.** Next deletes every request header outside the
-middleware's override set (`server/lib/router-utils/resolve-routes.js`), so on a matched path a
-forged `x-upgauge-path` cannot survive the proxy's value. On an unmatched path the proxy never runs
-and the header arrives as the client wrote it, so the dispatch honours it: `curl -H
-'x-upgauge-path: /carrier/ZZ' <base>/wp-login.php` renders the carrier 404 view and pays its
-`dataAsOf()` + `resolveCarrier()`. The status stays 404 and React escapes the echoed slug, so what
-that buys is one dimension lookup of **origin cost** on a path outside
-`deploy/cloudflare/rate-limit.json`'s prefixes (`/api/`, `/explore`, the four entity prefixes,
-`*/opengraph-image`) — not a wrong answer and not a disclosure. Closing it means widening the
-matcher to `/:path*`, which changes behaviour on every URL in the app and needs its own smoke pass;
-`app/smoke.sh` § 8c pins today's behaviour instead, and the widened matcher is the mutant that
-kills those checks and no others.
+**The dispatch can trust the path header because the proxy sets it on every request.** Next deletes
+every request header outside the middleware's override set
+(`server/lib/router-utils/resolve-routes.js`), so wherever `proxy.ts` runs a forged `x-upgauge-path`
+cannot survive its value — and `config.matcher` is `/:path*`, so it runs everywhere. A listed matcher
+left the header on every other URL exactly as the client wrote it: measured on production against
+the listed matcher on 2026-09-16, `curl -H 'x-upgauge-path: /carrier/ZZ' <base>/nope` answered
+`<h1>Carrier not found</h1>` with a `DATA AS OF` badge — `dataAsOf()` + `resolveCarrier()` minted by
+any client on any URL outside `deploy/cloudflare/rate-limit.json`'s prefixes, `/favicon.ico/x`,
+`/api/nope`, `/carrier/DL/x` and `/watch/a/b` alike (#172). The status stayed 404 and React escaped
+the echoed slug, so it was origin cost rather than a wrong answer or a disclosure. The price of the
+fix is that every request, `/_next/static` included, runs `proxy()` as far as `isOurs()` — which is
+why every `QUERY_ROWS` predicate must be total (§ One canonical key set per cacheable URL).
 
 **This narrows the blank body rather than closing it, and the six segment `not-found.tsx` files
 are not dead.** An RSC request is answered by `proxy.ts`'s `RSC` header guard, which returns
@@ -1120,9 +1103,9 @@ every row below, and the status on every 308 and 404.
 
 > **The three `/watch` rows are curled against a served build, not unit-only.** The
 > distinction is kept because it
-> is the general rule, not a fact about `/watch`: `proxy.test.ts` cannot observe
-> `config.matcher` at all (it never goes through Next's routing layer), so it **cannot tell a
-> present matcher entry from a missing one**. Any new row in this table is unit-verified, not
+> is the general rule, not a fact about `/watch`: `proxy.test.ts` calls `proxy()` directly and
+> never goes through Next's routing layer, so it **cannot tell whether the proxy ran for a request
+> at all**, only what it answers when it does. Any new row in this table is unit-verified, not
 > measured, until `app/smoke.sh` curls it against a real build.
 
 **`/search`'s 307 is a deliberate departure from every 308 in this table, and it is `search.ts`'s
@@ -1140,28 +1123,24 @@ where that answer stopped being true — exactly the class of "a wrong permanent
 `s-maxage` bounds" this table's `no-store` rows exist to avoid one layer up.
 
 **Verified by mutation on a served build, because a `check_not` that cannot fire is worse than
-no check** (this repo has shipped exactly one of those). Five mutants, each applied to
+no check** (this repo has shipped exactly one of those). Two mutants, each applied to
 `proxy.ts` alone, `make app-smoke` run, then reverted:
 
 | Mutant | Result |
 |---|---|
-| drop `/airport/:code` from the matcher | 4 red: the 200's header, the 308's header, and both airport 404 *body* checks |
-| drop `/carrier/:code` | 5 red: the same shape, plus the slug-as-typed check |
-| drop `/aircraft/:name` | 7 red: both 200 headers, the 308's, and all four 404-body checks |
 | `isCacheable` → `kind !== "notFound"` | **exactly 2 red, both on `/aircraft/CE-180`**, everything else green — the bug, isolated |
 | `isCacheable` → `return true` | 18 red: every `no-store` and every `s-maxage` absence check across all four entities |
 
-The last one is the proof that the absence checks are live rather than decorative; the
-fourth is the proof that they are specific.
+The second is the proof that the absence checks are live rather than decorative; the
+first is the proof that they are specific.
 
 ### The OG cards — a route handler, so the proxy's header lands on top of one it did not write
 
 Each entity page has an `opengraph-image.tsx` child (`/route/:pair/opengraph-image` and its
-three siblings), rendering the social-preview card on demand. They are the **first matcher
-entries whose route is not a page**: an `opengraph-image.tsx` compiles to a route handler, so
-there is no `not-found.tsx` reading the pathname header on these paths and no 404-into-500
-failure mode. The other reason for a matcher entry applies in full, and it is why they are
-listed.
+three siblings), rendering the social-preview card on demand. They are the **first declared
+routes that are not pages**: an `opengraph-image.tsx` compiles to a route handler, so there is no
+`not-found.tsx` reading the pathname header on these paths and nothing for a 404 to rewrite to.
+The cache decision applies in full, and it is why they are declared.
 
 **`ImageResponse` ships its own `Cache-Control`, and the proxy overwrites it.** In a production
 build it constructs the response with `public, max-age=0, must-revalidate`
@@ -1181,14 +1160,15 @@ is for `/sitemap.xml` and `/robots.txt`, which run fixed catalog queries and car
 **The four rows are one loop, and `/airport` is in it.** What pulls `/airport` out of
 `ENTITY_ROUTES` is its *page*'s `y=<year>` param, a second cacheability input the generic
 `isCacheable(entity, slug)` has no slot for. A card takes no query, so the slug is its only
-input and the generic shape fits: `OG_ROUTES` has all four. **The loop must sit above the
-`/airport` branch**, because every entity slug reader is a bare prefix test that does not stop
-at one segment — `airportSlugFromPath("/airport/ORD/opengraph-image")` returns
-`"ORD/opengraph-image"`, not null. The mis-resolution that causes is not the obvious 404:
-`resolveAirportCode` uppercases before it looks anything up, so a slug ending in lowercase
-`opengraph-image` comes back `redirect`, which is *cacheable*. The discriminating fixture is
-`/airport/LHR/opengraph-image`, where the two branches disagree; a real card cannot fail this
-way.
+input and the generic shape fits: `OG_ROUTES` has all four. **The loop sits above the `/airport`
+branch, and that order alone keeps no card out of it**: every entity slug reader takes exactly
+one non-empty raw segment, so `airportSlugFromPath("/airport/ORD/opengraph-image")` is null in
+either order. The order matters only if a reader also regresses to accepting a `/`, and the
+mis-resolution that causes is not the obvious 404: `resolveAirportCode` uppercases before it
+looks anything up, so a slug ending in lowercase `opengraph-image` comes back `redirect`, which is
+*cacheable*. The discriminating fixture is `/airport/LHR/opengraph-image`, where the two branches
+disagree; a real card cannot fail this way. Mutants run: the loop moved below the branch alone,
+and the reader regression alone, each leave that fixture green; both together turn it red.
 
 **The framework appends an unkeyed cache-buster, and the key gate admits it BY SHAPE.** Next
 emits `og:image` as `…/route/JFK-LAX/opengraph-image?083d4242d9090de4` — a query chunk with **no
@@ -1227,7 +1207,7 @@ families `/sitemap.xml` enumerates, less its `/watch` entries, which have no car
 `dynamic = "force-dynamic"`
 means the origin has no warm path: measured against a served build, repeating one card URL six
 times cost 89–114 ms every time, and a card is 74–107 KB of PNG. The CDN is what makes that
-survivable, which is the whole reason these four paths are in the matcher — and since #83 the
+survivable, which is the whole reason these four paths have a proxy cache branch — and since #83 the
 edge rate limit reaches them too, matched by their entity prefix and, as a backstop, by
 `ends_with(http.request.uri.path, "/opengraph-image")` (§ What this does not close).
 
@@ -1291,7 +1271,7 @@ two cacheable outcomes — the same "new outcome? decline by default" safety pro
 pulled back OUT of `proxy.ts`'s generic `ENTITY_ROUTES` table for this — the same reason
 `/watch` was never IN it (above): the airport branch's cacheability question no longer fits the
 table's one-resolver shape, so it is its own `if` branch, running before the loop and returning
-early. The matcher entry (`/airport/:code`) is unchanged; only which mechanism answers for it
+early. Its `QUERY_ROWS` row (`/airport/:code`) is unchanged; only which mechanism answers for it
 moved.
 
 **An invalid `y` is a named error, never a silent fallback to the default view** — the identical
@@ -1386,11 +1366,11 @@ opposite shape: ambiguity arrives as a thrown `AmbiguousCodeError`, so the resol
 `resolveAircraftSlug` and never `lookupAircraftByName`, which would inherit the throw onto a path
 with no `try`/`catch` around it.
 
-**Both branches sit BELOW the `OG_ROUTES` loop**, where `/airport`'s does, and for the reason that
-loop's own comment gives: every entity slug reader is a bare prefix test that does not stop at one
-segment, so `carrierSlugFromPath("/carrier/DL/opengraph-image")` is `"DL/opengraph-image"`, not
-null. These branches `return`, so from above the loop every carrier and aircraft card would be
-answered by resolving that whole string as a slug.
+**Both branches sit below the `OG_ROUTES` loop**, where `/airport`'s does, and as with `/airport`
+the order alone keeps no card out: `carrierSlugFromPath("/carrier/DL/opengraph-image")` is null,
+because every entity slug reader takes one segment. Were a reader to accept a `/`, these branches
+`return`, so from above the loop every carrier and aircraft card would be answered by resolving
+`"DL/opengraph-image"` as a slug.
 
 **The 308 had to learn to carry the query.** Both pages built their redirect target from the slug
 alone, so `/carrier/dl?type=B737-8` would have 308ed to `/carrier/DL` with the filter gone and the
@@ -1787,7 +1767,7 @@ guaranteed origin miss. Measured on a served build at `4aa8087`, before the gate
 | `/search?q=DL&x=1` | 307 | `no-store` — never cacheable |
 
 `/` is missing from the rows above for a different reason, not a survivor of this bug: at
-`4aa8087` it had not yet joined `proxy.ts`'s matcher and returned Next's own
+`4aa8087` the proxy did not yet decide its header, and it returned Next's own
 `private, no-cache, no-store, max-age=0, must-revalidate` unconditionally, so a junk query on it
 changed nothing — there was no long-cached response yet for one to corrupt. Once Task 1 landed,
 `/` joined the same exposure the seven rows above demonstrate, for **fifteen** paths the proxy
@@ -1797,12 +1777,13 @@ routes, all the identical mechanism as a row already shown). `/api/pivot` is a *
 cacheable path — its own successful responses
 take the identical `PROJECT_CACHE` value `/sitemap.xml` and `/robots.txt` do — and it is closed by
 its own handler rather than by the proxy (§ `/api/pivot` closes its own, below). `/search` alone is
-never cacheable, gated or not, which makes seventeen matcher entries in all.
+never cacheable, gated or not.
 
-`app/src/lib/canonicalQuery.ts` declares the legitimate query keys for every matcher path — the
-third list, alongside `ENTITY_ROUTES`, that the app's cacheable surface depends on. Only agreement
-with `config.matcher` is asserted by its own test (`canonicalQuery.test.ts`): `QUERY_ROWS` (17
-rows, one per matcher entry) is a strict superset of `ENTITY_ROUTES` (**1 row** — `/route/:pair`,
+`app/src/lib/canonicalQuery.ts`'s `QUERY_ROWS` declares every route the proxy answers for, one row
+per route, and the legitimate query keys of each: it is both the proxy's whole notion of "ours"
+(`isOurs()`) and its key table. `canonicalQuery.test.ts` asserts its agreement with the
+`app/src/app` file tree, less the pinned `NOT_OURS` set. It is a strict superset of `ENTITY_ROUTES`
+(**1 row** — `/route/:pair`,
 the only entity page whose cacheability is still answered by its slug alone; `/airport` left in
 M7 Task 9 and `/carrier`/`/aircraft` in #106, each for a second cacheability input the table's
 one-resolver shape has no slot for), so row-for-row agreement with the latter isn't a property
@@ -1846,7 +1827,7 @@ build, first at `d109845` and again in the fix wave by restoring the throw on to
 | `/airport/ORD??y=2019` | **500** | 307 `no-store` → `/airport/ORD?y=2019` |
 | `/sitemap.xml??x=1` | **500** | 307 `no-store` → `/sitemap.xml` |
 
-Reachable on every matcher path — `/`, `/sitemap.xml` and every entity page included — by any
+Reachable on every gated path — `/`, `/sitemap.xml` and every entity page included — by any
 client, with no auth and no unusual encoding, and `?x=1…N` behind a doubled `?` is itself an
 unbounded family of origin-hitting 500s: the exact cost shape this branch exists to close, minted
 by the branch itself. At `4aa8087`, before the gate existed, the same URL was an ordinary
@@ -1854,8 +1835,10 @@ long-cached 200 — *derived, not re-measured*: no branch there read the query s
 `/watch??x=1` took the identical path to `/watch`, which that commit's own row above records as
 200 `s-maxage=3600`. The fix is that the module is **total**: rule 0 drops the whole leading run
 of `?`s (the whole run, so `/watch??x=1` and `/watch???x=1` land on the same URL rather than
-forming a chain) and byte-equality then produces the redirect. `canonicalQuery.test.ts` asserts
-totality over a corpus of hostile inputs, and asserts that every `strip` location is itself clean —
+forming a chain) and byte-equality then produces the redirect. The same predicates run in `isOurs()`
+on every request the app receives, `/_next/static` included, so a throwing one would 500 the whole
+site rather than the gated paths. `canonicalQuery.test.ts` asserts
+totality over a corpus of hostile inputs, for both, and asserts that every `strip` location is itself clean —
 the proxy 307s to it, so a location that would strip again is a redirect loop. No check in
 `app/smoke.sh` used a doubled `?`, which is why neither `make app-smoke` nor `make image-smoke`
 saw a 500 on every gated path; the section-15 loop carries **seven** of them — `/watch??x=1`,
@@ -1875,7 +1858,7 @@ trailing `&`, `&&`, `&&&` and a *leading* `&` all returned 200 under
 this path exactly as on `/explore` and not closed by any of this.
 
 So `exempt` now means only **"the proxy does not redirect this path"**. The rules apply to every
-row: `queryVerdict()` evaluates them for all seventeen, and `canonicalize()` — the proxy's entry point
+row: `queryVerdict()` evaluates them for every row, and `canonicalize()` — the proxy's entry point
 and only that — answers `clean` for an exempt row. `app/api/pivot/route.ts` calls `queryVerdict()`
 itself and answers **400 + `no-store`**, the same as it already does for an unknown key. It does
 not 307: a redirect is a worse answer to an XHR than a named error, and that ruling is unchanged.
@@ -2182,11 +2165,11 @@ about it are easy to get wrong, and all four matter here:
   > ⚠️ **Which rows are enforced, measured by deleting each and running the file.** Eight of the
   > nine are individually necessary, bound to two different things. The three `/_next/` rows are
   > bound to what the app **emits** (above). `/`, `/watch`, `/watch/gauge`, `/sitemap.xml` and
-  > `/robots.txt` are bound to what it **serves**: every path in `proxy.ts`'s matcher that the
+  > `/robots.txt` are bound to what it **serves**: every route `QUERY_ROWS` declares that the
   > expression does not match must be listed here, so a new page route joins the rate limit or
   > joins this table and cannot quietly do neither. `/search` is the single exemption, carrying
   > its reason beside the name — it is deliberately outside both, and listing it would assert the
-  > opposite. **`/favicon.ico` alone is deletable with the file green**: not a matcher path, not
+  > opposite. **`/favicon.ico` alone is deletable with the file green**: not a declared route, not
   > an asset family, held by review. One row, named.
   >
   > The three asset rows carry one requirement more: each must be separated from its neighbours
@@ -2619,7 +2602,7 @@ hand-rolled document shell to claw either property back would itself have been t
 `public, s-maxage=3600, stale-while-revalidate=86400` (was `s-maxage=2592000`) — applied only to
 the branches this file controls, `/explore` and the four entity pages. `/api/pivot`
 sets its own header in its own route handler and is untouched, still `s-maxage=2592000`. The
-sitemap and `robots.txt` are in `proxy.ts`'s matcher and get `PROJECT_CACHE`
+sitemap and `robots.txt` have their own `proxy.ts` branch and get `PROJECT_CACHE`
 (`s-maxage=2592000`), gated behind the same `isDataLayerHealthy()` probe as `/explore` — the
 whole-branch final review found this branch had been left unconditional (see immediately
 below), which was closed in the same fix wave that wrote this paragraph, not left as still-open.
@@ -2656,12 +2639,7 @@ well-formed", never "is the page about to succeed" — `WatchPresetView` runs a 
 two mutants against `proxy.ts` alone, `npm test -- proxy` run, then reverted: dropping
 `&& (await isDataLayerHealthy())` turns exactly those two tests red; replacing the whole
 ternary with the unconditional `HTML_CACHE` additionally turns `"gives an unknown preset
-no-store"` red (three total), everything else green. A third mutant — removing
-`/watch/:preset` from `config.matcher` — left all 50 `proxy.test.ts` tests green: the suite
-calls `proxy()` directly and never crosses Next's routing layer, so it cannot see the matcher
-at all, the identical blind spot § "What omitting one actually costs" measures for the
-entity pages. **That mutant is only reachable from a served build**, never from the
-unit suite.
+no-store"` red (three total), everything else green.
 
 `/sitemap.xml` is
 `export const dynamic = "force-dynamic"` (`app/src/app/sitemap.ts`), serves roughly 2.4 MB, and
