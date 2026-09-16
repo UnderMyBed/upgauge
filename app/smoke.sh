@@ -1557,7 +1557,7 @@ check_dataset check_not "airport 05A: claims no exclusion that never happened" "
 check_dataset check_not "airport 05A: and does not blame quarantine" "$BODY" 'quarantined row'
 
 # The negative, on a page with real traffic: SEA must NOT have acquired em-dash measure cells.
-# Paired with SEA's own 53,372,100 check above so it cannot pass against an empty body.
+# Paired with SEA's own 53,343,024 check above so it cannot pass against an empty body.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA")
 check     "airport SEA: a healthy page states figures, not absence" "$BODY" \
   '<td class="num">'
