@@ -193,13 +193,11 @@ export function filterListHref(q: PivotQuery, dim: string): string {
 
 /** The `<dim>` half of a `/explore/filter/<dim>` pathname, or null if this is not one.
  *
- *  Delegates the decode to `entitySlugFromPath`, whose guard exists because
+ *  Delegates the whole reader to `entitySlugFromPath`, whose guard exists because
  *  `decodeURIComponent` THROWS on `%zz` and an uncaught throw on the proxy path is a 500 on the
- *  request (`canonicalQuery.ts`'s own leading-`?` incident). Rejects the bare prefix and any
- *  nested path for `ogSlugFromPath`'s reason: `config.matcher` forwards exactly ONE dynamic
- *  segment here, so a reader claiming more would describe traffic that never arrives. */
+ *  request (`canonicalQuery.ts`'s own leading-`?` incident), and whose one-non-empty-segment
+ *  rule refuses the bare prefix and any nested path -- exactly what a `:param` matcher entry and
+ *  the `[dim]` folder it forwards to both accept. */
 export function filterDimFromPath(pathname: string): string | null {
-  const dim = entitySlugFromPath(pathname, FILTER_PREFIX);
-  if (dim === null || dim === "" || dim.includes("/")) return null;
-  return dim;
+  return entitySlugFromPath(pathname, FILTER_PREFIX);
 }

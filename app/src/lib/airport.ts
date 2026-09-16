@@ -13,20 +13,13 @@ import { entitySlugFromPath } from "@/lib/entitySlug";
  * re-exports both so nothing importing from there has to change. */
 export const AIRPORT_PREFIX = "/airport/";
 
-/** The `<code>` half of an `/airport/<code>` pathname, or null if this is not an airport page
- * OR the code segment is empty (`/airport/` with nothing after it).
+/** The `<code>` half of an `/airport/<code>` pathname, or null if this is not an airport page.
  *
  * A thin wrapper around `lib/entitySlug.ts`'s `entitySlugFromPath` -- every other entity
- * reader (`routeSlugFromPath`, `carrierSlugFromPath`, `aircraftSlugFromPath`) is now exactly
- * that function under a different prefix, but this one carries one extra line: mapping the
- * bare-prefix case to `null` rather than `""`, so an empty code segment is never sent into
- * `resolveAirportCode` as a slug to reject -- Next would not route `/airport/` to `[code]` at
- * all, and returning `""` here would send an empty IN-list toward the lookup instead of
- * opting the request out of entity resolution entirely. That quirk predates this file (pinned
- * by `app/airport/[code]/not-found.test.tsx`'s `airportSlugFromPath("/airport/")` -> `null`
- * assertion) and does not generalize to the other three readers, which is why it is a
- * one-line wrapper here rather than a parameter on `entitySlugFromPath` itself. */
+ * reader (`routeSlugFromPath`, `carrierSlugFromPath`, `aircraftSlugFromPath`) is exactly that
+ * function under a different prefix, and this one is too: the bare prefix (`/airport/` with
+ * nothing after it) is exactly one non-empty raw segment short, which `entitySlugFromPath`
+ * itself refuses. */
 export function airportSlugFromPath(pathname: string): string | null {
-  const slug = entitySlugFromPath(pathname, AIRPORT_PREFIX);
-  return slug === "" ? null : slug;
+  return entitySlugFromPath(pathname, AIRPORT_PREFIX);
 }

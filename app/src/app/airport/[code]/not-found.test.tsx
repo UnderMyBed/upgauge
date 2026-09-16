@@ -105,10 +105,10 @@ describe("airportSlugFromPath", () => {
   });
 
   // M5 Task 6: airportSlugFromPath is now a thin wrapper (lib/airport.ts) around
-  // lib/entitySlug.ts's entitySlugFromPath, PLUS the empty-to-null mapping pinned above. This
-  // pins the one behaviour that mapping does NOT touch -- a nested path is still returned
-  // verbatim, exactly as the other three readers' equivalent tests assert.
-  it("returns whatever follows the prefix verbatim on a nested path", () => {
-    expect(airportSlugFromPath("/airport/SEA/extra")).toBe("SEA/extra");
+  // lib/entitySlug.ts's entitySlugFromPath, which refuses a nested path exactly as it refuses
+  // the bare prefix above -- matching what a `/airport/:code` matcher entry and its `[code]`
+  // folder actually route.
+  it("returns null when more than one raw segment follows the prefix", () => {
+    expect(airportSlugFromPath("/airport/SEA/extra")).toBeNull();
   });
 });

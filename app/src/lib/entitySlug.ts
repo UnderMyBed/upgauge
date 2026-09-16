@@ -8,25 +8,23 @@
  * one file -- but `proxy.ts`'s own header comment named the collapse as the intended follow-up
  * once all three existed, and `CLAUDE.md`'s M5 punch list is where that follow-up landed.
  *
+ * Exactly one non-empty RAW segment follows the prefix, or this returns null -- the same shape
+ * a `:param` matcher entry and the `[param]` folder it forwards to both accept, so the slug this
+ * function names is always a slug Next would actually route. The check runs on the RAW text,
+ * before decoding: an encoded slash (`%2F`) stays inside one segment, exactly as Next's own
+ * router treats it, so checking after decoding would wrongly split a legitimate slug in two.
+ *
  * `decodeURIComponent` THROWS on a malformed percent-escape (`%zz`, or the more exotic
  * `%E0%A4%A`) -- bug #2 on `smoke.sh`'s list of production-only failures, found once and never
  * by a unit test, because a page receives `params.<x>` already decoded by Next while
  * `proxy.ts` and every `not-found.tsx` read the RAW pathname and must decode it themselves to
  * agree. An uncaught throw here is a 500 on a page whose entire job is to render a 404, so a
  * malformed escape falls back to the raw (still-encoded) text instead -- every downstream
- * resolver then rejects that raw text as an unrecognized code, which is the honest outcome.
- *
- * Deliberately un-opinionated beyond that: it does not special-case an empty slug (the bare
- * prefix, e.g. `/carrier/`) or a nested path (`/carrier/DL/extra`) -- both come back as the
- * literal text after the prefix (`""`, `"DL/extra"`), exactly as `routeSlugFromPath`,
- * `carrierSlugFromPath` and `aircraftSlugFromPath` always have. `airportSlugFromPath`
- * (`lib/airport.ts`) is the one caller that additionally maps `""` to `null` -- a quirk that
- * predates this collapse (pinned by its own not-found.test.tsx) and does not generalize to the
- * other three, so it stays a one-line wrapper around this function rather than a parameter
- * here. */
+ * resolver then rejects that raw text as an unrecognized code, which is the honest outcome. */
 export function entitySlugFromPath(pathname: string, prefix: string): string | null {
   if (!pathname.startsWith(prefix)) return null;
   const raw = pathname.slice(prefix.length);
+  if (raw === "" || raw.includes("/")) return null;
   try {
     return decodeURIComponent(raw);
   } catch {
@@ -53,20 +51,14 @@ export const OG_SUFFIX = "/opengraph-image";
  * already imports `canonicalize` from `canonicalQuery.ts`, and a reader owned by that file would
  * have been the only reason for an edge back).
  *
- * Delegates the decode to `entitySlugFromPath` above rather than carrying its own
- * `decodeURIComponent` guard -- that guard existed in four copies once and M5 Task 6 collapsed
- * it; a fifth copy here would be the same defect re-introduced. The suffix comes off the RAW
- * pathname first, so a malformed escape inside the slug (`%zz`) still falls back to raw text
- * without taking the suffix test with it.
- *
- * Two extra rejections beyond the prefix test, both matching what `config.matcher`'s
- * `/<entity>/:slug/opengraph-image` shape actually forwards: an empty slug (`/route//
- * opengraph-image`) and a slug containing `/` (more than one dynamic segment). Without them this
- * reader would claim pathnames the matcher never sends here, and the branch that resolves them
- * would answer for a request that does not exist. */
+ * Delegates the whole one-segment rule to `entitySlugFromPath` above rather than carrying its
+ * own copy -- that guard existed in four copies once and M5 Task 6 collapsed it; a fifth copy
+ * here would be the same defect re-introduced. The suffix comes off the RAW pathname first, so
+ * a malformed escape inside the slug (`%zz`) still falls back to raw text without taking the
+ * suffix test with it, and an empty slug (`/route//opengraph-image`) or one carrying more than
+ * one segment (`/route/JFK-LAX/extra/opengraph-image`) is refused by the same check that refuses
+ * it on every other entity page. */
 export function ogSlugFromPath(pathname: string, prefix: string): string | null {
   if (!pathname.endsWith(OG_SUFFIX)) return null;
-  const slug = entitySlugFromPath(pathname.slice(0, -OG_SUFFIX.length), prefix);
-  if (slug === null || slug === "" || slug.includes("/")) return null;
-  return slug;
+  return entitySlugFromPath(pathname.slice(0, -OG_SUFFIX.length), prefix);
 }

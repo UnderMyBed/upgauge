@@ -59,14 +59,13 @@ describe("routeSlugFromPath", () => {
   });
 
   // M5 Task 6: routeSlugFromPath is now a one-line wrapper around lib/entitySlug.ts's
-  // entitySlugFromPath, and this pins the two behaviours the collapse had to preserve that no
-  // existing test named -- unlike airportSlugFromPath (app/airport/[code]/not-found.test.tsx),
-  // this reader never special-cased an empty slug, and it never rejected a nested path either.
-  it("returns the empty string for a bare trailing slash, not null", () => {
-    expect(routeSlugFromPath("/route/")).toBe("");
+  // entitySlugFromPath, and this pins the two shapes it refuses: a bare prefix and a nested
+  // path, matching what a `/route/:pair` matcher entry and its `[pair]` folder actually route.
+  it("returns null for a bare trailing slash", () => {
+    expect(routeSlugFromPath("/route/")).toBeNull();
   });
 
-  it("returns whatever follows the prefix verbatim on a nested path", () => {
-    expect(routeSlugFromPath("/route/JFK-LAX/extra")).toBe("JFK-LAX/extra");
+  it("returns null when more than one raw segment follows the prefix", () => {
+    expect(routeSlugFromPath("/route/JFK-LAX/extra")).toBeNull();
   });
 });

@@ -34,4 +34,20 @@ describe("notFoundFamilyFromPath", () => {
       expect(notFoundFamilyFromPath(pathname)).toBeNull();
     },
   );
+
+  it.each([
+    "/carrier/DL/x",
+    "/route/JFK-LAX/x",
+    "/airport/ORD/x",
+    "/aircraft/737-800/x",
+    "/watch/gauge/x",
+    "/explore/filter/origin_state/x",
+    "/carrier/DL/opengraph-image/x",
+  ])("gives the nested path %s no family -- it routes nowhere", (pathname) => {
+    expect(notFoundFamilyFromPath(pathname)).toBeNull();
+  });
+
+  it("keeps an encoded slash inside one segment", () => {
+    expect(notFoundFamilyFromPath("/carrier/D%2FL")).toBe("carrier");
+  });
 });

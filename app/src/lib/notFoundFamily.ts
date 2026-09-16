@@ -20,10 +20,14 @@ const OG_PREFIXES: readonly string[] = [ROUTE_PREFIX, AIRPORT_PREFIX, CARRIER_PR
  * Second encoding of the ordering `proxy.ts`'s `OG_ROUTES` loop already carries -- read that
  * loop's own comment (immediately above it, "THIS BRANCH MUST STAY ABOVE THE `/airport`
  * BRANCH") for the full argument; it is not restated here beyond the one line that matters for
- * THIS function: every entity slug reader below is a bare prefix test that does not stop at one
- * segment, so `carrierSlugFromPath("/carrier/DL/opengraph-image")` returns
- * `"DL/opengraph-image"`, not null. The OG check has to run first, or a card URL dispatches to
- * an entity's 404 view instead of being recognized as not-an-entity-page at all.
+ * THIS function: an OG card path (`/carrier/DL/opengraph-image`) is itself exactly one raw
+ * segment past `/carrier/`'s prefix, so `carrierSlugFromPath` alone cannot tell it apart from a
+ * real carrier code -- the OG check has to run first, or a card URL dispatches to an entity's
+ * 404 view instead of being recognized as not-an-entity-page at all.
+ *
+ * Null is also the answer for any path carrying more than one raw segment past an entity
+ * prefix (`/carrier/DL/x`) -- every reader below refuses that shape, matching what a `:param`
+ * matcher entry and its `[param]` folder actually route.
  *
  * Null is not a failure -- it is the answer for a URL this app never routes (`/wp-login.php`
  * and every other scanner probe, plus the four `opengraph-image` card paths), and the root

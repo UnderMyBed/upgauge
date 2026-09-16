@@ -33,4 +33,14 @@ describe("RootNotFoundView", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Page not found");
     expect(spy).not.toHaveBeenCalled();
   });
+
+  // A nested path routes nowhere (notFoundFamilyFromPath returns null), so it takes the same
+  // database-free generic branch as an absent header -- not the carrier view, and not a query.
+  it("renders the generic view, and reads no database, for a nested path", async () => {
+    const db = await import("@/lib/db");
+    const spy = vi.spyOn(db, "dataAsOf");
+    render(await RootNotFoundView({ pathname: "/carrier/DL/x", rawQuery: "" }));
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Page not found");
+    expect(spy).not.toHaveBeenCalled();
+  });
 });
