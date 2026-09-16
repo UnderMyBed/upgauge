@@ -554,7 +554,7 @@ describe("proxy", () => {
   // #8. The four OG card routes. Before this they were absent from the matcher entirely, so each
   // shipped `ImageResponse`'s own default -- measured on a served build, `next start` on :3251:
   // `cache-control: public, max-age=0, must-revalidate`, which forbids a shared cache from
-  // serving the card without revalidating, on 23,780 URLs whose only traffic is crawlers
+  // serving the card without revalidating, on 23,908 URLs whose only traffic is crawlers
   // re-fetching them.
   //
   // HTML_CACHE, not PROJECT_CACHE: a card runs the same live warehouse reads its page does
@@ -668,7 +668,7 @@ describe("proxy", () => {
 
   it("307s a keyless chunk on a card that is not cache-buster-shaped", async () => {
     // The bound. Admitting EVERY keyless chunk would pass the four tests above and re-open the
-    // unbounded cache-key family on 23,780 URLs -- `?x`, `?xx`, `?xxx`, ... each a distinct CDN
+    // unbounded cache-key family on 23,908 URLs -- `?x`, `?xx`, `?xxx`, ... each a distinct CDN
     // entry for a byte-identical PNG.
     const res = await proxy(new NextRequest("http://localhost/route/JFK-LAX/opengraph-image?zz"));
     expect(res.status).toBe(307);

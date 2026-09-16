@@ -62,7 +62,7 @@ export function numOrNull(v: unknown): number | null {
  *
  * The seed is the half that is easy to miss and has the widest footprint. `sumTotals`'s callers
  * reach it on every entity that is fact-present but filed nothing inside the trailing 12 --
- * 12,115 route pairs, and the /airport equivalent covers 290 airports. Those pages render `—`
+ * 12,201 route pairs, and the /airport equivalent covers 290 airports. Those pages render `—`
  * for a reason quarantine had no part in, and their empty states say which absence it is. */
 export function sumColumn(rows: Record<string, unknown>[], key: string): number | null {
   return rows.reduce<number | null>((a, r) => addSum(a, numOrNull(r[key])), null);

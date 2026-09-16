@@ -389,7 +389,7 @@ describe("renderSegmentMap", () => {
     // CHARACTERIZATION, not endorsement. `sameAirport` keys on the display code, which departs
     // from CLAUDE.md's "key on AIRPORT_ID, never letter codes" -- see its comment for why
     // (`GeoNode` carries no id and `NetworkMapInput` is pinned without one), for the
-    // measurement that makes it safe today (zero collisions among the 1,047 fact-present
+    // measurement that makes it safe today (zero collisions among the 1,049 fact-present
     // airports; `dim_airport` has 20+ overall, `AUS` being both 10423 and 16440), and for what
     // a fact-present collision would cost: a legitimate route between two DISTINCT airports
     // read as a self-segment and dropped.
@@ -777,8 +777,9 @@ describe("a map with nothing drawable still serves a usable canvas (#122/#123)",
   // `SegmentMapInput` with ZERO segments on two arms -- every route quarantined, and an only
   // filing that is same-airport -- specifically so the disclosure reaches the reader instead of
   // vanishing behind a missing panel. `/carrier/F4?type=SHORT360` and
-  // `/aircraft/AS350-B2?carrier=8E` are those two views, and `carrierTypeNetwork.test.ts` pins
-  // both at the producer. Nothing pinned them at the RENDERER, which is how a crop computed
+  // `/aircraft/SHORT360?carrier=F4` are the live view of the first arm; `carrierTypeNetwork.test.ts`
+  // pins the second (8E x 340, its own fixed 2025-06..2026-05 window) at the producer. Nothing
+  // pinned them at the RENDERER, which is how a crop computed
   // from an empty band list shipped: `Math.min(...[])` is `Infinity`.
   //
   // WHAT THE FIXTURE VARIES: the segment list is EMPTY, which is the one input no other test in
@@ -876,7 +877,7 @@ describe("the canvas is cropped to the panels that carry points (#123, absorbing
     // THE DEFECT, ASSERTED AS A WINDOW. An Alaska-only network drew a small ALASKA inset under
     // ~320px of empty conterminous panel, because `renderMapCore` already emitted an inset
     // FRAME only for a panel the network reaches while the CANVAS was not subject to the same
-    // rule. Reproduced on `/airport/BET`, `/airport/A18`, `/airport/JZM` and `/airport/OQZ`.
+    // rule. Reproduced on `/airport/BET`, `/airport/JZM` and `/airport/OQZ`.
     //
     // BOTH ENDS ARE ASSERTED, and that is the whole design of this test. "The height shrank"
     // passes for a renderer that crops to the ink and drops the frame's own top edge; "the top

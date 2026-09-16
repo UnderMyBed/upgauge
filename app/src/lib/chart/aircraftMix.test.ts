@@ -331,8 +331,8 @@ describe("toBands against a real route that stopped filing mid-window", () => {
   // HNL is AIRPORT_ID 12173, LAS is 12889. Measured against the built upgauge.duckdb: the pair
   // filed in 130 of the window's 136 months and nothing at all for 2020-04..2020-09 -- six
   // months inside the --panel-2 band the chart itself labels "COVID -- in window on purpose."
-  // 7.07 M seats over the window, so this is a page someone loads, not a corner case; 14,293 of
-  // 23,041 route pairs (62%) have at least one interior gap.
+  // 7.07 M seats over the window, so this is a page someone loads, not a corner case; 14,378 of
+  // 23,167 route pairs (62%) have at least one interior gap.
   const HNL_LAS: [string, string[]][] = [["route", ["12173-12889"]]];
 
   it("names the six months HNL-LAS filed nothing in, and puts them in no series", async () => {
@@ -462,10 +462,10 @@ describe("toBands over the real B737-8 carrier mix", () => {
  * TWO SHAPES, TWO TREATMENTS, and the split is measured rather than stipulated:
  *
  *   - a month with NO stateable cell has no height anywhere, so it breaks the runs exactly as an
- *     unfiled month does. 339 such months over the pairs this chart draws; they carry zero
+ *     unfiled month does. 345 such months over the pairs this chart draws; they carry zero
  *     stateable seats, so breaking them erases nothing.
  *   - a month with SOME stateable cells is still drawn, because dropping it would erase what
- *     CAN be stated: 407 such months hold 11,687,092 stateable seats, the worst 297,295 in one
+ *     CAN be stated: 411 such months hold 11,689,847 stateable seats, the worst 297,295 in one
  *     month. It is disclosed as understated instead.
  *
  * ASSERT THE GEOMETRY, NEVER THE FILLS. Every assertion below is on a run BOUNDARY -- the run id

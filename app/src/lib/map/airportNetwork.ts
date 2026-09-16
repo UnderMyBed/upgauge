@@ -193,16 +193,20 @@ export interface ClassifiedRoutes {
  * Before #114 both reached `Number(row.seats ?? 0)` and became the same arc: 0 seats, 0
  * departures, below the departure floor, dotted and muted -- "barely flown", which is a positive
  * claim the data does not support for the first group. `/airport/BTT` drew `UMT` that way, and
- * for `A18`, `JZM` and `OQZ` the quarantined pair is the airport's ENTIRE trailing-12 network,
+ * for `JZM` and `OQZ` the quarantined pair is the airport's ENTIRE trailing-12 network,
  * so the page's only arc was the fabricated one.
  *
  * SAME-AIRPORT IS TESTED FIRST, and the order is load-bearing rather than incidental. A filing
  * whose two endpoints are one airport is not a route the airport served, whatever its
  * quarantine state, so it must not reach `quarantinedRoutes` -- which counts route PAIRS and
- * feeds a sentence about them. This is #105's rule at route grain, and the dataset has exactly
- * one fixture that can tell the two orders apart: `VEE` carries BOTH a wholly-quarantined route
- * pair (`BTI-VEE`) and a wholly-quarantined same-airport pair (`VEE-VEE`), so it must report 1,
- * not 2. Every other affected airport reports the same number under either order.
+ * feeds a sentence about them. This is #105's rule at route grain. Over the trailing 12 ending
+ * 2026-05 (`airportNetwork.test.ts`'s own pinned window) the dataset had exactly one fixture
+ * that could tell the two orders apart: `VEE` carried BOTH a wholly-quarantined route pair
+ * (`BTI-VEE`) and a wholly-quarantined same-airport pair (`VEE-VEE`), so it had to report 1, not
+ * 2 -- every other affected airport reported the same number under either order. No airport in
+ * the current trailing 12 (2025-07 -> 2026-06) combines both states any more -- `VEE-VEE` flew
+ * for real in 2026-06 -- so that fixed window is what still proves the ordering, not a live page
+ * today.
  *
  * A same-airport row with real numbers is NOT removed from `drawable` -- it stays, and
  * `renderNetworkMap` filters its polyline by code equality (`drawableSegments`). That is
@@ -332,7 +336,7 @@ export async function fetchAirportNetwork(
   const arcs: ArcDatum[] = drawable.map((row) => toArcDatum(row, coords));
 
   // NOT gated on `arcs.length === 0`. An airport whose entire window is one wholly-quarantined
-  // pair (`A18`, `JZM`, `OQZ` over the trailing 12) has nothing to draw and something real to
+  // pair (`JZM`, `OQZ` over the trailing 12) has nothing to draw and something real to
   // say, and returning null here would leave no trace that anything was filed at all -- the
   // failure `quarantinedRoutes` exists to prevent, and the same rule `DiffMap` follows for a
   // carrier with no drawable arc. `rows.length === 0` -- the airport filed NOTHING in the

@@ -47,19 +47,19 @@ const ROWS_PER_TABLE = 25;
  * DataTable's generic ColumnSpec `kind`s (`"seats" | "loadFactor" | "gauge" | "count"`) all
  * render a NULL measure as an em-dash (lib/format.ts) -- correct for an ordinary absent
  * measure, and exactly the wrong rendering here. docs/product/features.md's standing UI
- * requirement is that a NULL health_score must never read as unhealthy: all 373 NULL
- * carrier-route pairs (2015-2026 window) are NULL for a data-availability reason -- 297 no prior
- * window, 89 no filed schedule, overlap 13 -- not a low-score reason, and an em-dash in a column this preset
+ * requirement is that a NULL health_score must never read as unhealthy: all 361 NULL
+ * carrier-route pairs (2015-2026 window) are NULL for a data-availability reason -- 281 no prior
+ * window, 93 no filed schedule, overlap 13 -- not a low-score reason, and an em-dash in a column this preset
  * sorts ascending reads as the worst row on the page.
  *
  * **The NULL branch is not a defensive edge case -- it is the common case on three of the four
  * presets**, measured against the real warehouse (current window):
  *
- *   - Route Birth Tracker: 297 of 297 rows (100%) -- EVERY row `p12_months_present = 0`
+ *   - Route Birth Tracker: 281 of 281 rows (100%) -- EVERY row `p12_months_present = 0`
  *     selects has a NULL score, by construction: there is no prior window to diff against, so
  *     "insufficient data" is not one branch among several here, it is the entire page.
- *   - Gauge Watch: 76 of 5,308 rows.
- *   - Empty Planes: 270 of 5,205 rows.
+ *   - Gauge Watch: 80 of 5,389 rows.
+ *   - Empty Planes: 251 of 5,263 rows.
  *   - Route Death Watch is the ONE preset where this function's NULL branch is provably
  *     unreachable in production: `watch_death_watch.sql` filters `WHERE health_score IS NOT
  *     NULL` before a row ever reaches `runPreset()` (see task-6-brief.md's own resolution of
@@ -162,7 +162,7 @@ function buildColumns(
     // flagged as undeclared by the final whole-branch review and declared here rather than
     // silently changed. `__health_score` is not a number: it is `formatHealthScore`'s output,
     // which is either a two-decimal score or the literal string "insufficient data", and on
-    // Route Birth Tracker it is that string on 100% of rows (297 of 297 -- see
+    // Route Birth Tracker it is that string on 100% of rows (281 of 281 -- see
     // formatHealthScore's own docstring). DataTable's `kind` is per COLUMN, not per cell, so
     // the alternatives are (a) right-align a column whose every cell on one preset is a
     // sentence, or (b) teach DataTable a per-cell kind for one column on one page. Neither is
@@ -232,11 +232,11 @@ function displayRows(
  * airport and itself -- not a data error -- but `/route/`'s own resolver refuses to name one a
  * "route" (routePair.ts), and every watch_*.sql file already excludes them
  * (`WHERE route_key_low <> route_key_high`). Stated once, identically, on all four presets --
- * measured: 6 of the 5,611 rows mart_route_health carries over the current window. */
+ * measured: 5 of the 5,675 rows mart_route_health carries over the current window. */
 function SameAirportNote() {
   return (
     <p className="foot">
-      Same-airport rows (route_key_low = route_key_high -- 6 of 5,611 mart_route_health rows)
+      Same-airport rows (route_key_low = route_key_high -- 5 of 5,675 mart_route_health rows)
       are excluded from every preset here: a route is between two different airports.
     </p>
   );
@@ -292,12 +292,12 @@ function DeparturesFloorNote() {
  * the trailing 12. Two things follow, and the page shipped a false claim about each:
  *
  *   1. It is a RE-ENTRY, not a first appearance. mart_route_health carries no lookback past
- *      that window, so the query cannot distinguish one from the other -- 174 of the 297
- *      qualifying rows (58.6%) filed in some earlier month, B6 AUS-FLL as far back as 2015-01
- *      with 106 distinct months on file. (M6 shipped "first appearance since 2015".)
+ *      that window, so the query cannot distinguish one from the other -- 160 of the 281
+ *      qualifying rows (56.9%) filed in some earlier month, B6 AUS-FLL as far back as 2015-01
+ *      with 107 distinct months on file. (M6 shipped "first appearance since 2015".)
  *   2. It is a CARRIER-ROUTE PAIR, not a route. The mart's grain is (op_airline_id, route), so
- *      this filter is silent about every OTHER carrier on the same airport pair -- 245 of the
- *      297 (82.5%), and all 25 rows this page renders, had another carrier flying that pair
+ *      this filter is silent about every OTHER carrier on the same airport pair -- 224 of the
+ *      281 (79.7%), and all 25 rows this page renders, had another carrier flying that pair
  *      inside the prior window. (M6 shipped "new service nobody flew last year", and the fix
  *      wave for #1 carried that clause over unexamined.)
  *
@@ -315,10 +315,10 @@ function ReEntryNote({ p12From, p12To }: { p12From: string; p12To: string }) {
       qualifies when this carrier filed nothing at all on this route in the prior 12 months (
       {p12From} to {p12To}) and something in the trailing 12. mart_route_health carries no
       lookback beyond that window, so it cannot tell a brand-new pair from a resumed one:
-      measured, 174 of the 297 qualifying pairs (58.6%) had already filed in some earlier month,
-      one of them in 106 distinct months going back to 2015-01. Nor does it mean the route was
-      unserved &mdash; 245 of the 297 (82.5%) had a <em>different</em> carrier flying the same
-      airport pair inside that prior window. A pair that stopped and resumed <em>within</em>
+      measured, 160 of the 281 qualifying pairs (56.9%) had already filed in some earlier month,
+      one of them in 107 distinct months going back to 2015-01. Nor does it mean the route was
+      unserved &mdash; 224 of the 281 (79.7%) had a <em>different</em> carrier flying the same
+      airport pair inside that prior window. A pair that stopped and resumed <em>within</em>{" "}
       these two windows is excluded for the mirror-image reason.
     </p>
   );
@@ -331,7 +331,7 @@ function ReEntryNote({ p12From, p12To }: { p12From: string; p12To: string }) {
 function DeathWatchScopeNote() {
   return (
     <p className="foot">
-      373 of 5,611 carrier-route pairs have no health score at all -- no prior-year window, no filed schedule,
+      361 of 5,675 carrier-route pairs have no health score at all -- no prior-year window, no filed schedule,
       or both -- and are excluded from this leaderboard entirely, never silently ranked worst.
     </p>
   );

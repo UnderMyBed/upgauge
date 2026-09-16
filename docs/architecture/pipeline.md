@@ -108,7 +108,7 @@ except `DataTable`'s rank column.
 route_key_low, route_key_high`, ascending. Each ranks on a single column, so without that suffix
 rows tying on it at the `LIMIT` boundary come back in DuckDB's merge order rather than by the
 query: the gap #136 closed for the pivot templates, reaching these files, which share none of
-that SQL. The triple is unique per row of the mart (5,611 rows, 5,611 distinct triples, no NULL
+that SQL. The triple is unique per row of the mart (5,675 rows, 5,675 distinct triples, no NULL
 in any of the three) and these queries neither join nor aggregate, so appending it makes the
 ordering total; it is a suffix, so the requested measure still ranks. **All three columns, never
 the route pair alone** — the grain is a carrier–route pair: `gauge_delta = 0.0` is one tie run
@@ -403,8 +403,8 @@ Two dimensions do not name a single column, and each needs its own compilation r
 
 The obvious workaround for "filter to the route between a and b" —
 `origin_airport_id IN (a,b) AND dest_airport_id IN (a,b)` — is not equivalent: it also matches
-same-airport filings (`a→a`, `b→b`), which are not a curiosity. 12,995 of them exist across 532
-airports (full window 2015-01 → 2026-04, quarantined rows included;
+same-airport filings (`a→a`, `b→b`), which are not a curiosity. 13,278 of them exist across 532
+airports (full window 2015-01 → 2026-06, quarantined rows included;
 `docs/data/invariants.md` § Route identity tabulates all four window × quarantine answers). On
 JFK–LAX that workaround inflates seats by 18,895 under a `DATA AS OF` badge. Full measurement:
 [`docs/data/invariants.md` § Route identity](../data/invariants.md#route-identity).
@@ -439,7 +439,7 @@ dest's group. The catalog row and its two columns are owned by
 ```
 
 `app/src/lib/routePair.ts`'s `resolveRoutePair` computes two orderings of the same pair
-explicitly, because they disagree for **215 of 22,509 routes (0.96%, excluding the 532
+explicitly, because they disagree for **215 of 22,635 routes (0.95%, excluding the 532
 same-airport "routes" that are not routes)**:
 
 - **`canonical` (the URL)** — alphabetical by code. Storage order is an implementation

@@ -184,12 +184,17 @@ STATED: dict[str, tuple[str, ...]] = {
     # mart_route_health cardinality (#146, #148). The grain is a carrier-route PAIR, so `rows`
     # and `pairs` are different questions and both are gated -- stating one as the other is the
     # defect #146 closed.
+    #
+    # docs/architecture/hosting.md is NOT registered here, and must not be: its only statement of
+    # this measure is the leaderboard-precompute retirement paragraph, "Measured 2026-08-30 at
+    # `9b358aa`, against a served build on that commit's warehouse" -- a measurement pinned to a
+    # build. Registering it would force that figure to the current warehouse on every refresh,
+    # which makes the sentence false about the build it names.
     "route_health_rows": (
         "app/smoke.sh",
         "app/src/app/watch/[preset]/page.test.tsx",
         "app/src/app/watch/[preset]/page.tsx",
         "app/src/lib/watch.test.ts",
-        "docs/architecture/hosting.md",
         "docs/architecture/pipeline.md",
         "docs/data/model.md",
         "docs/product/features.md",
@@ -211,12 +216,16 @@ STATED: dict[str, tuple[str, ...]] = {
         "pipeline/tests/test_route_health.py",
         "sql/02_marts/200_mart_route_health.sql",
     ),
+    # docs/architecture/hosting.md is NOT registered here: it states no same-airport filing
+    # count. A value of this measure turning up inside one of its unrelated numbers -- the image
+    # byte count 412,995,560, say -- is a collision, not a statement, and registering the file to
+    # match one would gate a coincidence. Its same-airport statement is the 532-pairs sentence,
+    # gated in ANCHORED under same_airport_pairs.
     "same_airport_filings": (
         "app/src/app/airport/[code]/endpoints.ts",
         "app/src/app/explore/page.test.tsx",
         "app/src/lib/pivot/render.ts",
         "app/src/lib/routePair.test.ts",
-        "docs/architecture/hosting.md",
         "docs/architecture/pipeline.md",
         "docs/data/invariants.md",
         "pipeline/pivot.py",
@@ -324,7 +333,7 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
 
 def _fmt(template: str, value: int) -> str:
     """Render a needle. `{v}` is the measure's own value; any other `{name}` is another
-    measure, so a phrase like `215 of 22,509` moves in BOTH of its halves when the dataset
+    measure, so a phrase like `215 of 22,635` moves in BOTH of its halves when the dataset
     does -- a needle that hard-coded the denominator would be a stale literal inside the very
     gate that exists to catch stale literals."""
     others = {k: f"{n:,}" for k, n in MEASURES.items() if isinstance(n, int)}

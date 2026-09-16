@@ -72,17 +72,17 @@ export function unknowableNote(months: number): string {
 
 /** THE THIRD SENTENCE, for months that ARE drawn but understate themselves. Unlike the two
  * above this is not a hole: at least one band is stateable, so the month is drawn from what can
- * be stated. The shortfall is real and unbounded -- 26 of the 606 rows behind these cells are
- * `load_factor_gt_1` carrying 19,870 filed seats, not the `zero_seats` the rest are -- so
+ * be stated. The shortfall is real and unbounded -- 27 of the 613 rows behind these cells are
+ * `load_factor_gt_1` carrying 19,877 filed seats, not the `zero_seats` the rest are -- so
  * leaving it unsaid would let a reader take the stack height as the month's total.
  *
- * Erasing the month instead was measured and rejected: 407 such months hold 11,687,092 stateable
+ * Erasing the month instead was measured and rejected: 411 such months hold 11,689,847 stateable
  * seats, the worst (LAS-LAX 2024-11) 297,295 across 12 cells with ONE unknowable. Showing the
  * dirt is a trust feature; erasing a filing is the same dishonesty as inventing one.
  *
- * IT SAYS "DRAWN AT ZERO HEIGHT" BECAUSE THAT IS WHAT HAPPENS. 420 of the 768 null cells sit
- * inside a month the chart can still draw, and 249 of those belong to a top-five MEMBER band
- * across 87 route pairs -- a NAMED band visibly dropping to the floor for one month. A reader
+ * IT SAYS "DRAWN AT ZERO HEIGHT" BECAUSE THAT IS WHAT HAPPENS. 424 of the 778 null cells sit
+ * inside a month the chart can still draw, and 253 of those belong to a top-five MEMBER band
+ * across 88 route pairs -- a NAMED band visibly dropping to the floor for one month. A reader
  * watching the ATR-72 flatten on HNL-OGG 2020-07 can only recover that from this sentence, so it
  * describes the mark rather than gesturing at a total.
  *
@@ -569,7 +569,7 @@ export function prepareMixPlot(
         crossover,
         covid: covidFrom < covidTo ? { covidFrom, covidTo } : null,
         // A one-month run has no width: filled, it serializes to a degenerate path and
-        // disappears. 41% of route pairs have at least one isolated month (aircraftMix.ts §
+        // disappears. 42% of route pairs have at least one isolated month (aircraftMix.ts §
         // MonthAxis), and erasing a filing is the same dishonesty as inventing one, so these
         // are STROKED by the caller -- a hairline column in the band's own shade, at the
         // band's own height in the stack.

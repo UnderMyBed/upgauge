@@ -221,7 +221,7 @@ describe("canonicalize", () => {
     ["a keyed chunk of the same bytes", "x=083d4242d9090de4"],
   ])("strips a keyless chunk that is %s, rather than admitting any keyless chunk", (_l, q) => {
     // The bound, not just the admission. A rule that kept EVERY keyless chunk on an OG path
-    // would pass every test above and re-open the unbounded cache-key family on 23,780 URLs.
+    // would pass every test above and re-open the unbounded cache-key family on 23,908 URLs.
     const result = canonicalize("/route/JFK-LAX/opengraph-image", q);
     expect(result).toEqual({ kind: "strip", location: "/route/JFK-LAX/opengraph-image" });
   });

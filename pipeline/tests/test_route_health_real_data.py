@@ -32,9 +32,9 @@ def con():
 
 # completion_capped mirrors 200_mart_route_health.sql's own CASE guard, not a bare least():
 # DuckDB's least(NULL, 1.5) returns 1.5 (ignores NULL rather than propagating it), which
-# fabricates a completion rate for the 89 carrier-route pairs with no filed schedule -- the
+# fabricates a completion rate for the 93 carrier-route pairs with no filed schedule -- the
 # same NULL trap the mart SQL's comment on `completion_capped` documents. A bare least() here
-# would pollute this axis's population avg/stddev with 89 fabricated 1.5s before the outer
+# would pollute this axis's population avg/stddev with 93 fabricated 1.5s before the outer
 # `WHERE health_score IS NOT NULL` ever drops those rows (they are dropped too late --
 # the window functions already ran over the polluted population). Confirmed: this guarded
 # form reconstructs the stored health_score to within 1.58e-14 over every scored row;
@@ -100,8 +100,8 @@ def test_the_three_null_reasons_keep_their_measured_sizes(con):
                              AND p12_months_present <> 0 AND completion_factor IS NOT NULL)
         FROM mart_route_health
     """).fetchone()
-    assert (total, scored) == (5611, 5238)
-    assert (no_prior, no_schedule) == (297, 89)
+    assert (total, scored) == (5675, 5314)
+    assert (no_prior, no_schedule) == (281, 93)
     assert neither == 0  # every NULL has one of the two live reasons
     assert no_prior + no_schedule - (total - scored) == 13  # the documented overlap
 
@@ -126,7 +126,7 @@ def test_the_clamp_binds_on_a_real_minority(con):
     it verifies the clamp THRESHOLD's effect on the data, not that the mart's SQL applies any
     clamp at all -- it passes unchanged even if the mart's clamp is deleted entirely (Task 2
     review finding; test_health_score_reconstructs_from_its_own_axes below is the one coupled
-    to the mart). 289 of 5,238 is the measured middle: a clamp that fires on zero rows would be
+    to the mart). 298 of 5,314 is the measured middle: a clamp that fires on zero rows would be
     decoration, one that fires on all of them would be a rank transform wearing a z-score's
     name."""
     clamped = con.execute(f"""
@@ -134,7 +134,7 @@ def test_the_clamp_binds_on_a_real_minority(con):
         WHERE health_score IS NOT NULL
           AND (abs(z_lf) > 3 OR abs(z_gauge) > 3 OR abs(z_freq) > 3 OR abs(z_completion) > 3)
     """).fetchone()[0]
-    assert clamped == 289
+    assert clamped == 298
 
     # NOT GENERATED, and the reason is a structural rule rather than a preference (#148).
     # Generating this figure into stats_counts.sql needs the four-axis z-derivation a THIRD
@@ -149,14 +149,14 @@ def test_the_clamp_binds_on_a_real_minority(con):
 
 
 def test_no_axis_survives_the_clamp_unbounded(con):
-    """The observed maximum |health_score| is 2.33977 against a construction bound of 3.0
+    """The observed maximum |health_score| is 2.33923 against a construction bound of 3.0
     (four axes, each clamped to 3, weighted 0.25). Unclamped, VD CPX-VQS reaches z_gauge
-    -18.91 on this warehouse."""
+    -18.18 on this warehouse."""
     worst = con.execute(
         "SELECT max(abs(health_score)) FROM mart_route_health WHERE health_score IS NOT NULL"
     ).fetchone()[0]
     assert worst <= 3.0
-    assert worst == pytest.approx(2.33977, abs=1e-4)
+    assert worst == pytest.approx(2.33923, abs=1e-4)
 
 
 def test_health_score_reconstructs_from_its_own_axes(con):
@@ -166,7 +166,7 @@ def test_health_score_reconstructs_from_its_own_axes(con):
     sql/02_marts/200_mart_route_health.sql stops matching that formula, whether the break is in
     which columns feed an axis (e.g. reverting to raw capacity_delta/frequency_delta instead of
     the logged ratios) or in whether the clamp is applied at all. Measured max |residual|
-    1.58e-14 across all 5,238 scored rows -- floating-point noise, not a near-match."""
+    1.58e-14 across all 5,314 scored rows -- floating-point noise, not a near-match."""
     max_residual = con.execute(f"""
         SELECT max(abs(health_score - 0.25 * (
               greatest(least(z_lf,         3), -3)
@@ -227,12 +227,12 @@ def test_the_gauge_floor_excludes_the_bush_and_sightseeing_operators(con):
 
 
 def test_same_airport_rows_are_excluded_from_the_presets(con):
-    """6 of 5,611 mart rows are same-airport, and 3 of the 5 rows at lf_t12 = 0 are among
+    """5 of 5,675 mart rows are same-airport, and 3 of the 5 rows at lf_t12 = 0 are among
     them. The filings are real, but a ROUTE leaderboard listing ATW-ATW reads as a bug."""
     same = con.execute(
         "SELECT count(*) FROM mart_route_health WHERE route_key_low = route_key_high"
     ).fetchone()[0]
-    assert same == 6, "the exclusion in every watch_*.sql is what this count justifies"
+    assert same == 5, "the exclusion in every watch_*.sql is what this count justifies"
 
 
 # --------------------------------------------------------------------------------------------

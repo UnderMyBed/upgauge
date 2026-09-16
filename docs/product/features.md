@@ -142,10 +142,10 @@ table" section.
 
 | Route | Contents |
 |---|---|
-| **`/route/PDX-AUS`** | Title block (both airport names), a stat strip (seats, passengers, load factor, avg gauge, departures, carrier count, quarantined count — load factor and avg gauge computed as ratios of the summed rows, never averaged), **the aircraft-type-mix chart**, a carriers table (one row per operating carrier over the trailing 12 months, resolved to codes, not ids), a link into the Explorer for the identical query, and the legend rail. **The chart and the table cover different windows and the page says so**: the chart is the full 2015-01 → `asOf`, because a twelve-point fleet-mix stack shows nothing (the A321's rise on JFK–LAX takes eight years to read); the table is the trailing 12. The chart is drawn whenever the route has any filings in the full window — including when the trailing-12 table is empty, which is 12,115 of 23,041 pairs (measured), i.e. the common case, not an edge one. A pair with nothing in either window draws no chart at all: the empty state already states that finding in words, and a second panel repeating it is card soup. **Months the pair filed nothing in break the area rather than being drawn across or zero-filled**, and the chart says how many there were — 62% of pairs have at least one, and HNL–LAS's six fall inside the COVID band. |
-| **`/airport/SEA`** | The same shape as `/route`, with one thing that changes every figure on it: **an airport is both endpoints.** Every stat, row and chart band counts `origin = X OR dest = X`, and the page says so in words. An origin-only page is not visibly broken — it renders everything in the right shape and is silently about half the airport (SEA reads 26,710,000 seats instead of 53,373,806). Stat strip adds **Destinations** (143 at SEA: distinct other endpoints, counted once each, excluding SEA itself — its own same-airport filings stay in every measure because they are real activity). Table is one row per carrier over the trailing 12; chart is the full window, stacked by aircraft type. **The Explorer link is ONE link** — `endpoint_airport_id` (filter-only, `filter_mode='either'`) compiles `origin OR dest` directly, so the link reproduces the page's own 53,373,806-seat figure rather than a half of it. Without that dimension the page can only offer two half-links. The network map (below) is now built too — still unbuilt here: capacity YoY, carrier share, routes added/dropped. |
-| **`/carrier/DL`** | The same shape again, one dimension over: the table is **aircraft types operated** (17 for DL), because the fleet is this product's subject. Below it, **Top routes** and **Top origin airports** — DL's first two callers of the Top-N builder (`app/src/lib/topn.ts`) — rank the 1,873 distinct routes and, headed exactly that rather than "airports served," the **186 origin-only** airports DL touches over the trailing 12 months. Origin-only, not either-endpoint, is load-bearing here, but not because the filter is missing — `endpoint_airport_id` exists and `/airport` uses it. The real reason: ranking airports means grouping BY the endpoint dimension, and `endpoint_airport_id` is `filter_only` (it can narrow a query to one fixed airport, which is exactly what `/airport` needs, but it is rejected as a grouping dimension the same way it would double-count a row into both its origin's and its dest's group) — so this table stays origin-only until a groupable either-endpoint dimension exists, which is on no current backlog list. DL's either-endpoint count is 188 against 186 origin-only, a small gap today but not a guarantee. Two things this page has to say out loud, and does, on every carrier and whether or not it has a table: **"Operated, not marketed"** — a DL-branded regional flown by Endeavor is counted under `9E`, and there is no marketing-carrier field to infer one from — and that the code and name are BTS's **current identity**, not what the airline filed under at the time. 39% of carriers have no rows in the trailing 12 (VX stopped filing in 2018-03) and still get a full-window chart. **The network map** is here too, drawing one aircraft type at a time — `?type=<aircraft slug>`, picked from the fleet table above it, with a named refusal for a value that resolves to nothing or to more than one airframe (`CE-180` is two real Cessnas, and the page names both rather than choosing). Clearing the filter returns to a picker with no map, because a carrier's whole fleet on one map is the hairball the Maps table below rules out. Still unbuilt: the operating vs. mainline-group toggle, gainers/losers. |
-| **`/aircraft/B737-8`** | **The differentiator, and the first page whose chart is not the same chart.** A page that *is* one aircraft type makes the type stack degenerate — one band — so it stacks by **operating carrier** instead: who adopted this type, and when. The ramp then encodes *configuration* rather than fleet, which `/route` cannot separate (A321nXLR over the trailing 12: B6 at 172.3 seats/departure, F9 at 230.0 — a 33% spread on the same airframe; 176.0 → 230.0, 31%, over the full window the chart draws — `docs/design/system.md` § Charts tabulates both), and the legend rail's wording travels with it. **The URL slug is not the BTS code and not the short name either**: 15 of the 112 fact-present short names carry a `/` or a space, so `/aircraft/A320-1/2` is two path segments and can never be a page — `/` and space become `-`, uppercased. `/aircraft/CE-180` names two airframes that both really flew and is a 404 that names and links both rather than picking one. The network map (below) is now built too, so **where it flies** is answered one carrier at a time; still unbuilt here: stage length. |
+| **`/route/PDX-AUS`** | Title block (both airport names), a stat strip (seats, passengers, load factor, avg gauge, departures, carrier count, quarantined count — load factor and avg gauge computed as ratios of the summed rows, never averaged), **the aircraft-type-mix chart**, a carriers table (one row per operating carrier over the trailing 12 months, resolved to codes, not ids), a link into the Explorer for the identical query, and the legend rail. **The chart and the table cover different windows and the page says so**: the chart is the full 2015-01 → `asOf`, because a twelve-point fleet-mix stack shows nothing (the A321's rise on JFK–LAX takes eight years to read); the table is the trailing 12. The chart is drawn whenever the route has any filings in the full window — including when the trailing-12 table is empty, which is 12,201 of 23,167 pairs (measured), i.e. the common case, not an edge one. A pair with nothing in either window draws no chart at all: the empty state already states that finding in words, and a second panel repeating it is card soup. **Months the pair filed nothing in break the area rather than being drawn across or zero-filled**, and the chart says how many there were — 62% of pairs have at least one, and HNL–LAS's six fall inside the COVID band. |
+| **`/airport/SEA`** | The same shape as `/route`, with one thing that changes every figure on it: **an airport is both endpoints.** Every stat, row and chart band counts `origin = X OR dest = X`, and the page says so in words. An origin-only page is not visibly broken — it renders everything in the right shape and is silently about half the airport (SEA reads 26,695,264 seats instead of 53,343,024). Stat strip adds **Destinations** (142 at SEA: distinct other endpoints, counted once each, excluding SEA itself — its own same-airport filings stay in every measure because they are real activity). Table is one row per carrier over the trailing 12; chart is the full window, stacked by aircraft type. **The Explorer link is ONE link** — `endpoint_airport_id` (filter-only, `filter_mode='either'`) compiles `origin OR dest` directly, so the link reproduces the page's own 53,343,024-seat figure rather than a half of it. Without that dimension the page can only offer two half-links. The network map (below) is now built too — still unbuilt here: capacity YoY, carrier share, routes added/dropped. |
+| **`/carrier/DL`** | The same shape again, one dimension over: the table is **aircraft types operated** (17 for DL), because the fleet is this product's subject. Below it, **Top routes** and **Top origin airports** — DL's first two callers of the Top-N builder (`app/src/lib/topn.ts`) — rank the 1,825 distinct routes and, headed exactly that rather than "airports served," the **184 origin-only** airports DL touches over the trailing 12 months. Origin-only, not either-endpoint, is load-bearing here, but not because the filter is missing — `endpoint_airport_id` exists and `/airport` uses it. The real reason: ranking airports means grouping BY the endpoint dimension, and `endpoint_airport_id` is `filter_only` (it can narrow a query to one fixed airport, which is exactly what `/airport` needs, but it is rejected as a grouping dimension the same way it would double-count a row into both its origin's and its dest's group) — so this table stays origin-only until a groupable either-endpoint dimension exists, which is on no current backlog list. DL's either-endpoint count is 185 against 184 origin-only, a small gap today but not a guarantee. Two things this page has to say out loud, and does, on every carrier and whether or not it has a table: **"Operated, not marketed"** — a DL-branded regional flown by Endeavor is counted under `9E`, and there is no marketing-carrier field to infer one from — and that the code and name are BTS's **current identity**, not what the airline filed under at the time. 39% of carriers have no rows in the trailing 12 (VX stopped filing in 2018-03) and still get a full-window chart. **The network map** is here too, drawing one aircraft type at a time — `?type=<aircraft slug>`, picked from the fleet table above it, with a named refusal for a value that resolves to nothing or to more than one airframe (`CE-180` is two real Cessnas, and the page names both rather than choosing). Clearing the filter returns to a picker with no map, because a carrier's whole fleet on one map is the hairball the Maps table below rules out. Still unbuilt: the operating vs. mainline-group toggle, gainers/losers. |
+| **`/aircraft/B737-8`** | **The differentiator, and the first page whose chart is not the same chart.** A page that *is* one aircraft type makes the type stack degenerate — one band — so it stacks by **operating carrier** instead: who adopted this type, and when. The ramp then encodes *configuration* rather than fleet, which `/route` cannot separate (A321nXLR over 2025-05 → 2026-04: B6 at 172.3 seats/departure, F9 at 230.0 — a 33% spread on the same airframe; 176.0 → 230.0, 31%, over the full window 2015-01 → 2026-04 — `docs/design/system.md` § Charts tabulates both), and the legend rail's wording travels with it. **The URL slug is not the BTS code and not the short name either**: 15 of the 112 fact-present short names carry a `/` or a space, so `/aircraft/A320-1/2` is two path segments and can never be a page — `/` and space become `-`, uppercased. `/aircraft/CE-180` names two airframes that both really flew and is a 404 that names and links both rather than picking one. The network map (below) is now built too, so **where it flies** is answered one carrier at a time; still unbuilt here: stage length. |
 
 **`/route/<pair>`'s URL is alphabetical by airport code** (`/route/BNH-HPN`, not the storage
 order `HPN-BNH`) — predictable from the two codes alone, no database lookup needed. A
@@ -180,14 +180,14 @@ bare `year_month` never gains a fake link. `/explore`'s route cell is the one di
 not a single id (its `column_expr` spans two airport columns), so its link is built and checked
 separately, and it is where the sharpest trap in this area lives: the cell displays the
 two codes in **airport-id** order but the canonical `/route/` URL is alphabetical by **code**,
-and those two orderings disagree for 215 of 22,509 pairs (`CLAUDE.md`) — reusing the
+and those two orderings disagree for 215 of 22,635 pairs (`CLAUDE.md`) — reusing the
 displayed order as the link would be silently wrong for every one of the 215. That same cell is
 also the one that must *refuse* to link: 532 same-airport pairs carry real traffic but
 `/route/ORD-ORD` is a 404 by design, so a route cell whose halves match renders as text. Full
 mechanics: `docs/design/system.md` § The data table.
 
 **Three links live outside the tables**, because the tables alone left the graph half-connected —
-`/airport/` and `/route/` are 23,556 of the sitemap's 23,785 URLs, and without those links they
+`/airport/` and `/route/` are 23,684 of the sitemap's 23,913 URLs, and without those links they
 carry no inbound internal link at all — crawlable but not browsable. So `/route/<pair>`'s title
 block links both airport names to `/airport/<code>`, and the top bar's wordmark links home from
 every page. Nothing but walking the graph from the front door finds a gap like this; no
@@ -285,25 +285,25 @@ by any reader who tries to reproduce Gauge Watch in `/explore` and cannot.
   `p12_months_present = 0` and nothing else; `mart_route_health` carries **no lookback past the
   prior 12 months**, so the query cannot distinguish a brand-new route from a resumed one.
 
-  Measured on the 2026-05 warehouse: **174 of the 297 qualifying rows (58.6%) filed in at least
-  one month before the p12 window**, including **19 of the 25 the page renders**. Worst case
-  `B6 AUS–FLL` — **106 distinct months filed, first filed 2015-01** — was presented as brand-new
-  service. Also `MQ AZO–ORD` (105 months), `MQ ALO–ORD` (103), `OO ORD–PAH` (100), `OH CLT–DSM`
-  (99). The old reasoning here ("a route flown in 2014 and resumed in 2019 looks new") had the
-  right failure mode and stopped one rung too high: a route flown in **2023** and resumed in
-  2025 looks new too, and that is well over half the rows. The mirror-image limitation is
-  unchanged — a carrier–route that stopped and resumed *within* the p12/t12 windows has some p12
-  presence and never appears here at all.
+  Measured on the 2026-06 warehouse: **160 of the 281 qualifying rows (56.9%) filed in at least
+  one month before the p12 window**, including **22 of the 25 the page renders**. Worst case
+  `B6 AUS–FLL` — **107 distinct months filed, first filed 2015-01** — which "first appearance
+  since 2015" presents as brand-new service. Also `OO ORD–PAH` (101 months), `OH CLT–DSM` (99),
+  `OO AUS–DEN` (97), `MQ BPT–DFW` (94). The old reasoning here ("a route flown in 2014 and
+  resumed in 2019 looks new") had the right failure mode and stopped one rung too high: a route
+  flown in **2023** and resumed in 2025 looks new too, and that is more than half the rows. The
+  mirror-image limitation is unchanged — a carrier–route that stopped and resumed *within* the
+  p12/t12 windows has some p12 presence and never appears here at all.
 
   **And the grain is the pair, not the route — so "nobody flew it last year" is false too.**
   `mart_route_health` is one row per **(op_airline_id, undirected route)**, which is why this
   bullet says "carrier × O&D pair". `p12_months_present = 0` is therefore silent about every
-  *other* carrier on the same airport pair. Measured: **245 of the 297 qualifying rows (82.5%),
+  *other* carrier on the same airport pair. Measured: **224 of the 281 qualifying rows (79.7%),
   and 25 of the 25 the page renders**, had a different carrier flying that pair inside the p12
   window. The page's own #1 row, `AS HNL–ITO`, ranks first while HA, UA and WN filed
-  **1,786,963 seats** on that pair in the prior window — **3.7×** the subject's own trailing 12.
-  `AS DEN–SAN` had **seven** other operators and 1.88M seats, 14× its own; `AA FLL–LGA` three
-  and 1.52M, 10.8×. This one is worth recording as a process finding, not just a data one: it was
+  **1,786,963 seats** on that pair in the prior window — **3.1×** the subject's own trailing 12.
+  `AS DEN–SAN` had **six** other operators and 1.86M seats, 12.6× its own; `AA FLL–LGA` three
+  and 1.50M, 9.5×. This one is worth recording as a process finding, not just a data one: it was
   **introduced by the fix wave that corrected the "since 2015" claim** — "new service nobody
   flew last year" read as the *accurate* half of the old sentence and was carried over
   unexamined, so a wave fixing one false claim shipped another of the same class. Any sentence
@@ -345,7 +345,7 @@ declared once in `app/src/lib/floor.ts` and every `/watch` preset inherits it fr
 
 **A carrier–route pair with no prior-12mo data gets `NULL` deltas and a `NULL` score, never an
 enormous "improvement."** It still appears as a row — that row is the Route Birth Tracker's
-input. Measured over the full 2015–2026 window: 297 of the mart's 5,611 rows are new in exactly
+input. Measured over the full 2015–2026 window: 281 of the mart's 5,675 rows are new in exactly
 this sense (`p12_months_present = 0`).
 
 **Show the components in the UI, not just the score.** The components are the insight; the
@@ -353,19 +353,19 @@ score is a sort key. Label it plainly as a heuristic. Do not over-engineer this.
 
 ### `health_score` is `NULL` for three reasons — a row unrankable for lack of a filed schedule must not render as unhealthy
 
-Measured over the full 2015–2026 window (`t12 = 2025-06..2026-05`, `p12 = 2024-06..2025-05`):
-**373 of the mart's 5,611 rows** have `health_score IS NULL`, for three distinct reasons — which
+Measured over the full 2015–2026 window (`t12 = 2025-07..2026-06`, `p12 = 2024-07..2025-06`):
+**361 of the mart's 5,675 rows** have `health_score IS NULL`, for three distinct reasons — which
 **overlap by 13 rows, so never sum them.** Full SQL-level accounting:
 [../data/model.md § Window rule, floor, and the NULL-prior-window trap](../data/model.md#window-rule-floor-and-the-null-prior-window-trap).
 
-1. **No prior window — 297, the largest group.** This carrier filed nothing on this pair in the
+1. **No prior window — 281, the largest group.** This carrier filed nothing on this pair in the
    prior window (`p12_months_present = 0`) — a re-entry as often as a birth, per Route Birth
    Tracker above. Correctly has no deltas to show.
 2. **Zero-measure prior window — 0 today.** The prior window is
    technically "present" but filed zero seats and zero departures, so the ratio is undefined
    the same way division by zero is. Empty in the current window — a property of which 24
    months happen to be the trailing window right now, not a structural absence of the case.
-3. **Zero scheduled departures — 89.** `completion_factor` is
+3. **Zero scheduled departures — 93.** `completion_factor` is
    undefined when `t12_departures_scheduled = 0`, which BTS allows for on-demand/
    charter-style operators that file real performed flights against no filed schedule at
    all. Unlike the other two, this row usually has known `lf_delta`, `gauge_delta`,
@@ -375,7 +375,7 @@ Measured over the full 2015–2026 window (`t12 = 2025-06..2026-05`, `p12 = 2024
 **UI requirement: a `NULL` `health_score` must never render as "unhealthy."** All three
 groups are `NULL` for a data-availability reason, not a low-score reason — sorting or
 filtering that silently treats `NULL` as the bottom of the range would misrepresent up to
-297 rows (the largest of the three groups today — "no prior window," not "zero scheduled
+281 rows (the largest of the three groups today — "no prior window," not "zero scheduled
 departures," which was largest only in the smaller 2015–2017 measurement) as failing on
 completion when the real story is "no schedule was ever filed to complete" or "this route
 didn't exist yet." Render these rows with an explicit "insufficient data" state,

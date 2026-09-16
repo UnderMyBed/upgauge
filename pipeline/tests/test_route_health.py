@@ -193,7 +193,7 @@ def test_new_routes_are_not_filtered_out(con):
     THE REFERENCE MODEL BELOW IS THE MART'S ADMISSION GATE, RE-DERIVED, and it has to track it.
     Until #148 it read `sum(departures_performed) >= 30` -- the flat trailing-12 predicate the
     rate floor replaced. Left that way it was worse than stale: its `expected` came to 606 where
-    the mart holds 297, it stayed green only because the CI fixture's mart is a single row, and
+    the mart holds 281, it stayed green only because the CI fixture's mart is a single row, and
     under a mutant that reverted the gate to `>= 30` it would have gone green and CERTIFIED the
     reverted rule. A reference model that survives the bug it is modelling is an anti-guard.
     """
@@ -377,7 +377,7 @@ def test_windows_are_global_and_do_not_overlap(con):
 
 def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
     """Fix round 1: the original version of this test checked parity against `lf_delta`
-    alone, which is FALSE on real data -- 76 of the 373 UNSCORED carrier-route pairs have a
+    alone, which is FALSE on real data -- 80 of the 361 UNSCORED carrier-route pairs have a
     fully-populated prior window (so lf_delta, gauge_delta, capacity_delta and frequency_delta
     are all known)
     but `completion_factor` is NULL anyway, because they filed zero scheduled departures
@@ -387,7 +387,7 @@ def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
     completion_factor NULL.
 
     The composite is FOUR axes, not five: M6 removed capacity_delta from the score, because
-    in log space it is exactly frequency + gauge (verified to 1.33e-15 over all 5,314 finite
+    in log space it is exactly frequency + gauge (verified to 1.33e-15 over all 5,394 finite
     rows -- docs/data/model.md), so scoring it scored those two a second time. It keeps its
     column and stays on the page; it is the composite it has no place in.
 
@@ -411,7 +411,7 @@ def test_health_score_is_null_exactly_when_a_component_is_unknown(con):
 
 def test_health_score_is_bounded_by_the_clamp(con):
     """Each axis is clamped to +/-3 and weighted 0.25, so |health_score| <= 3.0 by
-    construction. Without the clamp a nine-seat aircraft's log gauge ratio reaches z = -18.91
+    construction. Without the clamp a nine-seat aircraft's log gauge ratio reaches z = -18.18
     on the real warehouse (VD CPX-VQS) and Death Watch fills with bush operators."""
     worst = con.execute(
         "SELECT max(abs(health_score)) FROM mart_route_health WHERE health_score IS NOT NULL"
@@ -422,7 +422,7 @@ def test_health_score_is_bounded_by_the_clamp(con):
 def test_the_completion_cap_is_null_safe(adversarial_con):
     """DuckDB's least() IGNORES NULLs: least(NULL, 1.5) returns 1.5, not NULL. Written as a
     bare least(), the cap fabricates a 1.5 completion rate for every carrier-route pair that
-    filed no schedule at all -- 89 of them on the real warehouse -- and each then gets a
+    filed no schedule at all -- 93 of them on the real warehouse -- and each then gets a
     health_score it has no basis for.
 
     RUNS ON THE ADVERSARIAL WAREHOUSE BECAUSE IT HAS TO. On the committed fixture this test was

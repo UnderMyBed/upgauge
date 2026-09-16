@@ -14,8 +14,8 @@ import type { Resolved } from "@/lib/resolve";
  * Every figure on /airport/<code> must match `origin_airport_id = X OR dest_airport_id = X`.
  * An origin-only page is not obviously broken -- it renders every stat, every carrier row and
  * every chart band in exactly the right shape, and is silently about half the airport.
- * Measured at SEA (14747) over 2025-06..2026-05: 53,372,100 seats both ways against
- * 26,710,000 departing only, and 143 destinations against 140.
+ * Measured at SEA (14747) over 2025-07..2026-06: 53,343,024 seats both ways against
+ * 26,695,264 departing only, and 142 destinations against 138.
  *
  * THE MECHANISM, as of M7 Task 3: `endpoint_airport_id`, a first-class `meta_pivot_dimensions`
  * entry (filter_only, filter_mode='either', M7 Tasks 1-2) that compiles to
@@ -35,13 +35,13 @@ import type { Resolved } from "@/lib/resolve";
  *
  * The rows a single `endpoint_airport_id` query returns still span BOTH directions of every
  * route (an SEA->PDX row and a PDX->SEA row are different `(origin, dest)` groups) and same-
- * airport rows still exist -- `origin = dest` rows: 3,177 of them over the TRAILING 12 MONTHS
- * (2025-06..2026-05) across 356 airports, 598,829 seats, QUARANTINED ROWS INCLUDED -- 3,173 /
- * 355 / 598,829 without them, and 12,995 / 532 / 1,933,052 (12,953 / 532 / 1,932,821 without)
- * over the full 2015-01..2026-05 window. The window and the quarantine qualifier are both
+ * airport rows still exist -- `origin = dest` rows: 3,172 of them over the TRAILING 12 MONTHS
+ * (2025-07..2026-06) across 354 airports, 595,807 seats, QUARANTINED ROWS INCLUDED -- 3,167 /
+ * 354 / 595,807 without them, and 13,278 / 532 / 1,986,252 (13,235 / 532 / 1,986,021 without)
+ * over the full 2015-01..2026-06 window. The window and the quarantine qualifier are both
  * load-bearing: the four answers differ by 4x, and this file's own window is the trailing 12
  * for the table and the FULL window for the chart. docs/data/invariants.md § Route identity
- * tabulates all four. At SEA: 17 rows carrying 12,207 seats and 166 departures -- real activity
+ * tabulates all four. At SEA: 17 rows carrying 12,015 seats and 163 departures -- real activity
  * that `fct_segment_month` carries (the M4d design spec's "do not exist" is true only of route
  * IDENTITY, docs/data/invariants.md § Route identity, which excludes them as non-routes).
  * `toEndpointRows` below folds both directions and the same-airport case down to one
@@ -68,7 +68,7 @@ export interface EndpointRow {
    * `SUM(x) FILTER (WHERE NOT is_quarantined)` (sql/02_marts/301_meta_pivot_measures.sql:21-32)
    * and a SUM over zero passing rows returns NULL -- "nothing filed here can be trusted", which
    * is a different finding from "nothing flew" and must stay distinguishable from it.
-   * Measured: the 26 rows behind the 21 such groups in the trailing 12 all filed
+   * Measured: the 26 rows behind the 22 such groups in the trailing 12 all filed
    * `departures_performed` between 1 and 7 against a seat count of zero, so a row rendered as
    * "0 departures" is not merely unknowable, it is the opposite of what BTS filed. */
   seats: number | null;
@@ -149,8 +149,8 @@ export function carrierRows(
       // carrier flew AT THIS AIRPORT AT ALL, which is the union of its per-endpoint month
       // sets, and a union is not recoverable from the counts: `max()` is only a lower bound
       // and `sum()` double-counts every month two endpoints share. Measured over every
-      // /airport page in the trailing 12 (3,457 folded carrier rows), `max()` gives the wrong
-      // month count on 342 and the wrong BELOW-FLOOR VERDICT on 18; `sum()` flips 1,186.
+      // /airport page in the trailing 12 (3,444 folded carrier rows), `max()` gives the wrong
+      // month count on 347 and the wrong BELOW-FLOOR VERDICT on 23; `sum()` flips 1,187.
       //
       // So it comes from `airportCarrierMonthsQuery` -- a second pivot grouped by carrier
       // alone, where DuckDB does the DISTINCT over exactly that union. Undefined for a carrier
@@ -161,8 +161,8 @@ export function carrierRows(
 }
 
 export interface AirportTotals {
-  /** NULL, never 0, when every row the airport has is unknowable -- measured for A18, JZM and
-   * OQZ, whose entire trailing-12 window is a single quarantined filing. See EndpointRow. */
+  /** NULL, never 0, when every row the airport has is unknowable -- measured for JZM and OQZ,
+   * whose entire trailing-12 window is a single quarantined filing. See EndpointRow. */
   seats: number | null;
   passengers: number | null;
   departures: number | null;
@@ -178,7 +178,7 @@ export interface AirportTotals {
  *
  * `destinations` excludes the airport itself. Its own same-airport filings are real activity
  * and stay in every measure, but SEA is not one of SEA's destinations. Measured over the
- * trailing 12 months at SEA: 144 distinct other-endpoint ids including itself, 143 without. */
+ * trailing 12 months at SEA: 143 distinct other-endpoint ids including itself, 142 without. */
 export function airportTotals(rows: EndpointRow[], airportId: number): AirportTotals {
   // Seeded `null`, not 0, and folded with addSum: seeding 0 would make the stat strip of an
   // airport whose every filing was quarantined read "0 seats" -- the page-level form of the
@@ -211,9 +211,9 @@ export function airportTotals(rows: EndpointRow[], airportId: number): AirportTo
  * carrier, origin, dest) on ONE pivot, which keeps both directions of a route as separate rows
  * rather than folding them together the way the old union's key did -- so this figure is larger
  * than the old "per side"/"union" ones for the same airport, not comparable to them. Checked
- * against the 25 busiest airports by trailing-12 segment-row count, not assumed from ORD alone:
- * the busiest airport in the database (ORD, 13930) produces 1,732 such groups over a trailing 12
- * months, next is DFW (11298) at 1,237; SEA produces 666. 5,000 clears the real worst case 2.9x.
+ * against every airport in the database, not assumed from ORD alone: the worst case (ORD, 13930)
+ * produces 1,700 such groups over the trailing 12 months, next is DFW (11298) at 1,218; SEA
+ * produces 658. 5,000 clears the real worst case 2.9x.
  * If a future refresh ever reaches it the page says so (`truncated`) rather than under-reporting,
  * exactly as /route/<pair> does at its own limit. */
 export const AIRPORT_ENDPOINT_LIMIT = 5000;
@@ -249,7 +249,7 @@ export function airportTrafficQuery(
 }
 
 /** Measured ceiling for the carrier-months query below. The most operating carriers any one
- * airport sees over a trailing 12 months is 43 (ORD, 13930) on the 2026-05 warehouse, and 70
+ * airport sees over the trailing 12 months is 22 (BNA, 10693) on the 2026-06 warehouse, and 69
  * carriers file anything at all anywhere in that window -- so this cannot truncate on any
  * airport in the database, and 500 leaves an order of magnitude of headroom besides. Unlike
  * `AIRPORT_ENDPOINT_LIMIT` this bounds a query whose grain is one row per CARRIER, not one per
@@ -273,7 +273,7 @@ export const AIRPORT_CARRIER_LIMIT = 500;
  * pivot ever came back at exactly `AIRPORT_ENDPOINT_LIMIT` its departures would be truncated
  * while this query's month count would not, making the rate slightly understated on a page
  * that is already declaring `truncated` and under-reporting every figure on it. The real worst
- * case is ORD at 1,732 groups against a 5,000 limit, so it does not happen today. */
+ * case is ORD at 1,700 groups against a 5,000 limit, so it does not happen today. */
 export function airportCarrierMonthsQuery(
   airportId: number,
   timeFrom: string,
@@ -371,12 +371,12 @@ export interface AirportMix {
  * type) grain -- no union, and no per-row "other endpoint" to recover, since the chart's grain
  * doesn't carry one.
  *
- * Measured over 2015-01..2026-04, again checked against the 25 busiest airports rather than
- * assumed: the worst case in the database is ORD (13930) at 4,118 distinct (month, type)
- * groups, comfortably inside `AIRCRAFT_MIX_LIMIT` -- unchanged from the M4d-era union figure,
- * because this grain never carried a direction to begin with (year_month x aircraft_type has
- * no origin/dest column), so collapsing three pivots into one changes nothing about what gets
- * counted here. ATL is 3,592 and SEA 2,886 (endpoints.test.ts's existing SEA assertion, unmoved).
+ * Measured over 2015-01..2026-06, again checked against every airport rather than assumed: the
+ * worst case in the database is ORD (13930) at 4,181 distinct (month, type) groups, comfortably
+ * inside `AIRCRAFT_MIX_LIMIT` -- the same count the M4d-era union would give, because this grain
+ * never carried a direction to begin with (year_month x aircraft_type has no origin/dest
+ * column), so collapsing three pivots into one changes nothing about what gets counted here.
+ * ATL is 3,644 and SEA 2,932 (endpoints.test.ts's SEA assertion).
  * endpoints.test.ts asserts ORD comes back untruncated, so a refresh that approaches the bound
  * fails a TEST rather than a page. */
 export async function fetchAirportMix(

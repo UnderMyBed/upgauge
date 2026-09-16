@@ -14,10 +14,10 @@
 // one. Re-swept over all 114 fact-present carriers and 110 aircraft short names through the real
 // queries and limits:
 //
-//     CARRIER-TYPETABLE       25 below-floor rows over 18 pages --  0 disagreements
-//     CARRIER-TOPROUTES      297 below-floor rows over 33 pages -- 10
-//     CARRIER-TOPORIGINS     243 below-floor rows over 36 pages --  5
-//     AIRCRAFT-CARRIERTABLE   25 below-floor rows over 16 pages --  1
+//     CARRIER-TYPETABLE       23 below-floor rows over 16 pages --  0 disagreements
+//     CARRIER-TOPROUTES      297 below-floor rows over 32 pages --  9
+//     CARRIER-TOPORIGINS     241 below-floor rows over 35 pages --  6
+//     AIRCRAFT-CARRIERTABLE   22 below-floor rows over 14 pages --  1
 //
 // RE-SWEPT UNDER THE MONTHLY FLOOR (#134), not carried forward -- the same four call sites read
 // 6/4, 141/24, 85/22 and 6/6 while the floor was a raw twelve-month departure sum. Two things

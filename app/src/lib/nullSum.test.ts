@@ -83,7 +83,7 @@ describe("numOrNull tests the absence before the conversion", () => {
 });
 
 describe("sumColumn folds a pivot column with SUM semantics end to end", () => {
-  // THE SEED, which is the half with the widest footprint: 12,115 route pairs are fact-present
+  // THE SEED, which is the half with the widest footprint: 12,201 route pairs are fact-present
   // and filed nothing inside the trailing 12, and this is the branch they take.
   // MUTANT: seed the reduce at `0` instead of `null` -> red.
   it("is NULL over no rows at all", () => {

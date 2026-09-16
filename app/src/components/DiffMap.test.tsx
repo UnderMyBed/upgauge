@@ -212,7 +212,7 @@ describe("DiffMap", () => {
 
   it("counts the TRUE pre-cap total, not the drawn arcs", () => {
     // Catches: counting `segments.length`. The producer caps at NETWORK_ARC_CAP and returns the
-    // pre-cap `category_total`, so on OO's added panel the honest count is 1,624 with 400 drawn.
+    // pre-cap `category_total`, so a capped panel like OO's added one states that total, not 400.
     const capped = [diff("added", [seg("ORD", "LAX")], { totalRoutes: 1_624 })];
     const { container } = render(<DiffMap diffs={capped} quarantinedRoutes={0} carrier="OO" />);
     expect(textOf(panels(container)[0], "diff-panel-count")).toMatch(/^OO added 1,624 route pairs/);
@@ -259,15 +259,15 @@ describe("DiffMap", () => {
   });
 
   it("says a dropped pair may still be flown by another carrier", () => {
-    // map_carrier_diff.sql:111 -- 3,640 of 5,959 (61.1%) dropped carrier-routes had a DIFFERENT
-    // carrier flying the pair inside the trailing window.
+    // map_carrier_diff.sql header, point 3 -- 3,770 of 6,260 (60.2%) dropped carrier-routes had a
+    // DIFFERENT carrier flying the pair inside the trailing window.
     const { container } = render(<DiffMap diffs={DIFFS} quarantinedRoutes={0} carrier="AS" />);
     expect(container.textContent).toMatch(/another carrier may still be flying it/i);
   });
 
   it("says added is re-entry rather than first appearance", () => {
-    // map_carrier_diff.sql:97 -- 4,691 of 8,357 (56.1%) added carrier-routes had already filed
-    // that pair BEFORE the prior window. This query has no lookback past p12.
+    // map_carrier_diff.sql header, point 1 -- 4,549 of 8,129 (56.0%) added carrier-routes had
+    // already filed that pair BEFORE the prior window. This query has no lookback past p12.
     const { container } = render(<DiffMap diffs={DIFFS} quarantinedRoutes={0} carrier="AS" />);
     expect(container.textContent).toMatch(/re-entry, not first appearance/i);
   });

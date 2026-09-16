@@ -282,7 +282,7 @@ it is the only place a keyboard user reaches the expansion, linked cell or not.
 
 **A fourth case, and it is not a dimension property: a `route` cell whose two halves are the
 same airport does not link.** `fct_segment_month` carries 532 such pairs with real traffic
-(ORD alone is 76,236 seats over the trailing 12), but `/route/ORD-ORD` is a 404 by design —
+(ORD alone is 77,795 seats over the trailing 12), but `/route/ORD-ORD` is a 404 by design —
 `resolveRoutePair` answers *"'ORD' to itself is not a route between two airports"*, and
 `sitemap_routes.sql` excludes them for the same reason. The link path is the easiest place to
 forget it, and forgetting it ships a link to a guaranteed 404. The guard lives
@@ -307,10 +307,10 @@ the same component, calls per row for any non-dimension identifier column that s
 **The href is the code-alphabetical pair, never the displayed (airport-id) order**: `/explore`
 renders `route_key_low, route_key_high` — airport-id order — and `routeHrefFromCodes` re-sorts
 alphabetically by code before building `/route/<pair>`, because the two orderings disagree for
-215 of 22,509 pairs (measured; `CLAUDE.md`). Reusing the displayed order would be wrong
+215 of 22,635 pairs (measured; `CLAUDE.md`). Reusing the displayed order would be wrong
 for every one of those 215 — IFP/IAH is one of them: airport-id order displays `IFP–IAH`, but
 the canonical `/route/` URL is `/route/IAH-IFP`, the reverse. A fixture built on an
-order-agreeing pair like JFK–LAX (22,294 of 22,509) cannot catch that class of bug — both
+order-agreeing pair like JFK–LAX (22,420 of 22,635) cannot catch that class of bug — both
 orderings produce the same, coincidentally correct, href.
 
 ### The gauge rail — signature, 1 of 3
@@ -370,9 +370,9 @@ page gating on the second asks the wrong one. It bites twice:
   are the live cases. The predicate is `mixChartDraws` (`lib/chart/mixPlotConfig.ts`), and
   `prepareMixPlot` is routed **through** it so a page and the chart beside it cannot disagree.
 - **Arc rendering** — every row in that group describes an *arc*, and a map can render without one.
-  A hub map always paints its origin disc (`/airport/A18`, `/airport/OQZ`), and
+  A hub map always paints its origin disc (`/airport/JZM`, `/airport/OQZ`), and
   `fetchCarrierTypeNetwork` deliberately returns a zero-segment map so its quarantine disclosure
-  reaches the reader (`/carrier/F4?type=SHORT360`, `/aircraft/AS350-B2?carrier=8E`). The predicates
+  reaches the reader (`/carrier/F4?type=SHORT360`, `/aircraft/SHORT360?carrier=F4`). The predicates
   are `segmentArcsDrawn` / `networkArcsDrawn`, both reading the renderer's own `drawableSegments`.
   Gating on "a map exists" would delete the map to satisfy the rail, which is the wrong repair: the
   map stays, the group goes.
@@ -559,7 +559,7 @@ below — it binds every time-series mark, not only lines.
   seats) filed nothing for **2020-04 … 2020-09** and the chart drew one edge from 37,441 seats
   down to 6,804 across all six — inside the `--panel-2` band the same chart labels *"COVID —
   in window on purpose."* The one feature whose stated purpose is refusing to smooth COVID
-  away was smoothing away the actual COVID shutdown. **14,293 of 23,041 route pairs (62%) have
+  away was smoothing away the actual COVID shutdown. **14,378 of 23,167 route pairs (62%) have
   at least one interior gap**; `LGB–SJC` has a 21-month one.
 
   Three consequences for any chart built here:
@@ -567,7 +567,7 @@ below — it binds every time-series mark, not only lines.
   - **The absent month gets no sample.** The filed months are split into contiguous runs and
     each run is drawn as its own mark, so the hole is a hole.
   - **An isolated filed month is still drawn.** A one-month run has no width and serializes to
-    an invisible degenerate path, and **9,486 of 22,919 pairs (41%)** have at least one such
+    an invisible degenerate path, and **9,667 of 23,167 pairs (42%)** have at least one such
     month between two gaps. Erasing a filing is the same class of dishonesty as inventing one,
     so those runs are drawn **stroked** — a hairline column in the band's own shade, at its own
     height in the stack.
@@ -584,7 +584,7 @@ below — it binds every time-series mark, not only lines.
   `aria-label`: *"N months filed but wholly quarantined — every filing failed an invariant."*
   Folding them into the gap count puts a false clause in the one sentence a sighted reader gets,
   which is the compound-claim shape `/watch/new-routes` already shipped once. Measured over the
-  pairs the chart draws: **339** such months, and they carry zero stateable seats, so breaking
+  pairs the chart draws: **345** such months, and they carry zero stateable seats, so breaking
   them erases nothing.
 
   **A third state is not a hole at all.** Where *some* of a month's bands can be stated and
@@ -592,12 +592,12 @@ below — it binds every time-series mark, not only lines.
   understated: *"N months understated — a quarantined filing is drawn at zero height there, so
   its band flattens and the stack is lower than the real total by an amount that cannot be
   stated."* The sentence names the **mark**, not just a total: the cell is painted at zero, and
-  249 of the 420 such cells belong to a top-five *member* band, so a named band visibly drops to
+  253 of the 424 such cells belong to a top-five *member* band, so a named band visibly drops to
   the floor for one month and nothing else on the chart says why. Dropping the month instead
-  was measured and rejected: **407** such months hold **11,687,092** stateable seats, the worst
+  was measured and rejected: **411** such months hold **11,689,847** stateable seats, the worst
   (`LAS–LAX` 2024-11) **297,295** across 12 cells with one unknowable. Erasing a filing is the
-  same dishonesty as inventing one, and the shortfall is not bounded near zero — 26 of the 606
-  rows behind these cells are `load_factor_gt_1` carrying 19,870 filed seats, not `zero_seats`.
+  same dishonesty as inventing one, and the shortfall is not bounded near zero — 27 of the 613
+  rows behind these cells are `load_factor_gt_1` carrying 19,877 filed seats, not `zero_seats`.
   A stacked area's y is cumulative, so there is no honest way to omit one component at one x and
   keep the rest aligned; the choice is draw-and-disclose or erase, and this project surfaces dirt
   rather than hiding it.
@@ -608,7 +608,7 @@ below — it binds every time-series mark, not only lines.
   rather than treated as a wall, so the annotation is derived from the years that can be ranked.
   Measured **at year × type grain**, which is the grain the refusal fires at — a type's
   whole-year total must be unstateable, a strictly smaller set than "pairs carrying an
-  unstateable cell": **214 pairs across 273 pair-years** of 23,041. What a reader sees change is
+  unstateable cell": **215 pairs across 273 pair-years** of 23,167. What a reader sees change is
   smaller again, because most refused years were never the year the annotation named — the
   rendered annotation differs on **18 pairs**, 6 losing it and 12 moving year or direction.
 
@@ -620,7 +620,7 @@ below — it binds every time-series mark, not only lines.
   *requested* window and read `chart: the full window · 2015-01 → 2026-04` above a chart that
   stopped in 2022 — on `/route/ATL-CAK`, which filed 67 months, 2015-01 → 2022-06, and nothing
   since (measured). The `aria-label` was already correct, so only the text a sighted reader
-  sees was wrong, which is the worse half. 12,115 of 23,041 route pairs last filed before the
+  sees was wrong, which is the worse half. 12,201 of 23,167 route pairs last filed before the
   current trailing-12 window, so this is over half of them rather than a corner case. It is the
   same fabrication as interpolating across a gap, and the exact inverse of the mistake the
   two-window line exists to prevent: claiming a window you are not drawing. `page.test.tsx`
@@ -689,7 +689,7 @@ specific panels ever run. The extra panels exist precisely because a two-test sp
 **The canvas is 960×544, and each page's `viewBox` is cropped to the panels its own network
 reaches.** A page that reaches no inset must not spend the tray's height on blank canvas: an
 Alaska-only network drew a small ALASKA inset under ~320px of empty conterminous panel, on
-`/airport/BET`, `/airport/A18`, `/airport/JZM` and `/airport/OQZ`. Those pages now serve
+`/airport/BET`, `/airport/JZM` and `/airport/OQZ`. Those pages now serve
 `viewBox="0 354 960 190"` against a conterminous page's `0 12 960 532` — measured on a served
 build, and `.map svg { height: auto }` means the intrinsic ratio is what the page actually spends.
 
@@ -745,7 +745,7 @@ basemapPaths.generated.ts`) starts at Natural Earth **1:110m**, which has no pol
 Guam/CNMI/American Samoa/Midway or Puerto Rico/the USVI, which on its own leaves those insets
 empty. Measured against the real warehouse over the trailing 12 months, in which **757**
 airports are fact-present: **79** of them reach `car` and **7** reach a Pacific panel (GUM, HNL,
-PPG, ROP, SFO, SPN, TIQ). 757 is the denominator these two are shares of — 1,047 is the
+PPG, ROP, SFO, SPN, TIQ). 757 is the denominator these two are shares of — 1,049 is the
 fact-present population across the *whole* window and is the wrong one to read them against.
 `/airport/SJU` alone drew 65 arcs inside a labelled Caribbean frame with no landmass under it,
 and San Juan is a major airport, not an edge case. None of 757, 79 or 7 is generated; all three
@@ -962,7 +962,7 @@ point exactly on the rect's floor still paints a 4.5px subject disc or a label d
 y+5.
 
 Three gates hold it, and they are deliberately different instruments: `albers.test.ts` asserts the
-clearance structurally and needs no warehouse; `panelContainment.test.ts` sweeps all 1,047
+clearance structurally and needs no warehouse; `panelContainment.test.ts` sweeps all 1,049
 fact-present airports against all six frames; `segmentMap.test.ts` renders `MIA → SJU`, the near
 miss, because a fixture without an airport near the frame cannot fail. `basemap.test.ts` holds every
 inset frame clear of drawn conterminous land **with no exemption** — `car` is in that list like any
@@ -1103,9 +1103,9 @@ denominator would need a pivot grouped by endpoint airport, and `endpoint_airpor
 `filter_only` in the catalog. A quietly wrong mark is worse than a narrower true one.
 
 **A same-airport row is never an arc, on any page, standing rule.** `fct_segment_month`
-really carries rows whose origin and destination are the same airport — 359 of 1,047
+really carries rows whose origin and destination are the same airport — 354 of 1,049
 fact-present airports have at least one over the trailing 12 months; ORD alone is 53 rows,
-76,236 seats. Such a row's great circle has zero angular length, and `greatCircle`'s own
+77,795 seats. Such a row's great circle has zero angular length, and `greatCircle`'s own
 degenerate-endpoint branch (`om < 1e-9`) would emit `steps + 1` identical points — several
 hundred bytes of polyline drawing an invisible mark directly on top of the origin disc. So
 the drawn arc set always excludes any row whose two endpoints are the same airport
@@ -1260,7 +1260,7 @@ JFK–LAX     John F Kennedy Intl ↔ Los Angeles Intl
   table's trailing 12. The two windows differ because a twelve-point fleet-mix stack shows
   nothing, and **the page states both**: a decade drawn under a line reading "Trailing 12
   months" claims a window it is not showing. It is drawn whenever the *full* window has
-  filings, including when the trailing-12 table below is empty (12,115 of 23,041 pairs last
+  filings, including when the trailing-12 table below is empty (12,201 of 23,167 pairs last
   filed before the current trailing-12 window — the majority, not an edge case); when neither
   window has anything, no chart is drawn and the empty state below carries the finding alone.
 - **Table.** The standard data table, one row per operating carrier, trailing 12 months,
@@ -1306,7 +1306,7 @@ being honest:
 
 - **`/airport`'s Explorer link is ONE link.** `endpoint_airport_id` (filter-only,
   `filter_mode='either'`) compiles `origin OR dest` directly, so the page filters on it and
-  links to the identical query — that link reproduces the page's own 53,373,806-seat SEA
+  links to the identical query — that link reproduces the page's own 53,343,024-seat SEA
   figure, not a half of it. Without that dimension the page can only offer `departures from
   SEA` and `arrivals into SEA` as two halves, and "every insight row is one click from the raw
   rows" holds only with a qualification.
@@ -1413,14 +1413,14 @@ page still said otherwise — a rule in a doc does not enforce itself.
 `p12_months_present = 0` means *this carrier filed nothing on this route in the prior 12
 months*, full stop. Two things it does **not** mean, each measured:
 
-- **Not a first appearance.** The mart has no lookback past that window. 174 of 297 qualifying
-  rows (58.6%), and 19 of the 25 rendered, had already filed earlier — `B6 AUS–FLL` in 106
+- **Not a first appearance.** The mart has no lookback past that window. 160 of 281 qualifying
+  rows (56.9%), and 22 of the 25 rendered, had already filed earlier — `B6 AUS–FLL` in 107
   distinct months back to 2015-01.
 - **Not an unserved route.** `mart_route_health`'s grain is **(op_airline_id, route)**, so the
-  filter is silent about every other carrier on the same airport pair. **245 of 297 (82.5%), and
+  filter is silent about every other carrier on the same airport pair. **224 of 281 (79.7%), and
   25 of the 25 rendered**, had a different carrier flying that pair inside the prior window —
   `AS HNL–ITO` leads the page while HA, UA and WN filed **1,786,963 seats** on it in that
-  window, 3.7× the subject's own trailing 12.
+  window, 3.1× the subject's own trailing 12.
 
 **Grain is a copy problem, not just a data problem.** The second bullet was introduced by the
 fix wave that closed the first: "nobody flew last year" read as the accurate half of the old
@@ -1432,7 +1432,7 @@ rule and the rest of the evidence.
 **Every filter a preset applies that a reader could otherwise not infer is stated on the
 preset's own page**, in a `.foot` note, or the page cannot be reproduced from what it says.
 Empty Planes has exactly one of its own, `gauge_t12 >= 50`, and states it. The universal form of
-that sentence is false and was: Gauge Watch's `gauge_delta IS NOT NULL` excludes 297 carrier-route
+that sentence is false and was: Gauge Watch's `gauge_delta IS NOT NULL` excludes 281 carrier-route
 pairs with no prior window and is disclosed nowhere — a real gap, pre-dating #148 and not closed
 here. The departure floor is **not** a per-preset filter: it is
 `mart_route_health`'s admission gate, so it holds on all four leaderboards and is stated on all

@@ -42,7 +42,7 @@ describe("quarantineClause states what the quarantined rows did to THESE numbers
   });
 
   // MUTANT: drop the `quarantinedRows === 0` guard -> "Every filing ... is quarantined — 0 rows"
-  // on the 11,939 route pages, 44 carriers and 36 aircraft types that simply filed nothing,
+  // on the 12,023 route pages, 45 carriers and 38 aircraft types that simply filed nothing,
   // naming the one cause it is not -> red.
   it("says nothing when the absence has nothing to do with quarantine", () => {
     expect(quarantineClause({ ...ROUTE, seatsAreNull: true, quarantinedRows: 0 })).toBe("");

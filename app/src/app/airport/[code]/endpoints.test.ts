@@ -65,8 +65,8 @@ describe("the other-endpoint airport, derived per row", () => {
   });
 
   it("reads the airport itself as the other endpoint on a same-airport filing", () => {
-    // Measured: fct_segment_month really carries origin = dest rows -- 18 at SEA alone over
-    // the trailing 12 months, 12,646 seats (docs/data/invariants.md § Route identity has the
+    // Measured: fct_segment_month really carries origin = dest rows -- 17 at SEA alone over
+    // the trailing 12 months, 12,015 seats (docs/data/invariants.md § Route identity has the
     // full window x quarantine table). Both columns equal the subject airport, so either
     // branch of `otherEndpoint` must return it, not throw and not return undefined.
     const rows = toEndpointRows(
@@ -109,12 +109,12 @@ describe("the traffic query", () => {
 });
 
 // fetchAirportMix is ONE `endpoint_airport_id`-filtered pivot as of M7 Task 3 (no union), and
-// nothing about the rendered chart can see a 35,754-seat error in a 550-million-seat total. So
+// nothing about the rendered chart can see a 36,736-seat error in a 555-million-seat total. So
 // it is checked here, against the warehouse, where the exact figure is available. Measured for
-// SEA (14747) over 2015-01..2026-05:
+// SEA (14747) over 2015-01..2026-06:
 //
-//   seats   origin OR dest 550,395,521   origin only 275,312,624   naive origin + dest 550,431,275
-//   cells   2,910 distinct (month, aircraft type) groups
+//   seats   origin OR dest 555,462,755   origin only 277,849,048   naive origin + dest 555,499,491
+//   cells   2,932 distinct (month, aircraft type) groups
 //
 // THE MEASURES ARE QUARANTINE-FILTERED AND THE GROUPING IS NOT, and the two must not be
 // conflated: every meta_pivot_measures expression carries `FILTER (WHERE NOT is_quarantined)`,
@@ -123,29 +123,29 @@ describe("the traffic query", () => {
 // "retain the row, flag it" rule reaching the pivot, not an inconsistency.
 //
 // At SEA it is measurable in both directions: 13 quarantined rows carry 16 departures and ZERO
-// seats, so the departures total is 3,949,177 rather than the raw 3,949,193 while seats are
-// identical either way, and the cell count is 2,910 rather than the 2,904 a quarantine-filtered
+// seats, so the departures total is 3,983,291 rather than the raw 3,983,307 while seats are
+// identical either way, and the cell count is 2,932 rather than the 2,926 a quarantine-filtered
 // grouping would give. A re-derivation that applies the filter to both, or to neither, agrees
-// with this fixture on seats and disagrees on one of the other two. ORD (4,150) and ATL (3,619)
+// with this fixture on seats and disagrees on one of the other two. ORD (4,181) and ATL (3,644)
 // are identical under both filters, so only a SEA fixture can catch it.
 //
-// These figures are unmoved from the M4d-era three-pivot union: the (month, aircraft type)
-// grain never carried a direction, so collapsing three pivots into one changes nothing about
-// what this grain counts. A live-database test rather than a fixture, for the reason
+// These figures do not depend on the M4d-era three-pivot union having become one pivot: the
+// (month, aircraft type) grain never carried a direction, so collapsing three pivots into one
+// changes nothing about what this grain counts. A live-database test rather than a fixture, for the reason
 // lib/resolve.ts's header gives: this codebase has no mocks.
 describe("the chart's mix, against the warehouse", () => {
   it("totals both endpoints, with same-airport filings counted once", async () => {
     const asOf = await dataAsOf();
     const mix = await fetchAirportMix(14747, "2015-01", asOf);
     // SUM semantics (#121): `MixRow.seats` is nullable, and `+` would coerce a NULL back to 0.
-    expect(mix.rows.reduce<number | null>((a, r) => addSum(a, r.seats), null)).toBe(550395521);
-    expect(mix.rows.reduce<number | null>((a, r) => addSum(a, r.departures), null)).toBe(3949177);
-    expect(mix.rows.length).toBe(2910);
+    expect(mix.rows.reduce<number | null>((a, r) => addSum(a, r.seats), null)).toBe(555462755);
+    expect(mix.rows.reduce<number | null>((a, r) => addSum(a, r.departures), null)).toBe(3983291);
+    expect(mix.rows.length).toBe(2932);
     expect(mix.truncated).toBe(false);
   });
 
   it("survives a truncated result rather than 500ing under a 30-day cache", async () => {
-    // The real limit is 10,000 and the measured worst case is 4,150 (ORD, below), so this
+    // The real limit is 10,000 and the measured worst case is 4,181 (ORD, below), so this
     // branch is unreachable from production data -- which is exactly why the limit is an
     // argument.
     const asOf = await dataAsOf();
@@ -157,13 +157,13 @@ describe("the chart's mix, against the warehouse", () => {
   it("leaves the WORST case in the database inside the row limit", async () => {
     // The headroom assertion, so a BTS refresh that approaches the bound fails a TEST rather
     // than degrading a page -- the treatment MAX_SLUG_SEPARATORS already gets. ORD (13930), not
-    // ATL: measured (month, aircraft type) group count over 2015-01..2026-05 is 4,150 at ORD,
-    // against ATL's 3,619 and SEA's 2,910 -- checked against the 25 busiest airports by
-    // trailing-12 segment-row count (M7 Task 3), not assumed from ORD alone.
+    // ATL: measured (month, aircraft type) group count over 2015-01..2026-06 is 4,181 at ORD,
+    // against ATL's 3,644 and SEA's 2,932 -- checked against every airport in the database (the
+    // runner-up is LAX at 3,979), not assumed from ORD alone.
     const asOf = await dataAsOf();
     const mix = await fetchAirportMix(13930, "2015-01", asOf);
     expect(mix.truncated).toBe(false);
-    expect(mix.rows.length).toBe(4150);
+    expect(mix.rows.length).toBe(4181);
   });
 });
 
@@ -208,9 +208,9 @@ describe("aggregating the traffic rows", () => {
   });
 
   it("counts destinations as the OTHER endpoints, excluding the airport itself", () => {
-    // The 18 same-airport filings at SEA are real activity and belong in the seat total, but
+    // The 17 same-airport filings at SEA are real activity and belong in the seat total, but
     // SEA is not one of its own destinations. Measured at SEA over the trailing 12 months:
-    // 144 distinct other-endpoint ids including itself, 143 excluding it.
+    // 143 distinct other-endpoint ids including itself, 142 excluding it.
     const totals = airportTotals(
       [
         row({ carrierId: 19930, endpointId: PDX, seats: 1 }),
@@ -244,12 +244,12 @@ describe("aggregating the traffic rows", () => {
 // because one of its thirty groups was quarantined would be the opposite error, and the page
 // already discloses the excluded rows by count and reason.
 //
-// Measured 2026-08-27 against upgauge.duckdb at max(year_month) = 2026-05, trailing 12
-// (2025-06..2026-05), at the segment grain this page queries: 21 wholly-quarantined
-// (carrier x origin x dest) groups, 0 partially NULL. Folded to the grain the table actually
-// RENDERS -- one row per operating carrier -- that is 5 unknowable rows on 5 pages (A18, JZM,
-// OQZ, STT, STX), and on A18, JZM and OQZ it is the airport's entire window, so the stat strip
-// is unknowable too. docs/data/invariants.md carries the rule and the figures.
+// Measured against upgauge.duckdb at max(year_month) = 2026-06, trailing 12 (2025-07..2026-06),
+// at the segment grain this page queries: 22 wholly-quarantined (carrier x origin x dest)
+// groups, 0 partially NULL. Folded to the grain the table actually RENDERS -- one row per
+// operating carrier -- that is 4 unknowable rows on 4 pages (JZM, OQZ, STT, STX), and on JZM and
+// OQZ it is the airport's entire window, so the stat strip is unknowable too.
+// docs/data/invariants.md carries the rule and the figures.
 describe("an unknowable sum is not a zero", () => {
   it("keeps a NULL measure NULL rather than coercing it to 0", () => {
     // MUTANT: restore `Number(r.seats ?? 0)` in toEndpointRows -> this test goes red.
@@ -293,7 +293,7 @@ describe("an unknowable sum is not a zero", () => {
 
   it("reports the KNOWN sum for a carrier with one unknowable group among several", () => {
     // The over-correction guard. SQL NULL-poisoning semantics (`NULL + 5 = NULL`) would erase
-    // 24 of the 29 affected pages' real figures; SUM() semantics keep them, and the excluded
+    // 25 of the 29 affected pages' real figures; SUM() semantics keep them, and the excluded
     // filings are disclosed by the gutter and the foot's quarantined count instead.
     // MUTANT: make addSum return null when EITHER side is null -> this goes red.
     const rows = carrierRows([
@@ -307,7 +307,7 @@ describe("an unknowable sum is not a zero", () => {
   });
 
   it("leaves the airport's totals unknowable when every row it has is unknowable", () => {
-    // A18, JZM and OQZ, measured: one pivot row each, wholly quarantined. The stat strip is
+    // JZM and OQZ, measured: one pivot row each, wholly quarantined. The stat strip is
     // fed by this function, so under the bug the whole page reads 0 seats / 0 departures.
     // MUTANT: restore `rows.reduce((a, r) => a + r.seats, 0)` -> this goes red.
     const totals = airportTotals(
@@ -427,9 +427,9 @@ describe("an unknowable sum is not a zero", () => {
 // folded row is the UNION of the groups' month sets, and neither `max()` (a lower bound) nor
 // `sum()` (a wild overcount) recovers it.
 //
-// Measured across every /airport page in the trailing 12 (3,457 folded carrier rows):
-// max() gives the wrong month count on 342 of them and the WRONG BELOW-FLOOR VERDICT on 18;
-// sum() flips 1,186. So the count comes from a SECOND pivot grouped by carrier alone, where
+// Measured across every /airport page in the trailing 12 (3,444 folded carrier rows):
+// max() gives the wrong month count on 347 of them and the WRONG BELOW-FLOOR VERDICT on 23;
+// sum() flips 1,187. So the count comes from a SECOND pivot grouped by carrier alone, where
 // SQL does the DISTINCT over the union directly, and these tests are what refuse the folds.
 // ---------------------------------------------------------------------------------------
 describe("the active-month count a folded carrier row carries", () => {
@@ -453,7 +453,7 @@ describe("the active-month count a folded carrier row carries", () => {
   it("is the union, so a carrier flying two half-years reads as twelve months, not six", () => {
     // The verdict-flipping shape, in miniature: 300 departures.
     //   union 12 months -> 25.0/mo -> BELOW FLOOR
-    //   max()  6 months -> 50.0/mo -> scored     <- the wrong answer 18 real rows would get
+    //   max()  6 months -> 50.0/mo -> scored     <- the wrong answer 23 real rows would get
     const rows = [
       row({ carrierId: 20304, endpointId: PDX, seats: 5000, departures: 150 }),
       row({ carrierId: 20304, endpointId: LAX, seats: 5000, departures: 150 }),

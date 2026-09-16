@@ -320,7 +320,7 @@ describe("preset ORDER BY", () => {
   });
 });
 
-// Any limit above mart_route_health's 5,611 rows returns a preset's whole qualifying set, so
+// Any limit above mart_route_health's 5,675 rows returns a preset's whole qualifying set, so
 // this is not a window a warehouse refresh can slide a tie group out of.
 const WHOLE_QUALIFYING_SET = 100_000;
 
@@ -347,17 +347,23 @@ function tieRuns(rows: WatchRow[], ranked: string): WatchRow[][] {
 // runPreset() against the real database, so it covers the SUBSTITUTED bytes watch_gauge.sql
 // sends to DuckDB, which no text assertion can reach.
 //
-// NOT parameterized over empty-planes, deliberately. That preset has ZERO tie runs in its 5,205
-// qualifying rows on this warehouse, so a case for it would assert over an empty list -- the
-// vacuous fixture, passing against the bug. Its cover is the ORDER BY property tests above. A
-// future warehouse that gives it a tie is a reason to ADD a case here, never evidence one was
-// wrongly missing.
+// A PRESET BELONGS HERE ONLY WHILE ITS QUALIFYING SET HAS A TIE: a case over a set with none
+// asserts over an empty list -- the vacuous fixture, passing against the bug. So a preset whose
+// data ties gets a case, and one whose data does not is covered by the ORDER BY property tests
+// above alone.
+//
+// empty-planes' tie is INCIDENTAL: two carrier-route pairs whose trailing-12 load factors both
+// reduce to exactly 27/31, which is arithmetic coincidence, not a property of lf_t12. A refresh
+// can remove it, and when one does, that case fails loudly on the runs.length guard below. The
+// fix then is to delete the case and leave the ORDER BY property tests as its cover -- never to
+// weaken the guard, which is what keeps every case here from passing over nothing.
 describe("runPreset ties (real database)", () => {
   it.each([
     { name: "gauge upgauging", slug: "gauge", direction: "desc", ranked: "gauge_delta" },
     { name: "gauge downgauging", slug: "gauge", direction: "asc", ranked: "gauge_delta" },
     { name: "new-routes", slug: "new-routes", direction: "desc", ranked: "t12_seats" },
     { name: "death-watch", slug: "death-watch", direction: "asc", ranked: "health_score" },
+    { name: "empty-planes", slug: "empty-planes", direction: "asc", ranked: "lf_t12" },
   ] as const)("$name: tied rows come back in ascending grain order", async ({
     slug,
     direction,

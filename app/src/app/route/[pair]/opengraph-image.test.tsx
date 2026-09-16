@@ -116,9 +116,10 @@ describe("the default export's card input", () => {
     };
   }
 
-  // A18-LMA (Kantishna-Lake Minchumina): its entire trailing 12 is ONE filing, 2025-06, seats 0
-  // against 1 PERFORMED departure, quarantined `zero_seats`. One of the 10 pages this issue is
-  // about.
+  // AET-AIN (Allakaket-Wainwright): its entire trailing 12 is ONE filing, 2026-03, seats 0
+  // against 1 PERFORMED departure, quarantined `zero_seats` -- the state this issue is about. The
+  // same dataset-pinned subject page.test.tsx uses: it expires at asOf 2027-03, and its note there
+  // says how to re-derive one.
   //
   // THE ORDER IS PART OF THE ASSERTION, not decoration. Load factor and average gauge rendered
   // `—` even under the bug (their denominators were zero either way), so "the card contains a
@@ -129,7 +130,7 @@ describe("the default export's card input", () => {
   // (the pre-#121 line) -> the sixth stat reads `Carriers 1` -> red.
   // MUTANT: restore `?? 0` in `sumColumn` -> the first five read `0 · 0 · — · — · 0` -> red.
   it("rasterizes the quarantined count on a wholly-quarantined pair", async () => {
-    const input = await cardInputFor("A18-LMA");
+    const input = await cardInputFor("AET-AIN");
     expect(input.stats.map((s) => s.label)).toEqual([
       "Seats", "Passengers", "Load factor", "Avg gauge", "Departures", "Quarantined",
     ]);
@@ -138,9 +139,9 @@ describe("the default export's card input", () => {
   });
 
   // QUARANTINE BESIDE REAL TRAFFIC, which is what makes the gate's second operand undeletable.
-  // AKP-FAI filed 7 quarantined rows AND stateable traffic across 2 carriers in this window. Its
+  // AKP-FAI filed 6 quarantined rows AND stateable traffic across 2 carriers in this window. Its
   // measures are honest and its sixth stat must stay the carrier count.
-  // MUTANT: key `cardSixthStat` on `quarantinedRows > 0` alone -> `Quarantined 7` here -> red.
+  // MUTANT: key `cardSixthStat` on `quarantinedRows > 0` alone -> `Quarantined 6` here -> red.
   it("keeps the carrier count where quarantined rows sit beside stateable traffic", async () => {
     const input = await cardInputFor("AKP-FAI");
     expect(input.stats[5]).toEqual({ label: "Carriers", value: "2" });
@@ -149,7 +150,7 @@ describe("the default export's card input", () => {
 
   // THE OTHER ABSENCE. ATL-CAK filed 67 months and nothing since 2022-06, so the trailing-12
   // pivot returns NO rows -- unknowable for a reason quarantine had no part in, which is the
-  // state 12,115 of this database's route pairs are in.
+  // state 12,201 of this database's route pairs are in.
   // MUTANT: key `cardSixthStat` on `totals.seats === null` alone -> `Quarantined 0` here, naming
   // the one cause it is not and withholding nothing that would explain the dashes -> red.
   // MUTANT: seed `sumColumn` at 0 -> the first five stop being dashes -> red.

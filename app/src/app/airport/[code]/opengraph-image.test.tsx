@@ -93,8 +93,11 @@ describe("/airport/<code> opengraph-image", () => {
 // literal left the whole suite green. Every case it covered is below, driven through the spy,
 // where the same mutant dies.
 describe("the default export's card input", () => {
-  // A18 and 05A are the two absences, and both have fewer than two filed months, so `cardChart`
-  // returns early and no Plot/jsdom rendering happens in this node-environment file.
+  // OQZ and 05A are the two absences, but for different reasons. OQZ has one full-window filed
+  // month, wholly quarantined, so `cardChart` returns early and no Plot/jsdom rendering happens
+  // for it. 05A filed real, stateable data across 13 months (2015-2019), so its chart draws
+  // normally -- its absence is the trailing-12 stat strip (the 290-page cell), asserted below as
+  // `Carriers: 0`, not a missing chart.
   async function cardInputFor(code: string) {
     renderSpy.mockClear();
     await Image({ params: Promise.resolve({ code }) });
@@ -105,7 +108,9 @@ describe("the default export's card input", () => {
   it("rasterizes the quarantined count on a wholly-quarantined airport", async () => {
     // MUTANT: `stats: cardStats(totals, { label: "Carriers", ... })` at the render call -> red.
     // Verified: that mutant previously survived the entire suite.
-    const input = await cardInputFor("A18");
+    // OQZ's whole trailing 12 is one quarantined filing; the expiry note on page.test.tsx's
+    // "unknowable sum" describe covers this fixture too.
+    const input = await cardInputFor("OQZ");
     expect(input.stats.map((s) => s.label)).toEqual([
       "Seats", "Passengers", "Load factor", "Avg gauge", "Departures", "Quarantined",
     ]);
@@ -122,7 +127,7 @@ describe("the default export's card input", () => {
 
   it("keeps the entity count on a page with quarantined rows beside real traffic", async () => {
     // THE THIRD BRANCH, and the one that makes the second operand non-deletable. STT filed 9
-    // quarantined rows in this window AND 2,081,101 stateable seats across 16 carriers -- 24 of
+    // quarantined rows in this window AND 2,048,256 stateable seats across 15 carriers -- 25 of
     // the 29 /airport pages carrying a quarantined group look like this. Its measures are
     // honest and its sixth stat must stay the carrier count.
     //
@@ -131,7 +136,7 @@ describe("the default export's card input", () => {
     // unaffected, but 05A above flips to "Quarantined 0", naming the one cause it is not
     // -> red THERE. Neither test catches the other's mutant, which is why both exist.
     const input = await cardInputFor("STT");
-    expect(input.stats[5]).toEqual({ label: "Carriers", value: "16" });
+    expect(input.stats[5]).toEqual({ label: "Carriers", value: "15" });
     expect(input.stats.map((x) => x.value)).not.toContain("—");
   });
 

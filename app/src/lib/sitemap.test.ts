@@ -9,8 +9,8 @@ import sitemap from "@/app/sitemap";
 
 describe("sitemapEntries", () => {
   it("emits exactly the measured URL count per kind, quarantine included", async () => {
-    // docs/product/scope.md § D2's 23,785 breakdown (23,780 through M5; M6 Task 7 added
-    // `/watch` plus its four presets, +5, which this file's four ENTITY counts do not carry --
+    // docs/product/scope.md § D2's 23,913 breakdown (the 23,908 entity URLs, plus `/watch` and
+    // its four presets, +5, which this file's four ENTITY counts do not carry --
     // they are appended by app/sitemap.ts). Each of the four counts is measured
     // against the built database; a regression here is a real count drift, not a guess.
     const [routes, airports, carriers, aircraft] = await Promise.all([
@@ -19,13 +19,13 @@ describe("sitemapEntries", () => {
       sitemapEntries("carriers"),
       sitemapEntries("aircraft"),
     ]);
-    expect(routes).toHaveLength(22509);
-    expect(airports).toHaveLength(1047);
+    expect(routes).toHaveLength(22635);
+    expect(airports).toHaveLength(1049);
     expect(carriers).toHaveLength(114);
     expect(aircraft).toHaveLength(110);
   });
 
-  // (a) Quarantine scoping. Filtering `NOT is_quarantined` gives 1,043 airports, not 1,047.
+  // (a) Quarantine scoping. Filtering `NOT is_quarantined` gives 1,045 airports, not 1,049.
   // Anchor on a SPECIFIC entity that resolves only because quarantined rows are counted:
   // A18, DJN, OQZ and POB are the four airports (measured) whose ONLY fct_segment_month rows
   // are quarantined -- excluding quarantine drops all four, which is exactly the class of bug
@@ -43,7 +43,7 @@ describe("sitemapEntries", () => {
   // (b) lastmod is the entity's OWN last-filed month, never the build/current date.
   // /carrier/VX (Virgin America) last filed 2018-03 -- a fixture on an ACTIVE carrier cannot
   // fail this way, because its last filed month and the current window (data_as_of ==
-  // 2026-05) coincide. This is the anchor the brief requires.
+  // 2026-06) coincide. This is the anchor the brief requires.
   it("dates a dormant carrier by ITS last filed month, not by the current window", async () => {
     const carriers = await sitemapEntries("carriers");
     const vx = carriers.find((e) => e.url.endsWith("/VX"));
@@ -55,23 +55,24 @@ describe("sitemapEntries", () => {
   });
 
   // Companion fixture: an ACTIVE carrier's lastModified equals the dataset's current window
-  // (2026-05). On its own this assertion is NOT sufficient to catch a build-date bug (the
-  // brief's own point: "a fixture on an active entity cannot fail" that way) -- it exists so
-  // the VX test above can be shown to be load-bearing by contrast (see task-5-report.md's
-  // mutant 2).
+  // (2026-06). On its own this assertion is NOT sufficient to catch a lastmod pinned to the
+  // current window (the brief's own point: "a fixture on an active entity cannot fail" that way)
+  // -- that mutant leaves it green and reddens only VX above, which is how the VX test is shown to
+  // be load-bearing by contrast (see task-5-report.md's mutant 2). It does separate the last
+  // filed month from the wall-clock date: the data lags the calendar, so `new Date()` reddens it.
   it("dates an active carrier by its last filed month too, which happens to be the current window", async () => {
     const carriers = await sitemapEntries("carriers");
     const dl = carriers.find((e) => e.url.endsWith("/DL"));
     expect(dl).toBeDefined();
-    expect(dl?.lastModified.toISOString()).toBe(new Date("2026-05-01T00:00:00Z").toISOString());
+    expect(dl?.lastModified.toISOString()).toBe(new Date("2026-06-01T00:00:00Z").toISOString());
   });
 
   // (c) Route URLs are the CODE-ALPHABETICAL canonical form, not the id-ordered pair
   // sitemap_routes.sql returns. Anchored on HPN/BNH -- the exact pair routePair.test.ts
   // anchors its own id-vs-alphabetical trap on: id order is HPN-BNH (HPN=12197, BNH=16954)
   // while the alphabetical canonical, and the only URL /route/<pair> itself ever 200s on, is
-  // BNH-HPN. A fixture built on a pair where the two orderings agree (JFK-LAX, 22,294 of
-  // 22,509) cannot fail this way.
+  // BNH-HPN. A fixture built on a pair where the two orderings agree (JFK-LAX, 22,420 of
+  // 22,635) cannot fail this way.
   it("emits the code-alphabetical route URL, not the id-ordered pair", async () => {
     const routes = await sitemapEntries("routes");
     const urls = new Set(routes.map((e) => e.url));

@@ -81,13 +81,13 @@ box its own timer keeps at `:deploy`. `warehouse.yml` polls BTS and publishes th
 `image.yml` builds and gates the container, `promote.yml` moves the tag. `make portability` proves
 the WORKDIR/data contract by breaking it, and is hand-run — no workflow invokes it.
 
-Current gates (`app-smoke`, `app-check` and `image-smoke` measured 2026-09-10, `verify`/`goldens` 2026-08-08,
+Current gates (`app-smoke` and `app-check` measured 2026-09-16, `image-smoke` 2026-09-10, `verify`/`goldens` 2026-08-08,
 `portability` 2026-08-09, the rest 2026-08-10; the only counts kept here — history lives in git):
 
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 65 skip without `data/` |
-| `make app-check` | 1,899 app tests · without a built `upgauge.duckdb` 1,883 are collected, 12 skip, and **654 of the 1,871 that run fail** — collected, run and failed are three different sets, so "N of the total fail" was never the sentence it read as |
+| `make app-check` | 1,900 app tests · without a built `upgauge.duckdb` 1,884 are collected, 12 skip, and **655 of the 1,872 that run fail** — collected, run and failed are three different sets, so "N of the total fail" was never the sentence it read as |
 | `make app-smoke` | 786 served-build checks |
 | `make image-smoke` | the host set less the 10 host-only gap checks (printed as a named three-section block, never as `skip` lines — that shape is `check_dataset`'s), **plus the 1 container-only check** (#162's artifact-level toolchain probe) — three terms, because the two modes now OVERLAP and neither contains the other; each prints the term it is missing — **777, measured 2026-09-10** by `image-contract.yml` on #173 (run 34502951768, job `gate`), and it reconciles against the rule — derived from both logs, not asserted: of the 786 host `ok` lines exactly 10 sit inside the three `==> gap check:` sections, and the container log's own `==> host-only sections NOT run in container mode (3)` block confirms none of them ran there. #147's two ordering checks are deliberately not dataset-pinned and were confirmed running in the container, not merely inferred from a local `SMOKE_DATASET_PINNED=0` run. Needs Docker plus the pinned release asset — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
 | `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
@@ -299,7 +299,7 @@ would leave a wrong permanent redirect no server-side fix could reach. `/search`
 `no-store` **unconditionally** — `q` is an unbounded, attacker-chosen cache key.
 
 **The route cell displays in airport-ID order and links in code-alphabetical order, and the two
-disagree.** 215 of 22,509 pairs. `IFP–IAH` displays that way and must link to `/route/IAH-IFP`.
+disagree.** 215 of 22,635 pairs. `IFP–IAH` displays that way and must link to `/route/IAH-IFP`.
 A `JFK–LAX`-shaped fixture cannot fail this way, so any test for it needs a disagreeing pair.
 
 **`entityLink`'s map is keyed on the dimension's own key, never `join_dim`.** `route`,
@@ -320,7 +320,7 @@ Encodings live in `docs/design/system.md`. These three are the traps.
 **Gaps are gaps, and zero is not the alternative.** T-100 is a *filing*, so a month with no row
 is neither "nobody flew" nor "0 seats flew" — drawing it either way invents data. Areas break
 into contiguous runs, one `z` series each, and the count is stated on the chart and in its
-`aria-label`. 62% of route pairs have such a gap; 41% have an isolated single month, drawn
+`aria-label`. 62% of route pairs have such a gap; 42% have an isolated single month, drawn
 **stroked**, because a one-month area has no width and erasing a filing is the same dishonesty
 as inventing one. This shipped wrong once: `HNL–LAS` drew a straight edge across six unfiled
 COVID months, *inside* the band labelled "COVID — in window on purpose".

@@ -10,7 +10,7 @@
 -- QUARANTINE IS NOT FILTERED, and that is the whole correctness question here. sitemap_routes.sql
 -- does not filter it either, deliberately: a quarantined row (load_factor > 1.0) is still a REAL
 -- filing that a real, 200-serving page renders, so it is excluded from AGGREGATES, never from
--- EXISTENCE. Filtering it here returns 22,478 where the sitemap returns 22,509 -- the measure
+-- EXISTENCE. Filtering it here returns 22,604 where the sitemap returns 22,635 -- the measure
 -- would then be counting pages that are not the pages the site serves, which is worse than not
 -- measuring at all. That 31-row gap is exactly what two careful hand counts disagreed by before
 -- these measures existed (#91).

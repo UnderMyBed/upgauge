@@ -132,7 +132,7 @@ describe("/watch/<preset>", () => {
   // Death Watch row that watch_death_watch.sql can never actually produce (its own `WHERE
   // health_score IS NOT NULL` excludes it). Neither proves the path that actually fires in
   // production: Route Birth Tracker's `p12_months_present = 0` filter means EVERY one of its
-  // 297 rows has a NULL health_score (measured against the real warehouse -- 297 of 297, 100%),
+  // 281 rows has a NULL health_score (measured against the real warehouse -- 281 of 281, 100%),
   // so "insufficient data" is not an edge case on this preset, it is the entire page, reached
   // through the REAL column-building path (buildColumns -> displayRows -> DataTable), not a
   // direct call to the helper. A regression here -- an accidental dimKey or href on the
@@ -180,10 +180,10 @@ describe("/watch/<preset>", () => {
     expect(container.querySelector('a[href^="/route/"]')).not.toBeNull();
   });
 
-  it("states the same-airport exclusion (6 of 5,611) on every preset", async () => {
+  it("states the same-airport exclusion (5 of 5,675) on every preset", async () => {
     for (const slug of PRESETS) {
       const { container } = await renderPreset(slug);
-      expect(content(container)).toContain("6 of 5,611");
+      expect(content(container)).toContain("5 of 5,675");
     }
   });
 
@@ -220,7 +220,7 @@ describe("/watch/<preset>", () => {
 
   it("states that unscored routes are excluded from Death Watch, not silently ranked worst", async () => {
     const { container } = await renderPreset("death-watch");
-    expect(content(container)).toContain("373 of 5,611");
+    expect(content(container)).toContain("361 of 5,675");
   });
 
   // Final whole-branch review (M6), CRITICAL. This test previously read:
@@ -232,9 +232,9 @@ describe("/watch/<preset>", () => {
   // and this test enforced it, so the eighth test in this milestone unable to fail for the
   // reason it names: it asserted a phrase, not a fact, and the phrase was wrong.
   // watch_new_routes.sql selects `p12_months_present = 0` -- nothing filed in the PRIOR 12
-  // months -- which is a re-entry, not a first appearance. Measured on the 2026-05 warehouse:
-  // 174 of 297 qualifying rows (58.6%) filed before that window, 19 of the 25 the page renders,
-  // worst case B6 AUS-FLL at 106 distinct months back to 2015-01.
+  // months -- which is a re-entry, not a first appearance. Measured on the 2026-06 warehouse:
+  // 160 of 281 qualifying rows (56.9%) filed before that window, 22 of the 25 the page renders,
+  // worst case B6 AUS-FLL at 107 distinct months back to 2015-01.
   //
   // The replacement asserts the accurate claim AND the absence of the false one -- the pair is
   // the point. `toContain("...first appearance")` alone would still pass against the old
@@ -244,7 +244,7 @@ describe("/watch/<preset>", () => {
     const text = content(container);
     expect(text).toContain("not necessarily a first appearance");
     expect(text).toContain("Re-entry, not first appearance");
-    expect(text).toContain("174 of the 297");
+    expect(text).toContain("160 of the 281");
     expect(text).not.toContain("since 2015");
     expect(text).not.toContain("first ever");
   });
@@ -254,9 +254,9 @@ describe("/watch/<preset>", () => {
   // pair -- so `p12_months_present = 0` is silent about every OTHER carrier on the same airport
   // pair. Two strings described it at ROUTE grain: the frame's "nobody flew last year" (carried
   // over from the original sentence unexamined, because it read as its accurate half) and
-  // ReEntryNote's "A route qualifies by...". Measured: 245 of the 297 qualifying rows (82.5%),
+  // ReEntryNote's "A route qualifies by...". Measured: 224 of the 281 qualifying rows (79.7%),
   // and 25 of the 25 the page renders, had a different carrier flying that pair inside the p12
-  // window -- the #1 row AS HNL-ITO while HA, UA and WN filed 1,786,963 seats on it, 3.7x the
+  // window -- the #1 row AS HNL-ITO while HA, UA and WN filed 1,786,963 seats on it, 3.1x the
   // subject's own trailing 12. So the claim was false about EVERY row on the page.
   //
   // Both directions, as always: the carrier-grain phrasing present AND the two route-grain
@@ -267,7 +267,7 @@ describe("/watch/<preset>", () => {
     const text = content(container);
     expect(text).toContain("this carrier flew nothing on");
     expect(text).toContain("this carrier filed nothing at all on this route");
-    expect(text).toContain("245 of the 297");
+    expect(text).toContain("224 of the 281");
     expect(text).not.toContain("nobody flew");
     expect(text).not.toMatch(/\bA route qualifies\b/);
   });
@@ -337,7 +337,7 @@ describe("/watch/<preset>", () => {
 // hand a page a NULL score, so this is the only place the null branch is reachable at all.
 describe("formatHealthScore", () => {
   it("renders NULL as insufficient data, never an em-dash and never 'unhealthy'", () => {
-    // features.md's standing UI requirement: all 373 NULL carrier-route pairs are NULL for
+    // features.md's standing UI requirement: all 361 NULL carrier-route pairs are NULL for
     // data-availability reasons, not low-score reasons, and an em-dash in a column sorted
     // ascending reads as 'worst'.
     expect(formatHealthScore(null)).toBe("insufficient data");

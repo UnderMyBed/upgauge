@@ -78,7 +78,7 @@ export function normalizeLon(lon: number): number {
  *     the antimeridian", which is what an earlier draft of this line claimed: normalized, it
  *     is raw longitude east of 160E, not east of 180E. The band between them (raw 160E-180E,
  *     lat < 30) falls through to `nwhi` and would render inside a frame labelled MIDWAY.
- *     Nothing is there today -- all 1,047 fact-present airports were classified to check --
+ *     Nothing is there today -- all 1,049 fact-present airports were classified to check --
  *     but `dim_airport` already carries AWK (Wake), KWA and MAJ, so the boundary is left where
  *     it is DELIBERATELY rather than tightened to -180 on hypothetical data: at -180 those
  *     three would instead take `pac`'s baked Marianas fit and project off the canvas entirely,

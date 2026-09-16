@@ -56,9 +56,11 @@ WHERE route_key_low <> route_key_high
 -- columns, never the route pair alone: the grain is a carrier-route PAIR. watch_gauge.sql
 -- carries the full rule and the measurement that proves route alone is not total.
 --
--- This preset has ZERO tie runs in its 5,205 qualifying rows on the 2026-05 warehouse, which is
--- why watch.test.ts's real-data determinism test does NOT cover it -- a case with no tie to
--- order asserts nothing. Its guard here is the ORDER BY property test, and a future warehouse
--- that gives it a tie is a reason to ADD the real-data case, not evidence one was missing.
+-- watch.test.ts's real-data determinism test covers this preset only while its qualifying set
+-- holds a tie, because a case with no tie to order asserts nothing. The tie it rests on is
+-- INCIDENTAL -- two carrier-route pairs whose trailing-12 load factors both reduce to exactly
+-- 27/31, nothing structural about lf_t12 -- so a refresh can remove it, and that case then fails
+-- loudly on its own no-tie guard. Delete the case when that happens and leave the ORDER BY
+-- property test as this file's guard; never weaken the no-tie guard to keep the case green.
 ORDER BY lf_t12 ASC, op_airline_id, route_key_low, route_key_high
 LIMIT $limit

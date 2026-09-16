@@ -319,10 +319,10 @@ gauge_delta_column() { # gauge_delta_column <table-html>
 # -- which would break monotonicity on a page that is entirely correct. It cannot here:
 # mart_route_health's own admission gate is `t12_departures_performed >= 30 * t12_months_flown`
 # (200_mart_route_health.sql), the SAME rule lib/floor.ts applies, so every row it emits is on or
-# above the floor. Measured: 0 of 5,611 mart rows are below floor, and the two rendered tables
-# bottom out at 34.75 and 31.22 departures/month. If that gate and floor.ts ever diverge this
-# goes red -- correctly, because a ranked leaderboard would then be reordering itself under the
-# reader.
+# above the floor. Measured: 0 of 5,675 mart rows are below floor, and the two rendered tables
+# bottom out at 30.83 (upgauge) and 34.71 (downgauge) departures/month. If that gate and floor.ts
+# ever diverge this goes red -- correctly, because a ranked leaderboard would then be reordering
+# itself under the reader.
 #
 # NON-VACUITY LIVES INSIDE THIS CHECK, not in a second check beside it. Sortedness over an empty
 # list is trivially true, so an extractor that silently matched nothing would print `ok` forever
@@ -998,7 +998,7 @@ check "chart: the rest of the page still server-renders"      "$BODY" '>DL<'
 # rename can redden this check without any underlying fact changing -- re-measure before
 # assuming a data movement.
 check_dataset check_not "chart: a route with no crossover gets NO annotation (JFK-LAX)" "$BODY" 'overtakes'
-# The negative half of the gap pair below. JFK-LAX filed in all 136 months of the window
+# The negative half of the gap pair below. JFK-LAX filed in all 138 months of the window
 # (measured), so it must claim no gaps AND draw each band in exactly one piece.
 check_not "chart: a route with no gaps claims none (JFK-LAX)" "$BODY" 'no filings'
 check_re  "chart: an ungapped band is ONE path (JFK-LAX)" "$(count "$BODY" '<path fill="var(--g5)" d=')" '^1$'
@@ -1010,7 +1010,7 @@ check_dataset check "chart: a route with one gets the derived annotation (ATL-MC
 # labels "COVID -- in window on purpose." The shipped M4c built its x domain from the months
 # PRESENT in the pivot result, so those six were not on the axis and Plot drew one straight
 # edge from 37,441 seats down to 6,804 across them; a reader read roughly 30k, 22k, 15k seats
-# for months that filed nothing. 14,293 of 23,041 route pairs (62%) have such a gap.
+# for months that filed nothing. 14,378 of 23,167 route pairs (62%) have such a gap.
 #
 # Two claims, because the sentence alone would be satisfied by a chart that says "6 months"
 # and still draws across them: the page STATES the absence, and the darkest band arrives as
@@ -1027,7 +1027,7 @@ check_re "chart: the band BREAKS at them, drawn as two paths (HNL-LAS)" "$(count
 # 2022-06, and nothing since; the chart is fetched over the full window but can only draw to
 # 2022-06. The line shipped naming the REQUESTED window, putting "the full window · 2015-01 →
 # 2026-05" above a chart that stops in 2022 -- the aria-label was already right, so only the
-# text a sighted reader sees was wrong. 12,115 of 23,041 pairs last filed before the current
+# text a sighted reader sees was wrong. 12,201 of 23,167 pairs last filed before the current
 # trailing-12 window, so this branch is the majority case, not an edge.
 #
 # Checked HERE and not only in page.test.tsx because the fix's first form was `chart: {a} → {b}`
@@ -1038,7 +1038,7 @@ BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-CAK")
 check_dataset check     "chart: a subject that stopped filing names ITS range (ATL-CAK)" "$BODY" 'chart: 2015-01 → 2022-06'
 check_dataset check_not "chart: ...and does not claim the full window there"            "$BODY" 'chart: the full window'
 
-# Page weight, recorded rather than asserted: the chart is ~136 months x 6 bands of path data
+# Page weight, recorded rather than asserted: the chart is ~138 months x 6 bands of path data
 # on a force-dynamic page, and M4d mounts this same component on three more pages. A threshold
 # here would be a number invented in a shell script; the measurement is the useful part.
 printf '  note %s bytes of HTML for /route/JFK-LAX (32,087 before the chart, M4c task 6)\n' \
@@ -1073,12 +1073,12 @@ BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA")
 check     "airport: renders the code"        "$BODY" '>SEA<'
 check     "airport: DATA AS OF is present"   "$BODY" 'DATA AS OF'
 # The one figure that distinguishes this page's implementation from the plausible wrong one.
-# `origin OR dest` at SEA over 2025-06..2026-05 is 53,372,100 seats; an origin-only page renders
-# every stat, row and band in the right shape and reads 26,708,918. Carrier and aircraft-type
+# `origin OR dest` at SEA over 2025-07..2026-06 is 53,343,024 seats; an origin-only page renders
+# every stat, row and band in the right shape and reads 26,695,264. Carrier and aircraft-type
 # COUNTS are identical either way (13 and 25), so they are not discriminators -- see
 # docs/data/invariants.md § Route identity. Dropping the inclusion-exclusion overlap term
-# instead reads 53,384,307.
-check_dataset check "airport: counts BOTH endpoints, not just departures" "$BODY" '53,372,100'
+# instead reads 53,355,039.
+check_dataset check "airport: counts BOTH endpoints, not just departures" "$BODY" '53,343,024'
 check     "airport: says so in words"        "$BODY" 'at <b>both</b> endpoints'
 # `>14747<`, not a bare `14747`: SEA's airport_id legitimately appears in this page's Explorer
 # permalink (`f=endpoint_airport_id:14747` -- ONE link since M7, not the two origin/dest halves
@@ -1146,7 +1146,7 @@ check_re  "airport 404: the SENTENCE carries the requested code" "$BODY" 'We can
 check_rendered_404 "airport" "$BODY" 'Airport not found'
 
 # 10b. M7 Task 9: /airport/<code>?y=<year>, and the cache-header split proxy.ts's matcher
-# section warns can only be seen by a served build. asOf is 2026-05 as measured (M4d's own
+# section warns can only be seen by a served build. asOf is 2026-06 as measured (M4d's own
 # convention of hardcoding the current measured asOf elsewhere in this file, e.g. the carrier
 # chart-window check below) -- 2015-2025 are complete calendar years and 2026 is partial.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA?y=2019")
@@ -1156,7 +1156,7 @@ check_not "airport?y: a complete prior year is not called partial"   "$BODY" 'ca
 
 BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA")
 check_dataset check "airport: the default view states the current year is partial" "$BODY" \
-  '2026 is a partial year — filed through May 2026 only.'
+  '2026 is a partial year — filed through June 2026 only.'
 check_dataset check "airport: the current year's own tick carries the asterisk" "$BODY" '>2026*<'
 
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/airport/SEA?y=2019")
@@ -1173,14 +1173,14 @@ check_not "airport?y=1999: ...and is never long-cached"              "$HDRS" "s-
 BODY=$(curl -s --max-time 15 "${BASE}/airport/SEA?y=1999")
 check_dataset check "airport?y=1999: names the offending value and the covered range" "$BODY" \
   "unknown year '1999' — this dataset covers 2015–2026"
-check_dataset check_not "airport?y=1999: does not silently fall back to the default view" "$BODY" '53,372,100'
+check_dataset check_not "airport?y=1999: does not silently fall back to the default view" "$BODY" '53,343,024'
 
 BODY=$(curl -s --max-time 15 "${BASE}/airport/SEA?y=nonsense")
 check     "airport?y=nonsense: malformed input is the same named error, not a 500" "$BODY" \
   "unknown year 'nonsense'"
 
 # 10c. M7 Tasks 4-8: the airport network map, in the served HTML. ORD, not SEA -- it is the
-# database's own worst case (measured 273 destinations after the same-airport row is excluded,
+# database's own worst case (measured 274 destinations after the same-airport row is excluded,
 # vs. SEA's much smaller network), so this is the section that would first show a truncation or
 # a rendering blow-up if one existed. Same five-part discipline the comment above states for
 # every entity page (renders, Cache-Control, real-vs-bare id, chart/map svg, 404/308 caching),
@@ -1207,39 +1207,39 @@ check     "airport?y=nonsense: malformed input is the same named error, not a 50
 BODY=$(curl -s --max-time 30 "${BASE}/airport/ORD")
 check     "airport map: the network SVG is in the served HTML" "$BODY" \
   '<svg viewBox="0 12 960 532" width="960" height="532" role="img"'
-# The positive control for A18's two negatives below: on a page whose chart DOES draw, the
+# The positive control for OQZ's two negatives below: on a page whose chart DOES draw, the
 # fleet-shading group and its COVID sentence must both be present. Without this, deleting the
 # group outright would satisfy every negative needle in this file.
 check     "airport map: a page whose chart draws DOES get the fleet-shading rail group" "$BODY" \
   'Fleet shading'
 # THE SENTENCE ITSELF, not just the group heading, and it is the needle FIVE assertions depend on
-# being matchable: A18's `check_not` below, plus four `not.toContain` in the page tests. A copy
+# being matchable: OQZ's `check_not` below, plus four `not.toContain` in the page tests. A copy
 # edit to this string would turn every one of them silently vacuous while staying green -- the
 # self-defect class `smoke.sh`'s own header says to assume a fourth of. Verified against emitted
 # bytes: React renders it from a JS string literal, so the em dash and apostrophe in the
 # surrounding prose never reach this substring and it needs no entity handling.
-check     "airport map: ...and the COVID-window sentence the A18 negatives are written against" \
+check     "airport map: ...and the COVID-window sentence the OQZ negatives are written against" \
   "$BODY" 'COVID is in the window on purpose'
 check     "airport map: ...and a page that draws arcs DOES get the arc-rendering group" "$BODY" \
   'Arc rendering'
-# EXACTLY 273, not "at least" and not 274. ORD carries a same-airport row (53 rows / 76,236
+# EXACTLY 274, not "at least" and not 275. ORD carries a same-airport row (53 rows / 77,795
 # seats over the trailing 12 -- networkMap.ts's own NetworkMapInput doc) that renderNetworkMap
 # deliberately excludes from the drawn set (a same-airport great circle has zero length and
 # would draw an invisible mark atop the origin disc) while keeping its seats in the STATED
-# total -- so 274 arcs worth of destinations produce 273 polylines, and a mutant that drew the
-# same-airport row anyway would produce 274 here without moving any other check in this file.
+# total -- so 275 arcs worth of destinations produce 274 polylines, and a mutant that drew the
+# same-airport row anyway would produce 275 here without moving any other check in this file.
 # `count`, not `has`: presence alone cannot distinguish "the exclusion runs" from "it doesn't."
 #
 # NOT doubled the way M4c's chart-path checks are (a normal JSX SVG ships once in the HTML body
 # and again, `<`-escaped to `<`, in the RSC flight payload) -- measured directly against
-# this same served build: `<polyline` occurs exactly 273 times in the WHOLE response, because
+# this same served build: `<polyline` occurs exactly 274 times in the WHOLE response, because
 # this SVG is a single pre-serialized string injected via `dangerouslySetInnerHTML`
 # (NetworkMap.tsx), and Next's RSC payload re-encodes that string's own `<` as `<` before
 # embedding it, so the literal 4-byte substring `<polyline` never appears a second time. A
 # doubled-count assumption carried over from the chart checks would have made this section
-# assert 546 and fail against the real build.
-check_dataset check_re "airport map: exactly 273 polylines (same-airport arc excluded)" \
-  "$(count "$BODY" '<polyline')" '^273$'
+# assert 548 and fail against the real build.
+check_dataset check_re "airport map: exactly 274 polylines (same-airport arc excluded)" \
+  "$(count "$BODY" '<polyline')" '^274$'
 # An inset label -- ORD's own network reaches ak/hi/car (measured against this served build;
 # no ORD route touches a Pacific panel, which is why section 10b uses GUM), each drawn as a
 # labelled `<rect>`+`<text>` frame (INSETS,
@@ -1358,7 +1358,7 @@ check_dataset check     "airport map MDY 2021: Midway's own origin disc is insid
 # Every measure is `SUM(x) FILTER (WHERE NOT is_quarantined)`, so such a pair sums to NULL, and
 # `?? 0` used to turn that into an ordinary arc reading 0 seats and 0 departures -- drawn dotted
 # and muted below DEPARTURE_FLOOR, which SAYS "barely flown" about a pair the data cannot
-# describe. Worse than unsupported: all 11 such pairs over the trailing 12 are quarantined
+# describe. Worse than unsupported: all 12 such pairs over the trailing 12 are quarantined
 # `zero_seats`, meaning the aircraft PERFORMED a departure and filed no seats, so the drawn
 # "0 departures" contradicted the filing behind it.
 #
@@ -1367,40 +1367,43 @@ check_dataset check     "airport map MDY 2021: Midway's own origin disc is insid
 # the wholly-quarantined pairs at route grain before touching a needle; docs/data/invariants.md
 # § A wholly-quarantined group sums to NULL carries the query and the current measurement.
 
-# Bettles: 16 route-grain rows over the trailing 12, one of them the wholly-quarantined BTT-UMT.
+# Bettles: 17 route-grain rows over the trailing 12, one of them the wholly-quarantined BTT-UMT.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/BTT")
 check_dataset check "airport BTT: the network SVG is in the served HTML" "$BODY" \
   '<svg viewBox="0 354 960 190" width="960" height="190" role="img"'
-# A COUNT, not a presence check, for the reason ORD's 273 gives one section up: presence cannot
-# distinguish "the quarantined pair was excluded" from "it was drawn as zero". 15 arcs reach the
-# renderer and one is same-airport, so 14 polylines are drawn; before #114 it was 15.
-check_dataset check_re "airport BTT: exactly 14 polylines (the quarantined pair is not one)" \
-  "$(count "$BODY" '<polyline')" '^14$'
+# A COUNT, not a presence check, for the reason ORD's 274 gives one section up: presence cannot
+# distinguish "the quarantined pair was excluded" from "it was drawn as zero". 16 arcs reach the
+# renderer and one is same-airport, so 15 polylines are drawn; the pre-#114 `?? 0` draws 16.
+check_dataset check_re "airport BTT: exactly 15 polylines (the quarantined pair is not one)" \
+  "$(count "$BODY" '<polyline')" '^15$'
 # The disclosure a sighted reader actually sees -- rendered as HTML beneath the map, not only in
 # the aria-label. The em dash is U+2014 written LITERALLY: NetworkMap.tsx builds this from a JS
 # string, so React emits the raw code point and a needle copied off an `&mdash;` could never fire.
 check_dataset check "airport BTT: the quarantined pair is disclosed with a count and a reason" \
   "$BODY" '1 quarantined route not drawn — failed an invariant, never clamped.'
 
-# Kantishna: the case the disclosure exists for. A18's ENTIRE trailing-12 network is one
-# wholly-quarantined pair, so there is nothing to draw and everything to say -- and `sitemap.ts`
-# lists it, because A18 is one of four airports that resolve only via quarantined rows. Before
-# #114 this page's single arc was the fabricated one.
-BODY=$(curl -s --max-time 30 "${BASE}/airport/A18")
-check_dataset check "airport A18: the map still renders with nothing drawable" "$BODY" \
+# American Creek: the case the disclosure exists for. OQZ's ENTIRE trailing-12 network is one
+# wholly-quarantined pair -- its only row in the dataset, GAL->OQZ, 8V, 2025-08, `zero_seats` --
+# so there is nothing to draw and everything to say, and `sitemap.ts` lists it, because OQZ is
+# one of four airports that resolve only via quarantined rows. That row leaves the trailing 12 at
+# asOf 2026-08; re-derive the wholly-quarantined airports then (JZM is the only other one on
+# 2026-06, and its chart draws, so it is not a substitute). Before #114 this page's
+# single arc was the fabricated one.
+BODY=$(curl -s --max-time 30 "${BASE}/airport/OQZ")
+check_dataset check "airport OQZ: the map still renders with nothing drawable" "$BODY" \
   '<svg viewBox="0 354 960 190" width="960" height="190" role="img"'
-check_dataset check_re "airport A18: draws no arc at all" "$(count "$BODY" '<polyline')" '^0$'
-check_dataset check "airport A18: and still says why the map is empty" "$BODY" \
+check_dataset check_re "airport OQZ: draws no arc at all" "$(count "$BODY" '<polyline')" '^0$'
+check_dataset check "airport OQZ: and still says why the map is empty" "$BODY" \
   '1 quarantined route not drawn'
 # The pair's far endpoint must not appear as a destination label -- that is the fabricated arc
 # coming back, and it is the one thing the polyline count alone would not name.
-check_dataset check_not "airport A18: no destination label for the undrawable pair" "$BODY" '>LMA<'
+check_dataset check_not "airport OQZ: no destination label for the undrawable pair" "$BODY" '>GAL<'
 
 # #123, ON THE SURFACE IT WAS REPORTED ON. Two symptoms of one cause, and both are things only a
 # served build can show: the rail is composed by a Server Component and the canvas size is
 # decided inside the SVG string, so a unit test sees each in isolation and neither in the page.
 #
-# 1. THE RAIL MUST NOT EXPLAIN A CHART THAT WAS NOT DRAWN. A18 has exactly one filed month, so
+# 1. THE RAIL MUST NOT EXPLAIN A CHART THAT WAS NOT DRAWN. OQZ has exactly one filed month, so
 #    `AircraftMixChart` takes its `plot === null` branch and prints a line of text -- while the
 #    legend rail rendered the two gauge swatches and the COVID-window sentence beside it. Both
 #    needles are NEGATIVE, because the positive form ("the group is present") passes under the
@@ -1409,33 +1412,36 @@ check_dataset check_not "airport A18: no destination label for the undrawable pa
 #    and no apostrophe, so they survive JSX compilation unchanged -- checked against the served
 #    page, where they occur 0 times here and twice on ORD (once in the HTML, once in the RSC
 #    payload, the same doubling every other text needle in this file sees).
-check_dataset check_not "airport A18: no fleet-shading rail group, because no chart was drawn" \
+check_dataset check_not "airport OQZ: no fleet-shading rail group, because no chart was drawn" \
   "$BODY" 'Fleet shading'
-check_dataset check_not "airport A18: and no COVID-window sentence about a ramp that is not there" \
+check_dataset check_not "airport OQZ: and no COVID-window sentence about a ramp that is not there" \
   "$BODY" 'COVID is in the window on purpose'
 # THE SAME RULE, ON THE GROUP NEXT DOOR. Every row of "Arc rendering" describes an ARC, and this
 # page draws none -- a hub map still paints its origin disc, so "a map rendered" is the wrong gate
 # there too. The MAP itself must stay: it carries the quarantine disclosure this whole block exists
 # for, so the repair is to drop the group, never the map.
-check_dataset check_not "airport A18: no arc-rendering rail group either, because no arc was drawn" \
+check_dataset check_not "airport OQZ: no arc-rendering rail group either, because no arc was drawn" \
   "$BODY" 'Arc rendering'
 # NOT VACUOUS: the rail is mounted and carries the groups this page genuinely earns -- a rail
 # that failed to render at all would satisfy all three negatives above. `Gauge rail` is
 # unconditional and its axis IS drawn here (tickless, since the one row's gauge is unknowable).
-check_dataset check "airport A18: the rail is still mounted, with the groups the page does earn" \
+check_dataset check "airport OQZ: the rail is still mounted, with the groups the page does earn" \
   "$BODY" 'Gauge rail'
 
-# 2. THE CANVAS IS CROPPED TO THE PANELS THAT CARRY POINTS. A18's network is entirely Alaskan,
+# 2. THE CANVAS IS CROPPED TO THE PANELS THAT CARRY POINTS. OQZ's network is entirely Alaskan,
 #    so the conterminous panel is not in the picture: the viewBox needle above reads
 #    `0 354 960 190` against the `0 12 960 532` a conterminous page serves -- an Alaska-only
 #    network must not spend the lower 48's height on blank canvas above a small ALASKA inset,
 #    which is what #124 reported and #123 absorbed. Asserted as the HEIGHT
 #    ATTRIBUTE as well, because that is the byte the browser lays the element out from
 #    (`globals.css` gives `.map svg` `height: auto`, so the intrinsic ratio is what decides how
-#    much vertical space the page spends).
-check_dataset check "airport A18: the canvas is cropped to the Alaska band, not the full 500" \
+#    much vertical space the page spends). The negative names the UNCROPPED canvas, which is
+#    `HEIGHT` in segmentMap.ts -- 544, derived from the panel rects, and what `cropWindow` emits
+#    when it crops nothing. Re-read it there rather than remembering it: a needle naming a height
+#    no build emits prints ok unconditionally.
+check_dataset check "airport OQZ: the canvas is cropped to the Alaska band, not the full 544" \
   "$BODY" 'height="190"'
-check_dataset check_not "airport A18: the old full-canvas height is gone" "$BODY" 'height="500"'
+check_dataset check_not "airport OQZ: the full-canvas height is gone" "$BODY" 'height="544"'
 
 # #122, ON A SERVED PAGE, AND THE FIXTURE IS THE DEFECT ITSELF. The Caribbean inset's frame used
 # to be drawn over the bottom-right of the conterminous panel, so 17 fact-present `us` airports
@@ -1472,12 +1478,12 @@ check_not "airport ORD: ...and states no quarantined-route disclosure"          
 # 10d. #118 -- the same NULL, one surface over: the endpoints TABLE and the stat strip.
 #
 # 10c above proves the MAP excludes a wholly-quarantined pair. The table below it was still
-# applying `?? 0` to the identical FILTERed sums, so on A18 the map correctly said "1 quarantined
-# route not drawn" while the table underneath it reported the same filing as 0 seats and 0
-# departures. Both halves of one page, disagreeing.
+# applying `?? 0` to the identical FILTERed sums, so on a wholly-quarantined airport the map
+# correctly said "1 quarantined route not drawn" while the table underneath it reported the same
+# filing as 0 seats and 0 departures. Both halves of one page, disagreeing.
 #
-# A18 (Kantishna) is the whole-page case: ONE row in the entire dataset -- 2025-06, op_airline
-# 20333, seats 0.0, departures_performed 1.0, quarantined `zero_seats`, with A18 as the
+# OQZ (American Creek) is the whole-page case: ONE row in the entire dataset -- 2025-08, op_airline
+# 20333, seats 0.0, departures_performed 1.0, quarantined `zero_seats`, with OQZ as the
 # DESTINATION -- so its only table row and its stat strip are both unknowable.
 #
 # THE SEQUENCE IS THE NEEDLE, NOT THE DASH. `<td class="num">—</td>` is ALREADY served by the
@@ -1488,25 +1494,25 @@ check_not "airport ORD: ...and states no quarantined-route disclosure"          
 # The dash is U+2014 written LITERALLY -- lib/format.ts's DASH is a JS string, so React emits the
 # raw code point, and a needle copied off an `&mdash;` could never fire.
 #
-# DATASET-PINNED as a block, for 10c's reason: a BTS revision that un-quarantines A18 must redden
+# DATASET-PINNED as a block, for 10c's reason: a BTS revision that un-quarantines OQZ must redden
 # this rather than silently stop testing anything. docs/data/invariants.md
 # § A wholly-quarantined group sums to NULL carries the query and the current measurement.
-BODY=$(curl -s --max-time 30 "${BASE}/airport/A18")
-check_dataset check "airport A18: every measure cell is absence, in order" "$BODY" \
+BODY=$(curl -s --max-time 30 "${BASE}/airport/OQZ")
+check_dataset check "airport OQZ: every measure cell is absence, in order" "$BODY" \
   '<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>'
-check_dataset check_not "airport A18: no measure cell is a fabricated zero" "$BODY" \
+check_dataset check_not "airport OQZ: no measure cell is a fabricated zero" "$BODY" \
   '<td class="num">0</td>'
 # The stat strip, fed by the same fold one level up. Its COUNTS are real facts about what was
 # filed and must survive -- a page that blanked those too would pass the check_not vacuously.
-check_dataset check_not "airport A18: nor is the stat strip a fabricated zero" "$BODY" \
+check_dataset check_not "airport OQZ: nor is the stat strip a fabricated zero" "$BODY" \
   '<div class="v">0</div>'
-check_dataset check "airport A18: the strip still counts the carrier that filed" "$BODY" \
+check_dataset check "airport OQZ: the strip still counts the carrier that filed" "$BODY" \
   '<div class="k">Carriers</div><div class="v">1</div>'
 # The dash says nothing can be stated; the gutter says why. /airport rebuilds its rows in
 # TypeScript rather than handing DataTable a raw pivot row, so unlike the other four table
 # surfaces it carries `quarantine_reasons` through deliberately -- drop that and the title
 # silently degrades to the generic label while every other needle here stays green.
-check_dataset check "airport A18: the gutter carries the quarantine reason, not just the glyph" \
+check_dataset check "airport OQZ: the gutter carries the quarantine reason, not just the glyph" \
   "$BODY" 'title="Quarantined — failed an invariant: zero_seats"'
 
 # THE PROSE THAT EXPLAINS THE DASHES, in the served bytes. Design review found the foot claiming
@@ -1514,26 +1520,27 @@ check_dataset check "airport A18: the gutter carries the quarantine reason, not 
 # dashes -- and whose Carriers and Destinations counts are counts OF that row, not figures net of
 # it. Built as ONE template literal in page.tsx so a raw-bytes grep can reach it: React's SSR puts
 # `<!-- -->` between adjacent expression children, which `textContent` skips and this does not.
-check_dataset check "airport A18: the foot explains the dashes instead of miscounting them" \
-  "$BODY" 'Every filing at A18 in this window is quarantined'
+check_dataset check "airport OQZ: the foot explains the dashes instead of miscounting them" \
+  "$BODY" 'Every filing at OQZ in this window is quarantined'
 # /airport states TWO counts, so its tail is the plural one -- the single place the shared clause
 # genuinely varies between pages, and therefore the one worth pinning in the served bytes.
-check_dataset check "airport A18: ...and its tail names both counts" "$BODY" \
+check_dataset check "airport OQZ: ...and its tail names both counts" "$BODY" \
   'The carrier and destination counts are counted from those rows, not net of them.'
-check_dataset check_not "airport A18: ...and does not claim the counts are net of an exclusion" \
+check_dataset check_not "airport OQZ: ...and does not claim the counts are net of an exclusion" \
   "$BODY" 'excluded from these totals'
 # `1 destination`, singular, on the only prose left explaining five em dashes. The other half of
 # this same sentence has always agreed with its count.
-check_dataset check_not "airport A18: the foot agrees with its own count on the plural" \
+check_dataset check_not "airport OQZ: the foot agrees with its own count on the plural" \
   "$BODY" '1 destinations'
 
 # THE OTHER ABSENCE, and the branch this round's regression actually came from. 05A is
 # fact-present but filed NOTHING in the trailing 12, so its sums are unknowable for a reason
-# quarantine had no part in -- 290 airports are in that state against A18's 3. Every defect this
-# page's fixes chased was a consumer keying on "the sum is null" and answering the wrong one of
-# the two: the card said `Quarantined 0`, the foot claimed rows were "excluded from these totals"
-# that never existed, and the legend named quarantine as the cause. Unit and page tests covered
-# it; nothing served did, on a page whose whole class of bug this file exists to catch.
+# quarantine had no part in -- 290 airports are in that state against 2 wholly quarantined (JZM,
+# OQZ). Every defect this page's fixes chased was a consumer keying on "the sum is null" and
+# answering the wrong one of the two: the card said `Quarantined 0`, the foot claimed rows were
+# "excluded from these totals" that never existed, and the legend named quarantine as the cause.
+# Unit and page tests covered it; nothing served did, on a page whose whole class of bug this file
+# exists to catch.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/05A")
 check_dataset check "airport 05A: an unfiled window is unknowable, not zero traffic" "$BODY" \
   '<div class="k">Seats</div><div class="v">—</div>'
@@ -1543,13 +1550,14 @@ check_dataset check "airport 05A: the counts are still stated" "$BODY" \
   '<div class="k">Quarantined</div><div class="v">0</div>'
 check_dataset check "airport 05A: names which absence it is" "$BODY" 'No filings at'
 # The foot must claim NO exclusion here -- there is nothing to have been excluded from, and
-# nothing was quarantined. Both needles are served by A18 and by SEA, so neither is vacuous.
+# nothing was quarantined. Both needles are served by SEA's ordinary exclusion clause, so neither
+# is vacuous.
 check_dataset check_not "airport 05A: claims no exclusion that never happened" "$BODY" \
   'excluded from these totals'
 check_dataset check_not "airport 05A: and does not blame quarantine" "$BODY" 'quarantined row'
 
 # The negative, on a page with real traffic: SEA must NOT have acquired em-dash measure cells.
-# Paired with SEA's own 53,372,100 check above so it cannot pass against an empty body.
+# Paired with SEA's own 53,343,024 check above so it cannot pass against an empty body.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/SEA")
 check     "airport SEA: a healthy page states figures, not absence" "$BODY" \
   '<td class="num">'
@@ -1560,10 +1568,10 @@ check_not "airport SEA: no measure row is wholly unknowable" "$BODY" \
 # /route, /carrier and /aircraft, whose totals come from `sumTotals` rather than `airportTotals`.
 #
 # 10c proved the MAP excludes a wholly-quarantined pair and 10d proved the TABLE and strip do on
-# /airport. `sumTotals` was still applying `?? 0` inside a `+` fold, so on /route/A18-LMA the
-# table cell correctly rendered an em dash while the stat strip directly above it -- summing the
-# very same NULL -- reported 0 seats and 0 departures. Both halves of one page, disagreeing,
-# exactly as /airport's map and table did before #118.
+# /airport. `sumTotals` was still applying `?? 0` inside a `+` fold, so on a wholly-quarantined
+# route pair the table cell correctly rendered an em dash while the stat strip directly above it --
+# summing the very same NULL -- reported 0 seats and 0 departures. Both halves of one page,
+# disagreeing, exactly as /airport's map and table did before #118.
 #
 # THE ORDER OF THE STRIP IS THE NEEDLE, NOT THE DASH. Load factor and average gauge have zero
 # denominators here and rendered an em dash under the bug TOO, so a bare `<div class="v">—</div>`
@@ -1576,20 +1584,21 @@ check_not "airport SEA: no measure row is wholly unknowable" "$BODY" \
 # redden this rather than silently stop testing anything. docs/data/invariants.md
 # § A wholly-quarantined group sums to NULL carries the query and the current measurement.
 
-# A18-LMA (Kantishna-Lake Minchumina): ONE filing in the whole trailing 12 -- 2025-06, seats 0
-# against 1 PERFORMED departure, quarantined `zero_seats`. One of the 10 reachable route pages.
-BODY=$(curl -s --max-time 30 "${BASE}/route/A18-LMA")
-check_dataset check "route A18-LMA: the five measures are absence, in order" "$BODY" \
+# AET-AIN (Allakaket-Wainwright): ONE filing in the whole trailing 12 -- 8V, 2026-03, seats 0
+# against 1 PERFORMED departure, quarantined `zero_seats`. One of the 12 reachable route pages;
+# the row leaves the trailing 12 at asOf 2027-03.
+BODY=$(curl -s --max-time 30 "${BASE}/route/AET-AIN")
+check_dataset check "route AET-AIN: the five measures are absence, in order" "$BODY" \
   '<div class="v">—</div></div><div class="stat"><div class="k">Passengers</div><div class="v">—</div>'
-check_dataset check "route A18-LMA: departures is absence, not a fabricated zero" "$BODY" \
+check_dataset check "route AET-AIN: departures is absence, not a fabricated zero" "$BODY" \
   '<div class="k">Departures</div><div class="v">—</div>'
 # The COUNTS are real facts about what was filed and must survive -- a page that blanked those
 # too would pass the check_not below vacuously.
-check_dataset check "route A18-LMA: the strip still counts the carrier that filed" "$BODY" \
+check_dataset check "route AET-AIN: the strip still counts the carrier that filed" "$BODY" \
   '<div class="k">Carriers</div><div class="v">1</div>'
-check_dataset check "route A18-LMA: ...and still counts the quarantined row" "$BODY" \
+check_dataset check "route AET-AIN: ...and still counts the quarantined row" "$BODY" \
   '<div class="k">Quarantined</div><div class="v">1</div>'
-check_dataset check_not "route A18-LMA: no measure in the strip is a fabricated zero" "$BODY" \
+check_dataset check_not "route AET-AIN: no measure in the strip is a fabricated zero" "$BODY" \
   '<div class="v">0</div>'
 # THE PROSE THAT EXPLAINS THE DASHES. "1 quarantined row excluded from these totals" is a
 # compound claim whose second clause is false here: there are no totals to have been excluded
@@ -1598,22 +1607,22 @@ check_dataset check_not "route A18-LMA: no measure in the strip is a fabricated 
 # ADJACENT expression children, so `{n} quarantined row{s}` was unreachable; the tail
 # " excluded from these totals, never clamped." was a single static JSX child and always was
 # greppable. The rewrite is still right -- half a sentence is not a needle.
-check_dataset check "route A18-LMA: the foot explains the dashes instead of miscounting them" \
-  "$BODY" 'Every filing on A18–LMA in this window is quarantined'
+check_dataset check "route AET-AIN: the foot explains the dashes instead of miscounting them" \
+  "$BODY" 'Every filing on AET–AIN in this window is quarantined'
 # THE TAIL, which is the half that says what the numbers that SURVIVE actually mean -- and the
 # half nothing checked until review pointed out that garbling it left every gate green. The
 # opening clause alone does not make the sentence honest: "Carriers 1" above five em dashes is
 # derived FROM the quarantined rows, not a count OF them.
-check_dataset check "route A18-LMA: ...and says what the surviving counts mean" "$BODY" \
+check_dataset check "route AET-AIN: ...and says what the surviving counts mean" "$BODY" \
   'so no measure above can be summed. The carrier count is counted from those rows, not net of them.'
-check_dataset check_not "route A18-LMA: ...and claims no exclusion that could not have happened" \
+check_dataset check_not "route AET-AIN: ...and claims no exclusion that could not have happened" \
   "$BODY" 'excluded from these totals'
-check_dataset check_not "route A18-LMA: the foot agrees with its own count on the plural" \
+check_dataset check_not "route AET-AIN: the foot agrees with its own count on the plural" \
   "$BODY" '1 rows, each having failed'
 
-# THE OTHER ABSENCE. ATL-CAK filed 67 months and nothing since 2022-06; 12,115 route pairs are in
-# that state, against the 10 above. Quarantine had no part in it, and a surface keying on "the sum
-# is null" alone answers the wrong one of the two -- on the 12,115 rather than the 10.
+# THE OTHER ABSENCE. ATL-CAK filed 67 months and nothing since 2022-06; 12,201 route pairs are in
+# that state, against the 12 above. Quarantine had no part in it, and a surface keying on "the sum
+# is null" alone answers the wrong one of the two -- on the 12,201 rather than the 12.
 BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-CAK")
 check_dataset check "route ATL-CAK: an unfiled window is unknowable, not zero traffic" "$BODY" \
   '<div class="k">Seats</div><div class="v">—</div>'
@@ -1628,8 +1637,9 @@ check_dataset check_not "route ATL-CAK: and does not blame quarantine" "$BODY" '
 check     "route ATL-CAK: still labels the derived measures as computed" "$BODY" 'never averaged'
 
 # /aircraft, the grain issue #121 never measured: BTS 201 has no un-quarantined filing in the
-# window either (F4, 2025-08, 5 performed departures against 0 seats), so the footprint is 12
-# reachable pages and not the 10 the issue states.
+# window either (F4, 2025-08, 5 performed departures against 0 seats), and neither has 489, so the
+# footprint is 14 reachable pages -- the 12 route pairs plus those two types -- not the route pages
+# alone. Both types' rows leave the trailing 12 at asOf 2026-08; re-derive then.
 BODY=$(curl -s --max-time 30 "${BASE}/aircraft/TRISLNDR")
 check_dataset check "aircraft TRISLNDR: seats is absence, not a fabricated zero" "$BODY" \
   '<div class="k">Seats</div><div class="v">—</div>'
@@ -1643,8 +1653,8 @@ check_dataset check "aircraft TRISLNDR: the foot explains the dashes" "$BODY" \
   'Every filing on the TRISLNDR in this window is quarantined'
 # The same tail, on the grain that DISPROVED the original wording: this page renders
 # "Carriers 1 · Quarantined 2", so "the carrier count is a count of those rows" was 1 = 2.
-# /airport never surfaced it -- A18, JZM and OQZ are each 1 row, 1 carrier, 1 destination, and so
-# are all ten route pages, which makes the false sentence numerically indistinguishable there.
+# /airport never surfaced it -- JZM and OQZ are each 1 row, 1 carrier, 1 destination, and so
+# are all twelve route pages, which makes the false sentence numerically indistinguishable there.
 check_dataset check "aircraft TRISLNDR: ...and its counts are derived, not equal" "$BODY" \
   'The carrier count is counted from those rows, not net of them.'
 check_dataset check_not "aircraft TRISLNDR: the foot does not equate the two counts" "$BODY" \
@@ -1653,8 +1663,7 @@ check_dataset check_not "aircraft TRISLNDR: ...and claims no exclusion" "$BODY" 
   'excluded from these totals'
 
 # /carrier can reach only the OTHER absence: no carrier's every trailing-12 filing is quarantined
-# on this warehouse. VX has been dormant since 2018-03. 45 `airline_id`s are; 44 of them have a
-# page. This is a page-grain sentence, so 44 is its number.
+# on this warehouse. VX has been dormant since 2018-03, and so are 45 of the 114 carrier pages.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX")
 check_dataset check "carrier VX: an unfiled window is unknowable, not zero traffic" "$BODY" \
   '<div class="k">Seats</div><div class="v">—</div>'
@@ -1665,11 +1674,11 @@ check_dataset check_not "carrier VX: claims no exclusion that never happened" "$
 check_dataset check_not "carrier VX: and does not blame quarantine" "$BODY" 'is quarantined'
 
 # QUARANTINE BESIDE REAL TRAFFIC, which is what makes the clause's second operand undeletable.
-# Wright Air Service filed 118 quarantined rows in this window AND stateable traffic on 3 aircraft
+# Wright Air Service filed 115 quarantined rows in this window AND stateable traffic on 3 aircraft
 # types. Its figures are honest and its foot must claim the ordinary exclusion.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/8V")
 check_dataset check "carrier 8V: quarantined rows beside real traffic keep the ordinary clause" \
-  "$BODY" '118 quarantined rows excluded from these totals'
+  "$BODY" '115 quarantined rows excluded from these totals'
 check_dataset check_not "carrier 8V: ...and are not reported as a wholly-quarantined page" "$BODY" \
   'is quarantined —'
 
@@ -1808,13 +1817,13 @@ check     "carrier: states codes are current identity" "$BODY" 'current identity
 check     "carrier: renders a real aircraft short name" "$BODY" '>B737-9ER<'
 check_not "carrier: renders no bare aircraft code"      "$BODY" '>888<'
 # M5 "connect the graph": the fleet table's aircraft-type cells link out too (measured: DL
-# flies 13,504,318 trailing-12 seats on B737-8, so this href is really on the page, not a
+# flies 13,659,084 trailing-12 seats on B737-8, so this href is really on the page, not a
 # fixture invented for the check).
 check     "carrier: links an aircraft cell to /aircraft/B737-8" "$BODY" 'href="/aircraft/B737-8"'
 check     "carrier: the chart SVG is in the served HTML" "$BODY" '<svg role="img"'
 check     "carrier: ramp tokens reach the area fills (lightest)" "$BODY" '<path fill="var(--g0)" d='
 check     "carrier: ramp tokens reach the area fills (darkest)"  "$BODY" '<path fill="var(--g5)" d='
-check_dataset check "carrier: the page states the chart's own window" "$BODY" 'chart: the full window · 2015-01 → 2026-05'
+check_dataset check "carrier: the page states the chart's own window" "$BODY" 'chart: the full window · 2015-01 → 2026-06'
 # Final whole-branch review, M11 (third of four canonical checks -- see /route's own comment).
 check     "carrier: carries a self-referential canonical link (Task 2)" "$BODY" \
   '<link rel="canonical" href="http://localhost:3000/carrier/DL"'
@@ -1827,15 +1836,15 @@ check     "carrier: carries a self-referential canonical link (Task 2)" "$BODY" 
 # still passes (grainNote's comment on carrier/[code]/page.tsx carries the same rule).
 check     "carrier: the diff map renders its panels" "$BODY" 'data-testid="diff-panel-label"'
 # The `title` fix, live. Added and downgauged SHARE the trailing window, so without a per-panel
-# title BOTH of these are the string `aria-label="Route map, 2025-06 → 2026-05.` -- byte-
+# title BOTH of these are the string `aria-label="Route map, 2025-07 → 2026-06.` -- byte-
 # identical, and position is the only thing left telling them apart. Two needles, because that
 # is the pair that collided.
 check     "carrier: the added panel names itself and its carrier"      "$BODY" 'aria-label="DL added.'
 check     "carrier: the downgauged panel does too, distinctly"         "$BODY" 'aria-label="DL downgauged.'
 check     "carrier: the dropped panel names itself and its carrier"    "$BODY" 'aria-label="DL dropped.'
 # The two honesty claims that exist nowhere else in the product, because no other surface knows
-# this map is a diff. map_carrier_diff.sql: 3,640 of 5,959 dropped carrier-routes had another
-# carrier flying the pair inside the trailing window; 4,691 of 8,357 added ones had filed that
+# this map is a diff. map_carrier_diff.sql: 3,770 of 6,260 dropped carrier-routes had another
+# carrier flying the pair inside the trailing window; 4,549 of 8,129 added ones had filed that
 # pair before the prior window.
 check     "carrier: the diff map discloses the per-carrier grain" "$BODY" 'another carrier may still be flying it'
 check     "carrier: the diff map says added is re-entry"          "$BODY" 're-entry, not first appearance'
@@ -1873,7 +1882,7 @@ check     "carrier?type: the map's disclosures render as HTML too"   "$BODY" 'da
 # The cap sentence, which is the disclosure a reader needs and the one A13 warns is easy to
 # assert vacuously: `not.toContain("not drawn")` cannot die, because "not drawn" belongs to the
 # QUARANTINE sentence. This is the real cap wording, with both counts.
-check_dataset check "carrier?type: states the cap it drew under" "$BODY" '400 of 519 routes drawn.'
+check_dataset check "carrier?type: states the cap it drew under" "$BODY" '400 of 526 routes drawn.'
 HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL?type=B737-8")
 check     "carrier?type: a resolved filter stays cacheable"      "$HDRS" "$HTML_CACHE_EXPECTED"
 
@@ -1898,11 +1907,11 @@ check     "carrier?type: an unknown filter is never cached"      "$HDRS" 'no-sto
 # filter is `ok` and the map is null. Without this sentence the heading sits over a silent gap.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/VX?type=B737-8")
 check_not "carrier?type: a carrier with no such filings draws no map" "$BODY" 'data-testid="network-map"'
-check_dataset check "carrier?type: ...and says so, naming the window" "$BODY" 'VX filed no B737-8 routes in 2025-06 → 2026-05.'
+check_dataset check "carrier?type: ...and says so, naming the window" "$BODY" 'VX filed no B737-8 routes in 2025-07 → 2026-06.'
 
 # The other branch of the window line, and the negative half of the pair. VX (Virgin America)
 # stopped filing in 2018-03; the chart is fetched over the full window and can only draw to
-# there, so naming the REQUESTED window would put "the full window · … → 2026-05" over a chart
+# there, so naming the REQUESTED window would put "the full window · … → 2026-06" over a chart
 # that ends in 2018 -- M4c's bug, one page over. Both caveats render here too, with no table.
 # #110: F4 (Air Flamenco, 21615) is the ONE carrier of 114 whose diff has a non-zero
 # carrier-wide quarantine count and ZERO drawable arcs. A section gated on `panels.length` drops
@@ -2071,9 +2080,9 @@ check     "carrier?type: the 308 keeps the project Cache-Control"    "$HDRS" "$H
 # and 5 scored, so both needles below have something to match. Its sparse rows no longer
 # interleave -- the below-floor block is rows 6..25 -- which is why the /carrier UNIT fixture for
 # the interleaving property moved to M5; these two needles never depended on it. What 2O pins
-# here instead is the boundary in the served bytes: row 5 runs 373 departures across all twelve
-# months (31.1 a month, scored) and row 6 runs 356 across twelve (29.7, below floor). Seventeen
-# departures apart over a year, opposite sides of the floor.
+# here instead is the boundary in the served bytes: row 5 runs 385 departures across all twelve
+# months (32.1 a month, scored) and row 6 runs 358 across twelve (29.8, below floor).
+# Twenty-seven departures apart over a year, opposite sides of the floor.
 BODY=$(curl -s --max-time 30 "${BASE}/carrier/2O")
 check_dataset check_re "carrier/2O: a below-floor row's rank cell is the em dash" \
   "$BODY" '<td[^>]*rank[^>]*>—</td>'
@@ -2263,8 +2272,8 @@ check_not "aircraft: ...never the raw AIRLINE_ID"            "$BODY" 'carrier=19
 # Nothing to clear on the page a reader arrives at first.
 check_not "aircraft: unfiltered offers no clear-filter link" "$BODY" '>Clear the filter</a>'
 
-# WN files more B737-8 pairs than the 400-arc cap (1,318 measured over the trailing 12 to
-# 2026-05), so this view states the cap. The count is a PATTERN: a BTS refresh moves it.
+# WN files more B737-8 pairs than the 400-arc cap (1,319 measured over the trailing 12 to
+# 2026-06), so this view states the cap. The count is a PATTERN: a BTS refresh moves it.
 BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8?carrier=WN")
 check     "aircraft?carrier=WN: draws the map"               "$BODY" 'data-testid="segment-map"'
 check     "aircraft?carrier=WN: the map SVG is in the served HTML" "$BODY" 'aria-label="Route map, '
@@ -2274,9 +2283,9 @@ check     "aircraft?carrier=WN: offers the way back"         "$BODY" '<a href="/
 # The arc encodings reach the rail, which is the only thing on the page that explains them.
 check     "aircraft?carrier=WN: the rail explains the arcs"  "$BODY" 'Arc rendering'
 
-# AS files 325 pairs on the same type -- UNDER the cap, and with no quarantined or same-airport
-# group either, so this view states NOTHING. A cap note rendered unconditionally reads "325 of
-# 325 routes drawn." here and looks entirely plausible, which is why the pair is on one page.
+# AS files 328 pairs on the same type -- UNDER the cap, and with no quarantined or same-airport
+# group either, so this view states NOTHING. A cap note rendered unconditionally reads "328 of
+# 328 routes drawn." here and looks entirely plausible, which is why the pair is on one page.
 BODY=$(curl -s --max-time 30 "${BASE}/aircraft/B737-8?carrier=AS")
 check     "aircraft?carrier=AS: draws the map"               "$BODY" 'data-testid="segment-map"'
 check_not "aircraft?carrier=AS: states no cap it did not hit" "$BODY" 'routes drawn.'
@@ -2319,7 +2328,7 @@ check "cross-link: /carrier/DL links an aircraft cell to /aircraft/B737-8" "$BOD
 
 # The milestone's sharpest trap (docs/design/system.md § The data table): /explore's route cell
 # displays the two codes in AIRPORT-ID order but must LINK to the code-alphabetical canonical
-# /route/ URL, and the two orderings disagree for 215 of 22,509 pairs. IFP/IAH is the fixture
+# /route/ URL, and the two orderings disagree for 215 of 22,635 pairs. IFP/IAH is the fixture
 # explore/page.test.tsx and DataTable.test.tsx already use for exactly this reason -- a
 # JFK-LAX-shaped fixture cannot catch this class of bug, because JFK-LAX's two orderings agree.
 BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=route&d=route&m=seats&t=2015-01:2016-12&f=route:10590-12266&s=-seats&n=5&g=op")
@@ -2629,29 +2638,29 @@ check_not_re "watch/gauge: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td
 # made to the downgauge half below.
 #
 # RANK IS DELIBERATELY NOT PINNED TO A FIXTURE HERE, and that is a measurement rather than a
-# preference. Replaying mart_route_health's own window over the last 24 monthly rebuilds, the
-# rank-1 carrier-route changed in 4 of 23 steps upgauging and 7 of 23 downgauging, so a rank pin
-# on both tables survives a BTS refresh only ~58% of the time. AS LAX-OGG does lead today, by
-# 1.93 gauge points -- the SMALLEST rank1-rank2 margin in all 24 rebuilds -- and its lead has
-# collapsed 30.60 -> 13.43 -> 5.42 -> 1.93 over four consecutive rebuilds while AS HNL-LAX holds
-# flat behind it. Pinning that is a coin flip the gate would lose on its own schedule. The
-# ordering is asserted directly instead, by `check_gauge_sorted` below, which names no route.
+# preference. Replaying mart_route_health's own window over the 24 monthly rebuilds to 2026-05,
+# the rank-1 carrier-route changed in 4 of 23 steps upgauging and 7 of 23 downgauging, so a rank
+# pin on both tables survives a BTS refresh only ~58% of the time -- and the 2026-06 rebuild moved
+# both: AS LAX-OGG, the upgauge leader through 2026-05, is 3rd (+68.34, behind AS HNL-LAX and AA
+# CLE-LAX), and AA OMA-PHL displaced HA HNL-PDX at the top of the downgauge table. The ordering is
+# asserted directly instead, by `check_gauge_sorted` below, which names no route.
 #
-# FIVE carriers fly that airport pair and UA is downgauging it at -1.76, so the `check_not`
+# FIVE carriers fly that airport pair and UA is downgauging it at -1.60, so the `check_not`
 # below passes on MARGIN, not because the pair is one-sided: UA LAX-OGG ranks 1,114th by
-# descending downgauge against a 25-row cutoff of -29.09. That is a real but weaker guarantee
+# descending downgauge against a 25-row cutoff of -30.53. That is a real but weaker guarantee
 # than the pair below it, and it is stated rather than implied -- an earlier revision of this
 # comment claimed no carrier downgauges LAX-OGG, which is false.
 #
-# THE DOWNGAUGE HALF CANNOT USE ITS LEADER, and the reason is this repo's own grain rule. The
-# largest downgauge is HA HNL-PDX at -64.49, but AS flies the SAME airport pair upgauging at
-# +41.74 and sits 7th in the other table -- the mart's grain is a carrier-route PAIR, so
-# "HNL-PDX" names two rows in two different tables and a route-only `check_not` against the
-# upgauge table fails on a page that is entirely correct. Measured: it did, which is how this
-# was found. The needle is therefore B6 DAB-JFK, -53.37, rank 5 -- the largest downgauge whose
-# airport pair carries exactly ONE carrier in the mart, so its absence from the upgauge table is
-# a real statement about which table rendered. (It was DL BOS-CVG before #148, which the rate
-# floor no longer admits to the mart at all.) Presence in $BODY alone would be satisfied by a page that put both routes in
+# THE DOWNGAUGE NEEDLE MUST BE A ONE-CARRIER PAIR, and the reason is this repo's own grain rule.
+# HA HNL-PDX downgauges at -51.75 (4th), but AS flies the SAME airport pair upgauging at +44.62
+# and sits 7th in the other table -- the mart's grain is a carrier-route PAIR, so "HNL-PDX" names
+# two rows in two different tables and a route-only `check_not` against the upgauge table fails
+# on a page that is entirely correct. Measured: it did, which is how this was found. The needle
+# is therefore B6 DAB-JFK, -53.20, rank 2 -- the largest downgauge whose airport pair carries
+# exactly ONE carrier in the mart (the leader, AA OMA-PHL at -64.23, shares its pair with OH), so
+# its absence from the upgauge table is a real statement about which table rendered. (It was DL
+# BOS-CVG before #148, which the rate floor no longer admits to the mart at all.) Presence in
+# $BODY alone would be satisfied by a page that put both routes in
 # ONE table, or the wrong one -- these mean something only checked against the CORRECT table and
 # refuted against its sibling, which is why they're split with `between()` first.
 #
@@ -2735,22 +2744,22 @@ check "watch/new-routes: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EX
 check     "watch/new-routes: renders a carrier code"     "$BODY" '>AS<'
 check_not "watch/new-routes: renders no bare AIRLINE_ID" "$BODY" '>19930<'
 # Final whole-branch review (M6), CRITICAL: this page told visitors "First appearance since
-# 2015" about rows that had filed for years. `p12_months_present = 0` is a RE-ENTRY -- 174 of
-# 297 qualifying rows (58.6%) and 19 of the 25 rendered had filed before the p12 window, worst
-# case B6 AUS-FLL at 106 distinct months back to 2015-01. Both halves, in the served bytes: the
+# 2015" about rows that had filed for years. `p12_months_present = 0` is a RE-ENTRY -- 160 of
+# 281 qualifying rows (56.9%) and 22 of the 25 rendered had filed before the p12 window, worst
+# case B6 AUS-FLL at 107 distinct months back to 2015-01. Both halves, in the served bytes: the
 # accurate claim present AND the false one gone. All-ASCII needles for the reason above; the
 # frame itself is a plain TS string literal (lib/watch.ts), not JSX, so it ships verbatim.
 check     "watch/new-routes: states re-entry, not first appearance" "$BODY" 'not necessarily a first appearance'
-check_dataset check "watch/new-routes: carries the measured count"        "$BODY" '174 of the 297'
+check_dataset check "watch/new-routes: carries the measured count"        "$BODY" '160 of the 281'
 check_not "watch/new-routes: no longer claims 'since 2015'"         "$BODY" 'since 2015'
 # The SECOND false claim on this page, found by the re-review of the wave that fixed the first:
 # mart_route_health's grain is (op_airline_id, route), so `p12_months_present = 0` says nothing
-# about the OTHER carriers on that airport pair -- 245 of 297 (82.5%) and 25 of the 25 rendered
+# about the OTHER carriers on that airport pair -- 224 of 281 (79.7%) and 25 of the 25 rendered
 # had one, the #1 row (AS HNL-ITO) while HA/UA/WN filed 1,786,963 seats on it. This page has now
 # shipped a false claim twice, so every one of them gets a served-byte guard, both directions.
 check     "watch/new-routes: names the carrier, not the route (frame)" "$BODY" 'A route this carrier flew nothing on last year'
 check     "watch/new-routes: names the carrier, not the route (note)"  "$BODY" 'this carrier filed nothing at all on this route'
-check_dataset check "watch/new-routes: carries the unserved-route measurement" "$BODY" '245 of the 297'
+check_dataset check "watch/new-routes: carries the unserved-route measurement" "$BODY" '224 of the 281'
 check_not "watch/new-routes: never claims nobody flew it"              "$BODY" 'nobody flew'
 check_re     "watch/new-routes: rank starts at 1"    "$BODY" '<td[^>]*rank[^>]*>1</td>'
 check_not_re "watch/new-routes: rank is not 0-based" "$BODY" '<td[^>]*rank[^>]*>0</td>'

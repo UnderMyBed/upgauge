@@ -72,17 +72,17 @@ const MONTH_NAMES = [
 ];
 
 // EVERY figure below is measured against upgauge.duckdb for SEA (airport_id 14747) over the
-// trailing 12 months 2025-06..2026-05, and every one of them is a figure an ORIGIN-ONLY page
+// trailing 12 months 2025-07..2026-06, and every one of them is a figure an ORIGIN-ONLY page
 // gets wrong. That is the point: carriers (13) and aircraft types (25) are IDENTICAL either
 // way, so a suite built on those two would pass against the bug this page exists to exclude.
 //
-//   seats          origin OR dest 53,372,100   origin only 26,708,918
-//   passengers     origin OR dest 43,888,228   origin only 21,922,669
-//   destinations   origin OR dest        143   origin only         139
-//   AS's seats     origin OR dest 26,089,404   origin only 13,059,688
+//   seats          origin OR dest 53,343,024   origin only 26,695,264
+//   passengers     origin OR dest 43,868,418   origin only 21,921,227
+//   destinations   origin OR dest        142   origin only         138
+//   AS's seats     origin OR dest 26,112,814   origin only 13,071,865
 //
 // And the third term, which is not a formality: 17 same-airport (origin = dest) filings at
-// SEA carry 12,207 seats, so a naive origin + dest reads 53,384,307 rather than 53,372,100.
+// SEA carry 12,015 seats, so a naive origin + dest reads 53,355,039 rather than 53,343,024.
 describe("/airport/<code>", () => {
   it("renders the airport's code and name, never the bare AIRPORT_ID", async () => {
     const { container } = render(await renderSEA());
@@ -99,54 +99,54 @@ describe("/airport/<code>", () => {
   });
 
   it("counts BOTH endpoints, not departures alone", async () => {
-    // The one test this task exists for. 53,372,100 fails for an origin-only page
-    // (26,708,918) AND for a page that forgets the overlap term (53,384,307).
+    // The one test this task exists for. 53,343,024 fails for an origin-only page
+    // (26,695,264) AND for a page that forgets the overlap term (53,355,039).
     const { container } = render(await renderSEA());
     const stats = container.querySelector(".stats")?.textContent ?? "";
-    expect(stats).toContain("53,372,100");
-    expect(stats).not.toContain("26,708,918");
-    expect(stats).not.toContain("53,384,307");
+    expect(stats).toContain("53,343,024");
+    expect(stats).not.toContain("26,695,264");
+    expect(stats).not.toContain("53,355,039");
   });
 
   it("counts arrivals in passengers and destinations too, not only in seats", async () => {
     // A page that fixed the seat total alone -- by, say, doubling the origin figure -- would
     // pass the test above. Passengers and destinations are separately wrong under origin-only
-    // (21,922,669 and 139), and the destination count cannot be reached by scaling anything.
+    // (21,921,227 and 138), and the destination count cannot be reached by scaling anything.
     const { container } = render(await renderSEA());
     const stats = container.querySelector(".stats")?.textContent ?? "";
-    expect(stats).toContain("43,888,228");
-    expect(stats).not.toContain("21,922,669");
-    // SCOPED to the Destinations stat's own value node. `toContain("143")` over the whole strip
-    // was a three-digit substring match: it happens to be unambiguous against today's other
-    // stats, but 143 is a substring of any figure containing it, so the assertion could pass for
+    expect(stats).toContain("43,868,418");
+    expect(stats).not.toContain("21,921,227");
+    // SCOPED to the Destinations stat's own value node. `toContain("142")` over the whole strip
+    // would be a three-digit substring match: it happens to be unambiguous against today's other
+    // stats, but 142 is a substring of any figure containing it, so the assertion could pass for
     // a reason other than the destination count being right. The whole point of this figure is
-    // that origin-only reads 139 and nothing can scale its way there.
+    // that origin-only reads 138 and nothing can scale its way there.
     const destinations = [...container.querySelectorAll(".stats .stat")].find(
       (s) => s.querySelector(".k")?.textContent === "Destinations",
     );
-    expect(destinations?.querySelector(".v")?.textContent).toBe("143");
+    expect(destinations?.querySelector(".v")?.textContent).toBe("142");
   });
 
   it("computes load factor and avg gauge from summed parts, never by averaging carriers", async () => {
-    // Ratio of sums: 43,888,228 / 53,372,100 = 82.23%, and 53,372,100 / 366,174 = 145.8.
-    // The mean of the 13 carrier load factors is 83.84% and the mean of their gauges is
-    // 164.9 -- both plausible, both wrong, both what AVG(load_factor) produces.
+    // Ratio of sums: 43,868,418 / 53,343,024 = 82.24%, and 53,343,024 / 365,576 = 145.9.
+    // The mean of the 13 carrier load factors is 83.94% and the mean of their gauges is
+    // 166.7 -- both plausible, both wrong, both what AVG(load_factor) produces.
     const { container } = render(await renderSEA());
     const stats = container.querySelector(".stats")?.textContent ?? "";
-    expect(stats).toContain("82.23%");
-    expect(stats).toContain("145.8");
-    expect(stats).not.toContain("83.84%");
-    expect(stats).not.toContain("164.9");
+    expect(stats).toContain("82.24%");
+    expect(stats).toContain("145.9");
+    expect(stats).not.toContain("83.94%");
+    expect(stats).not.toContain("166.7");
   });
 
   it("lists the carriers at the airport by code, biggest first, counting both directions", async () => {
     const { container } = render(await renderSEA());
     const first = container.querySelector("tbody tr");
     const cells = [...(first?.querySelectorAll("td") ?? [])].map((c) => c.textContent);
-    // Alaska, by a distance, at SEA. 26,089,404 seats over both endpoints; 13,059,688
+    // Alaska, by a distance, at SEA. 26,112,814 seats over both endpoints; 13,071,865
     // departing only -- so this row alone distinguishes the two implementations.
     expect(cells[1]).toBe("AS");
-    expect(cells.join(" ")).toContain("26,089,404");
+    expect(cells.join(" ")).toContain("26,112,814");
     const codes = [...container.querySelectorAll("tbody td.id")].map((c) => c.textContent);
     expect(codes.length).toBe(13);
     expect(codes.every((c) => /^[A-Z0-9]{2}$/.test(c ?? ""))).toBe(true);
@@ -221,7 +221,7 @@ describe("/airport/<code>", () => {
   });
 
   it("DOES render the fleet-shading rail group when a chart was drawn (#123)", async () => {
-    // The other side of the #123 gate, and the reason it is here rather than only on A18:
+    // The other side of the #123 gate, and the reason it is here rather than only on OQZ:
     // without it, "never render the group" satisfies the absence assertion there and silently
     // deletes a group four pages need. SEA has many filed months, so the chart draws and the
     // rail must explain it. Note this direction passes under the BUG too -- that is exactly why
@@ -236,13 +236,15 @@ describe("/airport/<code>", () => {
 // #114, at the page. The unit tests prove the producer counts and the renderer states; this
 // proves the served page mounts the map that carries it.
 describe("/airport/<code> whose whole network is one quarantined route pair", () => {
-  // Kantishna (A18) has exactly one filing in the trailing 12 and it is quarantined
-  // `zero_seats`, having PERFORMED a departure. Before #114 this page drew that pair as an arc
-  // reading 0 seats and 0 departures -- dotted and muted, "barely flown" -- which is a claim the
-  // data cannot support. A18 is sitemap-listed (`sitemap.test.ts` pins it as one of four
-  // airports resolving ONLY because quarantined rows are counted), so this is a live page.
+  // American Creek (OQZ) has exactly one filing in the trailing 12 -- GAL->OQZ, 2025-08 -- and it
+  // is quarantined `zero_seats`, having PERFORMED a departure. It is also OQZ's only filing in
+  // the entire dataset. Before #114 this page drew that pair as an arc reading 0 seats and 0
+  // departures -- dotted and muted, "barely flown" -- which is a claim the data cannot support.
+  // OQZ is sitemap-listed (`sitemap.test.ts` pins it as one of four airports resolving ONLY
+  // because quarantined rows are counted), so this is a live page. The fixture expiry note on
+  // the "unknowable sum" describe below applies to this block too.
   it("renders the map and its disclosure rather than dropping the section", async () => {
-    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "A18" }) }));
+    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "OQZ" }) }));
     // The map is mounted at all -- a gate on `arcs.length` would take the whole section, and
     // with it the only thing on this page saying anything was filed.
     expect(container.querySelector("svg[role='img']")).not.toBeNull();
@@ -253,7 +255,7 @@ describe("/airport/<code> whose whole network is one quarantined route pair", ()
   });
 
   it("renders NO fleet-shading rail group, because no chart was drawn (#123)", async () => {
-    // THE DEFECT STATED AS AN ABSENCE, which is the only form that can fail. A18 has exactly
+    // THE DEFECT STATED AS AN ABSENCE, which is the only form that can fail. OQZ has exactly
     // one filed month, so `AircraftMixChart` takes its `plot === null` branch and draws a line
     // of text -- while the rail rendered the two gauge swatches and "The shaded months are
     // 2020-03 to 2021-06. COVID is in the window on purpose", explaining a ramp that is not on
@@ -262,7 +264,7 @@ describe("/airport/<code> whose whole network is one quarantined route pair", ()
     //
     // Mutant: put `fleetMix={hasMix}` back on page.tsx's `<LegendRail>` and this goes red on
     // both assertions, while the SEA test below stays green.
-    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "A18" }) }));
+    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "OQZ" }) }));
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).not.toContain("Fleet shading");
     expect(rail.textContent).not.toContain("COVID is in the window on purpose");
@@ -271,22 +273,22 @@ describe("/airport/<code> whose whole network is one quarantined route pair", ()
     // it carries its unconditional groups, and the chart really did decline to draw.
     expect(rail.textContent).toContain("Gauge rail");
     expect(container.querySelector(".chart svg[role='img']")).toBeNull();
-    // THE sentence, not merely some sentence. A18's one filed month is ITSELF wholly quarantined,
+    // THE sentence, not merely some sentence. OQZ's one filed month is ITSELF wholly quarantined,
     // so `mixAbsenceNote` names that cause rather than the bare month count. Integrating #121 and
-    // #123 moved this string: #123 pinned the note it found here, #121 changed which branch A18
-    // reaches, and neither unit could see the other. The property under test is unchanged -- the
-    // chart declined to draw and said why.
+    // #123 moved this string: #123 pinned the note it found here, #121 changed which branch such
+    // a page reaches, and neither unit could see the other. The property under test is unchanged
+    // -- the chart declined to draw and said why.
     expect(container.querySelector(".chart")!.textContent).toContain(
       "wholly quarantined — every filing failed an invariant",
     );
   });
 
   it("does not draw an arc claiming the pair carried nothing", async () => {
-    // The defect stated as an absence. `LMA` is A18's only far endpoint in this window; a
+    // The defect stated as an absence. `GAL` is OQZ's only far endpoint in this window; a
     // destination label for it means the fabricated arc is back.
-    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "A18" }) }));
+    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "OQZ" }) }));
     const svg = container.querySelector("svg[role='img']")!;
-    expect(svg.textContent).not.toContain("LMA");
+    expect(svg.textContent).not.toContain("GAL");
   });
 });
 
@@ -315,9 +317,9 @@ describe("/airport/<code> with nothing in the trailing 12 months", () => {
 });
 
 describe("/airport/<code> truncation disclosure", () => {
-  // SEA's real trailing-12 traffic pivot returns 666 (carrier, origin, dest) groups, against a
-  // 5,000 limit no airport in this database reaches (measured worst case is ORD at 1,732, M7
-  // Task 3), so nothing in production data exercises this branch. `AirportView` takes the limit
+  // SEA's real trailing-12 traffic pivot returns 658 (carrier, origin, dest) groups, against a
+  // 5,000 limit no airport in this database reaches (measured worst case is ORD at 1,700), so
+  // nothing in production data exercises this branch. `AirportView` takes the limit
   // as an explicit parameter for exactly that reason -- same split, same justification, as
   // RouteView's.
   async function view(limit?: number, mixLimit?: number) {
@@ -591,24 +593,27 @@ describe("/airport/<code>?y=<year> -- the year track (M7 Task 9)", () => {
 // actually survives DataTable -> lib/format.ts and reaches a `<td>`, which is the seam a unit
 // test of either half alone cannot see.
 //
-// A18 (Kantishna), measured 2026-08-27 at asOf 2026-05: ONE row in the entire dataset --
-// 2025-06, op_airline 20333, seats 0.0, departures_performed 1.0, is_quarantined true, with A18
-// as the DESTINATION. So its trailing-12 pivot returns a single wholly-quarantined group, and
-// under the `?? 0` bug the only row of the only table on the page read "0 / 0 / 0".
+// OQZ (American Creek), measured at asOf 2026-06: ONE row in the entire dataset -- 2025-08,
+// op_airline 20333, GAL->OQZ, seats 0.0, departures_performed 1.0, is_quarantined true
+// (`zero_seats`), with OQZ as the DESTINATION. So its trailing-12 pivot returns a single
+// wholly-quarantined group, and under the `?? 0` bug the only row of the only table on the page
+// read "0 / 0 / 0".
 //
 // TWO THINGS TURN THIS FIXTURE RED, AND THE LIKELIER ONE IS NOT A BUG. (1) A BTS revision
-// un-quarantines that row. (2) `asOf` ADVANCES: 2025-06 is the FIRST month of the current
-// trailing 12, so one dataset month rolls it out of the window, A18 has no rows at all, and the
-// page becomes the empty state -- taking these four tests, three of app/smoke.sh's A18 needles
-// and #114's already-merged A18 map needles with it. Expiry is the likelier cause by far, so
-// triage the window before hunting an un-quarantine that never happened. JZM and OQZ carry the
-// identical single-quarantined-row property at 2025-08, two months of further runway, and are
-// the fixtures to MOVE to (CLAUDE.md, "MOVE the fixture") -- not a relaxed assertion, which
-// would keep passing against the very bug this guards.
+// un-quarantines that row. (2) `asOf` ADVANCES: 2025-08 is the SECOND month of the trailing 12
+// (2025-07..2026-06), so at asOf 2026-08 it rolls out of the window, OQZ has no rows at all, and
+// the page becomes the empty state -- taking every OQZ test in this file with it. Expiry is the
+// likelier cause by far, so triage the window before hunting an un-quarantine that never
+// happened. On this warehouse NO OTHER AIRPORT carries the whole property: JZM is the only other
+// airport whose trailing 12 is wholly quarantined (the same 2025-08 expiry), and it filed real
+// seats in 2021-08 and 2022-08, so its chart draws and it cannot stand in for the
+// one-filed-month tests above. When OQZ expires, re-derive a replacement from the warehouse and
+// MOVE the fixture (CLAUDE.md, "MOVE the fixture") -- never a relaxed assertion, which would
+// keep passing against the very bug this guards.
 describe("/airport/<code> renders an unknowable sum as absence, not zero", () => {
-  async function a18() {
-    const r = await resolveAirportCode("A18");
-    if (r.kind !== "ok") throw new Error("expected A18 to resolve for this fixture");
+  async function oqz() {
+    const r = await resolveAirportCode("OQZ");
+    if (r.kind !== "ok") throw new Error("expected OQZ to resolve for this fixture");
     return await AirportView({ airport: r.airport });
   }
 
@@ -618,7 +623,7 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
     // the class of self-defect app/smoke.sh has produced three times. Only asserting the
     // POSITION of each dash distinguishes the fixed page from the buggy one.
     // MUTANT: restore `Number(r.seats ?? 0)` in endpoints.ts -> ["0","0","0","—","—"], red.
-    const { container } = render(await a18());
+    const { container } = render(await oqz());
     const cells = [...container.querySelectorAll("td.num")].map((c) => c.textContent);
     expect(cells).toEqual(["—", "—", "—", "—", "—"]);
   });
@@ -626,7 +631,7 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
   it("renders no measure cell as a zero anywhere on the page", async () => {
     // The absence half. A page that dropped the row entirely would satisfy the test above
     // vacuously (zero cells is not a sequence of five), so the row's presence is asserted too.
-    const { container } = render(await a18());
+    const { container } = render(await oqz());
     expect(container.querySelectorAll("tbody tr").length).toBe(1);
     expect([...container.querySelectorAll("td.num")].some((c) => c.textContent === "0")).toBe(
       false,
@@ -634,10 +639,10 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
   });
 
   it("leaves the stat strip unknowable rather than reporting zero traffic", async () => {
-    // A18's whole window is that one quarantined filing, so the strip has nothing to state --
+    // OQZ's whole window is that one quarantined filing, so the strip has nothing to state --
     // but the COUNTS are still real facts about what was filed, and must not be blanked with it.
     // MUTANT: seed airportTotals' reduce at 0 again -> "0" for seats/passengers/departures, red.
-    const { container } = render(await a18());
+    const { container } = render(await oqz());
     const stats = [...container.querySelectorAll(".stat")].map((s) => [
       s.querySelector(".k")?.textContent,
       s.querySelector(".v")?.textContent,
@@ -657,15 +662,15 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
     // there are totals left to exclude from, and here there are none. The /watch/new-routes
     // class of defect: a compound claim whose clauses need re-deriving one at a time.
     // MUTANT: drop the `totals.seats === null` branch from `quarantineClause` -> red.
-    const { container } = render(await a18());
+    const { container } = render(await oqz());
     const feet = [...container.querySelectorAll(".foot")].map((f) => f.textContent).join(" ");
-    expect(feet).toContain("Every filing at A18 in this window is quarantined");
+    expect(feet).toContain("Every filing at OQZ in this window is quarantined");
     expect(feet).toContain("no measure above can be summed");
     expect(feet).not.toContain("excluded from these totals");
     // BOTH counts, which is the one thing about this sentence that is genuinely this page's:
     // /airport is the only entity page carrying a destinations count beside its carrier count,
     // and the shared clause takes that noun phrase from the caller.
-    // MUTANT: pass "The carrier count is" here -> red. The 1:1 shape of A18 (1 row, 1 carrier,
+    // MUTANT: pass "The carrier count is" here -> red. The 1:1 shape of OQZ (1 row, 1 carrier,
     // 1 destination) is exactly why a looser assertion would not notice.
     expect(feet).toContain(
       "The carrier and destination counts are counted from those rows, not net of them.",
@@ -678,7 +683,7 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
     // numbers, and this is now the only prose on the page explaining five em dashes.
     // MUTANT: hardcode `destinations` -> red. In-repo precedent: networkMap.test.ts asserts
     // `not.toContain("1 quarantined routes")` for the same class of defect.
-    const { container } = render(await a18());
+    const { container } = render(await oqz());
     const feet = [...container.querySelectorAll(".foot")].map((f) => f.textContent).join(" ");
     expect(feet).toContain("1 destination counted once each");
     expect(feet).not.toContain("1 destinations");
@@ -689,7 +694,7 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
     // table surfaces already carry (they hand DataTable raw pivot rows; /airport rebuilds its
     // rows in TypeScript, so it has to carry the reason deliberately).
     // MUTANT: drop quarantine_reasons from carrierRows' output -> the title loses ": zero_seats".
-    const { container } = render(await a18());
+    const { container } = render(await oqz());
     const gutter = container.querySelector("td.gut abbr");
     expect(gutter?.textContent).toBe("Q");
     expect(gutter?.getAttribute("title")).toBe(
@@ -703,8 +708,8 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
 //
 // `airportTotals` seeded at `null` also makes `airportTotals([])` unknowable, so a fact-present
 // airport with NO rows in the trailing 12 now reports `—` where it reported `0`. Measured: 290
-// such airports, against the 3 whose rows are all quarantined -- so the change's real footprint
-// is 293 pages, not 3, and 290 of them are reached by a code path no test named. A future
+// such airports, against the 2 whose rows are all quarantined -- so the change's real footprint
+// is 292 pages, not 2, and 290 of them are reached by a code path no test named. A future
 // "simplify the seed back to 0" reverts all of them silently. (The airport total this is a
 // fraction of is a `test_stated_counts.py`-gated figure and lives in docs/data/invariants.md;
 // a hand-written copy here would rot silently, which is what that gate exists to prevent.)
@@ -713,7 +718,7 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
 // window with no row is neither "nobody flew" nor "0 seats flew". The two absences are
 // different findings and `AirportEmptyState` is what names which one this page is in.
 //
-// 05A has zero rows in 2025-06..2026-05 (measured). Unlike A18 this fixture does not expire on
+// 05A has zero rows in 2025-07..2026-06 (measured). Unlike OQZ this fixture does not expire on
 // an `asOf` advance -- an airport that stopped filing stays stopped.
 describe("/airport/<code> with nothing filed in the window", () => {
   async function empty() {
@@ -748,10 +753,10 @@ describe("/airport/<code> with nothing filed in the window", () => {
   });
 
   it("names which absence it is, rather than leaving the dashes bare", async () => {
-    // The em dash says "no measure"; only this says WHY, and it is a different why from A18's.
+    // The em dash says "no measure"; only this says WHY, and it is a different why from OQZ's.
     // SCOPED TO THE FOOT, and the negative is the point: `seats === null` is true here too,
     // so a clause gated on that alone tells 290 pages that every filing at them was
-    // quarantined -- inventing a finding on 290 pages to fix it on 3. This test caught exactly
+    // quarantined -- inventing a finding on 290 pages to fix it on 2. This test caught exactly
     // that before it shipped.
     // MUTANT: gate `quarantineClause` on `totals.seats === null` alone -> red.
     const { container } = render(await empty());
@@ -811,12 +816,12 @@ describe("/airport/<code> sorts below-floor rows last", () => {
     // That is exactly how M4c's two-sort fixture failed.
     //
     // RE-DERIVED UNDER THE MONTHLY FLOOR (#134) rather than assumed to have survived it: STT
-    // still discriminates, and by a wider margin than before. Trailing 12 to 2026-05, STT's four
+    // still discriminates, and by a wider margin than before. Trailing 12 to 2026-06, STT's four
     // below-floor carriers are SY (9,300 seats, 50 departures across 5 months -- 10.0 a month),
-    // F9 (8,644 / 46 / 3 -- 15.3), MQ (380 / 5 / 3 -- 1.7) and LF (60 / 2 / 2 -- 1.0), while 3M
-    // is SCORED on 1,748 seats and 38 departures in the single month it flew. So the measure
+    // F9 (5,296 / 28 / 2 -- 14.0), MQ (380 / 5 / 3 -- 1.7) and LF (90 / 3 / 3 -- 1.0), while VD
+    // is SCORED on 115 seats and 120 departures in the single month it flew. So the measure
     // sort puts a below-floor row 9,300 seats ABOVE a scored one and the two orderings genuinely
-    // disagree. 3M earns its place twice over: at 38 departures in one month it is exactly the
+    // disagree. VD earns its place twice over: at 120 departures in one month it is exactly the
     // row a flat 360-per-window floor would have branded sparse.
     //
     // If a BTS refresh ends that, this goes red and the fixture MOVES to another airport
@@ -834,14 +839,14 @@ describe("/airport/<code> sorts below-floor rows last", () => {
 describe("/airport/<code>: the legend rail's arc group follows the ARCS (#123)", () => {
   // EVERY ROW IN THAT GROUP DESCRIBES AN ARC -- width by seats, dashed below the load-factor
   // floor, dotted-muted below the departure floor, and why a cross-panel arc is a straight line.
-  // A map can render with none of them, so "a map was drawn" is the wrong gate: a hub map always paints its origin disc, so `/airport/A18` and
+  // A map can render with none of them, so "a map was drawn" is the wrong gate: a hub map always paints its origin disc, so `/airport/JZM` and
   // `/airport/OQZ` render a map with zero polylines.
   //
   // Asserted as an ABSENCE, because the presence form passes under the bug. And per CALL SITE:
   // each page decides for itself what to pass, so reverting one is a live defect on that surface
   // alone. Mutant: pass `hasNetwork` back to `<LegendRail map={...}>` here and this goes red.
   it("renders NO arc-rendering group when no arc was drawn", async () => {
-    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "A18" }) }));
+    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "OQZ" }) }));
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).not.toContain("Arc rendering");
     expect(rail.textContent).not.toContain("width scales with seats");

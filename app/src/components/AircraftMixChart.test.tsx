@@ -67,7 +67,7 @@ function monthRange(from: string, to: string): string[] {
 }
 
 /** `skip` is the months the SUBJECT filed nothing in -- no row for any type, which is what a
- * real absence looks like in a pivot result (14,293 of 23,041 route pairs have at least one).
+ * real absence looks like in a pivot result (14,378 of 23,167 route pairs have at least one).
  * Not the same thing as a type with zero seats in a month it did fly. */
 function rows(
   types: TypeSpec[],
@@ -381,7 +381,7 @@ describe("AircraftMixChart", () => {
 
   it("draws a single filed month between two gaps instead of erasing it", () => {
     // An area needs two points, so a one-month run serializes to a degenerate, invisible path
-    // -- and 9,486 of 22,919 route pairs (41%) have at least one isolated interior month.
+    // -- and 9,667 of 23,167 route pairs (42%) have at least one isolated interior month.
     // Dropping the filing would be the same class of dishonesty as inventing one, so those
     // runs are stroked. Breaks if the solo mark is removed: the month vanishes silently, which
     // is exactly the failure that would not be noticed.

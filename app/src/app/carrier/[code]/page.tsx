@@ -212,7 +212,7 @@ function identityNote(carrier: CarrierRef): string {
 }
 
 /** A carrier that resolved but filed nothing in the trailing 12 months. Not an error and not
- * an oddity: 45 of this database's 114 fact-present carriers last filed before the current
+ * an oddity: 45 of this database's 114 fact-present `airline_id`s last filed before the current
  * window (measured, 39%) -- Virgin America stopped in 2018-03 and is still a real carrier with
  * a real history, which the chart above this state is drawing. State the finding in words and
  * offer the widened permalink, never a blank panel. */
@@ -299,8 +299,8 @@ export async function CarrierView({
   // ever be origin-only OR dest-only, never either-endpoint, until a groupable version of the
   // dimension exists -- not on any current backlog list. The heading below says "origin" and the
   // page states the real limitation in words -- the same failure shape as /airport's measured
-  // 26,708,918-vs-53,372,100 seats when a union term was dropped (CLAUDE.md), but a different
-  // cause from the one this comment used to name.
+  // 26,695,264-vs-53,343,024 seats when a union term is dropped
+  // (app/src/app/airport/[code]/endpoints.ts), from a different cause.
   const routesSpec: TopNSpec = {
     grain: "route",
     dimension: "route",
@@ -433,7 +433,7 @@ export async function CarrierView({
   });
 
   // The range the chart can DRAW, which is not the range it was fetched over. 45 of 114
-  // fact-present carriers last filed before the trailing-12 window, so a chart whose x axis
+  // fact-present `airline_id`s last filed before the trailing-12 window, so a chart whose x axis
   // ends years before `asOf` is routine here -- naming the requested window over it would be
   // the same fabrication as interpolating across a gap (M4c, Finding 1). Months are
   // zero-padded YYYY-MM, so lexical min/max IS chronological.
@@ -620,7 +620,7 @@ export async function CarrierView({
           {/* The rail describes the encodings THIS page uses and no others; the fleet-shading
               group is asked for only when a chart is actually drawn, and the rank group only
               where a rank column exists. `ranked` shipped as a literal when #127's partition and
-              #123's rail gating were merged, and the integration gap pass caught it: 44 of the
+              #123's rail gating were merged, and the integration gap pass caught it: 45 of the
               114 carrier pages file nothing in the trailing 12, so `isEmpty` suppresses the main
               table and BOTH ranked tables, and the rail explained a column the page did not
               render. `hasRoutes || hasOrigins` is the same gate those two tables already use

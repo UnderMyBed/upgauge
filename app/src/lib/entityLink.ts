@@ -46,8 +46,8 @@ export function entityHref(dimKey: string, hit: Resolved | undefined): string | 
  *
  * Not the order the caller happens to hold them in. /explore renders a route cell from
  * `route_key_low, route_key_high`, which is airport-ID order, and the two orderings disagree
- * for 215 of 22,509 pairs (CLAUDE.md; routePair.ts computes them as two separate values for
- * exactly this reason). Building an href from the displayed order is right 99.3% of the time,
+ * for 215 of 22,635 pairs (CLAUDE.md; routePair.ts computes them as two separate values for
+ * exactly this reason). Building an href from the displayed order is right 99.05% of the time,
  * which is precisely why it survives review. */
 export function routeHrefFromCodes(a: string, b: string): string {
   const [low, high] = a <= b ? [a, b] : [b, a];
