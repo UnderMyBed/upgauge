@@ -447,7 +447,7 @@ Windows are **global, not per-route**: `t12_start_month..t12_end_month` is the l
 calendar months present anywhere in `fct_route_month`; `p12_start_month..p12_end_month` is
 the 12 immediately before that. `'YYYY-MM'` strings compare correctly with `BETWEEN`, so no
 per-row date parsing is needed. Measured over the full 2015–2026 window:
-`t12 = 2025-06..2026-05`, `p12 = 2024-06..2025-05` — 2026 is a partial year, so the trailing
+`t12 = 2025-07..2026-06`, `p12 = 2024-07..2025-06` — 2026 is a partial year, so the trailing
 window lands mid-2026 rather than on a year boundary.
 
 **The floor is a RATE, not a window total: 30 performed departures per month FLOWN** —
@@ -650,8 +650,8 @@ bound. Unclamped, the worst single axis (`VD` `CPX–VQS`) reaches `z_gauge = -1
 warehouse — the reason a per-axis clamp exists at all, not just an overall cap on the sum.
 
 > ⚠️ **`health_score` is `NULL` for three distinct reasons, not one — 361 of 5,675 rows,
-> measured over the full 2015–2026 window** (`t12 = 2025-06..2026-05`,
-> `p12 = 2024-06..2025-05`). The product-facing writeup (what the UI must do about each) lives
+> measured over the full 2015–2026 window** (`t12 = 2025-07..2026-06`,
+> `p12 = 2024-07..2025-06`). The product-facing writeup (what the UI must do about each) lives
 > in
 > [../product/features.md § Route Health score](../product/features.md#route-health-score-v0--deliberately-dumb);
 > this is the SQL-level accounting behind it.

@@ -295,7 +295,7 @@ def test_output_column_names_match_across_grouping_modes(con):
 # origin's group and its dest's group.
 def test_either_mode_filter_compiles_to_an_or_across_both_columns(con):
     """Catches: compiling `either` through the single-column branch (origin only), which is
-    the SILENT half of an airport query -- SEA reads 26,710,000 seats instead of 53,373,806
+    the SILENT half of an airport query -- SEA reads 26,695,264 seats instead of 53,343,024
     and every row still renders perfectly."""
     sql, params = render_pivot(q(filters=(("endpoint_airport_id", ("14747",)),)), con)
     assert "(origin_airport_id IN ($f0_0) OR dest_airport_id IN ($f0_0))" in sql

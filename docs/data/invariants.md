@@ -267,7 +267,7 @@ above), so the population that can catch it is a third of all airports, not a cu
 ORD are both in it.
 
 **Route storage order (by airport ID) and the alphabetical order a person would type
-disagree for 215 of 22,635 routes (0.96%, excluding the 532 same-airport "routes" just
+disagree for 215 of 22,635 routes (0.95%, excluding the 532 same-airport "routes" just
 above, which are not routes)** — e.g. `HPN` (12197) and `BNH` (16954): id order is
 `HPN-BNH`, but the alphabetical form — used as `/route/<pair>`'s canonical URL — is `BNH-HPN`.
 `/route/<pair>` (`app/src/lib/routePair.ts`) computes both explicitly rather than assuming one
@@ -552,7 +552,7 @@ map's accessible name and in visible text beneath it.
 **These pairs reach real pages.** They touch **22** airport pages over the trailing 12, and for
 **JZM and OQZ** the quarantined pair is the airport's *entire* window — so dropping it
 without a disclosure leaves nothing on the page saying anything was ever filed. `OQZ`
-is one of the four airports (with `DJN`, `JZM` and `POB`) that resolve at all **only** because
+is one of the four airports (with `A18`, `DJN` and `POB`) that resolve at all **only** because
 quarantined rows are counted, which `app/src/lib/sitemap.ts` relies on and `sitemap.test.ts` pins.
 
 **At segment grain, and stated at the grain the page RENDERS.** `/airport/<code>`'s endpoints
@@ -650,17 +650,17 @@ em dash everywhere" is how a sweep declares a surface fixed that never was.
 and the stat strip were the first half of #121; `fetchAircraftMix` applied the identical `?? 0`,
 so a `(month, band)` cell whose every filing was quarantined was drawn as a zero-height band —
 "this type flew nothing that month". Measured over the pairs the chart actually draws (≥ 2 filed
-months): **768** such cells across **302** route pairs, **55** cells / 8 carriers, **62** cells /
+months): **778** such cells across **305** route pairs, **55** cells / 8 carriers, **62** cells /
 11 aircraft types.
 
 **A stacked area's y is cumulative, so the two shapes of that defect take different treatments,
 and the split is measured rather than assumed.** A month with **no** stateable cell has no height
-anywhere and breaks the runs exactly as an unfiled month does — **339** such months, carrying zero
+anywhere and breaks the runs exactly as an unfiled month does — **345** such months, carrying zero
 stateable seats, so breaking them erases nothing. A month with **some** stateable cells is still
-drawn, because dropping it would erase what can be stated: **407** such months hold **11,687,092**
+drawn, because dropping it would erase what can be stated: **411** such months hold **11,689,847**
 stateable seats, the worst (`LAS–LAX` 2024-11) **297,295** across 12 cells with one unknowable. It
-is disclosed as *understated* instead. The shortfall is not bounded near zero — 26 of the 606 rows
-behind those cells are `load_factor_gt_1` carrying 19,870 filed seats, not `zero_seats`.
+is disclosed as *understated* instead. The shortfall is not bounded near zero — 27 of the 613 rows
+behind those cells are `load_factor_gt_1` carrying 19,877 filed seats, not `zero_seats`.
 `docs/design/system.md` § Charts carries the exact wording each cause gets; the rule is that the
 gap count never absorbs the quarantine count, because "N months with no filings" is false of a
 month that was filed.
@@ -668,9 +668,9 @@ month that was filed.
 **Downstream of the same rows: the crossover annotation refuses rather than ranks.** A year holding
 a type whose seats cannot be stated has no leader — "B overtakes A" is a claim about which type was
 biggest, and an unknown rival cannot be shown to have lost. **State the grain**: the refusal is at
-year × type — a type's WHOLE-YEAR total must be unstateable — which fires on **214 pairs across
+year × type — a type's WHOLE-YEAR total must be unstateable — which fires on **215 pairs across
 273 pair-years** of 23,167, and changes the rendered annotation on **18** of them (6 lose it, 12
-move year or direction). The cell-grain figure two paragraphs up (768 cells / 302 pairs) answers a
+move year or direction). The cell-grain figure two paragraphs up (778 cells / 305 pairs) answers a
 different question and is not this one.
 
 **One state is admitted because the producer can return it, not because a page shows it.**
@@ -701,7 +701,7 @@ wholly-quarantined set draws above, one level up. Against the 290 airports
 the 290, are measurements stated here, not gated figures; only the route count is generated.) They
 render the same `—` for a different reason — nothing was filed, rather than nothing filed can be
 trusted — and both are the `—` this section requires. **A consumer keying on "the sum is null" alone
-answers the wrong one of them, and answers it on the 12,201 rather than the 10.** So the card's
+answers the wrong one of them, and answers it on the 12,201 rather than the 12.** So the card's
 sixth stat and the page's foot are both gated on **two** operands, and every surface tests both
 absences: `RouteEmptyState` / `CarrierEmptyState` / `AircraftEmptyState` name which one a page is
 in, and the foot claims an exclusion only where there was one.
@@ -778,7 +778,7 @@ is 21–22 ms (6.7 M probe values instead of 1,049 distinct ones).
 
 ### Airport coordinates, and the six that are east of the antimeridian
 
-Measured 2026-08-01 against the 1,049 fact-present airports (`fct_segment_month`'s origin ∪
+Measured 2026-09-16 against the 1,049 fact-present airports (`fct_segment_month`'s origin ∪
 dest, joined on `is_latest`). Recorded here because anything that places an airport
 geographically depends on both facts, and neither is guessable from the schema.
 

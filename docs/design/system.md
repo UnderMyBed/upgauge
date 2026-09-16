@@ -282,7 +282,7 @@ it is the only place a keyboard user reaches the expansion, linked cell or not.
 
 **A fourth case, and it is not a dimension property: a `route` cell whose two halves are the
 same airport does not link.** `fct_segment_month` carries 532 such pairs with real traffic
-(ORD alone is 76,236 seats over the trailing 12), but `/route/ORD-ORD` is a 404 by design —
+(ORD alone is 77,795 seats over the trailing 12), but `/route/ORD-ORD` is a 404 by design —
 `resolveRoutePair` answers *"'ORD' to itself is not a route between two airports"*, and
 `sitemap_routes.sql` excludes them for the same reason. The link path is the easiest place to
 forget it, and forgetting it ships a link to a guaranteed 404. The guard lives
@@ -370,7 +370,7 @@ page gating on the second asks the wrong one. It bites twice:
   are the live cases. The predicate is `mixChartDraws` (`lib/chart/mixPlotConfig.ts`), and
   `prepareMixPlot` is routed **through** it so a page and the chart beside it cannot disagree.
 - **Arc rendering** — every row in that group describes an *arc*, and a map can render without one.
-  A hub map always paints its origin disc (`/airport/A18`, `/airport/OQZ`), and
+  A hub map always paints its origin disc (`/airport/JZM`, `/airport/OQZ`), and
   `fetchCarrierTypeNetwork` deliberately returns a zero-segment map so its quarantine disclosure
   reaches the reader (`/carrier/F4?type=SHORT360`, `/aircraft/SHORT360?carrier=F4`). The predicates
   are `segmentArcsDrawn` / `networkArcsDrawn`, both reading the renderer's own `drawableSegments`.
@@ -567,7 +567,7 @@ below — it binds every time-series mark, not only lines.
   - **The absent month gets no sample.** The filed months are split into contiguous runs and
     each run is drawn as its own mark, so the hole is a hole.
   - **An isolated filed month is still drawn.** A one-month run has no width and serializes to
-    an invisible degenerate path, and **9,486 of 22,919 pairs (41%)** have at least one such
+    an invisible degenerate path, and **9,667 of 23,167 pairs (42%)** have at least one such
     month between two gaps. Erasing a filing is the same class of dishonesty as inventing one,
     so those runs are drawn **stroked** — a hairline column in the band's own shade, at its own
     height in the stack.
@@ -584,7 +584,7 @@ below — it binds every time-series mark, not only lines.
   `aria-label`: *"N months filed but wholly quarantined — every filing failed an invariant."*
   Folding them into the gap count puts a false clause in the one sentence a sighted reader gets,
   which is the compound-claim shape `/watch/new-routes` already shipped once. Measured over the
-  pairs the chart draws: **339** such months, and they carry zero stateable seats, so breaking
+  pairs the chart draws: **345** such months, and they carry zero stateable seats, so breaking
   them erases nothing.
 
   **A third state is not a hole at all.** Where *some* of a month's bands can be stated and
@@ -592,12 +592,12 @@ below — it binds every time-series mark, not only lines.
   understated: *"N months understated — a quarantined filing is drawn at zero height there, so
   its band flattens and the stack is lower than the real total by an amount that cannot be
   stated."* The sentence names the **mark**, not just a total: the cell is painted at zero, and
-  249 of the 420 such cells belong to a top-five *member* band, so a named band visibly drops to
+  253 of the 424 such cells belong to a top-five *member* band, so a named band visibly drops to
   the floor for one month and nothing else on the chart says why. Dropping the month instead
-  was measured and rejected: **407** such months hold **11,687,092** stateable seats, the worst
+  was measured and rejected: **411** such months hold **11,689,847** stateable seats, the worst
   (`LAS–LAX` 2024-11) **297,295** across 12 cells with one unknowable. Erasing a filing is the
-  same dishonesty as inventing one, and the shortfall is not bounded near zero — 26 of the 606
-  rows behind these cells are `load_factor_gt_1` carrying 19,870 filed seats, not `zero_seats`.
+  same dishonesty as inventing one, and the shortfall is not bounded near zero — 27 of the 613
+  rows behind these cells are `load_factor_gt_1` carrying 19,877 filed seats, not `zero_seats`.
   A stacked area's y is cumulative, so there is no honest way to omit one component at one x and
   keep the rest aligned; the choice is draw-and-disclose or erase, and this project surfaces dirt
   rather than hiding it.
@@ -608,7 +608,7 @@ below — it binds every time-series mark, not only lines.
   rather than treated as a wall, so the annotation is derived from the years that can be ranked.
   Measured **at year × type grain**, which is the grain the refusal fires at — a type's
   whole-year total must be unstateable, a strictly smaller set than "pairs carrying an
-  unstateable cell": **214 pairs across 273 pair-years** of 23,167. What a reader sees change is
+  unstateable cell": **215 pairs across 273 pair-years** of 23,167. What a reader sees change is
   smaller again, because most refused years were never the year the annotation named — the
   rendered annotation differs on **18 pairs**, 6 losing it and 12 moving year or direction.
 
@@ -1306,7 +1306,7 @@ being honest:
 
 - **`/airport`'s Explorer link is ONE link.** `endpoint_airport_id` (filter-only,
   `filter_mode='either'`) compiles `origin OR dest` directly, so the page filters on it and
-  links to the identical query — that link reproduces the page's own 53,373,806-seat SEA
+  links to the identical query — that link reproduces the page's own 53,343,024-seat SEA
   figure, not a half of it. Without that dimension the page can only offer `departures from
   SEA` and `arrivals into SEA` as two halves, and "every insight row is one click from the raw
   rows" holds only with a qualification.

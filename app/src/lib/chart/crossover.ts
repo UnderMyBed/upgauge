@@ -103,8 +103,8 @@ function leadersByYear(rows: readonly CrossoverRow[]): [string, Leader][] {
  * to naming the crossover from the years that CAN be ranked rather than to no annotation at all.
  * MEASURED AT YEAR x TYPE GRAIN, which is the grain this function refuses at: a type's WHOLE-YEAR
  * total must be null, i.e. every cell it filed that year was quarantined. That is a strictly
- * smaller set than "pairs carrying an unstateable cell" (768 cells / 302 pairs), and quoting the
- * cell figure here would be measuring a different question -- the refusal fires on **214 pairs
+ * smaller set than "pairs carrying an unstateable cell" (778 cells / 305 pairs), and quoting the
+ * cell figure here would be measuring a different question -- the refusal fires on **215 pairs
  * across 273 pair-years** of 23,167.
  *
  * WHAT A READER ACTUALLY SEES CHANGE is smaller again, because most refused years were never the

@@ -107,9 +107,9 @@ describe("every airport this site serves a page for lands where the map says it 
     // Without this, a regression that emptied the sitemap -- or a `lookupAirportsByCode` that
     // resolved nothing -- would make both properties pass over an empty list and report
     // success. The same guard, for the same reason, as the land test's "reads real
-    // conterminous subpaths". Measured 2026-08-26: 1,049 airports. Asserted as a floor rather
-    // than that figure, because the figure is a dataset measurement and this file is not
-    // registered with `test_stated_counts.py`.
+    // conterminous subpaths". The served population is 1,049 airports, a figure
+    // `test_stated_counts.py` holds current in this comment. Asserted as a floor rather than that
+    // figure, because a refresh that moves the count is not a containment failure.
     expect(placed.length).toBeGreaterThan(1000);
     for (const p of placed) {
       expect(`${p.code}: ${Number.isFinite(p.x) && Number.isFinite(p.y)}`).toBe(`${p.code}: true`);

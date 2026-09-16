@@ -299,8 +299,8 @@ export async function CarrierView({
   // ever be origin-only OR dest-only, never either-endpoint, until a groupable version of the
   // dimension exists -- not on any current backlog list. The heading below says "origin" and the
   // page states the real limitation in words -- the same failure shape as /airport's measured
-  // 26,708,918-vs-53,372,100 seats when a union term was dropped (CLAUDE.md), but a different
-  // cause from the one this comment used to name.
+  // 26,695,264-vs-53,343,024 seats when a union term is dropped
+  // (app/src/app/airport/[code]/endpoints.ts), from a different cause.
   const routesSpec: TopNSpec = {
     grain: "route",
     dimension: "route",

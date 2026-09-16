@@ -27,8 +27,8 @@ export interface MixRow {
    *
    * Coercing it here drew the cell as a zero-height band, which on a stacked area reads as "this
    * type flew nothing that month" -- inventing data, the thing this chart's whole gap treatment
-   * exists to refuse. Measured over pairs the chart actually draws (>= 2 filed months): 768 such
-   * cells across 302 route pairs, 55 cells / 8 carriers, 62 cells / 11 aircraft types. Issue
+   * exists to refuse. Measured over pairs the chart actually draws (>= 2 filed months): 778 such
+   * cells across 305 route pairs, 55 cells / 8 carriers, 62 cells / 11 aircraft types. Issue
    * #121. */
   seats: number | null;
   departures: number | null;
@@ -239,9 +239,9 @@ export interface SeriesPoint {
  * (2020-04..2020-09) INSIDE the COVID band the chart labels "in window on purpose".
  *
  * `solo` exists because a run of one month has no width: it serializes to a degenerate,
- * invisible path, and 9,486 of 22,919 route pairs (41%) have at least one such isolated
- * month. Erasing a filing is the same class of dishonesty as inventing one, so the renderer
- * draws those runs stroked instead of filled. */
+ * invisible path, and 9,667 of 23,167 route pairs (42%) have at least one such isolated
+ * interior month. Erasing a filing is the same class of dishonesty as inventing one, so the
+ * renderer draws those runs stroked instead of filled. */
 export interface MonthAxis {
   /** Every month from the first FILED month to the last, contiguous, drawable or not -- which
    * is the window every sentence around the chart names, and since the x domain is pinned to it
@@ -259,19 +259,19 @@ export interface MonthAxis {
    * sentence a reader gets must not name the wrong cause. A chart saying "3 months with no
    * filings" about a month that WAS filed is false in the one line a sighted reader reads.
    *
-   * Measured over pairs the chart draws: 339 such months. They carry zero stateable seats by
+   * Measured over pairs the chart draws: 345 such months. They carry zero stateable seats by
    * construction, so breaking them erases nothing. */
   unknowable: string[];
   /** Months that ARE drawn -- at least one band's height is stateable -- but that also carry at
    * least one cell whose filings all failed an invariant, so the stack UNDERSTATES them by an
    * amount nobody can state.
    *
-   * These are not broken, and the measurement is why. 407 such months exist over the pairs this
-   * chart draws, and they hold 11,687,092 stateable seats between them -- the worst single month
+   * These are not broken, and the measurement is why. 411 such months exist over the pairs this
+   * chart draws, and they hold 11,689,847 stateable seats between them -- the worst single month
    * (LAS-LAX 2024-11) has 297,295 stateable seats across 12 cells with ONE unknowable. Dropping
    * the month to avoid understating it would erase all of that, and erasing a filing is the same
-   * class of dishonesty as inventing one. Nor is the understatement bounded near zero: 26 of the
-   * 606 rows behind these cells are `load_factor_gt_1` carrying 19,870 filed seats, not
+   * class of dishonesty as inventing one. Nor is the understatement bounded near zero: 27 of the
+   * 613 rows behind these cells are `load_factor_gt_1` carrying 19,877 filed seats, not
    * `zero_seats`. So the month is drawn from what CAN be stated and the shortfall is disclosed,
    * which is this project's standing answer to dirt -- surface it, never clamp it. */
   understated: string[];
@@ -523,7 +523,7 @@ export function toBands(rows: MixRow[]): {
     // Inside a drawable month a `null` cell still resolves to 0, and that is deliberate rather
     // than an oversight: the stack is cumulative, so omitting one component at one x would leave
     // every band above it with an uncomputable y and take the whole month down with it. What
-    // that would cost is measured (MonthAxis.understated: 11,687,092 stateable seats over 407
+    // that would cost is measured (MonthAxis.understated: 11,689,847 stateable seats over 411
     // months). The month is drawn from what can be stated and the shortfall is DISCLOSED, on the
     // chart and in its aria-label -- never silently folded into the "no filings" count.
     series: months.map((month) => ({ month, seats: byMonth.get(month)?.get(t.code) ?? 0 })),

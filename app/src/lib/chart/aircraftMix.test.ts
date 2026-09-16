@@ -462,10 +462,10 @@ describe("toBands over the real B737-8 carrier mix", () => {
  * TWO SHAPES, TWO TREATMENTS, and the split is measured rather than stipulated:
  *
  *   - a month with NO stateable cell has no height anywhere, so it breaks the runs exactly as an
- *     unfiled month does. 339 such months over the pairs this chart draws; they carry zero
+ *     unfiled month does. 345 such months over the pairs this chart draws; they carry zero
  *     stateable seats, so breaking them erases nothing.
  *   - a month with SOME stateable cells is still drawn, because dropping it would erase what
- *     CAN be stated: 407 such months hold 11,687,092 stateable seats, the worst 297,295 in one
+ *     CAN be stated: 411 such months hold 11,689,847 stateable seats, the worst 297,295 in one
  *     month. It is disclosed as understated instead.
  *
  * ASSERT THE GEOMETRY, NEVER THE FILLS. Every assertion below is on a run BOUNDARY -- the run id

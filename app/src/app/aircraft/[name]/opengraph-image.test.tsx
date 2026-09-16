@@ -90,7 +90,7 @@ describe("/aircraft/<slug> opengraph-image", () => {
 // the wholly-quarantined footprint at route grain only; re-derived at aircraft grain, BTS types
 // 201 (`/aircraft/TRISLNDR`) and 489 (`/aircraft/SHORT360`) have no un-quarantined filing either
 // -- both F4 in 2025-08, 5 and 27 PERFORMED departures against a filed seat count of zero. So the
-// reachable footprint is 12 pages, not the 10 the issue states.
+// reachable footprint is 14 pages, not the route grain's 12.
 describe("the default export's card input", () => {
   async function cardInputFor(name: string) {
     renderSpy.mockClear();
@@ -104,6 +104,9 @@ describe("the default export's card input", () => {
   // MUTANT: `stats: cardStats(totals, { label: "Carriers", ... })` at the render call -> the
   // sixth stat reads `Carriers 1` -> red.
   // MUTANT: restore `?? 0` in `sumColumn` -> the first five stop being dashes -> red.
+  // DATASET-PINNED SUBJECT, and it expires: TRISLNDR's trailing-12 filings are F4's two 2025-08
+  // rows, which leave the window at asOf 2026-08, so when this reddens, re-derive an aircraft
+  // type with no un-quarantined trailing-12 filing and move the fixture there.
   it("rasterizes the quarantined count on a wholly-quarantined aircraft type", async () => {
     const input = await cardInputFor("TRISLNDR");
     expect(input.stats.map((s) => s.label)).toEqual([
@@ -122,8 +125,8 @@ describe("the default export's card input", () => {
     expect(input.stats.map((s) => s.value)).not.toContain("—");
   });
 
-  // The MD-80 stopped filing in 2023-04, so its trailing-12 pivot returns no rows -- 37 of this
-  // dataset's fact-present types are in that state.
+  // The MD-80 stopped filing in 2023-04, so its trailing-12 pivot returns no rows -- 39 of this
+  // dataset's 112 fact-present types are in that state.
   // MUTANT: key `cardSixthStat` on `totals.seats === null` alone -> `Quarantined 0` -> red.
   // MUTANT: seed `sumColumn` at 0 -> the first five stop being dashes -> red.
   it("keeps the carrier count on a type that filed nothing in the window", async () => {

@@ -81,7 +81,7 @@ describe("fetchAirportNetwork, against the warehouse", () => {
   it("passes the same-airport seat total through rather than discarding it", async () => {
     // Measured directly against fct_route_month: ORD's same-airport rows sum to 73,082 seats
     // over 2025-05..2026-04, the FIXED window this test queries. docs/design/system.md and
-    // docs/data/invariants.md state 76,236 for the trailing 12 (2025-06..2026-05) -- a
+    // docs/data/invariants.md state 77,795 for the trailing 12 (2025-07..2026-06) -- a
     // different window, not a different answer. A re-pin sweep once updated this comment to
     // the trailing-12 figure while leaving the assertion on its own fixed window, which is how
     // a green test came to be documented by a number it does not assert.

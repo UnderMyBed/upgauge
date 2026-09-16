@@ -444,7 +444,7 @@ describe("/carrier/<code> Open Graph metadata (M9 Task 6b)", () => {
 // (M7 Task 2's `for_grouping` guard rejects it as a grouping dimension, the same way it would
 // double-count a segment row into both its origin's and its dest's group). An "airports served"
 // heading over an origin-only query is a quiet false claim, the same shape as /airport reading
-// 26,710,000 seats instead of 53,373,806 when it dropped a union term.
+// 26,695,264 seats instead of 53,343,024 when it dropped a union term.
 describe("/carrier/<code> Top-N tables", () => {
   it("labels the airports table 'origin', because either-endpoint is not what it queries", async () => {
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
@@ -1040,6 +1040,10 @@ describe("/carrier/<code>: the legend rail's arc group follows the ARCS (#123)",
   // A map can render with none of them, so "a map was drawn" is the wrong gate: `fetchCarrierTypeNetwork` deliberately returns a map with ZERO
   // segments when every route of a pair is quarantined, so its disclosure reaches the reader --
   // `F4 x SHORT360` is that view, pinned at the producer by `carrierTypeNetwork.test.ts`.
+  //
+  // DATASET-PINNED SUBJECT, and it expires: F4's SHORT360 filings are all 2025-08 and leave the
+  // trailing 12 at asOf 2026-08, so when this reddens, re-derive a carrier x type whose
+  // trailing-12 groups are all quarantined or same-airport and move the fixture there.
   //
   // Asserted as an ABSENCE, because the presence form passes under the bug. And per CALL SITE:
   // each page decides for itself what to pass, so reverting one is a live defect on that surface

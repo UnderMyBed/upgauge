@@ -247,7 +247,7 @@ describe("NetworkMap", () => {
   });
 
   it("discloses even when the network has no drawable arc at all", () => {
-    // /airport/A18: nothing to draw, something to say. Gating the notes on the arcs -- the
+    // /airport/JZM: nothing to draw, something to say. Gating the notes on the arcs -- the
     // obvious "no arcs, nothing to show" shortcut -- deletes the only thing on the page saying
     // anything was filed, on precisely the pages where it is the only thing there is.
     const empty: NetworkMapInput = {

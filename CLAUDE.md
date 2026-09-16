@@ -320,7 +320,7 @@ Encodings live in `docs/design/system.md`. These three are the traps.
 **Gaps are gaps, and zero is not the alternative.** T-100 is a *filing*, so a month with no row
 is neither "nobody flew" nor "0 seats flew" — drawing it either way invents data. Areas break
 into contiguous runs, one `z` series each, and the count is stated on the chart and in its
-`aria-label`. 62% of route pairs have such a gap; 41% have an isolated single month, drawn
+`aria-label`. 62% of route pairs have such a gap; 42% have an isolated single month, drawn
 **stroked**, because a one-month area has no width and erasing a filing is the same dishonesty
 as inventing one. This shipped wrong once: `HNL–LAS` drew a straight edge across six unfiled
 COVID months, *inside* the band labelled "COVID — in window on purpose".

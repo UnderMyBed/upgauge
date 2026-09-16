@@ -126,7 +126,8 @@ same-airport-INCLUSIVE; 22,635 excludes the 532 same-airport pairs (`docs/data/i
 
 **Count airports at both endpoints, or the number is wrong by a third.** Origin-only gives 741
 / 993, and that is not a rounding difference: it is the same silent halving
-`../product/features.md` measures on `/airport/SEA` (26,710,000 seats against 53,373,806). A prerender list built from
+`../product/features.md` measures on `/airport/SEA` (26,710,000 seats against 53,373,806 over
+this section's 2025-05 → 2026-04 window). A prerender list built from
 `origin_airport_id` alone would simply never emit pages for the 48 airports that only ever
 appear as destinations.
 

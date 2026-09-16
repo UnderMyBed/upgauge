@@ -139,7 +139,7 @@ function conterminousOnlyFixture(): NetworkMapInput {
 }
 
 /** ORD with three arcs, the FIRST of which shares its code with the origin -- a same-airport
- * row (measured: ORD carries 53 such rows / 73,082 seats over the trailing 12 months,
+ * row (measured: ORD carries 53 such rows / 73,082 seats over 2025-05..2026-04,
  * docs/data/invariants.md § Route identity). `fixtureArcCount` returns this fixture's total
  * arc count (including the self row) so the exclusion test can assert N-1 without a second,
  * independently-maintained constant drifting from this one. */

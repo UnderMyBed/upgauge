@@ -19,9 +19,9 @@ const R = Math.PI / 180;
  * (lat, lon) directly.
  *
  * `om < 1e-9` guards coincident (or antipodal-adjacent) endpoints, where `sin(om) === 0` would
- * otherwise divide by zero and produce NaN for every point on the path. 359 of 1,049 airports
- * have same-airport rows upstream (excluded before this module by Task 6, but this function
- * itself must stay safe regardless of what calls it).
+ * otherwise divide by zero and produce NaN for every point on the path. 354 of 1,049 airports
+ * have same-airport rows in the trailing 12 upstream (excluded before this module by Task 6, but
+ * this function itself must stay safe regardless of what calls it).
  */
 export function greatCircle(a: GeoPoint, b: GeoPoint, steps: number): GeoPoint[] {
   const toVec = (lat: number, lon: number): [number, number, number] => [

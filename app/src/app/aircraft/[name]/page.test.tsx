@@ -573,6 +573,10 @@ describe("/aircraft/<slug> network map on a type with nothing in the window", ()
  * zero. `/aircraft/TRISLNDR` and `/aircraft/SHORT360` rendered three fabricated zeros, so the
  * reachable footprint is 14 pages, not the route grain's 12.
  *
+ * DATASET-PINNED SUBJECT, and it expires: TRISLNDR's trailing-12 filings are F4's two 2025-08
+ * rows, which leave the window at asOf 2026-08, so when these redden, re-derive an aircraft type
+ * with no un-quarantined trailing-12 filing and move the fixture there.
+ *
  * The strip is read as an ORDERED LIST, never searched for a dash: load factor and average gauge
  * rendered `—` under the bug too, so the buggy page read `0 · 0 · — · — · 0`. */
 function statStrip(container: HTMLElement): string[] {

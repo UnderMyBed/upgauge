@@ -9,8 +9,8 @@ import sitemap from "@/app/sitemap";
 
 describe("sitemapEntries", () => {
   it("emits exactly the measured URL count per kind, quarantine included", async () => {
-    // docs/product/scope.md § D2's 23,913 breakdown (23,908 through M5; M6 Task 7 added
-    // `/watch` plus its four presets, +5, which this file's four ENTITY counts do not carry --
+    // docs/product/scope.md § D2's 23,913 breakdown (the 23,908 entity URLs, plus `/watch` and
+    // its four presets, +5, which this file's four ENTITY counts do not carry --
     // they are appended by app/sitemap.ts). Each of the four counts is measured
     // against the built database; a regression here is a real count drift, not a guess.
     const [routes, airports, carriers, aircraft] = await Promise.all([

@@ -1128,7 +1128,7 @@ const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 // segment, same shape as the four ENTITY_ROUTES entries -- but it has no ENTITY_ROUTES row of
 // its own, because its cacheability branch (above) answers "known" from the static `PRESETS`
 // registry rather than a database resolve(). `app/sitemap.ts` is a single default export
-// (23,913 URLs -- was 23,908 through M5, +5 for `/watch` and its four presets -- well under
+// (23,913 URLs -- the 23,908 entity pages plus `/watch` and its four presets -- well under
 // the sitemap protocol's 50,000-per-file limit, see that file's own header), not
 // `generateSitemaps()`'s multi-file convention, so there is exactly one `/sitemap.xml` route to
 // list, not a family of numbered children.

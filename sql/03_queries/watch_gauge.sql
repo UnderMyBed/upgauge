@@ -36,9 +36,9 @@ WHERE route_key_low <> route_key_high
 -- appending the triple makes the ordering total. It is a SUFFIX -- gauge_delta still ranks.
 --
 -- ALL THREE COLUMNS, never the route pair alone, and here that is measured rather than argued:
--- gauge_delta = 0.0 is a SINGLE tie run of 546 rows spanning 27 carriers and 515 distinct route
--- pairs, inside which 31 pairs are flown by more than one carrier. A route-only tiebreak leaves
--- those 31 pairs' rows in merge order -- still nondeterministic, and green against any fixture
+-- gauge_delta = 0.0 is a SINGLE tie run of 563 rows spanning 27 carriers and 530 distinct route
+-- pairs, inside which 33 pairs are flown by more than one carrier. A route-only tiebreak leaves
+-- those 33 pairs' rows in merge order -- still nondeterministic, and green against any fixture
 -- keyed on route alone. The grain is a carrier-route PAIR, never a route.
 --
 -- The tiebreak is written LITERALLY rather than as a second substituted token, and that is the
@@ -52,7 +52,7 @@ WHERE route_key_low <> route_key_high
 -- direction token would create precisely the second substitution site the paragraph above
 -- exists to avoid, and ascending is the order 200_mart_route_health.sql stores its rows in.
 --
--- Ties are real in this data, not hypothetical: 3 tie runs covering 550 of the 5,308
+-- Ties are real in this data, not hypothetical: 2 tie runs covering 565 of the 5,389
 -- qualifying rows.
 ORDER BY gauge_delta {{DIRECTION}}, op_airline_id, route_key_low, route_key_high
 LIMIT $limit
