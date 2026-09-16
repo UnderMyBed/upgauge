@@ -318,7 +318,7 @@ function ReEntryNote({ p12From, p12To }: { p12From: string; p12To: string }) {
       measured, 160 of the 281 qualifying pairs (56.9%) had already filed in some earlier month,
       one of them in 107 distinct months going back to 2015-01. Nor does it mean the route was
       unserved &mdash; 224 of the 281 (79.7%) had a <em>different</em> carrier flying the same
-      airport pair inside that prior window. A pair that stopped and resumed <em>within</em>
+      airport pair inside that prior window. A pair that stopped and resumed <em>within</em>{" "}
       these two windows is excluded for the mirror-image reason.
     </p>
   );
