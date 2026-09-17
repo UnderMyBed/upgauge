@@ -348,8 +348,8 @@ export async function FilterListView({ rawQuery, dim }: { rawQuery: string; dim:
 /** Thin wrapper: the ONLY job here is getting the raw query string and the slug. It deliberately
  *  does not accept `searchParams` -- Next has already percent-decoded those by the time a page
  *  sees them, and this format's filter values can contain the delimiters decoding makes
- *  ambiguous (lib/rawQuery.ts). `proxy.ts` supplies the raw string via a request header, so
- *  `/explore/filter/:dim` must be in its matcher or this throws. */
+ *  ambiguous (lib/rawQuery.ts). `proxy.ts` supplies the raw string via a request header on
+ *  every request; without it this throws. */
 export default async function FilterListPage({ params }: { params: Promise<{ dim: string }> }) {
   const { dim } = await params;
   const requestHeaders = await headers();

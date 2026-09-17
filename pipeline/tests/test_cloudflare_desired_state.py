@@ -359,8 +359,8 @@ COVERED = (
     (
         "/api/health",
         "the second `/api/` row, and not a decoration: `no-store` with "
-        '`dynamic = "force-dynamic"` (app/src/app/api/health/route.ts), deliberately absent '
-        "from proxy.ts's matcher because uncached is its REQUIREMENT rather than an omission -- "
+        '`dynamic = "force-dynamic"` (app/src/app/api/health/route.ts), deliberately not declared '
+        "in `QUERY_ROWS` because uncached is its REQUIREMENT rather than an omission -- "
         "so every request runs `catalogGaps` + `dataAsOf` at the origin with nothing in front",
     ),
     ("/explore", "the same `f` axis on the HTML page, which no key or value bound closes"),
@@ -368,9 +368,9 @@ COVERED = (
         "/explore/ZZZZ",
         "the clause is `/explore` with NO trailing slash, so the whole `/explore...` family is "
         "inside it. MEASURED 2026-08-27 against a served build: 404 under `private, no-cache, "
-        "no-store, max-age=0, must-revalidate`. It is outside proxy.ts's matcher, which lists "
-        "the literal `/explore`, so no cache header is set for it and each distinct spelling is "
-        "another origin 404",
+        "no-store, max-age=0, must-revalidate`. No `QUERY_ROWS` row declares it -- `/explore`'s "
+        "row is an exact match -- so the proxy sets no cache header for it and each distinct "
+        "spelling is another origin 404",
     ),
     ("/route/JFK-LAX/opengraph-image", "a DuckDB query plus a rasterize, with no warm path"),
     ("/airport/SEA/opengraph-image", "same"),
@@ -451,11 +451,11 @@ COVERED = (
 #     `test_the_excluded_asset_families_agree_with_the_app_that_emits_them` (`app/smoke.sh`'s
 #     served needle for the stylesheet, the pinned `next/font` module for the faces).
 #   * `/`, `/watch`, `/watch/gauge`, `/sitemap.xml` and `/robots.txt` are bound to what it
-#     SERVES -- `test_every_matcher_path_the_rule_misses_is_listed_as_deliberately_excluded`
-#     agrees with `proxy.ts`'s matcher. "No authority binds these" was written here once and was
+#     SERVES -- `test_every_declared_route_the_rule_misses_is_listed_as_deliberately_excluded`
+#     agrees with `QUERY_ROWS`. "No authority binds these" was written here once and was
 #     an overstatement: one counterexample (`/search`) refutes a UNIVERSAL, not a binding, and it
 #     lives in `UNCOVERED_EXEMPT` with its reason beside the name.
-#   * `/favicon.ico` alone is DELETABLE with this file green. It is not a matcher path and not an
+#   * `/favicon.ico` alone is DELETABLE with this file green. It is not a declared route and not an
 #     asset family, so neither authority reaches it; it is held by review. That is one row, named,
 #     rather than a necessity claim the whole table does not satisfy.
 #
@@ -468,7 +468,7 @@ COVERED = (
 # the property vacuous for everything (a measured mutant -- see that test).
 UNCOVERED = (
     ("/", "static, and the entry point every real visitor lands on"),
-    ("/watch", "the index: a matcher path outside the expression, and one cacheable document"),
+    ("/watch", "the index: a declared route outside the expression, and one cacheable document"),
     ("/watch/gauge", "four closed slugs, so the whole surface is four cacheable documents"),
     # The reason is the CACHE alone. Nearly every URL this document enumerates is itself inside
     # the rule since #117, so "crawlers fetch it" exempts nothing -- it is one cached document,
@@ -600,8 +600,8 @@ def test_the_og_cards_stay_covered_by_their_own_clause_when_the_entity_prefixes_
     # Counting COVERED entries would let a FIFTH card route be added -- `/watch/[preset]/` is the
     # plausible one -- with no test noticing: the clause would silently become load-bearing again,
     # the "BACKSTOP, not load-bearing" paragraph in hosting.md would become false, and every
-    # assertion here would stay green. Same shape as `canonicalQuery.test.ts` agreeing with
-    # `config.matcher` rather than restating it.
+    # assertion here would stay green. Same shape as `canonicalQuery.test.ts` agreeing with the
+    # `app/src/app` tree rather than restating it.
     # EVERY spelling Next accepts, not just the one this app happens to use. Next generates a
     # card from `opengraph-image` with a CODE extension -- ".js, .ts, .tsx" in its own docs
     # (node_modules/next/dist/docs/.../opengraph-image.md) -- and this glob was `.tsx` only.
@@ -898,38 +898,29 @@ def test_no_single_literal_substitution_can_make_a_clause_lossy():
             )
 
 
-# `proxy.ts`'s matcher is the app's own list of the page routes it serves, and it is closed and
-# actively maintained -- CLAUDE.md makes adding a route to it a rule. So it can bind the half of
-# UNCOVERED the asset authorities cannot reach, in the shape this file already uses for
-# `card_dirs` and `prefetchPolicy.test.ts` uses for `<Link>`: agree with the real list rather
-# than restating it.
-_MATCHER = re.compile(r"matcher:\s*\[")
+# `canonicalQuery.ts`'s QUERY_ROWS is the app's own list of the routes it declares, and
+# `canonicalQuery.test.ts` binds it to the `app/src/app` file tree -- so it can bind the half of
+# UNCOVERED the asset authorities cannot reach: agree with the real list rather than restating it.
+_ROUTE = re.compile(r'^\s*(?:\{\s*)?route:\s*"(/[^"]*)"', re.M)
+_ROW_PREDICATE = re.compile(r"\bmatches:\s*\(p\)\s*=>")
 
 
-def _matcher_patterns(source: str) -> list[str]:
-    r"""`proxy.ts`'s matcher entries, read to the array's MATCHING bracket.
-
-    A non-greedy `\[(.*?)\]` stops at the FIRST `]`, so an entry in Next's object form
-    (`{ source: "...", has: [...] }`) truncates the parse mid-array and the rest of the matcher
-    silently stops being checked. That was guarded by `len(patterns) >= 16` -- a hardcoded floor
-    that works only while there are exactly 16 entries, since at 17 a truncation back to 16
-    passes as the very failure the guard's own message describes. Counting bracket depth removes
-    the failure rather than watching for it, so no floor is needed and none is written."""
-    start = _MATCHER.search(source)
-    assert start, "proxy.ts has no `matcher:` array -- this test is reading the wrong file"
-    depth, i = 1, start.end()
-    while i < len(source) and depth:
-        depth += {"[": 1, "]": -1}.get(source[i], 0)
-        i += 1
-    assert not depth, "proxy.ts's matcher array is unterminated"
-    # Routes only. Every quoted string inside the span was returned before, so Next's object
-    # form (`{ source: "/x", has: [{ type: "header", key: "x-foo" }] }`) would yield `header` and
-    # `x-foo` as if they were paths -- dormant today, and precisely the shape the bracket-depth
-    # parse above was written to accept. A matcher entry is a path and starts with `/`.
-    return [p for p in re.findall(r'"([^"]+)"', source[start.end() : i - 1]) if p.startswith("/")]
+def _route_patterns(source: str) -> list[str]:
+    """QUERY_ROWS' `route` strings, cross-checked against the rows' predicate count so a row this
+    parse cannot read fails loudly instead of silently leaving the coverage check."""
+    routes = _ROUTE.findall(source)
+    assert routes, (
+        "canonicalQuery.ts parsed no `route:` entries -- this test is reading the wrong file"
+    )
+    predicates = len(_ROW_PREDICATE.findall(source))
+    assert len(routes) == predicates, (
+        f"{len(routes)} `route:` strings but {predicates} row predicates in canonicalQuery.ts -- a "
+        "row this parse cannot read would be missing from the coverage check below"
+    )
+    return routes
 
 
-# The ONE matcher path deliberately outside both the expression and UNCOVERED. `/search` is
+# The ONE declared route deliberately outside both the expression and UNCOVERED. `/search` is
 # `no-store` unconditionally, so every request reaches the origin over an attacker-chosen
 # unbounded `q` -- it is named as still-uncovered in docs/architecture/hosting.md rather than
 # implied, and listing it here would assert the opposite: that it MUST NOT be rate limited.
@@ -937,8 +928,8 @@ def _matcher_patterns(source: str) -> list[str]:
 UNCOVERED_EXEMPT = {"/search": "cheap per request, and a real candidate for future coverage"}
 
 
-def test_every_matcher_path_the_rule_misses_is_listed_as_deliberately_excluded():
-    """The exclusion table agrees with `proxy.ts`'s matcher instead of being trusted on its own.
+def test_every_declared_route_the_rule_misses_is_listed_as_deliberately_excluded():
+    """The exclusion table agrees with `QUERY_ROWS` instead of being trusted on its own.
 
     The asset rows are bound to what the app emits; these are bound to what it SERVES. Without
     this, five of the eight rows were deletable with the whole file green -- and "no in-repo
@@ -946,10 +937,10 @@ def test_every_matcher_path_the_rule_misses_is_listed_as_deliberately_excluded()
     universal, not a binding, and an exemption list carrying that counterexample is the shape
     `prefetchPolicy.test.ts` and this file's own `card_dirs` check already use.
 
-    The direction is one-way on purpose. Every matcher path the expression does NOT match must
+    The direction is one-way on purpose. Every declared route the expression does NOT match must
     appear here, so a new page route joins the rate limit or joins this table -- it cannot
     quietly do neither. The converse is not asserted: `/_next/` and `/favicon.ico` are legitimate
-    rows and are not matcher paths at all, so requiring equality would forbid exactly the fixtures
+    rows and are not declared routes at all, so requiring equality would forbid exactly the fixtures
     #131 added."""
     # The exemption list is PINNED, not merely short. Deleting an assertion looks like deleting
     # an assertion; moving a row out of UNCOVERED and into an ungated dict beside it looks like
@@ -962,8 +953,7 @@ def test_every_matcher_path_the_rule_misses_is_listed_as_deliberately_excluded()
         "with NO edge rate limit and no assertion that it is deliberately unlimited; growing it "
         "is how a surface loses its gate while a diff looks like tidying"
     )
-    patterns = _matcher_patterns((ROOT / "app" / "src" / "proxy.ts").read_text())
-    assert patterns, "proxy.ts's matcher parsed empty -- this test would assert nothing"
+    patterns = _route_patterns((ROOT / "app" / "src" / "lib" / "canonicalQuery.ts").read_text())
     clauses = _swept_clauses(_rate_limit_expression())
     excluded = [path for path, _ in UNCOVERED]
     for pattern in patterns:
@@ -1007,7 +997,7 @@ def test_each_excluded_asset_row_is_isolated_by_its_own_segment_or_extension():
     Scope is the asset rows only, and deliberately. `/` has no extension and no segment prefix
     but `/`, which every row shares -- the axes do not apply to a single document, and stretching
     the rule to cover it would mean loosening the candidate space back to the vacuous form. The
-    non-asset rows are bound to `proxy.ts`'s matcher instead, one test down.
+    non-asset rows are bound to `QUERY_ROWS` instead, one test down.
 
     (It OVER-REJECTS, and fails closed. `starts_with`/`ends_with` read any prefix and any suffix,
     not only the ones ending at a `/` or starting at a `.`, so a real `/_next/` route that is not
@@ -1703,8 +1693,8 @@ def _put_calls(code: str) -> dict[str, list[str]]:
     defines it. Measured: `readback` appears five times, three of them inside `put()` itself, so
     `code.count("readback") >= 3` held with the argument removed from BOTH call sites -- the
     read-back never ran on either file and nothing in this suite noticed. Same shape as
-    `card_dirs` agreeing with the routes on disk and `_matcher_patterns` agreeing with the real
-    matcher array: read the thing, do not grep near it."""
+    `card_dirs` agreeing with the routes on disk and `_route_patterns` agreeing with the real
+    `QUERY_ROWS`: read the thing, do not grep near it."""
     calls: dict[str, list[str]] = {}
     # Line continuations first, so a call split across lines reads as one.
     for line in code.replace("\\\n", " ").splitlines():

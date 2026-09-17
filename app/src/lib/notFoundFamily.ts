@@ -1,35 +1,24 @@
-import { ogSlugFromPath } from "@/lib/entitySlug";
-import { routeSlugFromPath, ROUTE_PREFIX } from "@/lib/rawPath";
-import { airportSlugFromPath, AIRPORT_PREFIX } from "@/lib/airport";
-import { carrierSlugFromPath, CARRIER_PREFIX } from "@/lib/carrier";
-import { aircraftSlugFromPath, AIRCRAFT_PREFIX } from "@/lib/aircraftSlug";
+import { routeSlugFromPath } from "@/lib/rawPath";
+import { airportSlugFromPath } from "@/lib/airport";
+import { carrierSlugFromPath } from "@/lib/carrier";
+import { aircraftSlugFromPath } from "@/lib/aircraftSlug";
 import { presetSlugFromPath } from "@/lib/watch";
 import { filterDimFromPath } from "@/lib/pivot/builder";
 
 export type NotFoundFamily = "route" | "airport" | "carrier" | "aircraft" | "watch" | "filter";
 
-// The same four prefixes proxy.ts's OG_ROUTES table carries, not four re-typed string literals
-// -- ROUTE_PREFIX/AIRPORT_PREFIX/CARRIER_PREFIX/AIRCRAFT_PREFIX are each already exported
-// beside the slug reader they belong to (see those files' own headers), and a private copy
-// here is exactly the drift CLAUDE.md's "one owner" rule exists to prevent. `/watch` has no
-// opengraph-image route (absent from proxy.ts's OG_ROUTES), so it is not in this list.
-const OG_PREFIXES: readonly string[] = [ROUTE_PREFIX, AIRPORT_PREFIX, CARRIER_PREFIX, AIRCRAFT_PREFIX];
-
 /** Which 404 view owns this pathname, or null if this project does not route it at all.
  *
- * Second encoding of the ordering `proxy.ts`'s `OG_ROUTES` loop already carries -- read that
- * loop's own comment (immediately above it, "THIS BRANCH MUST STAY ABOVE THE `/airport`
- * BRANCH") for the full argument; it is not restated here beyond the one line that matters for
- * THIS function: every entity slug reader below is a bare prefix test that does not stop at one
- * segment, so `carrierSlugFromPath("/carrier/DL/opengraph-image")` returns
- * `"DL/opengraph-image"`, not null. The OG check has to run first, or a card URL dispatches to
- * an entity's 404 view instead of being recognized as not-an-entity-page at all.
+ * Null covers every URL this app does not route to an entity page: an unrecognized code, a
+ * scanner probe (`/wp-login.php`), a path carrying more than one raw segment past an entity
+ * prefix (`/carrier/DL/x`), and each of the four `opengraph-image` card paths
+ * (`/carrier/DL/opengraph-image`) -- a card path's remainder past the entity prefix is always
+ * two raw segments, the slug and then `opengraph-image`, and every reader below refuses that
+ * shape exactly as it refuses any other nested path.
  *
- * Null is not a failure -- it is the answer for a URL this app never routes (`/wp-login.php`
- * and every other scanner probe, plus the four `opengraph-image` card paths), and the root
+ * Null is not a failure -- it is the answer for a URL this app never routes, and the root
  * `not-found.tsx` renders its database-free generic view for exactly that case. */
 export function notFoundFamilyFromPath(pathname: string): NotFoundFamily | null {
-  if (OG_PREFIXES.some((prefix) => ogSlugFromPath(pathname, prefix) !== null)) return null;
   if (routeSlugFromPath(pathname) !== null) return "route";
   if (airportSlugFromPath(pathname) !== null) return "airport";
   if (carrierSlugFromPath(pathname) !== null) return "carrier";

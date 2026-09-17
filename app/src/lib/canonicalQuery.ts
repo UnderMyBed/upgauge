@@ -5,7 +5,7 @@ import { airportSlugFromPath, AIRPORT_PREFIX } from "@/lib/airport";
 import { carrierSlugFromPath, CARRIER_PREFIX } from "@/lib/carrier";
 import { aircraftSlugFromPath, AIRCRAFT_PREFIX } from "@/lib/aircraftSlug";
 import { presetSlugFromPath } from "@/lib/watch";
-import { FILTER_PREFIX } from "@/lib/pivot/builder";
+import { filterDimFromPath } from "@/lib/pivot/builder";
 
 /** One canonical KEY SET per cacheable URL.
  *
@@ -40,8 +40,8 @@ import { FILTER_PREFIX } from "@/lib/pivot/builder";
  * each one a guaranteed origin miss -- against the exact cost model the CDN exists to protect
  * (docs/architecture/hosting.md § "The actual cost control is caching, not the tier"). That
  * document's § "The gap" already recorded this for `/sitemap.xml` alone, and said nothing
- * guarded the family; it was in fact all ten of the paths the proxy gates. `/api/pivot` is an
- * ELEVENTH cacheable path -- its own successes take the same 30-day `PROJECT_CACHE` -- and it was
+ * guarded the family; it was in fact every path the proxy gates. `/api/pivot` is one more
+ * cacheable path -- its own successes take the same 30-day `PROJECT_CACHE` -- and it was
  * not exempt from the disease either, only from the unknown-key symptom: its handler answered an
  * unknown key with 400, but `splitPairs` skips an empty chunk, so `?<valid permalink>&`, `&&`,
  * `&&&` and a LEADING `&` all returned 200 under `public, s-maxage=2592000,
@@ -51,22 +51,23 @@ import { FILTER_PREFIX } from "@/lib/pivot/builder";
  *
  * A table rather than a chain of `if`s, for the same reason `proxy.ts`'s `ENTITY_ROUTES` is one:
  * the failure being defended against is a future route whose author copies three lines out of
- * four. `QUERY_ROWS` is the THIRD list that must agree with `config.matcher` (canonicalQuery.test
- * .ts asserts it), alongside `ENTITY_ROUTES`.
+ * four. `QUERY_ROWS` is also the app's declared route set -- `isOurs` below is the proxy's whole
+ * notion of "ours" -- and canonicalQuery.test.ts binds it to the `app/src/app` file tree.
  *
  * Pure: no database, no Next imports, no I/O, and it never throws on any input. That last part is
  * load-bearing and was got wrong once: this module used to throw on a `rawQuery` carrying a
  * leading `?`, on the argument that only a wiring bug could produce one. It could not have been
  * more reachable -- `proxy.ts`'s `new URL(request.url).search.replace(/^\?/, "")` strips ONE `?`,
- * so `GET /watch??x=1` (`search === "??x=1"`) handed this function `"?x=1"` and 500ed every one of
- * the twelve matcher paths, `/` and `/sitemap.xml` included, for any client. Measured against a
+ * so `GET /watch??x=1` (`search === "??x=1"`) handed this function `"?x=1"` and 500ed every
+ * gated path, `/` and `/sitemap.xml` included, for any client. Measured against a
  * served build at d109845, and re-measured by restoring the throw on top of the fix: `/watch?x=1`
  * 307, `/watch??x=1` **500**. A leading `?` is not a wiring
  * bug, it is one more non-canonical spelling, and rule 0 below treats it as one.
  * `lib/entitySlug.ts` already catches `decodeURIComponent`'s throw on a malformed escape (`%zz`)
  * and falls back to the raw text, so every `matches` predicate below is total for the same
  * reason: on the proxy path an uncaught throw is a 500 on a request that was only ever going to
- * be a redirect. */
+ * be a redirect -- and `isOurs` runs those predicates on EVERY request the server receives, where
+ * a throw would be a 500 on any URL at all. */
 const NO_KEYS: ReadonlySet<string> = new Set();
 const NONE_REPEATABLE: ReadonlySet<string> = new Set();
 /** `encode()` emits one `f=` per filter (urlstate.ts:113-114) and `decode()` `continue`s past its
@@ -135,8 +136,9 @@ const SEARCH_KEYS: ReadonlySet<string> = new Set(["q"]);
 const OG_CACHE_BUSTER = /^[0-9a-f]{16}$/;
 
 export type QueryRow = {
-  /** The literal `proxy.ts` matcher entry this row answers for. The agreement test keys on it. */
-  matcher: string;
+  /** The App Router pattern this row declares, spelled the way `app/src/app`'s folders spell it
+   * (`[code]` is `:code`). `canonicalQuery.test.ts`'s route-tree agreement keys on it. */
+  route: string;
   matches: (pathname: string) => boolean;
   /** Query keys this path legitimately reads. Everything else is stripped. */
   keys: ReadonlySet<string>;
@@ -156,9 +158,9 @@ export type QueryRow = {
 };
 
 export const QUERY_ROWS: ReadonlyArray<QueryRow> = [
-  { matcher: "/", matches: (p) => p === "/", keys: NO_KEYS, repeatable: NONE_REPEATABLE },
+  { route: "/", matches: (p) => p === "/", keys: NO_KEYS, repeatable: NONE_REPEATABLE },
   {
-    matcher: "/explore",
+    route: "/explore",
     matches: (p) => p === "/explore",
     keys: ALLOWED_KEYS,
     repeatable: EXPLORE_REPEATABLE,
@@ -169,95 +171,97 @@ export const QUERY_ROWS: ReadonlyArray<QueryRow> = [
     // query verbatim so the value list can scope itself to the reader's own window and filters,
     // so a narrower key set here would 307 away the very thing the page reads.
     //
-    // A prefix test, not `filterDimFromPath(p) !== null`: this row must claim every pathname
-    // under the prefix that `config.matcher` forwards, and a row claiming slightly MORE than the
-    // matcher sends costs nothing (nothing ever evaluates it) where a row claiming LESS silently
-    // drops a path out of query protection -- rule 1's `clean` default. It does not collide with
-    // `/explore` above, whose predicate is an equality.
-    matcher: "/explore/filter/:dim",
-    matches: (p) => p.startsWith(FILTER_PREFIX),
+    // `filterDimFromPath`, the reader the page's own not-found and the proxy's branch use, so the
+    // row claims exactly what the `[dim]` folder serves: one non-empty segment after the prefix.
+    // A prefix test would also claim `/explore/filter/` and `/explore/filter/x/y`, which no page
+    // serves -- and this row's predicate is `isOurs`, so claiming them would put a canonical-query
+    // gate and a Cache-Control decision on a URL the app answers with its generic 404. It does
+    // not collide with `/explore` above, whose predicate is an equality.
+    route: "/explore/filter/:dim",
+    matches: (p) => filterDimFromPath(p) !== null,
     keys: ALLOWED_KEYS,
     repeatable: EXPLORE_REPEATABLE,
   },
-  // THE FOUR OG ROWS SIT ABOVE THE FOUR ENTITY ROWS, AND THE ORDER IS LOAD-BEARING.
-  // `canonicalize`/`queryVerdict` take the FIRST row whose predicate fires, and every entity
-  // reader is a bare prefix test that does not stop at one segment: `routeSlugFromPath
-  // ("/route/JFK-LAX/opengraph-image")` is `"JFK-LAX/opengraph-image"`, not null (lib/
-  // entitySlug.ts's header states that non-opinion deliberately). So `/route/:pair` would claim
-  // every route card, answer it with `keys: NO_KEYS`, and 307 the cache-buster off the URL this
-  // site puts in its own `og:image` tag. The "row %s is the first to claim %s" case in
-  // canonicalQuery.test.ts is what makes a reorder red instead of silent.
+  // THE FOUR OG ROWS SIT ABOVE THE FOUR ENTITY ROWS. `canonicalize`/`queryVerdict` take the FIRST
+  // row whose predicate fires, but no entity row fires on a card in either order: every entity
+  // reader takes exactly one non-empty raw segment, so `routeSlugFromPath
+  // ("/route/JFK-LAX/opengraph-image")` is null (lib/entitySlug.ts). The order matters only if a
+  // reader ALSO regresses to accepting a `/` -- then `/route/:pair` below would claim every route
+  // card, answer it with `keys: NO_KEYS`, and 307 the cache-buster off the URL this site puts in
+  // its own `og:image` tag. The "row %s is the first to claim %s" card cases in
+  // canonicalQuery.test.ts go red only with both defects present; the reader regression alone is
+  // caught by "no OG row claims %s" and by `isOurs`'s cases.
   //
   // An OG card takes no query of its own -- no `y` even on airport, which is why `/airport`'s
   // card can share this shape with the other three (see proxy.ts's OG branch) -- so `NO_KEYS`
   // plus the framework's own cache-buster is the whole key set.
   {
-    matcher: "/route/:pair/opengraph-image",
+    route: "/route/:pair/opengraph-image",
     matches: (p) => ogSlugFromPath(p, ROUTE_PREFIX) !== null,
     keys: NO_KEYS,
     repeatable: NONE_REPEATABLE,
     cacheBuster: OG_CACHE_BUSTER,
   },
   {
-    matcher: "/airport/:code/opengraph-image",
+    route: "/airport/:code/opengraph-image",
     matches: (p) => ogSlugFromPath(p, AIRPORT_PREFIX) !== null,
     keys: NO_KEYS,
     repeatable: NONE_REPEATABLE,
     cacheBuster: OG_CACHE_BUSTER,
   },
   {
-    matcher: "/carrier/:code/opengraph-image",
+    route: "/carrier/:code/opengraph-image",
     matches: (p) => ogSlugFromPath(p, CARRIER_PREFIX) !== null,
     keys: NO_KEYS,
     repeatable: NONE_REPEATABLE,
     cacheBuster: OG_CACHE_BUSTER,
   },
   {
-    matcher: "/aircraft/:name/opengraph-image",
+    route: "/aircraft/:name/opengraph-image",
     matches: (p) => ogSlugFromPath(p, AIRCRAFT_PREFIX) !== null,
     keys: NO_KEYS,
     repeatable: NONE_REPEATABLE,
     cacheBuster: OG_CACHE_BUSTER,
   },
   {
-    matcher: "/airport/:code",
+    route: "/airport/:code",
     matches: (p) => airportSlugFromPath(p) !== null,
     keys: AIRPORT_KEYS,
     repeatable: NONE_REPEATABLE,
   },
   {
-    matcher: "/route/:pair",
+    route: "/route/:pair",
     matches: (p) => routeSlugFromPath(p) !== null,
     keys: NO_KEYS,
     repeatable: NONE_REPEATABLE,
   },
   {
-    matcher: "/carrier/:code",
+    route: "/carrier/:code",
     matches: (p) => carrierSlugFromPath(p) !== null,
     keys: CARRIER_KEYS,
     repeatable: NONE_REPEATABLE,
   },
   {
-    matcher: "/aircraft/:name",
+    route: "/aircraft/:name",
     matches: (p) => aircraftSlugFromPath(p) !== null,
     keys: AIRCRAFT_KEYS,
     repeatable: NONE_REPEATABLE,
   },
-  { matcher: "/watch", matches: (p) => p === "/watch", keys: NO_KEYS, repeatable: NONE_REPEATABLE },
+  { route: "/watch", matches: (p) => p === "/watch", keys: NO_KEYS, repeatable: NONE_REPEATABLE },
   {
-    matcher: "/watch/:preset",
+    route: "/watch/:preset",
     matches: (p) => presetSlugFromPath(p) !== null,
     keys: NO_KEYS,
     repeatable: NONE_REPEATABLE,
   },
   {
-    matcher: "/sitemap.xml",
+    route: "/sitemap.xml",
     matches: (p) => p === "/sitemap.xml",
     keys: NO_KEYS,
     repeatable: NONE_REPEATABLE,
   },
   {
-    matcher: "/robots.txt",
+    route: "/robots.txt",
     matches: (p) => p === "/robots.txt",
     keys: NO_KEYS,
     repeatable: NONE_REPEATABLE,
@@ -267,7 +271,7 @@ export const QUERY_ROWS: ReadonlyArray<QueryRow> = [
     // raw string to urlstate.ts's decode(). This row read NO_KEYS while it was exempt from the
     // rules as well as from the redirect, which was harmless only because nothing ever evaluated
     // it -- and would silently 400 every valid API query the moment something did.
-    matcher: "/api/pivot",
+    route: "/api/pivot",
     matches: (p) => p === "/api/pivot",
     keys: ALLOWED_KEYS,
     repeatable: EXPLORE_REPEATABLE,
@@ -278,7 +282,7 @@ export const QUERY_ROWS: ReadonlyArray<QueryRow> = [
       "redirect does not.",
   },
   {
-    matcher: "/search",
+    route: "/search",
     matches: (p) => p === "/search",
     keys: SEARCH_KEYS,
     repeatable: NONE_REPEATABLE,
@@ -289,6 +293,16 @@ export const QUERY_ROWS: ReadonlyArray<QueryRow> = [
       "today; its keys are declared truthfully regardless.",
   },
 ];
+
+/** Whether `pathname` is a route this app declares -- the proxy's whole notion of "ours".
+ *
+ * Runs on EVERY request (`proxy.ts`'s matcher is `/:path*`), `/_next/static` included, so it
+ * must be total: each row predicate is a string comparison or one of the slug readers, whose
+ * decode is guarded. A path no row declares gets both request headers from the proxy and
+ * nothing else. */
+export function isOurs(pathname: string): boolean {
+  return QUERY_ROWS.some((r) => r.matches(pathname));
+}
 
 export type Canonical =
   | { kind: "clean" }
@@ -320,8 +334,8 @@ export type Canonical =
  *    rule 4 turns it into a redirect. The whole run goes, not one: `/watch???x=1` is the same
  *    typo twice and must land on the same canonical URL, or it is a redirect chain.
  * 1. No matching row: `clean`. An unmatched pathname defaults to doing NOTHING rather than
- *    stripping, so a route added to `config.matcher` without a row here loses this protection but
- *    never loses its query. The agreement test makes that unreachable.
+ *    stripping: a path no row declares is not one of ours (`isOurs`), so its query is never this
+ *    module's to rewrite.
  * 2. Split on `&`, then on the FIRST `=`, TEXTUALLY -- never `URLSearchParams`. Same reason
  *    `decode()` carries its own `splitPairs`: decoding before the structural delimiters have done
  *    their job corrupts a percent-encoded `,` or `&` inside a filter value, which is the bug
@@ -356,11 +370,10 @@ export type Canonical =
  * inside a filter value intact.
  *
  * The walk itself lives in `applyRules` below, taking an already-resolved `row` rather than
- * re-finding it. `queryVerdict` and `canonicalize` each match `QUERY_ROWS` exactly once per call
- * -- seventeen `matches` predicates, nine of them `startsWith` + `decodeURIComponent`, are not free,
- * and this path is the one every gated request runs. Before this split, `canonicalize` found its
- * own row AND called `queryVerdict`, which found it again: two walks of `QUERY_ROWS` per gated
- * request for one answer. */
+ * re-finding it. `queryVerdict` and `canonicalize` each match `QUERY_ROWS` exactly once per call:
+ * the slug-reader predicates decode, so a walk is not free. `proxy.ts` walks the table once more
+ * before either, in `isOurs`, on every request -- a path no row declares pays that one walk and
+ * nothing else, and a gated request pays two (`isOurs`, then `canonicalize`). */
 function applyRules(row: QueryRow | undefined, pathname: string, rawQuery: string): Canonical {
   if (row === undefined) return { kind: "clean" };
 

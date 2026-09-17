@@ -150,12 +150,13 @@ describe("carrierSlugFromPath", () => {
 
   // M5 Task 6: carrierSlugFromPath is now a one-line wrapper around lib/entitySlug.ts's
   // entitySlugFromPath. Pinned here so the collapse cannot smuggle in a behaviour change --
-  // unlike airportSlugFromPath, this reader never special-cased an empty slug or a nested path.
-  it("returns the empty string for a bare trailing slash, not null", () => {
-    expect(carrierSlugFromPath("/carrier/")).toBe("");
+  // a bare prefix and a nested path are both refused, matching what the `[code]` folder's page
+  // itself receives: exactly one segment, or none.
+  it("returns null for a bare trailing slash", () => {
+    expect(carrierSlugFromPath("/carrier/")).toBeNull();
   });
 
-  it("returns whatever follows the prefix verbatim on a nested path", () => {
-    expect(carrierSlugFromPath("/carrier/DL/extra")).toBe("DL/extra");
+  it("returns null when more than one raw segment follows the prefix", () => {
+    expect(carrierSlugFromPath("/carrier/DL/extra")).toBeNull();
   });
 });

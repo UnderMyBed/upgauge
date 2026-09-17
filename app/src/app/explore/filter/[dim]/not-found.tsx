@@ -186,9 +186,6 @@ export async function NotFoundView({
 export default async function NotFound() {
   const requestHeaders = await headers();
   // Fails loudly if proxy.ts did not run, exactly as /explore and the four entity pages do.
-  // NOTE for the proxy: `/explore/filter/:dim` must be in its matcher, or this throws and the
-  // 404 loses its entire message -- see docs/architecture/hosting.md § "What omitting one
-  // actually costs".
   return (
     <NotFoundView
       pathname={rawPathFromHeaders(requestHeaders)}

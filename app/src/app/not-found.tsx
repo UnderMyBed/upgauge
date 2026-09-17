@@ -46,19 +46,17 @@ export const dynamic = "force-dynamic";
  * guard, which returns before every branch below it, so client-side navigation to a 404 URL
  * still renders through the segment boundary, and any `notFound()` the proxy did not predict
  * still lands there with the blank body this file exists to fix -- narrowed, not closed.
- * They also keep the fail-loud `rawPathFromHeaders`; this file deliberately does not, because
- * here an absent header is MEANINGFUL -- it is how an unrouted URL announces itself.
+ * They also keep the fail-loud `rawPathFromHeaders`; this file deliberately does not. `proxy.ts`
+ * runs on every request, so an absent header means it did not run at all -- and this boundary is
+ * what every unrouted URL renders, so throwing here would turn every scanner probe's 404 into a
+ * 500 where the generic view below is still the right answer.
  *
- * THE HEADER IS AUTHORITATIVE ONLY ON A PATH THE MATCHER COVERS, and every cost claim in this
- * file is scoped to that. Next deletes every request header outside the middleware's override set
- * (`server/lib/router-utils/resolve-routes.js`), so wherever `proxy.ts` runs its value wins and a
- * forged one cannot survive. Outside the matcher `proxy.ts` never runs, so a client-supplied
- * `x-upgauge-path` reaches the dispatch below: `curl -H 'x-upgauge-path: /carrier/ZZ' /wp-login.php`
- * renders the carrier view and pays its one `dataAsOf()` + `resolveCarrier()`. The status stays
- * 404 and React escapes the echoed slug, so what that buys is one dimension lookup of ORIGIN COST
- * on a path `deploy/cloudflare/rate-limit.json`'s prefixes do not cover -- not a wrong answer, not
- * a disclosure. Widening the matcher to every path closes it and changes behaviour on every URL in
- * the app; `app/smoke.sh` § 8c pins what happens today. */
+ * THE HEADER IS AUTHORITATIVE because `proxy.ts` runs on every request (its matcher is
+ * `/:path*`). Next deletes every request header outside the middleware's override set
+ * (`server/lib/router-utils/resolve-routes.js`), and `proxy.ts` sets this one to the request's own
+ * pathname, so a client-supplied `x-upgauge-path` never reaches the dispatch below. That is what
+ * keeps the dispatch from being a client-selectable dimension lookup -- `dataAsOf()` plus a
+ * resolver -- on any path `deploy/cloudflare/rate-limit.json`'s prefixes do not cover (#172). */
 export async function RootNotFoundView({
   pathname,
   rawQuery,
@@ -101,13 +99,11 @@ export async function RootNotFoundView({
       }
     }
   }
-  // NO DATABASE ON THIS BRANCH, deliberately. Every request whose path header `proxy.ts` set --
-  // which is every request the proxy matches -- lands here for zero queries when the pathname is
-  // one this app does not route: every scanner probe and every typo, an unbounded set the edge
-  // rate limit does not enumerate. A forged header on an unmatched path reaches the dispatch above
-  // instead, one dimension lookup and no further (see this file's header). That is also why there
-  // is no `TopBar`: it takes `asOf`, and `DATA AS OF` is a first-class element on every DATA view,
-  // which this is not.
+  // NO DATABASE ON THIS BRANCH, deliberately. Every request -- `proxy.ts` sets the path header on
+  // all of them -- lands here for zero queries when the pathname is one this app does not route:
+  // every scanner probe and every typo, an unbounded set the edge rate limit does not enumerate.
+  // That is also why there is no `TopBar`: it takes `asOf`, and `DATA AS OF` is a first-class
+  // element on every DATA view, which this is not.
   return (
     <div className="wrap">
       <main className="error-page">

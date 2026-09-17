@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { canonicalize } from "@/lib/canonicalQuery";
+import { canonicalize, isOurs } from "@/lib/canonicalQuery";
 import { ogSlugFromPath } from "@/lib/entitySlug";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { RAW_PATH_HEADER, routeSlugFromPath, ROUTE_PREFIX } from "@/lib/rawPath";
@@ -12,7 +12,7 @@ import { aircraftSlugFromPath, resolveAircraftSlug, AIRCRAFT_PREFIX } from "@/li
 import { presetSlugFromPath, presetBySlug } from "@/lib/watch";
 import { parseYear } from "@/lib/year";
 import { decodeRequest } from "@/lib/pivot/bounds";
-import { FILTER_PREFIX, filterDimFromPath, filterableDimensions } from "@/lib/pivot/builder";
+import { filterDimFromPath, filterableDimensions } from "@/lib/pivot/builder";
 import {
   rawFilterValue,
   resolveCarrierFilter,
@@ -96,6 +96,14 @@ export async function proxy(request: NextRequest) {
     return response;
   }
 
+  // NOT ONE OF OURS. The matcher is `/:path*`, so this function runs on every request --
+  // every `/_next/static` chunk, every scanner probe -- and both headers above are set
+  // before anything else, which is what stops a client-supplied `x-upgauge-path` from
+  // reaching `app/not-found.tsx` (#172). A path no `QUERY_ROWS` row declares gets exactly
+  // that and nothing more: no canonical-query gate, no Cache-Control decision, no database.
+  // AFTER the RSC branch, not before: an RSC payload is never cacheable on any path.
+  if (!isOurs(pathname)) return response;
+
   // M8 Task 3 (epic #3). The canonical-query gate, ahead of every branch below because its
   // answer depends on none of them, and because a `strip` must not pay for a database probe it
   // is about to redirect away from. `lib/canonicalQuery.ts` carries the measurements and the
@@ -171,7 +179,7 @@ export async function proxy(request: NextRequest) {
   // NO try/catch around the call below, deliberately, and the deliberation was earned: an earlier
   // revision of `canonicalize()` threw on a `rawQuery` carrying a leading `?`, calling it a wiring
   // bug -- and `rawQuery` above is `.replace(/^\?/, "")`, NON-GLOBAL, so `GET /watch??x=1`
-  // delivered exactly that and 500ed every one of the twelve matcher paths for any client
+  // delivered exactly that and 500ed every path this file gated, for any client
   // (measured at d109845: `/watch?x=1` 307, `/watch??x=1` 500). The fix is that the function is
   // TOTAL -- every `matches` predicate is a string test or the already-guarded
   // `entitySlugFromPath`, and a leading `?` is now just another non-canonical spelling
@@ -234,12 +242,12 @@ export async function proxy(request: NextRequest) {
   // require giving up Next's page-rendering pipeline entirely -- not this file's decision to
   // make alone, so the accepted fallback is a shorter `s-maxage` on HTML instead).
   //
-  // CRITICAL fix (final whole-branch review): the matcher below used to list only "/explore"
-  // and "/api/pivot", so `/route/<pair>` -- M4b's headline SEO-canonical permalink page --
-  // shipped `private, no-cache, no-store, max-age=0, must-revalidate`, reproducing the exact
-  // bug this file exists to fix. A prefix test (`routeSlugFromPath`), not an exact match: the
-  // matcher below only forwards the literal `/route/:pair` shape (one dynamic segment), so
-  // this can't accidentally net `/api/pivot` or some future unrelated top-level route.
+  // CRITICAL fix (final whole-branch review): with no branch here answering it, `/route/<pair>`
+  // -- M4b's headline SEO-canonical permalink page -- shipped `private, no-cache, no-store,
+  // max-age=0, must-revalidate`, reproducing the exact bug this file exists to fix. A reader
+  // (`routeSlugFromPath`), not an exact match, and the reader takes exactly one non-empty segment
+  // under `/route/`, so this can't net `/api/pivot`, a card path, or some future unrelated
+  // top-level route.
   //
   // Fix wave 2, NEW-1: the CRITICAL fix above set the long cache on EVERY `/route/` response,
   // with no status discrimination, so a 404 was pinned in a shared CDN cache for what was then
@@ -263,12 +271,11 @@ export async function proxy(request: NextRequest) {
   //
   // M4d generalized that from one route to four: see ENTITY_ROUTES below.
   //
-  // M8 Task 1 (#13). `/` was the one page route absent from the matcher below, so it served
-  // Next's own force-dynamic fallback -- measured on a served build at 4aa8087:
-  // `private, no-cache, no-store, max-age=0, must-revalidate`, which forbids caching everywhere
-  // including the CDN, on the front door, which queries DuckDB to render DATA AS OF. CLAUDE.md
-  // already stated the rule this violated: a new page route must be added to this matcher or it
-  // ships uncached and without the raw-query and pathname headers.
+  // M8 Task 1 (#13). Without this branch `/` serves Next's own force-dynamic fallback -- measured
+  // on a served build at 4aa8087: `private, no-cache, no-store, max-age=0, must-revalidate`,
+  // which forbids caching everywhere including the CDN, on the front door, which queries DuckDB
+  // to render DATA AS OF. A declared route with no branch ships uncached; the comment above
+  // `config` states the rule.
   if (pathname === "/") {
     response.headers.set("Cache-Control", (await isFreshnessReadable()) ? HTML_CACHE : NO_STORE);
     return response;
@@ -297,10 +304,10 @@ export async function proxy(request: NextRequest) {
   // dimension filterable at that grain. This is the same shape as the `/airport` and `/carrier`
   // branches below, and for the same reason CLAUDE.md states as a rule -- an unknown slug 404s,
   // and a 404 pinned in a shared cache outlives the condition that caused it, because this
-  // dataset is rebuilt monthly. `startsWith`, not `filterDimFromPath(...) !== null`, so that any
-  // pathname under this prefix the matcher does forward gets an answer from this file rather
-  // than falling through to none at all; the probe declines the cache for the ones the page
-  // will 404.
+  // dataset is rebuilt monthly. `filterDimFromPath(...) !== null` is the predicate `QUERY_ROWS`'s
+  // filter row uses, so this branch and `isOurs` cannot disagree about which paths are the
+  // `[dim]` page's: exactly one non-empty segment under the prefix. The probe declines the cache
+  // for the ones the page will 404.
   //
   // #157: ONE probe, THREE outcomes -- the same "one resolution, two allow-lists" shape the
   // entity branches below use, for the identical reason. A boolean cannot answer this branch's
@@ -321,7 +328,7 @@ export async function proxy(request: NextRequest) {
   // connections, 4 file reads and 4 catalog queries where one of each does -- on the `no-store`
   // path, which is exactly the one a crawler or scanner walks uncached. One call now, on both
   // paths, asserted by `proxy.test.ts`'s call-count test rather than left to review.
-  if (pathname.startsWith(FILTER_PREFIX)) {
+  if (filterDimFromPath(pathname) !== null) {
     const verdict = await filterListVerdict(pathname, rawQuery);
     if (verdict === "notFound") return notFoundRewrite(request, headers);
     response.headers.set("Cache-Control", verdict === "cacheable" ? HTML_CACHE : NO_STORE);
@@ -334,12 +341,11 @@ export async function proxy(request: NextRequest) {
   // ENTITY_ROUTES does would still leave every distinct `q` a shared-cache entry, so a crawler
   // (or an attacker) walking the query space mints an unbounded family of 30-day CDN entries on
   // a box whose entire cost model is that caching bounds origin load. `no-store`, unconditionally,
-  // is the only value that closes that off. It still needs the matcher entry below -- absent
-  // one, this request gets neither the raw-query header `search.ts` doesn't need nor the
-  // pathname header its (nonexistent) not-found path would need, but MORE importantly it also
-  // gets NO Cache-Control at all, which for this route happens to be harmless (Next's own
-  // `no-store` for `dynamic = "force-dynamic"` would apply) but is the same invisible-omission
-  // shape every other row in this file warns about, so the entry is not optional on principle.
+  // is the only value that closes that off. It still needs its `QUERY_ROWS` row -- absent one,
+  // the early return above answers this request with NO Cache-Control at all, which for this
+  // route happens to be harmless (Next's own `no-store` for `dynamic = "force-dynamic"` would
+  // apply) but is the same invisible-omission shape every other row in this file warns about, so
+  // the row is not optional on principle.
   if (pathname === "/search") {
     response.headers.set("Cache-Control", NO_STORE);
     return response;
@@ -408,23 +414,24 @@ export async function proxy(request: NextRequest) {
   }
   // The four OG card routes (`/<entity>/<slug>/opengraph-image`), M8/#8.
   //
-  // THIS BRANCH MUST STAY ABOVE THE `/airport` BRANCH. Every entity slug reader is a bare prefix
-  // test that does not stop at one segment (`lib/entitySlug.ts`'s header says so deliberately),
-  // so `airportSlugFromPath("/airport/ORD/opengraph-image")` is `"ORD/opengraph-image"`, not
-  // null -- and that branch RETURNS, so from below it every airport card would be answered by
-  // resolving that whole string as an airport code.
+  // This loop sits above the `/airport` branch, and that order is NOT what keeps cards out of
+  // it: every entity slug reader takes exactly one non-empty raw segment (`lib/entitySlug.ts`),
+  // so `airportSlugFromPath("/airport/ORD/opengraph-image")` is null and no entity branch sees a
+  // card in either order. The order matters only if a reader ALSO regresses to accepting a `/`:
+  // then `"ORD/opengraph-image"` reaches that branch, which RETURNS, so from below it every
+  // airport card would be answered by resolving that whole string as an airport code.
   //
   // What that mis-resolution produces is NOT the obvious 404, which is why the test that catches
   // it is a 404 card and not a real one (measured by running the mutant, not by reading the
   // code): `resolveAirportCode` uppercases before it looks anything up, so a slug ending in
   // lowercase `opengraph-image` comes back `redirect` -- cacheable -- and `/airport/SEA`'s card
   // would still ship HTML_CACHE, pointing at a 308 to `/airport/SEA%2FOPENGRAPH-IMAGE`. The
-  // discriminating case is `/airport/LHR/opengraph-image`, where the two branches disagree.
+  // discriminating case is `/airport/LHR/opengraph-image`, where the two branches disagree, and
+  // it goes red only with BOTH defects present: the loop moved below the branch alone, and the
+  // reader regression alone, each leave it green (mutants run).
   //
-  // The `ENTITY_ROUTES` loop below cannot win the same way -- it `break`s rather than returning,
-  // so a later write to the header would overwrite its own. This loop still sits above it, to
-  // avoid paying that loop's warehouse resolution of a slug (`"JFK-LAX/opengraph-image"`) that
-  // exists only to be discarded.
+  // The `ENTITY_ROUTES` loop below never sees a card either: this loop returns first, and its
+  // readers refuse the two-segment slug regardless.
   //
   // `HTML_CACHE`, not `PROJECT_CACHE`. A card runs the same live warehouse reads its page does --
   // `dataAsOf()`, a `runPivot()` and `fetchAircraftMix()`, straight out of `lib/entityFacts.ts`,
@@ -511,12 +518,11 @@ export async function proxy(request: NextRequest) {
   // `/carrier/DL?type=NOPE-1` would render DL's ordinary unfiltered page under `HTML_CACHE`, once
   // per spelling. `lib/map/mapFilter.ts` carries the full argument and the measured bounds.
   //
-  // BOTH BRANCHES MUST SIT BELOW THE `OG_ROUTES` LOOP, for the reason that loop's own comment
-  // gives: every entity slug reader is a bare prefix test that does not stop at one segment, so
-  // `carrierSlugFromPath("/carrier/DL/opengraph-image")` is `"DL/opengraph-image"`, not null -- and
-  // these branches RETURN, so from above the loop every carrier and aircraft card would be
-  // answered by resolving that whole string as a slug. The OG loop returns first; branch order
-  // here is load-bearing, not cosmetic.
+  // Both branches sit below the `OG_ROUTES` loop, and, as that loop's own comment says, the order
+  // alone keeps no card out of them: `carrierSlugFromPath("/carrier/DL/opengraph-image")` is null,
+  // because every entity slug reader takes exactly one non-empty raw segment. Were a reader to
+  // accept a `/` as well, these branches RETURN, so from above the loop every carrier and
+  // aircraft card would be answered by resolving `"DL/opengraph-image"` as a slug.
   //
   // The value is read from the RAW query bytes, never `new URLSearchParams(rawQuery).get(...)` --
   // the `/airport` branch above uses that form and it PERCENT-DECODES, so `y=%3201%39` arrives as
@@ -684,7 +690,7 @@ async function isExploreCacheable(rawQuery: string): Promise<boolean> {
  * to decode (the page catches `UrlStateError`/`PivotError` and renders `<UnreadableQuery>` as a
  * 200) or `loadAllowlist()` threw. Both decline the cache and neither rewrites. Everything is
  * inside the try, `decodeURIComponent` (via `filterDimFromPath`) included -- `canonicalize()` once
- * threw on a leading `?` that "only a wiring bug could produce" and 500ed every matcher path, so
+ * threw on a leading `?` that "only a wiring bug could produce" and 500ed every gated path, so
  * nothing on this spine may throw.
  *
  * ONE `loadAllowlist()`, on every path, and that is a cost claim rather than a style one:
@@ -741,15 +747,15 @@ async function isFreshnessReadable(): Promise<boolean> {
  *
  * M4d added three pages to a mechanism that had shipped broken once already by being invisible
  * to whoever added a route -- M4b's `/route/<pair>` served
- * `private, no-cache, no-store, max-age=0, must-revalidate` for a whole branch because the
- * matcher listed only `/explore` and `/api/pivot`. Since then the omission costs more than a
- * mis-cache: all four `not-found.tsx` files read RAW_PATH_HEADER and throw
- * `MissingRawPathError` without it, so **a page missing from the matcher turns every 404 on it
- * into a 500.**
+ * `private, no-cache, no-store, max-age=0, must-revalidate` for a whole branch because nothing
+ * in this file answered it. The omission costs more than a mis-cache: a page no branch answers
+ * is never rewritten to `/_not-found`, so every 404 on it ships Next's blank error shell
+ * (CLAUDE.md's rewrite rule).
  *
  * A table rather than four `else if` branches, because the failure mode being defended against
  * is a fifth page whose author reads this file and copies three lines out of four. Adding an
- * entity is one row here plus one `matcher` entry, and both are in view at once.
+ * entity is one row here plus one `QUERY_ROWS` row, and `canonicalQuery.test.ts` fails until the
+ * second exists.
  *
  * The `slugFromPath` readers used to be four independent copies of the same decode guard, one
  * per entity module (`lib/rawPath.ts`, `app/airport/[code]/resolveAirport.ts`, `lib/carrier.ts`,
@@ -814,8 +820,8 @@ const ENTITY_ROUTES: ReadonlyArray<{
  * pathname (the prefix AND the `/opengraph-image` suffix) and there is one reader for all four.
  * It lives in `lib/entitySlug.ts`, beside the decode guard it wraps, so this branch and
  * `lib/canonicalQuery.ts`'s four OG rows cannot disagree about which requests are cards -- the
- * same "these lists must agree" property the matcher comment at the foot of this file describes,
- * enforced by sharing the predicate instead of by restating it. */
+ * same "these lists must agree" property, enforced by sharing the predicate instead of by
+ * restating it. */
 const OG_ROUTES: ReadonlyArray<{
   prefix: string;
   resolve: (slug: string) => Promise<{ kind: string }>;
@@ -1083,101 +1089,27 @@ const NO_STORE = "no-store";
  * page-route module importing a route-handler module for a string. */
 const PROJECT_CACHE = "public, s-maxage=2592000, stale-while-revalidate=86400";
 
-// Without a matcher, proxy runs on every request including _next/static and public assets.
-// Every entry point needs the header (or, for /api/pivot, the raw-query passthrough only
-// -- see above): /api/pivot's own `new URL(request.url).search` is normalized too -- measured,
-// every filtered API query returned `malformed filter 'origin_state%3AOR'` before this. They
-// now read the identical raw string from one source.
+// The matcher is universal, and that is a security property rather than a convenience. Next
+// deletes every request header outside the proxy's override set, so a header this function sets
+// cannot be forged -- but only on a request it runs for. `app/not-found.tsx` dispatches on
+// `x-upgauge-path`, and under a listed matcher every other URL let a client supply that header
+// and make the root 404 run an entity lookup (#172). `/:path*` puts every request -- pages,
+// route handlers, `/_next/static`, scanner probes -- through the two `headers.set` calls at the
+// top of `proxy()` before anything else can happen.
 //
-// Each `/<entity>/:slug` entry covers every `/<entity>/<anything>` request with exactly ONE
-// dynamic segment, matching the segment its `app/<entity>/[x]/page.tsx` owns -- a prefix test in
-// spirit, but narrow enough that it cannot accidentally net `/api/pivot` or a future unrelated
-// top-level route. `/search`, `/sitemap.xml` and `/robots.txt` (M5 Task 8) are exact-path
-// entries for the same reason: each is one literal pathname, not a dynamic segment, and each
-// needs the header/cache branches above to run at all -- the sitemap and robots.txt would
-// otherwise ship with NO Cache-Control (Next infers none for a MetadataRoute export), and
-// `/search`, while its own `no-store` doesn't strictly depend on the pathname header the way a
-// `not-found.tsx` does, still follows the same "every route gets a row" discipline this list
-// exists to enforce rather than becoming the one silent exception.
+// What is OURS is decided by `QUERY_ROWS` (`lib/canonicalQuery.ts`), never by this config: a
+// path no row declares returns straight after the RSC branch with both headers and nothing else.
+// `canonicalQuery.test.ts` binds `QUERY_ROWS` to the `app/src/app` file tree, so a new route
+// file with no row fails that test unless it joins the pinned `NOT_OURS` set with its reason,
+// and a route or metadata file convention that test's walker does not model fails it outright.
 //
-// THIS LIST AND `ENTITY_ROUTES` (plus `OG_ROUTES`, which owns the four `opengraph-image`
-// entries) MUST AGREE -- but `ENTITY_ROUTES` IS NO LONGER THE MAIN MECHANISM, and an author
-// adding a fifth entity page must not read it as one. There are now FIVE carve-outs:
-// `/airport/:code` (the `y` query param, M7 Task 9), `/carrier/:code` and `/aircraft/:name`
-// (the `type`/`carrier` map filters, #106), `/watch`/`/watch/:preset` (a live
-// `mart_route_health` read), and `/explore/filter/:dim` (epic #6 -- the permalink AND the slug's
-// grain). Each stays in THIS list but has its own `if` branch above rather
-// than a row in `ENTITY_ROUTES`, because each has a cacheability question the generic table
-// cannot express -- the table's `isCacheable(entity, slug)` has exactly ONE input slot.
-// `/route/:pair` is the only row left in it.
+// A new page therefore needs a `QUERY_ROWS` row AND a branch above that decides its
+// Cache-Control -- an `ENTITY_ROUTES` row when the slug is its only cacheability input, its own
+// `if` when anything else feeds the decision. A row with no branch gets the canonical-query gate
+// and no Cache-Control at all; nothing but `app/smoke.sh`'s served-build header checks sees that.
 //
-// So the rule for a new page is: a matcher entry HERE, always -- plus EITHER an `ENTITY_ROUTES`
-// row (if the slug is its only cacheability input) OR its own branch (if anything else feeds
-// the decision). Absent a matcher entry, or absent both of those, the same two failure modes
-// below still apply. A row
-// here without a row (or branch) there ships an entity page that is long-cached on its 404s; a
-// row there without a row here ships a page with no Cache-Control at all AND turns each of its
-// 404s into a 500 (`not-found.tsx` throws `MissingRawPathError` when the pathname header is
-// absent). Neither asymmetry is visible in a build, a unit test, or a rendered page -- only
-// `app/smoke.sh` sees them, which is why every row here has a served-build header assertion and
-// a served-build `no-store` assertion there.
-//
-// ELEVEN entries as of M6 Task 7 (was nine through M5 Task 8) -- `/watch` and `/watch/:preset`
-// added here. `/watch` is an exact-path entry, same reasoning as `/search`/`/sitemap.xml`/
-// `/robots.txt`: one literal pathname, not a dynamic segment. `/watch/:preset` IS a dynamic
-// segment, same shape as the four ENTITY_ROUTES entries -- but it has no ENTITY_ROUTES row of
-// its own, because its cacheability branch (above) answers "known" from the static `PRESETS`
-// registry rather than a database resolve(). `app/sitemap.ts` is a single default export
-// (23,913 URLs -- the 23,908 entity pages plus `/watch` and its four presets -- well under
-// the sitemap protocol's 50,000-per-file limit, see that file's own header), not
-// `generateSitemaps()`'s multi-file convention, so there is exactly one `/sitemap.xml` route to
-// list, not a family of numbered children.
-//
-// STILL eleven at M7 Task 9 -- `/airport/:code` was already here; only its `ENTITY_ROUTES` row
-// moved into its own branch above (see that branch's doc comment, and `ENTITY_ROUTES`'s own).
-//
-// TWELVE as of M8 Task 1 (#13) -- `/` added here, an exact-path entry like `/search`,
-// `/sitemap.xml`, `/robots.txt` and `/watch`. It is the only entry whose branch probes
-// `dataAsOf()` rather than `isDataLayerHealthy()`; see `isFreshnessReadable`'s doc comment for
-// why those two are not interchangeable.
-//
-// SIXTEEN as of #8 -- the four `opengraph-image` routes. Each is TWO segments after its prefix
-// (one dynamic, then the literal `opengraph-image`), so it is a distinct entry from the
-// `/<entity>/:slug` above it and is NOT netted by it: those forward exactly one dynamic segment.
-// The four have one `OG_ROUTES` row each (above) rather than an `ENTITY_ROUTES` row, and
-// `/airport`'s card is in that table even though its page is not -- see `OG_ROUTES`'s own
-// comment. They are the first entries here whose route is NOT a page: an `opengraph-image.tsx`
-// compiles to a route handler, so there is no `not-found.tsx` reading the pathname header on this
-// path and no 404-into-500 failure mode -- the second of the two reasons at the top of this
-// comment does not apply to them. The FIRST one does, and it is the whole reason they are listed:
-// without an entry each card ships `public, max-age=0, must-revalidate` (`ImageResponse`'s own
-// default, measured on a served build) -- uncacheable at the CDN, on 23,908 URLs whose entire
-// traffic is crawlers re-fetching them.
-//
-// SEVENTEEN as of epic #6 -- `/explore/filter/:dim`, the Explorer builder's value list. It is a
-// dynamic segment, the sixth one here, and like `/watch/:preset` it has its own `if` branch
-// rather than an `ENTITY_ROUTES` row: its cacheability takes TWO inputs (the permalink AND the
-// slug), which the table's one `isCacheable(entity, slug)` slot cannot express. It is also the
-// second page route (after `/explore`) whose `keys` are `ALLOWED_KEYS` rather than a short list
-// or none, because it reads the identical permalink through the identical `decodeRequest`.
+// `/:path*` matches `/` as well as every deeper path: checked against the compiled matcher in
+// `.next/server/functions-config-manifest.json`, not assumed from the path-to-regexp docs.
 export const config = {
-  matcher: [
-    "/",
-    "/explore",
-    "/explore/filter/:dim",
-    "/api/pivot",
-    "/route/:pair",
-    "/airport/:code",
-    "/carrier/:code",
-    "/aircraft/:name",
-    "/route/:pair/opengraph-image",
-    "/airport/:code/opengraph-image",
-    "/carrier/:code/opengraph-image",
-    "/aircraft/:name/opengraph-image",
-    "/search",
-    "/sitemap.xml",
-    "/robots.txt",
-    "/watch",
-    "/watch/:preset",
-  ],
+  matcher: ["/:path*"],
 };

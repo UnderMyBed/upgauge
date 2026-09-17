@@ -1,6 +1,84 @@
-import { describe, expect, it } from "vitest";
-import { canonicalize, queryVerdict, QUERY_ROWS } from "@/lib/canonicalQuery";
-import { config } from "@/proxy";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { canonicalize, isOurs, queryVerdict, QUERY_ROWS } from "@/lib/canonicalQuery";
+
+const APP_DIR = path.resolve(__dirname, "../app");
+
+/** Next's route and metadata file conventions this walker does not model -- from the
+ * file-conventions docs and `next/dist/lib/metadata/is-metadata-route.js`, which also accepts a
+ * one-digit variant (`icon1.png`, `opengraph-image2.tsx`). Each serves a URL no pattern below
+ * produces, so a match throws rather than leaving a route this agreement cannot see. */
+const UNMODELED_FILE = [
+  /^(?:icon|apple-icon|twitter-image)\d?\.(?:ico|jpe?g|png|svg|gif|[jt]sx?|alt\.txt)$/,
+  /^opengraph-image(?:\d?\.(?:jpe?g|png|gif|alt\.txt)|\d\.[jt]sx?)$/,
+  /^manifest\.(?:json|webmanifest|[jt]sx?)$/,
+  /^(?:sitemap\.xml|robots\.txt)$/,
+];
+
+/** An export that moves a code metadata route off the URL its file name gives: `generateSitemaps`
+ * serves `/sitemap/<id>.xml`, and `generateImageMetadata` puts an `/<id>` segment under a card. */
+const URL_MOVING_EXPORT =
+  /^\s*export\s+(?:async\s+)?(?:function|const|let)\s+(generate(?:Sitemaps|ImageMetadata))\b/m;
+
+/** The last URL segment each modeled code metadata file serves. */
+const METADATA_URL: Record<string, string> = {
+  "opengraph-image": "opengraph-image",
+  sitemap: "sitemap.xml",
+  robots: "robots.txt",
+};
+
+/** Every URL pattern a file under `dir` (src/app by default) serves: `page`/`route`,
+ * `opengraph-image`, `sitemap` and `robots` in any of Next's four code extensions (`[jt]sx?`),
+ * plus `favicon.ico`. THROWS on every other route or metadata file convention (`UNMODELED_FILE`),
+ * on a code metadata file carrying a URL-moving export, and on a private, route-group, parallel,
+ * catch-all or optional catch-all folder -- so a new convention is a red test rather than a route
+ * this agreement silently cannot see. Each guard has its own message ("file convention",
+ * "URL-moving export", "folder convention") naming what it refused, relative to `root`, and the
+ * "servedRoutePatterns" describe pins each one. Any other file (`layout`, `not-found`, tests,
+ * helpers) serves no URL of its own. */
+function servedRoutePatterns(dir: string = APP_DIR, prefix = "", root: string = dir): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const file = path.relative(root, path.join(dir, entry.name));
+    if (entry.isDirectory()) {
+      if (/^[(@_]|^\[\[?\.\.\./.test(entry.name)) {
+        throw new Error(`servedRoutePatterns does not model the folder convention '${file}'`);
+      }
+      const segment = entry.name.replace(/^\[(.+)\]$/, ":$1");
+      out.push(...servedRoutePatterns(path.join(dir, entry.name), `${prefix}/${segment}`, root));
+      continue;
+    }
+    if (UNMODELED_FILE.some((re) => re.test(entry.name))) {
+      throw new Error(`servedRoutePatterns does not model the file convention '${file}'`);
+    }
+    const metadata = /^(opengraph-image|sitemap|robots)\.[jt]sx?$/.exec(entry.name)?.[1];
+    if (metadata !== undefined) {
+      const moving = URL_MOVING_EXPORT.exec(readFileSync(path.join(dir, entry.name), "utf8"))?.[1];
+      if (moving !== undefined) {
+        throw new Error(
+          `servedRoutePatterns does not model the URL-moving export '${moving}' in '${file}'`,
+        );
+      }
+      out.push(`${prefix}/${METADATA_URL[metadata]}`);
+    } else if (/^(page|route)\.[jt]sx?$/.test(entry.name)) {
+      out.push(prefix === "" ? "/" : prefix);
+    } else if (entry.name === "favicon.ico") {
+      out.push(`${prefix}/favicon.ico`);
+    }
+  }
+  return out;
+}
+
+/** Routes this app serves that the proxy deliberately treats as not its own. PINNED: growing
+ * this is how a page loses its cache header and its canonical-query gate while the diff looks
+ * like tidying, so each name carries its reason and the set is asserted exactly. */
+const NOT_OURS: Record<string, string> = {
+  "/api/health":
+    "must never be cached; the handler sets its own no-store, it takes no query and has no not-found path",
+  "/favicon.ico": "a static metadata file; nothing to canonicalize or cache-decide",
+};
 
 // The permalink fixture from app/smoke.sh:388 -- every reserved character this format has to
 // survive, in one filter value. Used here because the whole point of comparing keys TEXTUALLY
@@ -23,9 +101,9 @@ describe("canonicalize", () => {
     // wiring bug could hand this function a `?`-prefixed rawQuery. proxy.ts's
     // `.search.replace(/^\?/, "")` is NON-GLOBAL, so `GET /airport/ORD??y=2019` (`search` ===
     // "??y=2019") strips one `?` of two and delivers exactly this input -- and the throw escaped
-    // proxy(), which has no try/catch around it, as a 500 on every one of the twelve matcher
-    // paths. Measured on a served build at d109845: `/watch?x=1` 307, `/watch??x=1` 500. A
-    // leading `?` is a non-canonical spelling, and this module already has an answer for those.
+    // proxy(), which has no try/catch around it, as a 500 on every gated path. Measured on a
+    // served build at d109845: `/watch?x=1` 307, `/watch??x=1` 500. A leading `?` is a
+    // non-canonical spelling, and this module already has an answer for those.
     expect(canonicalize("/airport/ORD", "?y=2019")).toEqual({
       kind: "strip",
       location: "/airport/ORD?y=2019",
@@ -272,15 +350,15 @@ describe("canonicalize", () => {
     expect(canonicalize("/search", "q=DL&x=1")).toEqual({ kind: "clean" });
   });
 
-  it("leaves an off-matcher path's query alone rather than stripping it", () => {
-    // The safe default. A route added to the matcher without a row here loses the protection,
-    // which the agreement test below makes unreachable -- but it must never lose its query.
+  it("leaves an undeclared path's query alone rather than stripping it", () => {
+    // The safe default. A path no row declares is not one of ours, so its query is not this
+    // module's to rewrite -- and a route FILE with no row fails the route-tree agreement below.
     expect(canonicalize("/api/health", "x=1")).toEqual({ kind: "clean" });
   });
 
   // Totality, asserted rather than claimed. This module runs on the proxy path, where an uncaught
   // throw is a 500 on a request that was only ever going to be a redirect -- and it has thrown
-  // for real once, on the first entry below, taking every one of the twelve matcher paths with it
+  // for real once, on the first entry below, taking every gated path with it
   // because proxy() has no try/catch around the call. `%zz` and a lone `%` are the malformed
   // escapes `entitySlugFromPath` exists to survive; the rest are the shapes a hostile client is
   // free to send.
@@ -298,7 +376,7 @@ describe("canonicalize", () => {
     ["", ""],
     // #8. The OG rows add a regex to the walk and a new reader to the predicates, on the same
     // no-try/catch path -- so the same corpus, aimed at them. The doubled `?` is the shape that
-    // 500ed all twelve matcher paths at d109845.
+    // 500ed every gated path at d109845.
     ["/route/JFK-LAX/opengraph-image", "?083d4242d9090de4"],
     ["/route/%zz/opengraph-image", "083d4242d9090de4"],
     ["/aircraft/%/opengraph-image", "?%"],
@@ -315,7 +393,7 @@ describe("canonicalize", () => {
     // ever claimed a `//`-leading pathname. None can: every `matches` predicate is either an
     // exact `p === "/literal"` or an `entitySlugFromPath` prefix test requiring `/<prefix>/` at
     // position 0. This pins that as an asserted property rather than a fact someone re-derives by
-    // reading twelve predicates. (Next answers `GET //evil.com` with its own 308 before proxy()
+    // reading every predicate. (Next answers `GET //evil.com` with its own 308 before proxy()
     // runs -- app/smoke.sh asserts that second, independent reason on a served build.)
     expect(canonicalize("//evil.com", "x=1")).toEqual({ kind: "clean" });
     expect(canonicalize("//evil.com/watch", "x=1")).toEqual({ kind: "clean" });
@@ -398,18 +476,102 @@ describe("queryVerdict vs canonicalize on an exempt row", () => {
   });
 });
 
+// Each guard in `servedRoutePatterns` fires only when app/src/app holds the file or folder it
+// refuses, which it does not -- so against the real tree every guard is deletable with the suite
+// green. These pin each one against a throwaway tree under os.tmpdir(), never inside the repo,
+// and assert WHICH guard refused: the three messages differ, and each names what it refused.
+describe("servedRoutePatterns", () => {
+  let tree: string | undefined;
+
+  afterEach(() => {
+    if (tree === undefined) return;
+    // Removal is recursive, so the path is checked before it is trusted: a direct child of
+    // os.tmpdir() carrying this suite's own prefix, or nothing is removed.
+    expect(path.relative(os.tmpdir(), tree)).toMatch(/^route-tree-[^/\\]+$/);
+    rmSync(tree, { recursive: true, force: true });
+    tree = undefined;
+  });
+
+  function build(files: Record<string, string>): string {
+    const root = mkdtempSync(path.join(os.tmpdir(), "route-tree-"));
+    tree = root;
+    for (const [relative, body] of Object.entries(files)) {
+      const file = path.join(root, relative);
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, body);
+    }
+    return root;
+  }
+
+  it("models page.jsx and a nested opengraph-image.js as exactly the URLs they serve", () => {
+    // The control. Without it, a builder that wrote nothing would make every throw case below
+    // fail for the wrong reason -- and a walker that modelled only `.tsx` would pass them all.
+    const root = build({ "page.jsx": "", "x/[id]/opengraph-image.js": "" });
+    expect(servedRoutePatterns(root).sort()).toEqual(["/", "/x/:id/opengraph-image"]);
+  });
+
+  // A file for every alternative `UNMODELED_FILE` lists, and deleting an alternative reddens
+  // exactly the cases whose file passes through it. A file can pass through two: the first
+  // pattern multiplies a name group by an extension group, and the second nests its extension
+  // group inside the static branch, so deleting a name or that branch reddens every case under it.
+  // Each comment names the alternatives its file passes through.
+  it.each([
+    "x/icon.ico", // icon, ico
+    "x/icon.svg", // icon, svg
+    "x/icon.tsx", // icon, [jt]sx?
+    "x/apple-icon.png", // apple-icon, png
+    "x/apple-icon.jpg", // apple-icon, jpe?g
+    "x/twitter-image.gif", // twitter-image, gif
+    "x/twitter-image.alt.txt", // twitter-image, alt\.txt
+    "x/opengraph-image.jpg", // the static branch, jpe?g
+    "x/opengraph-image.png", // the static branch, png
+    "x/opengraph-image.gif", // the static branch, gif
+    "x/opengraph-image.alt.txt", // the static branch, alt\.txt
+    "x/opengraph-image1.tsx", // the numbered code branch
+    "manifest.json", // json
+    "manifest.webmanifest", // webmanifest
+    "manifest.ts", // [jt]sx?
+    "sitemap.xml", // sitemap\.xml
+    "robots.txt", // robots\.txt
+  ])("refuses %s with the unmodeled-file guard, naming the file", (file) => {
+    const root = build({ [file]: "" });
+    expect(() => servedRoutePatterns(root)).toThrow(
+      `servedRoutePatterns does not model the file convention '${file}'`,
+    );
+  });
+
+  // Every alternative in the folder guard: the three members of `^[(@_]` -- a route group, a
+  // parallel-route slot and a private folder -- and both spellings `^\[\[?\.\.\.` accepts.
+  it.each(["(group)", "@slot", "_private", "[[...slug]]", "[...slug]"])(
+    "refuses a %s folder with the folder-convention guard, naming the folder",
+    (folder) => {
+      const root = build({ [`${folder}/page.tsx`]: "" });
+      expect(() => servedRoutePatterns(root)).toThrow(
+        `servedRoutePatterns does not model the folder convention '${folder}'`,
+      );
+    },
+  );
+
+  it.each([
+    ["generateSitemaps", "sitemap.ts", "export async function generateSitemaps() {}\n"],
+    ["generateImageMetadata", "x/opengraph-image.tsx", "export function generateImageMetadata() {}\n"],
+  ])("refuses an exported %s with the URL-moving-export guard, naming it", (name, file, body) => {
+    const root = build({ [file]: body });
+    expect(() => servedRoutePatterns(root)).toThrow(
+      `servedRoutePatterns does not model the URL-moving export '${name}' in '${file}'`,
+    );
+  });
+});
+
 describe("QUERY_ROWS", () => {
-  it("has exactly one row per proxy matcher entry", () => {
-    // The third list that must agree with config.matcher -- and with THAT list only. This comment
-    // used to name ENTITY_ROUTES as well, which the assertion below does not check and could not:
-    // QUERY_ROWS (one row per matcher entry) is a strict superset of ENTITY_ROUTES (1 row since
-    // #106 -- `/route/:pair` alone; the other three entity pages each grew a second cacheability
-    // input and moved to their own proxy branch), so
-    // row-for-row agreement with the latter is not a property that holds. docs/architecture/
-    // hosting.md § "One canonical key set per cacheable URL" states the same thing. A row missing
-    // here ships a path with no query protection; a matcher entry missing ships a page with no
-    // Cache-Control at all and turns each of its 404s into a 500.
-    expect(QUERY_ROWS.map((r) => r.matcher).sort()).toEqual([...config.matcher].sort());
+  it("declares every route the app serves, except the pinned NOT_OURS set", () => {
+    expect(Object.keys(NOT_OURS).sort()).toEqual(["/api/health", "/favicon.ico"]);
+    const served = servedRoutePatterns();
+    expect(served.length).toBeGreaterThan(Object.keys(NOT_OURS).length); // anti-vacuity
+    for (const route of Object.keys(NOT_OURS)) expect(served).toContain(route);
+    expect(QUERY_ROWS.map((r) => r.route).sort()).toEqual(
+      served.filter((route) => !(route in NOT_OURS)).sort(),
+    );
   });
 
   it.each([
@@ -425,20 +587,21 @@ describe("QUERY_ROWS", () => {
     ["/robots.txt", "/robots.txt"],
     ["/api/pivot", "/api/pivot"],
     ["/search", "/search"],
-    // #8. These four are the ones the ordering actually decides, and they are why the OG rows sit
-    // ABOVE the entity rows in QUERY_ROWS. Every entity slug reader is a bare prefix test that
-    // does not stop at one segment, so `routeSlugFromPath("/route/JFK-LAX/opengraph-image")` is
-    // `"JFK-LAX/opengraph-image"` -- below the entity rows, `/route/:pair` claims every card,
-    // answers it with NO_KEYS and no cache-buster, and 307s the URL this site emits in its own
-    // `og:image` tag. This case goes red on a reorder; nothing else in the file does.
+    // #8. The four cards, which an entity row claims only under TWO defects together: the OG rows
+    // moved BELOW the entity rows in QUERY_ROWS, AND an entity slug reader accepting a `/`, so
+    // that `routeSlugFromPath("/route/JFK-LAX/opengraph-image")` is `"JFK-LAX/opengraph-image"`
+    // rather than null. Then `/route/:pair` claims every card, answers it with NO_KEYS and no
+    // cache-buster, and 307s the URL this site emits in its own `og:image` tag. MUTANTS RUN: the
+    // reorder alone and the reader regression alone each leave these cases green; both together
+    // turn them red. The reader regression alone is caught by "no OG row claims %s" below.
     ["/route/:pair/opengraph-image", "/route/JFK-LAX/opengraph-image"],
     ["/airport/:code/opengraph-image", "/airport/ORD/opengraph-image"],
     ["/carrier/:code/opengraph-image", "/carrier/DL/opengraph-image"],
     ["/aircraft/:name/opengraph-image", "/aircraft/B737-8/opengraph-image"],
-  ])("row %s is the first to claim %s", (matcher, pathname) => {
-    // Agreement on names is not agreement on behaviour: a row could carry the right `matcher`
+  ])("row %s is the first to claim %s", (route, pathname) => {
+    // Agreement on names is not agreement on behaviour: a row could carry the right `route`
     // string and a predicate that never fires, or fire on a path an earlier row should own.
-    expect(QUERY_ROWS.find((r) => r.matches(pathname))?.matcher).toBe(matcher);
+    expect(QUERY_ROWS.find((r) => r.matches(pathname))?.route).toBe(route);
   });
 
   it.each([
@@ -447,14 +610,13 @@ describe("QUERY_ROWS", () => {
     ["the bare suffix", "/opengraph-image"],
     ["the suffix in the middle", "/route/JFK-LAX/opengraph-image/x"],
   ])("no OG row claims %s", (_label, pathname) => {
-    // `config.matcher` forwards `/<entity>/:slug/opengraph-image` -- exactly ONE dynamic segment.
-    // A row claiming more would describe traffic the proxy never sees, and `proxy.ts`'s OG branch
-    // shares this same reader, so it would resolve a slug like `"JFK-LAX/extra"` against the
-    // warehouse on a request that cannot reach it. (These pathnames still fall to the entity
-    // rows' own prefix tests, which is unchanged pre-existing behaviour and unreachable for the
-    // same matcher reason -- what is asserted here is only that no OG row takes them.)
+    // A card is `/<entity>/[param]/opengraph-image` -- exactly ONE dynamic segment. A row claiming
+    // more would declare a route the app does not serve, and `proxy.ts`'s OG branch shares this
+    // same reader, so it would resolve a slug like `"JFK-LAX/extra"` against the warehouse on
+    // every such request. What is asserted here is only that no OG row takes them; whether any
+    // row does is `isOurs`'s question.
     const row = QUERY_ROWS.find((r) => r.matches(pathname));
-    expect(row?.matcher.endsWith("/opengraph-image") ?? false).toBe(false);
+    expect(row?.route.endsWith("/opengraph-image") ?? false).toBe(false);
   });
 
   it("never declares a repeatable key it does not also allow", () => {
@@ -464,4 +626,28 @@ describe("QUERY_ROWS", () => {
       }
     }
   });
+});
+
+describe("isOurs", () => {
+  it.each([
+    ["/", true],
+    ["/carrier/DL", true],
+    ["/carrier/D%2FL", true],
+    ["/explore/filter/origin_state", true],
+    ["/api/pivot", true],
+    ["/carrier/DL/x", false],
+    ["/explore/filter/origin_state/x", false],
+    ["/api/health", false],
+    ["/_next/static/chunks/app.js", false],
+    ["/nope", false],
+  ])("isOurs(%j) is %s", (pathname, expected) => {
+    expect(isOurs(pathname)).toBe(expected);
+  });
+
+  it.each(["/%zz", "/carrier/%E0%A4%A", "//", "/carrier//x", `/${"a/".repeat(2000)}`, "/ ", "/carrier/%2F%2F"])(
+    "never throws on %j -- it runs on every request",
+    (pathname) => {
+      expect(() => isOurs(pathname)).not.toThrow();
+    },
+  );
 });

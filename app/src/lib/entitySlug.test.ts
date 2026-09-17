@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { entitySlugFromPath } from "@/lib/entitySlug";
+import { entitySlugFromPath, ogSlugFromPath } from "@/lib/entitySlug";
+import { CARRIER_PREFIX } from "@/lib/carrier";
 
 // The four real prefixes this function was collapsed out of, so every property below is
 // checked against all four rather than against one representative -- the whole point of
@@ -45,18 +46,33 @@ describe("entitySlugFromPath", () => {
     }
   });
 
-  it("returns the empty string for a bare trailing slash, not null", () => {
-    // airportSlugFromPath (lib/airport.ts) is the one caller that maps this particular result
-    // to null -- a quirk pinned by its own test, layered on TOP of this function rather than
-    // reproduced inside it. This function itself treats all four prefixes alike.
+  it("returns null for the bare prefix: no segment follows it", () => {
     for (const prefix of PREFIXES) {
-      expect(entitySlugFromPath(prefix, prefix)).toBe("");
+      expect(entitySlugFromPath(prefix, prefix)).toBeNull();
     }
   });
 
-  it("returns whatever follows the prefix verbatim, including embedded slashes", () => {
+  it("returns null when more than one raw segment follows the prefix", () => {
     for (const prefix of PREFIXES) {
-      expect(entitySlugFromPath(`${prefix}DL/extra`, prefix)).toBe("DL/extra");
+      expect(entitySlugFromPath(`${prefix}DL/extra`, prefix)).toBeNull();
+      expect(entitySlugFromPath(`${prefix}DL/`, prefix)).toBeNull();
     }
+  });
+
+  it("decides one segment on the RAW text, so an encoded slash stays inside the slug", () => {
+    // `/carrier/D%2FL` is ONE path segment -- Next routes it to `[code]` with code `D/L`.
+    // Checking after decoding would call it two.
+    for (const prefix of PREFIXES) {
+      expect(entitySlugFromPath(`${prefix}D%2FL`, prefix)).toBe("D/L");
+    }
+  });
+});
+
+describe("ogSlugFromPath", () => {
+  // ogSlugFromPath delegates the entire one-segment decision to entitySlugFromPath above --
+  // an OG card's slug is decided on the same RAW text, before decoding, so an encoded slash
+  // stays inside the slug here too rather than being mistaken for a second dynamic segment.
+  it("decides one segment on the RAW text, so an encoded slash stays inside the OG card's slug", () => {
+    expect(ogSlugFromPath(`${CARRIER_PREFIX}D%2FL/opengraph-image`, CARRIER_PREFIX)).toBe("D/L");
   });
 });

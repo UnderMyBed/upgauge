@@ -72,7 +72,6 @@ export default async function NotFound() {
   const requestHeaders = await headers();
   // Fails loudly if proxy.ts did not run. There is deliberately no fallback: a 404 page that
   // quietly stops naming the offending code, with every gate green, is the precise failure
-  // this header exists to make impossible. NOTE FOR M4d TASK 5: `/airport/:code` must be added
-  // to proxy.ts's matcher, or this throws on every 404 here.
+  // this header exists to make impossible.
   return <NotFoundView pathname={rawPathFromHeaders(requestHeaders)} />;
 }

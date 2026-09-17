@@ -81,15 +81,15 @@ box its own timer keeps at `:deploy`. `warehouse.yml` polls BTS and publishes th
 `image.yml` builds and gates the container, `promote.yml` moves the tag. `make portability` proves
 the WORKDIR/data contract by breaking it, and is hand-run — no workflow invokes it.
 
-Current gates (`app-smoke` and `app-check` measured 2026-09-16, `image-smoke` 2026-09-10, `verify`/`goldens` 2026-08-08,
+Current gates (`app-smoke`, `app-check` and `image-smoke` measured 2026-09-16, `verify`/`goldens` 2026-08-08,
 `portability` 2026-08-09, the rest 2026-08-10; the only counts kept here — history lives in git):
 
 | gate | result |
 |---|---|
 | `make check` | ruff · `actionlint` · pytest. Test total is **generated** — `pipeline/reference/gates.generated.json`, gated by `check-gate-counts`. 65 skip without `data/` |
-| `make app-check` | 1,900 app tests · without a built `upgauge.duckdb` 1,884 are collected, 12 skip, and **655 of the 1,872 that run fail** — collected, run and failed are three different sets, so "N of the total fail" was never the sentence it read as |
-| `make app-smoke` | 786 served-build checks |
-| `make image-smoke` | the host set less the 10 host-only gap checks (printed as a named three-section block, never as `skip` lines — that shape is `check_dataset`'s), **plus the 1 container-only check** (#162's artifact-level toolchain probe) — three terms, because the two modes now OVERLAP and neither contains the other; each prints the term it is missing — **777, measured 2026-09-10** by `image-contract.yml` on #173 (run 34502951768, job `gate`), and it reconciles against the rule — derived from both logs, not asserted: of the 786 host `ok` lines exactly 10 sit inside the three `==> gap check:` sections, and the container log's own `==> host-only sections NOT run in container mode (3)` block confirms none of them ran there. #147's two ordering checks are deliberately not dataset-pinned and were confirmed running in the container, not merely inferred from a local `SMOKE_DATASET_PINNED=0` run. Needs Docker plus the pinned release asset — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
+| `make app-check` | 1,965 app tests · without a built `upgauge.duckdb` 1,949 are collected, 12 skip, and **655 of the 1,937 that run fail** — collected, run and failed are three different sets, so "N of the total fail" was never the sentence it read as |
+| `make app-smoke` | 808 served-build checks |
+| `make image-smoke` | the host set less the 10 host-only gap checks (printed as a named three-section block, never as `skip` lines — that shape is `check_dataset`'s), **plus the 1 container-only check** (#162's artifact-level toolchain probe) — three terms, because the two modes now OVERLAP and neither contains the other; each prints the term it is missing — **799, measured 2026-09-16** by `image-contract.yml` on #185 (run 35161417691, job `gate`), and it reconciles against the rule — derived from both logs, not asserted: of the 808 host `ok` lines (`ci.yml` run 35161417739, job `smoke`) exactly 10 sit inside the three `==> gap check:` sections, and the container log's own `==> host-only sections NOT run in container mode (3)` block confirms none of them ran there. #147's two ordering checks are deliberately not dataset-pinned and were confirmed running in the container, not merely inferred from a local `SMOKE_DATASET_PINNED=0` run. Needs Docker plus the pinned release asset — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
 | `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
 | `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
 | `make goldens` | byte-identical |
@@ -268,8 +268,8 @@ comma becomes indistinguishable from a separator. Without them **every** filtere
 **both** `/explore` and `/api/pivot`, reserved characters or not. Both entry points read the raw
 string from a header and nothing else; **a page can never use `searchParams` for this.**
 `proxy.ts` also sets the request pathname as a second header, which each `not-found.tsx` reads
-(it accepts no props) — a page missing from the matcher loses its 404's entire message, not just
-its cache header.
+(it accepts no props). The proxy runs on every request and sets both headers before anything else,
+so neither can come from the client.
 
 **`lib/db.ts` memoizes its `DuckDBInstance` on `globalThis`, not in a module-level `let`.**
 Turbopack emits that module into a separate server chunk per entry graph — proxy, page SSR,
@@ -310,7 +310,7 @@ A `JFK–LAX`-shaped fixture cannot fail this way, so any test for it needs a di
 `/carrier/VX`, dormant since 2018-03, is the fixture that distinction needs.
 
 **A new top-level route is not shipped until something already-reachable links to it.** Neither
-`sitemap.ts` nor `proxy.ts`'s matcher counts. `/watch` shipped with zero inbound internal links,
+`sitemap.ts` nor a `QUERY_ROWS` row counts. `/watch` shipped with zero inbound internal links,
 one milestone after M5 existed to remove exactly that kind of island.
 
 ## Charts and maps
@@ -479,22 +479,24 @@ signature element; it does not own these.
   that would still fix it). Do not restate any of this as "errors get `no-store`"; it is 404s
   only, and even those are per-route (`/sitemap.xml`/`/robots.txt` 404 the same way any Next
   route does, uncached by `proxy.ts` since they never leave the 200 path in practice).
-  **A new page route must be added to `proxy.ts`'s matcher or it ships uncached and without the
-  raw-query and pathname headers** — seventeen entries, four of them `opengraph-image`. A static, closed slug set
-  (like `/watch`'s four presets) is necessary but not sufficient for the matcher's own cacheability
-  branch to skip a database probe — every preset page still runs a `mart_route_health` query the
-  proxy commits to a cache header before, so `isDataLayerHealthy()` gates it exactly like
-  `/explore` and `/sitemap.xml`/`robots.txt` do. Full detail: `docs/architecture/hosting.md`.
-- **Every matcher path declares its legitimate query keys (`lib/canonicalQuery.ts`), and a
-  non-canonical query is never a cached 200:** 307 + `no-store` on the ten paths the proxy gates,
+  **`proxy.ts`'s matcher is `/:path*`, and a route is ours only if `QUERY_ROWS` (`lib/canonicalQuery.ts`)
+  declares it.** Anything else gets both headers and nothing more — no canonical-query gate, no database,
+  no `Cache-Control` but the `no-store` every `RSC` request gets — and `canonicalQuery.test.ts` fails on
+  a route file under `app/src/app` it does not model, or with no row and not in its pinned `NOT_OURS`
+  set. A listed matcher left every other URL's `x-upgauge-path` to the client, and a forged one reached
+  `CarrierNotFound`'s DuckDB query from outside the edge rate limit. A static, closed slug set (like
+  `/watch`'s four presets) is necessary but not sufficient for a route's cacheability branch to skip a
+  database probe — every preset page runs a `mart_route_health` query the proxy commits to a cache
+  header before, so `isDataLayerHealthy()` gates it like `/explore` and `/sitemap.xml`/`robots.txt` do.
+- **Every declared route declares its legitimate query keys (`lib/canonicalQuery.ts`), and a
+  non-canonical query is never a cached 200:** 307 + `no-store` on every path the proxy gates,
   400 + `no-store` from `/api/pivot`'s own handler (a JSON endpoint must not 307), nothing on
   `/search` (`no-store` unconditionally, must never redirect). A CDN's cache key includes the query
   string, so `?x=1…N` was unbounded. **`exempt` means "the proxy does not redirect this path",
   never "the rules do not apply"** — the second reading left `/api/pivot`'s `&&`/trailing-`&` axis
-  a 30-day-cached 200 (`splitPairs` skips an empty chunk), on the ELEVENTH cacheable path this file
-  had called ten. Byte-equality against the canonical string, not "unknown key present": `?&&` has
-  none. `f` is repeatable. It is one canonical KEY SET, never "one spelling" — key order survives,
-  and *that module* inspects no value; don't restate it wider.
+  a 30-day-cached 200 (`splitPairs` skips an empty chunk). Byte-equality against the canonical string,
+  not "unknown key present": `?&&` has none. `f` is repeatable. It is one canonical KEY SET, never
+  "one spelling" — key order survives, and *that module* inspects no value; don't restate it wider.
 - **Values are bounded too — `lib/pivot/bounds.ts`, not the key gate.** `t` inside the months this
   dataset covers with `from ≤ to`, `n` under a ceiling, no repeated token in `d`/`m`, and every key
   but `f` spelled ONE way. **A shape check downstream of `pyUnquote` is not a spelling bound** —
@@ -506,9 +508,9 @@ signature element; it does not own these.
   must be a canonical in-range whole number (`render.ts` + `pivot.py`, #87 — a digits-only rule
   admits `distance_group=99999`, which 500s). VARCHAR values, `f`'s repeat count and its spelling
   exemption (`%` is its own escape there) stay open, left to an edge rule matching `/api/` only.
-- **Nothing on the proxy path may throw.** `canonicalize()` threw on a leading `?` as a "wiring
-  bug"; `proxy.ts` strips only ONE `?` (non-global regex) and has no try/catch, so `GET /watch??x=1`
-  500ed every matcher path — and no smoke check used a doubled `?`, so both gates missed it.
+- **Nothing on the proxy path may throw — it runs on every request.** `canonicalize()` threw on a
+  leading `?` as a "wiring bug"; `proxy.ts` strips only ONE `?` (non-global regex) and has no
+  try/catch, so `GET /watch??x=1` 500ed every gated path — and no smoke check used a doubled `?`.
 - Build the **aircraft-type-mix chart before the load-factor chart**. Everyone does load
   factor; the gauge story is the differentiator.
 - **The `/watch` presets are NOT saved instances of a generic Top-N builder**, and the opposite

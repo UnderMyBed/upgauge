@@ -17,12 +17,12 @@ import Link from "next/link";
  *
  * `prefetch={false}` is LOAD-BEARING, not a micro-optimisation. `Link`'s default (`auto`)
  * prefetches when the link enters the viewport, in production. This wordmark is above the fold
- * on every page, and the CDN cannot absorb that prefetch -- NOT because `/` is uncached (it is in
- * `proxy.ts`'s matcher and gets `HTML_CACHE`), but because `proxy.ts` answers ANY request carrying
- * the `RSC` header `no-store`, unconditionally. A prefetch is such a request, so it always reaches
- * the origin: the default would add one uncached origin request per page view, on a single
- * always-on box whose entire cost control is the caching (CLAUDE.md, "the caching is the cost
- * control, not the hosting tier").
+ * on every page, and the CDN cannot absorb that prefetch -- NOT because `/` is uncached (it is
+ * declared in `QUERY_ROWS` and gets `HTML_CACHE`), but because `proxy.ts` answers ANY request
+ * carrying the `RSC` header `no-store`, unconditionally. A prefetch is such a request, so it
+ * always reaches the origin: the default would add one uncached origin request per page view, on
+ * a single always-on box whose entire cost control is the caching (CLAUDE.md, "the caching is the
+ * cost control, not the hosting tier").
  *
  * THE ONE PLACE THIS RULE IS EXPLAINED. Four 404s and the front door defer here rather than
  * restating it -- the sentence was wrong in six places at once and reached its third revision

@@ -1,13 +1,13 @@
 import { healthReport, type AsOfFn, type GapProbe } from "@/lib/health";
 
-/** Deliberately ABSENT from proxy.ts's matcher, and proxy.test.ts pins that.
+/** Deliberately NOT declared in `QUERY_ROWS`, and canonicalQuery.test.ts pins that in `NOT_OURS`.
  *
- * CLAUDE.md's rule is that a new route joins the matcher or it ships uncached and without the
- * raw-query and pathname headers. Here uncached is the REQUIREMENT, so this is the documented
- * exception rather than a silent omission: a route handler sets its own headers (/api/pivot
- * already does this for its errors), this endpoint takes no query so it needs no raw-query
- * header, and it has no not-found path so it needs no pathname header. The matcher's purpose
- * is to GRANT cacheability; this route must never have it.
+ * `proxy.ts` runs on every request and sets both headers here as everywhere, but a route
+ * `QUERY_ROWS` does not declare gets nothing more: no canonical-query gate, no Cache-Control
+ * decision. Here uncached is the REQUIREMENT, so this is the documented exception rather than a
+ * silent omission: a route handler sets its own headers (/api/pivot already does this for its
+ * errors), this endpoint takes no query, and it has no not-found path. Declaring a route is what
+ * lets the proxy GRANT cacheability; this route must never have it.
  *
  * 503 rather than 200-with-a-flag: Docker's HEALTHCHECK and any load balancer both need the
  * status line to mean "do not send traffic here". */
