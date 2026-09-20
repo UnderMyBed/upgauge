@@ -86,13 +86,13 @@ export const BY_AIRCRAFT_TYPE: MixDimension = {
  * THE RAMP STILL ENCODES SOMETHING, MEASURED -- and every figure below names its WINDOW,
  * because the ranking moves with it. Over the full window 2015-01..2026-06, which is what
  * /aircraft fetches and this chart draws, across every operating carrier that filed the type
- * however few departures it flew: the A321nXLR spans B6 175.9 -> F9 230.0 (54.1 seats, 31%,
- * on identical metal), the A320-1/2 spans MX 129.3 -> G4 181.6, and the B737-8 spans
- * AS 159.8 -> XP 187.5.
- * The page's trailing-12 TABLE covers a different span and ranks them differently -- SY is the
- * densest B737-8 operator there, XP here -- so a gauge figure carrying no window is evidence
- * for nothing. On this page the ramp isolates CONFIGURATION choice from FLEET choice, which
- * `/route` cannot separate.
+ * however few departures it flew: the A321nXLR spans B6 175.9 -> F9 230.0
+ * (54.1 seats, 31%, on identical metal), the A320-1/2 spans MX 129.3 -> G4 181.6, and the
+ * B737-8 spans AS 159.8 -> XP 187.5.
+ * The page's trailing-12 TABLE covers a different span and ranks them differently -- the
+ * densest B737-8 operator there is SY 186.0, XP here -- so a gauge figure carrying no window
+ * is evidence for nothing. On this page the ramp isolates CONFIGURATION choice from FLEET
+ * choice, which `/route` cannot separate.
  *
  * `op_airline_id` and not a mainline rollup: the query keeps `grouping: "operating"` (CLAUDE.md
  * -- the operating carrier is the grain and the truth), because rolling Endeavor into Delta

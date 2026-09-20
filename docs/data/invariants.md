@@ -972,9 +972,10 @@ Three consequences, all of them observed rather than predicted:
 1. **A rename is not a data movement, and the two are easy to confuse.** The rename reddened
    17 assertions and one `app/smoke.sh` needle (`B757-2 overtakes A321/LR · 2018`). Every
    underlying *number* was unchanged — JFK–LAX's yearly leader table re-measured
-   byte-identical, ATL–MCO still crosses over in 2018, and 699's carrier gauge spread over the
-   full window (B6 175.9 → F9 230.0) has moved only with the months filed since. Re-measure
-   before concluding the facts moved.
+   byte-identical, ATL–MCO still crosses over in 2018, and 699's carrier gauge spread came
+   back at the same two ends. Re-measure before concluding the facts moved; the spread's
+   current figures are in [`../design/system.md`](../design/system.md) § Charts, where they are
+   quoted as a live measurement rather than as evidence about a past refresh.
 2. **A fixture can lose the property it was chosen for.** `A321/LR` was *the* worked example
    for the slug transform, and `A321nXLR` carries no separator at all — so the renamed type
    cannot exercise the mechanism, and the assertions would have passed against the very bug

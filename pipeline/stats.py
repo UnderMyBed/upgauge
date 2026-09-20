@@ -70,6 +70,10 @@ _SCALAR = frozenset(
         # the identity crossover + none = sitemap_routes cross-checks the predicate.
         "crossover_routes",
         "crossover_routes_none",
+        # The population crossover_routes is a share OF: the routes whose chart draws, which
+        # are the only ones that reach findCrossover at all.
+        "crossover_routes_drawing",
+        "gauge_a320_12_full_low_departures",
         # DECIMAL measures (#182): the carrier gauge spread on one airframe. Scalars like the
         # rest -- the only thing new is the type, which every consumer must render with an
         # explicit decimal spec (pipeline/tests/test_stated_counts.py).
@@ -79,6 +83,12 @@ _SCALAR = frozenset(
         "gauge_a320_12_full_high",
         "gauge_b737_8_full_low",
         "gauge_b737_8_full_high",
+        "gauge_b737_8_t12_high",
+        # The chart's five BANDED carriers on the B737-8 -- a different population from the
+        # six above, answering the two-orderings question rather than the spread one.
+        "gauge_b737_8_banded_high",
+        "seats_b737_8_banded_high_m",
+        "seats_b737_8_banded_low_m",
     }
 )
 
@@ -176,8 +186,17 @@ def _derive(measures: dict[str, Any]) -> None:
         return round(100.0 * measures[part] / measures[whole], 4)
 
     measures["route_order_disagreeing_pct"] = pct("route_order_disagreeing_pairs", "sitemap_routes")
-    measures["crossover_routes_pct"] = pct("crossover_routes", "sitemap_routes")
-    measures["crossover_routes_none_pct"] = pct("crossover_routes_none", "sitemap_routes")
+    # The no-annotation share is taken against the DRAWING population, not every route: the
+    # function only runs where a chart drew. Both halves of the subtraction are measured
+    # separately, and crossover_routes is a subset of crossover_routes_drawing by construction
+    # (a crossover needs two led years, which needs two stateable months) -- asserted in
+    # test_stats.py rather than assumed here.
+    measures["crossover_routes_drawing_none"] = (
+        measures["crossover_routes_drawing"] - measures["crossover_routes"]
+    )
+    measures["crossover_routes_drawing_none_pct"] = pct(
+        "crossover_routes_drawing_none", "crossover_routes_drawing"
+    )
     for key in ("a321nxlr", "a320_12", "b737_8"):
         low, high = measures[f"gauge_{key}_full_low"], measures[f"gauge_{key}_full_high"]
         measures[f"gauge_{key}_full_spread"] = round(high - low, 4)

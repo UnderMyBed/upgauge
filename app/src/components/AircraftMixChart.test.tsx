@@ -297,7 +297,10 @@ describe("AircraftMixChart", () => {
   it("draws no annotation when the #1 type never changes", () => {
     // Paired with the test above on purpose: alone, this passes for a component that never
     // renders an annotation at all. FLEET's leader is constant, so the honest output is
-    // nothing -- and `findCrossover` returns null for 46% of real routes, JFK-LAX included.
+    // nothing -- and `findCrossover` returns null for
+    // 4,152 of the 16,345 real routes whose chart draws (25.4%),
+    // JFK-LAX included. The population is the drawing routes, not all 22,635: a route whose
+    // chart does not draw never reaches the function.
     const container = chart(FLEET);
     expect(textsOf(container).some((t) => t.includes("overtakes"))).toBe(false);
     expect(container.querySelector("g[stroke-dasharray]")).toBeNull();

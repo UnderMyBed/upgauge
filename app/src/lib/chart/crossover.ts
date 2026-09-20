@@ -28,13 +28,17 @@ type Leader = { code: string; label: string; seats: number | null };
  * annotation rots silently the first month the data moves." This is that derivation.
  *
  * **`null` is an ordinary outcome, not an edge case.** The predicate is this function's own --
- * the #1 type by seats in a year differs from the previous LED year's -- and measured on the
- * built database over the full window it holds for 12,193 of 22,635 routes (53.9%). The other
- * 10,442 (46.1%) render no annotation at all, JFK-LAX among them: the A321nXLR
- * leads that route every year 2015-2026, even as its share of the route's seats falls, which
- * is a real upgauge story but not a crossover. This function must never manufacture an
- * annotation, and must never fall back to naming the largest type: that is not an event, it
- * would appear on every chart, and it would teach readers to ignore annotations.
+ * the #1 type by seats in a year differs from the previous LED year's -- and the POPULATION is
+ * the routes that reach it. `prepareMixPlot` returns early on `!mixChartDraws(rows)`, so a
+ * route whose chart does not draw never calls this at all, and sizing the null branch against
+ * all 22,635 routes understates it by more than half. Measured on the built database over the
+ * full window, of the 16,345 routes whose chart draws,
+ * 12,193 carry an annotation and 4,152 (25.4%) do not
+ * -- JFK-LAX among them: the A321nXLR leads that route every year 2015-2026, even as its
+ * share of the route's seats falls, which is a real upgauge story but not a crossover. This
+ * function must never manufacture an annotation, and must never fall back to naming the
+ * largest type: that is not an event, it would appear on every chart, and it would teach
+ * readers to ignore annotations.
  *
  * Two rules decide what counts as a leader, both of which suppress annotations that would
  * otherwise flap or mislead:

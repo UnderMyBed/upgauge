@@ -483,10 +483,10 @@ across every operating carrier that filed the type, however few departures it fl
 | B737-8 | AS 159.8 | XP 187.5 | 27.6 |
 
 **A gauge figure names its window, or it is evidence for nothing.** The page's trailing-12
-table covers a different span from its chart, and the ranking moves with it: SY is the densest
-B737-8 operator over the trailing 12, XP over the full window. Same airframe, same measure,
-different answer (`docs/data/invariants.md` § Route identity records the same lesson about the
-same-airport counts).
+table covers a different span from its chart, and the ranking moves with it: the densest B737-8
+operator is **SY 186.0** over the trailing 12 and XP 187.5 over the full window. Same airframe,
+same measure, different answer (`docs/data/invariants.md` § Route identity records the same
+lesson about the same-airport counts).
 
 **But it is not the same claim, so it must not carry the same words.** Across aircraft types a
 darker band is *bigger metal*. Across carriers of one type it is the *same* metal fitted denser —
@@ -501,8 +501,10 @@ in one object, deliberately: splitting them is how a chart ends up stacked by ca
 title and a legend that both say "aircraft type".
 
 **The two orderings do not become one just because the bands changed.** On the 737-800 they are
-exact *reverses* — Southwest flies the most of them **and** the densest cabin, Alaska the fewest
-and the least dense — so a single sort mislabels all five swatches rather than four of five. That is the fixture the implementation is
+exact *reverses* — Southwest flies the most of them (**603.3 M seats**) **and** the densest
+cabin (**175.0** seats/departure), Alaska the fewest (**106.0 M**) and the least dense (159.8,
+the light end of the table above) — so a single sort mislabels all five swatches rather than
+four of five. That is the fixture the implementation is
 pinned against, precisely because a fixture whose two orders coincide lets a single sort pass.
 
 ### Multi-series lines
@@ -528,8 +530,10 @@ below — it binds every time-series mark, not only lines.
   hand-typed annotation rots silently the first month the data moves.
   **No annotation is a designed state, not a gap.** Measured over the full window, on the
   annotation's own predicate — the #1 type by seats in a year differs from the previous *led*
-  year's — it fires on **12,193 of 22,635 routes (53.9%)**, and JFK–LAX — the flagship
-  example — is not one of them. The other **10,442 (46.1%)** carry none, and the chart must
+  year's — and against the population that *reaches* it: `findCrossover` runs only where a
+  chart drew, so the share is of the **16,345** routes whose chart draws, never of all 22,635.
+  Of those, **12,193** carry an annotation and **4,152 (25.4%)** do not — JFK–LAX, the
+  flagship example, among them. So the chart must
   never manufacture one, never fall back to labelling the largest type (that is not an event,
   it would appear on every chart, and it teaches readers to ignore annotations), and never
   break a tie to produce one. Three rules decide what counts, all of them suppressive: **a

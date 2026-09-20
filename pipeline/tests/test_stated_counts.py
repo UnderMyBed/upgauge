@@ -77,7 +77,7 @@ STATED: dict[str, tuple[str, ...]] = {
         "app/src/app/sitemap.ts",
         "app/src/lib/entityFacts.ts",
         "app/src/lib/entityLink.ts",
-        "app/src/lib/chart/crossover.test.ts",
+        "app/src/components/AircraftMixChart.test.tsx",
         "app/src/lib/chart/crossover.ts",
         "app/src/lib/routePair.test.ts",
         "app/src/lib/routePair.ts",
@@ -233,7 +233,25 @@ STATED: dict[str, tuple[str, ...]] = {
         "app/src/lib/chart/crossover.ts",
         "docs/design/system.md",
     ),
-    "crossover_routes_none": (
+    # THE POPULATION, and registering it is half of what makes the share above honest. The
+    # function is reached only through `prepareMixPlot`, which returns early on
+    # `!mixChartDraws(rows)`, so a no-annotation share taken against every route understates
+    # it by more than half -- 46.1% of all routes against 25.4% of the ones that draw. Both
+    # sentences were literally true and one of them sized the branch wrong.
+    #
+    # `crossover_routes_none` is deliberately NOT here: it is the complement over all routes,
+    # which no sentence states any more. It stays a measure because the identity in
+    # test_stats.py is what keeps the two SQL blocks copy-consistent.
+    "crossover_routes_drawing": (
+        "app/smoke.sh",
+        "app/src/components/AircraftMixChart.test.tsx",
+        "app/src/lib/chart/crossover.test.ts",
+        "app/src/lib/chart/crossover.ts",
+        "docs/design/system.md",
+    ),
+    "crossover_routes_drawing_none": (
+        "app/smoke.sh",
+        "app/src/components/AircraftMixChart.test.tsx",
         "app/src/lib/chart/crossover.test.ts",
         "app/src/lib/chart/crossover.ts",
         "docs/design/system.md",
@@ -367,23 +385,30 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
         ("docs/data/invariants.md", "({v:.2f}%, excluding"),
         ("docs/data/invariants.md", "wrong route for that {v:.2f}%"),
     ),
-    "crossover_routes_pct": (
+    # The no-annotation share, ALWAYS against the drawing population -- every needle names it,
+    # so a site that quietly re-based the share on all routes cannot satisfy one.
+    "crossover_routes_drawing_none_pct": (
         (
-            "app/src/lib/chart/crossover.ts",
-            "{crossover_routes} of {sitemap_routes} routes ({v:.1f}%)",
+            "app/smoke.sh",
+            "{crossover_routes_drawing_none} of the {crossover_routes_drawing} routes whose "
+            "chart draws ({v:.1f}%)",
         ),
         (
-            "docs/design/system.md",
-            "**{crossover_routes} of {sitemap_routes} routes ({v:.1f}%)**",
+            "app/src/components/AircraftMixChart.test.tsx",
+            "{crossover_routes_drawing_none} of the {crossover_routes_drawing} real routes "
+            "whose chart draws ({v:.1f}%)",
         ),
-    ),
-    "crossover_routes_none_pct": (
-        ("app/src/lib/chart/crossover.ts", "{crossover_routes_none} ({v:.1f}%)"),
         (
             "app/src/lib/chart/crossover.test.ts",
-            "{crossover_routes_none} of {sitemap_routes} routes ({v:.1f}%)",
+            "{crossover_routes_drawing_none} of the {crossover_routes_drawing} routes whose "
+            "chart draws ({v:.1f}%)",
         ),
-        ("docs/design/system.md", "**{crossover_routes_none} ({v:.1f}%)**"),
+        (
+            "app/src/lib/chart/crossover.ts",
+            "{crossover_routes} carry an annotation and {crossover_routes_drawing_none} "
+            "({v:.1f}%) do not",
+        ),
+        ("docs/design/system.md", "**{crossover_routes_drawing_none} ({v:.1f}%)**"),
     ),
     # THE CARRIER GAUGE SPREAD (#182), and the reason this module learned decimals. `172.3`
     # was stated in seven files as the trailing-12 figure for a ramp the chart draws over the
@@ -395,7 +420,6 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
         ("app/src/components/AircraftMixChart.tsx", "B6's {v:.1f}"),
         ("app/src/lib/chart/aircraftMix.ts", "B6 {v:.1f} seats per departure"),
         ("app/src/lib/chart/aircraftMix.ts", "A321nXLR spans B6 {v:.1f}"),
-        ("docs/data/invariants.md", "(B6 {v:.1f}"),
         ("docs/design/system.md", "| A321nXLR | B6 {v:.1f} |"),
         ("docs/product/features.md", "B6 at {v:.1f} seats/departure"),
     ),
@@ -405,7 +429,6 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
         ("app/src/components/AircraftMixChart.tsx", "F9 {v:.1f} seats in"),
         ("app/src/lib/chart/aircraftMix.ts", "departure to F9 {v:.1f}"),
         ("app/src/lib/chart/aircraftMix.ts", "-> F9 {v:.1f}"),
-        ("docs/data/invariants.md", "→ F9 {v:.1f})"),
         ("docs/design/system.md", "| F9 {v:.1f} |"),
         ("docs/product/features.md", "F9 at {v:.1f}"),
     ),
@@ -431,9 +454,12 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "gauge_b737_8_full_low": (
         ("app/src/app/aircraft/[name]/page.test.tsx", "down to AS {v:.1f}"),
-        ("app/src/lib/chart/aircraftMix.ts", "B737-8 spans"),
-        ("app/src/lib/chart/aircraftMix.ts", "AS {v:.1f} -> XP"),
+        # ONE needle over the whole clause, not a value-free "B737-8 spans" beside a bare
+        # number: a needle with no {v} in it is the deletable-green shape -- it can never
+        # refuse anything, so it is coverage on paper only.
+        ("app/src/lib/chart/aircraftMix.ts", "B737-8 spans AS {v:.1f}"),
         ("docs/design/system.md", "| B737-8 | AS {v:.1f} |"),
+        ("docs/design/system.md", "the least dense ({v:.1f},"),
     ),
     "gauge_b737_8_full_high": (
         ("app/src/lib/chart/aircraftMix.ts", "-> XP {v:.1f}"),
@@ -441,6 +467,25 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "gauge_b737_8_full_spread": (
         ("docs/design/system.md", "| XP {gauge_b737_8_full_high:.1f} | {v:.1f} |"),
+    ),
+    # Finding 4 of the #182 review: XP's half of the window-flip rule sat inside
+    # gauge_b737_8_full_high and SY's half was pinned nowhere, so SY losing the trailing 12
+    # would leave two files stating a false fact with every gate green.
+    "gauge_b737_8_t12_high": (
+        ("app/src/lib/chart/aircraftMix.ts", "there is SY {v:.1f}"),
+        ("docs/design/system.md", "**SY {v:.1f}**"),
+    ),
+    # The two-orderings passage. Its population is the chart's five BANDED carriers, not every
+    # operator of the type, so these are their own measures rather than a reuse of the spread
+    # ends -- reusing gauge_b737_8_full_high would pin XP, which is in Other.
+    "seats_b737_8_banded_high_m": (("docs/design/system.md", "(**{v:.1f} M seats**)"),),
+    "seats_b737_8_banded_low_m": (("docs/design/system.md", "the fewest (**{v:.1f} M**)"),),
+    "gauge_b737_8_banded_high": (("docs/design/system.md", "cabin (**{v:.1f}** seats/departure)"),),
+    # The evidence for the every-carrier predicate, stated beside that predicate in the SQL
+    # that uses it: 51 departures is what sets the A320-1/2's light end, and a reader deciding
+    # to "tidy" the measure down to the banded carriers needs to see the number it would drop.
+    "gauge_a320_12_full_low_departures": (
+        ("sql/03_queries/stats_counts.sql", "MX's {v} A320-1/2 departures"),
     ),
     # The window every gauge figure above is measured over, bound to the dataset rather than
     # typed: it was written as `2026-04` in three files on a 2026-06 warehouse, which is what

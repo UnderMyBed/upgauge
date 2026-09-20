@@ -240,10 +240,15 @@ seq AS (
 SELECT count(*) FROM (SELECT DISTINCT lo, hi FROM seq WHERE prev IS NOT NULL AND code <> prev);
 
 -- name: crossover_routes_none
--- The complement, MEASURED rather than subtracted, for the reason route_order_agreeing_pairs
--- is: a derived complement cannot cross-check the thing it was derived from. Inverting the
--- predicate above would swap the two figures and leave every assertion green, which is the
--- exact shape of the bug this pair exists to catch. A route with NO led year at all -- every
+-- The complement over the same population. IT CHECKS COPY-CONSISTENCY, NOT THE PREDICATE, and
+-- claiming otherwise was this measure's own first defect: the chain below is a byte-copy of
+-- crossover_routes', so `changed + none = sitemap_routes` holds for ANY predicate at all --
+-- invert `code <> prev` in BOTH blocks and the identity stays green while the prose states the
+-- opposite of what is measured. What it does catch is the two copies drifting apart, which is
+-- the real risk of duplicating a chain this long. The PREDICATE is pinned falsifiably in
+-- pipeline/tests/test_stats.py, on JFK-LAX (must be ABSENT from `changed`) and ATL-MCO (must
+-- be PRESENT) -- and once that holds, this identity forces this block to be the true
+-- complement of a correct `changed`. A route with NO led year at all -- every
 -- year tied, unknowable or flown empty -- belongs here, since it too renders no annotation.
 WITH cell AS (
     SELECT route_key_low AS lo, route_key_high AS hi, year, aircraft_type AS code,
@@ -280,8 +285,9 @@ WHERE NOT EXISTS (SELECT 1 FROM changed ch WHERE ch.lo = p.lo AND ch.hi = p.hi);
 -- so a gauge figure that does not name its window is not evidence for anything. No date
 -- predicate appears below because the full window IS the whole fact table.
 --
--- PREDICATE: every operating carrier that filed the type, however few departures it flew. MX's
--- 51 A320-1/2 departures set that type's light end, and narrowing to the banded carriers would
+-- PREDICATE: every operating carrier that filed the type, however few departures it flew.
+-- MX's 51 A320-1/2 departures set that type's light end (gauge_a320_12_full_low_departures,
+-- below -- the figure is generated, not typed), and narrowing to the banded carriers would
 -- be measuring the chart's top five instead of the configuration spread the sentence claims.
 -- Ratio of sums per carrier, never an average of gauges (CLAUDE.md), and quarantine-filtered on
 -- both halves so numerator and denominator come from the identical row set -- the same
@@ -346,3 +352,105 @@ SELECT round(max(g), 4) FROM (
     JOIN dim_aircraft_type t ON t.code = f.aircraft_type
     WHERE t.short_name = 'B737-8'
     GROUP BY f.op_airline_id);
+
+-- name: crossover_routes_drawing
+-- THE POPULATION crossover_routes is a share OF, and it is not sitemap_routes (#182 review).
+-- `findCrossover` is reached only through `prepareMixPlot`, which returns early on
+-- `!mixChartDraws(rows)` (app/src/lib/chart/mixPlotConfig.ts) -- so a route whose chart does
+-- not draw never calls the function at all, and sizing the no-annotation branch against every
+-- route understates it by more than half.
+--
+-- `mixChartDraws` is `>= 2` DISTINCT STATEABLE months: months in which at least one cell
+-- survived quarantine. Not filed months -- a pair whose every filing was thrown away has rows
+-- and draws nothing, which is the defect that predicate exists to state. Mirrored here with
+-- `count(DISTINCT year_month) FILTER (WHERE NOT is_quarantined)`, the same subset
+-- `MixRow.seats IS NOT NULL` selects.
+SELECT count(*) FROM (
+    SELECT route_key_low, route_key_high
+    FROM fct_segment_month
+    WHERE route_key_low <> route_key_high
+    GROUP BY 1, 2
+    HAVING count(DISTINCT year_month) FILTER (WHERE NOT is_quarantined) >= 2);
+
+-- name: gauge_b737_8_t12_high
+-- The TRAILING-12 densest B737-8 operator, and the only figure in the window-flip rule that
+-- was not otherwise measured: SY tops this window where XP tops the full one. Stated in
+-- docs/design/system.md and aircraftMix.ts as the instance that makes "a gauge figure names
+-- its window" a rule rather than an assertion, so it needs the same binding the full-window
+-- ends have -- otherwise SY losing the trailing 12 leaves two files false with every gate
+-- green. Window is asOf-11..asOf, the span /aircraft's TABLE covers.
+WITH bound AS (
+    SELECT
+        strftime(
+            strptime(max(year_month) || '-01', '%Y-%m-%d') - INTERVAL 11 MONTH, '%Y-%m') AS lo,
+        max(year_month) AS hi
+    FROM fct_segment_month)
+SELECT round(max(g), 4) FROM (
+    SELECT SUM(f.seats) FILTER (WHERE NOT f.is_quarantined)::DOUBLE
+           / NULLIF(SUM(f.departures_performed) FILTER (WHERE NOT f.is_quarantined), 0) AS g
+    FROM fct_segment_month f
+    JOIN dim_aircraft_type t ON t.code = f.aircraft_type, bound
+    WHERE t.short_name = 'B737-8' AND f.year_month BETWEEN bound.lo AND bound.hi
+    GROUP BY f.op_airline_id);
+
+-- name: seats_b737_8_banded_high_m
+-- THE FIVE BANDED CARRIERS ON THE B737-8, which is a different population from the six gauge
+-- measures above and answers a different question. Those span EVERY carrier that filed the
+-- type. These three are about the chart's own five bands, because the claim they evidence is
+-- about the five SWATCHES -- membership by seats, shade by gauge, and on this type the two
+-- orderings are exact reverses, so a single sort mislabels all five rather than four of five.
+-- SY and XP are the two densest cabins on the type and are still in Other.
+--
+-- Stated in MILLIONS because that is how the passage reads. A raw count measure beside a
+-- millions one would be two copies of one measurement, which is the drift this file exists to
+-- remove -- so the rounding is here, once, rather than in the prose.
+SELECT round(max(s) / 1e6, 1) FROM (
+    SELECT SUM(f.seats) FILTER (WHERE NOT f.is_quarantined) AS s
+    FROM fct_segment_month f
+    JOIN dim_aircraft_type t ON t.code = f.aircraft_type
+    WHERE t.short_name = 'B737-8'
+    GROUP BY f.op_airline_id
+    ORDER BY s DESC
+    LIMIT 5);
+
+-- name: seats_b737_8_banded_low_m
+SELECT round(min(s) / 1e6, 1) FROM (
+    SELECT SUM(f.seats) FILTER (WHERE NOT f.is_quarantined) AS s
+    FROM fct_segment_month f
+    JOIN dim_aircraft_type t ON t.code = f.aircraft_type
+    WHERE t.short_name = 'B737-8'
+    GROUP BY f.op_airline_id
+    ORDER BY s DESC
+    LIMIT 5);
+
+-- name: gauge_b737_8_banded_high
+-- The densest cabin AMONG THE BANDED FIVE, not among all operators -- XP and SY are denser and
+-- are in Other, so gauge_b737_8_full_high would be answering the other question.
+SELECT round(max(g), 4) FROM (
+    SELECT
+        SUM(f.seats) FILTER (WHERE NOT f.is_quarantined) AS s,
+        SUM(f.seats) FILTER (WHERE NOT f.is_quarantined)::DOUBLE
+            / NULLIF(SUM(f.departures_performed) FILTER (WHERE NOT f.is_quarantined), 0) AS g
+    FROM fct_segment_month f
+    JOIN dim_aircraft_type t ON t.code = f.aircraft_type
+    WHERE t.short_name = 'B737-8'
+    GROUP BY f.op_airline_id
+    ORDER BY s DESC
+    LIMIT 5);
+
+-- name: gauge_a320_12_full_low_departures
+-- How few departures set the A320-1/2's light end. This is the evidence for the every-carrier
+-- predicate the six gauge measures use, and it is load-bearing: narrowing them to the banded
+-- carriers would be measuring the chart's top five instead of the configuration spread the
+-- sentence claims. Quoted in this file, beside that predicate.
+SELECT CAST(d AS BIGINT) FROM (
+    SELECT
+        SUM(f.departures_performed) FILTER (WHERE NOT f.is_quarantined) AS d,
+        SUM(f.seats) FILTER (WHERE NOT f.is_quarantined)::DOUBLE
+            / NULLIF(SUM(f.departures_performed) FILTER (WHERE NOT f.is_quarantined), 0) AS g
+    FROM fct_segment_month f
+    JOIN dim_aircraft_type t ON t.code = f.aircraft_type
+    WHERE t.short_name = 'A320-1/2'
+    GROUP BY f.op_airline_id
+    ORDER BY g
+    LIMIT 1);

@@ -10,7 +10,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from pipeline.stats import STATS_PATH, collect
+from pipeline.stats import STATS_PATH, all_measures_sql, collect
 
 DB = Path("upgauge.duckdb")
 pytestmark = pytest.mark.skipif(not DB.exists(), reason="no built catalog; run `make build`")
@@ -212,21 +212,95 @@ def test_route_order_halves_account_for_every_pair(con):
     )
 
 
-def test_crossover_halves_account_for_every_route():
-    """changed + never-changed = sitemap_routes, with BOTH halves measured independently.
+def test_crossover_halves_stay_copy_consistent():
+    """changed + never-changed = sitemap_routes.
 
-    Same shape as the route-order pair above, and for the same reason (#182). The sentence
-    these two figures carry -- `crossover.ts`'s "`null` is an ordinary outcome" -- is a claim
-    about WHICH half is larger, and it shipped bolded above evidence saying the opposite. A
-    derived complement would move with whichever half was measured, so inverting the predicate
-    would swap the two figures and leave the prose reading correctly about the wrong one.
+    THIS IS NOT A CHECK ON THE PREDICATE, and an earlier revision of this docstring said it
+    was. `crossover_routes_none` is `NOT EXISTS` over the same population with a byte-copy of
+    the same chain, so the identity holds for ANY predicate: invert `code <> prev` in BOTH
+    blocks and it stays green at 12,216 + 10,419 = 22,635 while the prose states the opposite
+    of what is measured. Mutating one copy kills it, which is exactly why a one-copy mutant is
+    not evidence about a two-copy structure.
 
-    It also proves the two predicates partition the population: a route whose every year is
-    tied, unknowable or flown empty has no led year at all, belongs to the never-changed half,
-    and a shortfall here is the only thing that would show it had fallen out of both.
+    What it does catch is the two copies DRIFTING APART -- the live risk of duplicating a chain
+    this long -- and it proves the two halves partition the population, so a route with no led
+    year at all (every year tied, unknowable or flown empty) lands in exactly one of them.
+    The predicate itself is pinned by the falsifiable pair below, and the two assertions are
+    complementary: the pair fixes what `changed` means, this fixes `none` against it.
     """
     m = json.loads(STATS_PATH.read_text())["measures"]
     assert m["crossover_routes"] + m["crossover_routes_none"] == m["sitemap_routes"]
+
+
+# The two route pairs that tell the crossover predicate apart from its plausible inversions,
+# keyed by airport id. `app/smoke.sh` pins the same pair on the RENDERED annotation and states
+# why: absence alone is satisfied by a predicate that never fires, presence alone by one that
+# always does. Only the pair is a test.
+_JFK_LAX = (12478, 12892)  # A321nXLR leads every year 2015-2026 -- no crossover
+_ATL_MCO = (10397, 13204)  # A321nXLR -> B757-2 in 2018
+_05A_ANC = (10005, 10299)  # one stateable month, so its chart cannot draw
+
+# A MARKER, not query logic. It is the outer aggregate that turns a measure's pair set into a
+# count, and replacing it is how these tests read the set THE MEASURE ITSELF built rather than
+# adding a third copy of a CTE chain this repo already carries twice. A copy would drift, and
+# drift is the one failure the identity above cannot see.
+_COUNT_HEAD = "SELECT count(*) FROM ("
+
+
+def _pairs_behind(con, measure: str) -> set[tuple[int, int]]:
+    statement = all_measures_sql()[measure]
+    assert statement.count(_COUNT_HEAD) == 1, (
+        f"{measure} no longer has exactly one {_COUNT_HEAD!r} projection, so this test is not "
+        f"reading the set that measure counts. Fix the transform, never the assertion."
+    )
+    rows = con.execute(statement.replace(_COUNT_HEAD, "SELECT * FROM (", 1)).fetchall()
+    return {(lo, hi) for lo, hi in rows}
+
+
+def test_the_crossover_predicate_is_pinned_to_the_pair_that_distinguishes_it(con):
+    """The falsifiable pair, asserted against `crossover_routes`'s own set.
+
+    Each half refuses a different wrong predicate, and they are asserted separately so the red
+    says which: ATL-MCO's absence means the predicate stopped firing, JFK-LAX's presence means
+    it fires where the leader never changes. Inverting `code <> prev` to `code = prev` in every
+    copy -- the mutant the identity above survives -- puts JFK-LAX into `changed`, because its
+    A321nXLR leads every led year in a row, and dies here.
+    """
+    changed = _pairs_behind(con, "crossover_routes")
+    assert _ATL_MCO in changed, (
+        "ATL-MCO's #1 type goes A321nXLR -> B757-2 in 2018 -- app/smoke.sh pins the rendered "
+        "annotation. Absent from `changed`, the predicate has stopped detecting crossovers."
+    )
+    assert _JFK_LAX not in changed, (
+        "JFK-LAX's A321nXLR is the #1 type in every year 2015-2026, so it has no crossover. "
+        "Present in `changed`, the predicate is reporting a change where the leader held."
+    )
+
+
+def test_the_drawing_population_is_the_routes_whose_chart_actually_draws(con):
+    """`crossover_routes_drawing` mirrors `mixChartDraws`, whose whole content is the `>= 2`.
+
+    A count alone cannot show the threshold is right, so the two sides of it are pinned: a
+    route with one stateable month must be OUT and a route with many must be IN. Loosening to
+    `>= 1` pulls 05A-ANC in and dies here; the artifact diff alone would not say which rule
+    moved.
+
+    The subset relation is asserted rather than assumed, because `crossover_routes_drawing_none`
+    is derived by subtracting one from the other: a crossover needs two led years, which needs
+    two stateable months, so every changed route draws.
+    """
+    drawing = _pairs_behind(con, "crossover_routes_drawing")
+    assert _JFK_LAX in drawing, "JFK-LAX files every month in the window and draws a chart"
+    assert _05A_ANC not in drawing, (
+        "05A-ANC has ONE stateable month. A stacked area over one month has a degenerate x "
+        "domain and serializes to zero width, which is why mixChartDraws requires >= 2."
+    )
+    m = json.loads(STATS_PATH.read_text())["measures"]
+    assert _pairs_behind(con, "crossover_routes") <= drawing
+    assert m["crossover_routes"] < m["crossover_routes_drawing"] < m["sitemap_routes"]
+    assert (
+        m["crossover_routes_drawing"] - m["crossover_routes"] == m["crossover_routes_drawing_none"]
+    )
 
 
 def test_the_gauge_spread_measures_are_decimals_with_a_real_spread():
