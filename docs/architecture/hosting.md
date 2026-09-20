@@ -2502,6 +2502,61 @@ entry. `/api/pivot` and `/search` are declared exempt: the first answers 400 + `
 own handler, and the second is `no-store` unconditionally, so neither has a cache entry to
 pollute.
 
+### `/_next/image` renders whatever path it is handed, so it is handed none of ours
+
+The image optimizer is not a static-asset route. For any `?url=` that `images.localPatterns`
+admits, `fetchInternalImage` calls the server's **own request handler** —
+`handleRequest(mocked.req, mocked.res, parseReqUrl(href))`,
+`node_modules/next/dist/server/image-optimizer.js` — so the page renders in full, DuckDB reads
+included, and the buffer is refused for not being an image only afterwards. With no `images`
+block every local path is admitted by construction: *"if the user didn't define localPatterns, we
+allow all local images"* (`shared/lib/match-local-pattern.js`).
+
+That is the cost class #113, #117 and #172 closed, reached through the one prefix the edge
+deliberately leaves out. `deploy/cloudflare/rate-limit.json` excludes `/_next/` because a single
+real page view asks for more static chunks than 1 req/s allows, and under it every distinct
+`url=` value is its own CDN key that misses — `cf-cache-status: BYPASS` on every one of them,
+measured against production 2026-09-16.
+
+**The rule: `images: { localPatterns: [] }` (`app/next.config.ts`).** The app imports
+`next/image` nowhere, so the endpoint serves nothing this product needs.
+
+MEASURED on a served build 2026-09-19, with probes on `proxy()` and on `db.ts`'s `connect()` —
+these counts are the probe's, not an inference from response timing:
+
+| request | proxy invocations | DuckDB connections | response |
+|---|---|---|---|
+| `GET /airport/SEA` (control) | 1 | 24 | 200, the page |
+| `?url=/airport/SEA`, **before** | 2 — `/_next/image`, then `/airport/SEA` | **24** | 400 `The requested resource isn't a valid image.` |
+| `?url=/explore`, **before** | 2 | 3 | the same 400 |
+| `?url=/nope`, **before** | 2 | 0 | the same 400 |
+| `?url=/airport/SEA`, **after** | 1 | **0** | 400 `"url" parameter is not allowed`, 30 bytes |
+
+**The status is 400 either way, so the body is the only thing on the wire that says which refusal
+happened.** `"url" parameter is not allowed` comes from `validateParams`, before anything is
+fetched; `The requested resource isn't a valid image.` comes from `imageOptimizer`, after the
+inner render came back. Both are plain-text bodies written with `res.body(...)`, never JSX, so
+the apostrophe in the second is a raw U+0027 on the wire rather than `&#x27;`. `app/smoke.sh`
+§ 8d asserts both directions on two subjects; a status assertion is deliberately absent, because
+it stays green through the whole defect.
+
+**`images: { unoptimized: true }` was measured too, and is the weaker of the two.** It makes
+`next-server.js` `render404` the request before `validateParams` runs, which also takes the
+DuckDB reads to zero — but that 404 is a render of the app's 404 page (`/_not-found` carries
+`export const dynamic = "force-dynamic"`, so per-request) on **every** `/_next/image` request,
+where `localPatterns: []` answers 30 bytes of plain text having rendered nothing.
+
+**What this does not close.** `server/config.js` appends `/_next/static/media/**` and
+`/_next/static/immutable/media/**` to whatever `localPatterns` array it is given. The append is
+unconditional — `[]` is not empty by the time `hasLocalMatch` reads it — so static imports keep
+working, and a `?url=` under those two prefixes still reaches the handler. What that costs is
+measured on the same build rather than assumed: `?url=/_next/static/media/nope.woff2` fires two
+proxy invocations and **zero** DuckDB connections, and the inner path it reaches is the static
+one, whose direct response is Next's own 9-byte plain-text `Not Found` — no page render at
+either hop. The family is unbounded in cardinality and flat in cost, which is the same shape
+`/_next/` already had when it was left outside `rate-limit.json`, so nothing about that exclusion
+changes here.
+
 ### The gap: a **5xx** still gets a long-cached header
 
 CLAUDE.md's rule is *"404s get `no-store`"* and that is deliberately narrow. **A 500 does

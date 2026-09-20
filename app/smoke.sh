@@ -967,6 +967,42 @@ check_not "forged path header on a missing static asset: no app 404 render"  "$B
 CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/favicon.ico")
 check     "favicon.ico: still served"                                        "$CODE" '200'
 
+# 8d. `/_next/image` MUST NOT RENDER AN APP PAGE AT THE ORIGIN (#186).
+#
+# Next's image optimizer takes `?url=<local path>` and, for anything `images.localPatterns`
+# admits, hands that path to `fetchInternalImage` -- which calls the server's OWN request handler
+# (`node_modules/next/dist/server/image-optimizer.js`, `handleRequest(mocked.req, ...)`). The page
+# renders in full, DuckDB reads included, and only THEN is the buffer refused for not being an
+# image. With no `images` block at all `hasLocalMatch` returns true for every local path
+# (`shared/lib/match-local-pattern.js`: "if the user didn't define localPatterns, we allow all
+# local images"), so the endpoint rendered any page on the site.
+#
+# THAT IS THE COST CLASS #113, #117 AND #172 CLOSED, on a path the edge cannot bound:
+# `deploy/cloudflare/rate-limit.json` deliberately excludes `/_next/` (a single real page view
+# asks for more static chunks than 1/s allows), and every distinct `url=` value is a distinct
+# CDN key that misses. MEASURED on a served build with a probe on `proxy()` and on `db.ts`'s
+# `connect()`, 2026-09-19, before the fix: `?url=/airport/SEA` fired TWO proxy invocations
+# (`/_next/image`, then `/airport/SEA`) and **24 DuckDB connections** -- the same 24 a direct
+# `GET /airport/SEA` makes. `?url=/explore` made 3, `?url=/nope` 0. After it: one proxy
+# invocation, zero connections, nothing fetched.
+#
+# THE STATUS CANNOT TELL THE TWO APART -- both are 400 -- so these check the BODY, which is the
+# only thing on the wire that names WHICH refusal happened. `"url" parameter is not allowed` is
+# emitted by `validateParams` before any fetch; `The requested resource isn't a valid image.`
+# is emitted by `imageOptimizer` AFTER the inner render came back. Both are plain-text bodies
+# written with `res.body(...)`, never JSX, so the apostrophe in the second is a raw U+0027 on
+# the wire and not `&#x27;` -- verified by running these checks against a build WITHOUT the
+# `images` block, where both go red (this file's self-defect #2 is a needle that could not fire).
+#
+# PAIRED, on one `$BODY`: the negative alone would print `ok` for an empty or failed fetch, and
+# the positive alone would not say WHICH other body arrived. Two subjects, because one path bounds
+# one path -- `/explore` and an entity page are the two shapes the optimizer was rendering.
+for U in "%2Fairport%2FSEA|an entity page" "%2Fexplore|the Explorer"; do
+  BODY=$(curl -s --max-time 15 "${BASE}/_next/image?url=${U%%|*}&w=64&q=75")
+  check     "/_next/image (${U##*|}): refused before the fetch"        "$BODY" '"url" parameter is not allowed'
+  check_not "/_next/image (${U##*|}): the page was never rendered"     "$BODY" "isn't a valid image"
+done
+
 # 9. M4c: the aircraft-mix chart, in the SERVED HTML.
 #
 # This is the section the milestone exists to produce. Before it, `AircraftMixChart` had 262
