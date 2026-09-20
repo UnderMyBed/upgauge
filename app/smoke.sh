@@ -890,10 +890,14 @@ done
 # `check_rendered_404` of their own and need none, because they reach the identical branch of the
 # identical view -- what is proven emitted for one cause of a family is emitted for the other. With
 # that standing, a phrase found anywhere in this response is a phrase the server composed and
-# shipped in the document. Remove `check_rendered_404` and these needles are payload-only -- a
-# body-substring grep cannot tell a rendered page from an `<html id="__next_error__">` shell that
-# renders only under JavaScript (#157), and all six of them print ok against that shell (measured
-# under the reverted-`proxy.ts` mutant).
+# shipped in the document -- and `check_rendered_404` is what supplies it, not a nicety beside
+# it. What still rests on it, now that #183 has written the reason needles in emitted bytes, is
+# the needles a PAYLOAD can satisfy: the slug regexes (here, and the siblings on /carrier and
+# /aircraft) span the payload's own string-escaping with `.{1,12}` deliberately, and `DATA AS OF`
+# below is a bare phrase the payload repeats. Measured under the reverted-`proxy.ts` mutant: all
+# four print ok against an `<html id="__next_error__">` shell carrying no <h1> and no badge at
+# all, because a body-substring grep cannot tell that shell -- which renders only under
+# JavaScript (#157) -- from a rendered page. Remove `check_rendered_404` and nothing here notices.
 #
 # AND THAT STANDING STOPS AT SPELLING (#183). The payload is a JSON transcript of the same render,
 # not a second copy of the same bytes: a resolver's reason string reaches the markup through
@@ -903,9 +907,12 @@ done
 # wearing this file's self-defect #2 as a disguise. Measured on a served build, /airport/ZZZZ:
 #   markup   <p role="alert">We can’t show ‘<!-- -->ZZZZ<!-- -->’: <!-- -->unknown airport code &#x27;ZZZZ&#x27;<!-- -->.</p>
 #   payload  "p\",null,{\"role\":\"alert\",\"children\":[\"We can’t show ‘\",\"ZZZZ\",\"’: \",\"unknown airport code 'ZZZZ'\",\".\"]
-# So every reason needle in this file that carries an apostrophe is written in the ESCAPED form,
+# So every reason needle asserted against REACT-RENDERED HTML is written in the ESCAPED form,
 # which is emitted-only and cannot be satisfied by the payload -- the same discriminator
-# `check_rendered_404`'s `<h1>` relies on, applied to the sentence instead of the heading.
+# `check_rendered_404`'s `<h1>` relies on, applied to the sentence instead of the heading. That
+# scope is the whole rule: a body React did not render escapes nothing, so the apostrophes in
+# the `/_next/image` needle (plain text out of `res.body`) and in `/api/pivot`'s `'JFK'` (JSON)
+# are raw on the wire and stay raw here. Both are argued at their own sites.
 #
 # Fix wave 3, item 5: both of the first two checks here used to be weaker than the unit tests
 # they mirror. 'unknown airport code' alone asserts the CATEGORY, where the whole promise is
@@ -1291,8 +1298,8 @@ check     "airport map: a page whose chart draws DOES get the fleet-shading rail
 # THE SENTENCE ITSELF, not just the group heading, and it is the needle FIVE assertions depend on
 # being matchable: OQZ's `check_not` below, plus four `not.toContain` in the page tests. A copy
 # edit to this string would turn every one of them silently vacuous while staying green -- the
-# self-defect class `smoke.sh`'s own header says to assume a fourth of. Verified against emitted
-# bytes: React renders it from a JS string literal, so the em dash and apostrophe in the
+# self-defect class `smoke.sh`'s own header says to keep assuming another of. Verified against
+# emitted bytes: React renders it from a JS string literal, so the em dash and apostrophe in the
 # surrounding prose never reach this substring and it needs no entity handling.
 check     "airport map: ...and the COVID-window sentence the OQZ negatives are written against" \
   "$BODY" 'COVID is in the window on purpose'
@@ -1543,7 +1550,7 @@ check_dataset check "airport MIA: and the subject disc sits above that frame, no
 # The negative, on a clean network. `quarantined route` is the needle and the stem matters: this
 # page ALREADY says "N quarantined rows excluded from these totals" in the endpoints table, so a
 # `quarantin` needle would match that and report a silent ok forever -- the exact class of
-# self-defect app/smoke.sh has shipped three times. Paired with the ORD checks above on this same
+# self-defect app/smoke.sh has shipped before. Paired with the ORD checks above on this same
 # path, so it cannot pass vacuously against an empty body.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/ORD")
 check     "airport ORD: says nothing about quarantined ROUTES on a clean network" "$BODY" \
@@ -1934,8 +1941,8 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 30 "${BASE}/carrier/DL")
 check     "carrier: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
 
 # 11b. #107 -- /carrier's network map, filtered by aircraft type. Every needle below was read
-# out of a SERVED body, never copied from the JSX: this file has shipped three self-defects, one
-# of them a needle carrying an entity that JSX had already decoded at compile time, so it printed
+# out of a SERVED body, never copied from the JSX: this file has shipped self-defects of its own,
+# one a needle carrying an entity that JSX had already decoded at compile time, so it printed
 # `ok` unconditionally. The two anchors here are quoted verbatim from `curl` output.
 #
 # `<svg role="img"` is deliberately NOT the needle for the map. The aircraft-mix chart already
@@ -2151,7 +2158,7 @@ check     "carrier?type: the 308 keeps the project Cache-Control"    "$HDRS" "$H
 # one earned it twice: written first as the ERE escape `\xe2\x80\x94`, it FAILED, because
 # `grep -E` has no such escape and was matching the literal characters `x`, `e`, `2`. Had the
 # polarity been `check_not_re`, that same mistake would have printed `ok` forever -- the exact
-# self-defect this file has produced three times. Do not "escape" this dash; it is one
+# self-defect class this file keeps producing. Do not "escape" this dash; it is one
 # character on purpose.
 #
 # 2O, dataset-pinned and RE-DERIVED under the monthly floor (#134): 25 Top routes, 20 below floor
@@ -3029,7 +3036,7 @@ check        "canonical: ...under no-store"            "$HDRS" 'no-store'
 # the two, each reassigning $HDRS, and this check ran against the LAST of them (`//evil.com`,
 # which of course carries a Location) -- a red for a reason that had nothing to do with
 # /api/pivot. A shared mutable haystack two screens from its assertion is the same shape as this
-# file's three documented self-defects; every block added below opens with its own `HDRS=`.
+# file's own documented self-defects; every block added below opens with its own `HDRS=`.
 check_not_re "canonical: ...and is not redirected"     "$HDRS" '[Ll]ocation:'
 
 # Whole-branch review, Finding 2: the 400 above is about an unknown KEY, and says nothing about
@@ -3157,8 +3164,8 @@ done
 # curls because each needs a different VB. `k`, `d` and `s` are covered by the unit tests one per
 # key; these two are the ones whose decoded value is a LIST or an enum, where the separator
 # itself has a second spelling.
-# Written out in full rather than derived from $VB by substitution: this file has produced three
-# self-defects, and a needle or a URL assembled by string surgery is how the next one arrives.
+# Written out in full rather than derived from $VB by substitution: this file has produced
+# self-defects before, and a needle or URL assembled by string surgery is how the next arrives.
 for U in "v=1&k=seg&d=op_airline_id%2Cyear_month&m=seats&s=-seats&g=op|a percent-encoded structural comma in d" \
          "v=1&k=seg&d=op_airline_id&m=seats&s=-seats&g=%6Fp|a percent-encoded g"; do
   VB2="${U%%|*}"; WHAT="${U##*|}"

@@ -430,10 +430,7 @@ fmt-check:  ## Fail if the tree is not `ruff format`-clean
 # 533 as of #183: the file is 532 after that issue's fourth smoke self-defect and, with it, the
 # rule for VERIFYING a needle -- the flight payload carries the source's own spelling, so a
 # whole-body grep cannot tell a rendered page from a blank one, and a needle is checked against
-# the response with its <script> blocks stripped (two lines). The 530 this replaces was #157's
-# rule: a 404's body reaches the served HTML only through proxy.ts's rewrite to /_not-found,
-# without which a 404 verdict resolved anywhere but the proxy ships an empty body and every
-# status, header and body-substring check in the smoke gate stays green over it.
+# the response with its <script> blocks stripped (two lines).
 #
 # The headroom is now +1, not the +2 this line used to carry: one of the two slack lines was
 # spent by a rule rather than by drift, which is the budget working as intended. It is not
