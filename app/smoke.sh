@@ -1739,7 +1739,15 @@ check     "route ATL-CAK: still labels the derived measures as computed" "$BODY"
 # /aircraft, the grain issue #121 never measured: BTS 201 has no un-quarantined filing in the
 # window either (F4, 2025-08, 5 performed departures against 0 seats), and neither has 489, so the
 # footprint is 14 reachable pages -- the 12 route pairs plus those two types -- not the route pages
-# alone. Both types' rows leave the trailing 12 at asOf 2026-08; re-derive then.
+# alone.
+#
+# WHAT IS SERVED-ONLY HERE IS THAT A REAL PAGE REACHES THE RULE, not the rule itself: the
+# rendering is pinned window-independently by the constructed rows in
+# `app/src/app/aircraft/[name]/page.test.tsx` and its `opengraph-image.test.tsx`, which no
+# refresh can walk out of the window. These needles are the live half, and the live half
+# expires -- both types' only rows are 2025-08, so at asOf 2026-08 they leave the trailing 12
+# and these pages become the empty-window state, so triage the WINDOW first and re-derive the
+# subject rather than relaxing an assertion.
 BODY=$(curl -s --max-time 30 "${BASE}/aircraft/TRISLNDR")
 check_dataset check "aircraft TRISLNDR: seats is absence, not a fabricated zero" "$BODY" \
   '<div class="k">Seats</div><div class="v">—</div>'
