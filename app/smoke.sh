@@ -1057,7 +1057,8 @@ check "chart: the rest of the page still server-renders"      "$BODY" '>DL<'
 # never renders an annotation at all, and presence alone by one that manufactures one on every
 # chart -- which is the specific failure the spec forbids ("it must never fall back to
 # labelling the largest type"). Both routes are measured against the built warehouse:
-# JFK-LAX's A321nXLR leads every year 2015-2026 (no crossover, 46% of routes are like this),
+# JFK-LAX's A321nXLR leads every year 2015-2026 -- no crossover, as for
+# 4,152 of the 16,345 routes whose chart draws (25.4%), the only ones that reach findCrossover --
 # and ATL-MCO's leader goes A321nXLR -> B757-2 in 2018. If a data refresh moves ATL-MCO's
 # crossover this check fails loudly and is re-measured; that is the point of pinning the
 # derived string rather than the word.

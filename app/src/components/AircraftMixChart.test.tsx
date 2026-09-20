@@ -297,7 +297,10 @@ describe("AircraftMixChart", () => {
   it("draws no annotation when the #1 type never changes", () => {
     // Paired with the test above on purpose: alone, this passes for a component that never
     // renders an annotation at all. FLEET's leader is constant, so the honest output is
-    // nothing -- and `findCrossover` returns null for 46% of real routes, JFK-LAX included.
+    // nothing -- and `findCrossover` returns null for
+    // 4,152 of the 16,345 real routes whose chart draws (25.4%),
+    // JFK-LAX included. The population is the drawing routes, not all 22,635: a route whose
+    // chart does not draw never reaches the function.
     const container = chart(FLEET);
     expect(textsOf(container).some((t) => t.includes("overtakes"))).toBe(false);
     expect(container.querySelector("g[stroke-dasharray]")).toBeNull();
@@ -513,9 +516,9 @@ describe("AircraftMixChart stacked by operating carrier", () => {
 
   it("says what the ramp means for THIS stack, which is not what it means across types", () => {
     // Across aircraft types a darker band is bigger metal. Across carriers of ONE type it is
-    // the SAME metal fitted denser -- measured, F9 fits 230.0 seats into the A321 to B6's
-    // 172.3. Breaks if the key's note stays "smallest metal", which would describe an encoding
-    // this chart is not drawing.
+    // the SAME metal fitted denser -- measured over the full window, F9 fits 230.0 seats into
+    // the A321 to B6's 175.9. Breaks if the key's note stays "smallest metal", which would
+    // describe an encoding this chart is not drawing.
     const key = chart(FLEET_BY_CARRIER, "B737-8", BY_CARRIER).querySelector(".ckey")!.textContent;
     expect(key).toContain("least dense cabin");
     expect(key).not.toContain("smallest metal");

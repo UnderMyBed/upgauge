@@ -21,7 +21,7 @@ describe("resolveRoutePair", () => {
   });
 
   it("orders the filter value by ID even when that disagrees with the alphabet", async () => {
-    // 215 of 23,167 routes have id order != alphabetical order. Verified: HPN is 12197 and
+    // 215 of 22,635 routes have id order != alphabetical order. Verified: HPN is 12197 and
     // BNH is 16954, so id order is HPN-BNH while the alphabetical canonical is BNH-HPN.
     // The slug follows the alphabet; the filter value follows the ids. Pinned to the exact
     // expected string, not just an ordering check -- an ordering check alone would still

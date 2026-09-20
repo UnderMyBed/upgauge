@@ -10,7 +10,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from pipeline.stats import STATS_PATH, collect
+from pipeline.stats import STATS_PATH, all_measures_sql, collect
 
 DB = Path("upgauge.duckdb")
 pytestmark = pytest.mark.skipif(not DB.exists(), reason="no built catalog; run `make build`")
@@ -210,3 +210,125 @@ def test_route_order_halves_account_for_every_pair(con):
     assert (
         m["route_order_agreeing_pairs"] + m["route_order_disagreeing_pairs"] == m["sitemap_routes"]
     )
+
+
+def test_crossover_halves_stay_copy_consistent():
+    """changed + never-changed = sitemap_routes.
+
+    THIS IS NOT A CHECK ON THE PREDICATE, and an earlier revision of this docstring said it
+    was. `crossover_routes_none` is `NOT EXISTS` over the same population with a byte-copy of
+    the same chain, so the identity holds for ANY predicate: invert `code <> prev` in BOTH
+    blocks and it stays green at the same total -- the two figures merely swap size -- while
+    the prose states the opposite of what is measured. Mutating one copy kills it, which is
+    exactly why a one-copy mutant is not evidence about a two-copy structure.
+
+    What it does catch is the two copies DRIFTING APART -- the live risk of duplicating a chain
+    this long -- and it proves the two halves partition the population BY COUNT: a route
+    falling into neither shows as a shortfall, into both as an excess, so one with no led year
+    at all (every year tied, unknowable or flown empty) lands in exactly one. Cardinalities
+    only. Two copies could in principle drift into different sets of the same size, and
+    claiming more than that would be the overclaim this docstring already had to lose once.
+    The predicate itself is pinned by the falsifiable pair below, and the two assertions are
+    complementary: the pair fixes what `changed` means, this fixes `none` against it.
+    """
+    m = json.loads(STATS_PATH.read_text())["measures"]
+    assert m["crossover_routes"] + m["crossover_routes_none"] == m["sitemap_routes"]
+
+
+# The two route pairs that tell the crossover predicate apart from its plausible inversions,
+# keyed by airport id. `app/smoke.sh` pins the same pair on the RENDERED annotation and states
+# why: absence alone is satisfied by a predicate that never fires, presence alone by one that
+# always does. Only the pair is a test.
+_JFK_LAX = (12478, 12892)  # A321nXLR leads every year 2015-2026 -- no crossover
+_ATL_MCO = (10397, 13204)  # A321nXLR -> B757-2 in 2018
+_05A_ANC = (10005, 10299)  # one filed month, one stateable -- fails the >= 2 threshold
+_DCK_GAL = (11280, 11844)  # THREE filed months, one stateable -- fails only on QUARANTINE
+
+# A MARKER, not query logic. It is the outer aggregate that turns a measure's pair set into a
+# count, and replacing it is how these tests read the set THE MEASURE ITSELF built rather than
+# adding a third copy of a CTE chain this repo already carries twice. A copy would drift, and
+# drift is the one failure the identity above cannot see.
+_COUNT_HEAD = "SELECT count(*) FROM ("
+
+
+def _pairs_behind(con, measure: str) -> set[tuple[int, int]]:
+    statement = all_measures_sql()[measure]
+    assert statement.count(_COUNT_HEAD) == 1, (
+        f"{measure} no longer has exactly one {_COUNT_HEAD!r} projection, so this test is not "
+        f"reading the set that measure counts. Fix the transform, never the assertion."
+    )
+    rows = con.execute(statement.replace(_COUNT_HEAD, "SELECT * FROM (", 1)).fetchall()
+    return {(lo, hi) for lo, hi in rows}
+
+
+def test_the_crossover_predicate_is_pinned_to_the_pair_that_distinguishes_it(con):
+    """The falsifiable pair, asserted against `crossover_routes`'s own set.
+
+    Each half refuses a different wrong predicate, and they are asserted separately so the red
+    says which: ATL-MCO's absence means the predicate stopped firing, JFK-LAX's presence means
+    it fires where the leader never changes. Inverting `code <> prev` to `code = prev` in every
+    copy -- the mutant the identity above survives -- puts JFK-LAX into `changed`, because its
+    A321nXLR leads every led year in a row, and dies here.
+    """
+    changed = _pairs_behind(con, "crossover_routes")
+    assert _ATL_MCO in changed, (
+        "ATL-MCO's #1 type goes A321nXLR -> B757-2 in 2018 -- app/smoke.sh pins the rendered "
+        "annotation. Absent from `changed`, the predicate has stopped detecting crossovers."
+    )
+    assert _JFK_LAX not in changed, (
+        "JFK-LAX's A321nXLR is the #1 type in every year 2015-2026, so it has no crossover. "
+        "Present in `changed`, the predicate is reporting a change where the leader held."
+    )
+
+
+def test_the_drawing_population_is_the_routes_whose_chart_actually_draws(con):
+    """`crossover_routes_drawing` mirrors `mixChartDraws`, which is TWO rules, not one: the
+    `>= 2` threshold and the fact that it counts STATEABLE months rather than filed ones.
+
+    ONE FIXTURE PER RULE, because a fixture that exercises one of two asserted properties is
+    the vacuous fixture wearing half a disguise. 05A-ANC files one month and is refused by the
+    threshold; DCK-GAL files THREE and is refused only by quarantine, so it is the one that
+    moves when `FILTER (WHERE NOT is_quarantined)` is dropped. Confirmed by running that
+    mutant: the count rises, DCK-GAL crosses into `drawing`, and JFK-LAX and 05A-ANC do not
+    budge -- which is why the threshold fixtures alone left half the mirrored rule unpinned.
+
+    The subset relation is asserted rather than assumed, because `crossover_routes_drawing_none`
+    is derived by subtracting one from the other: a crossover needs two led years, which needs
+    two stateable months, so every changed route draws.
+    """
+    drawing = _pairs_behind(con, "crossover_routes_drawing")
+    assert _JFK_LAX in drawing, "JFK-LAX files every month in the window and draws a chart"
+    assert _05A_ANC not in drawing, (
+        "05A-ANC has ONE filed month. A stacked area over one month has a degenerate x domain "
+        "and serializes to zero width, which is why mixChartDraws requires >= 2."
+    )
+    assert _DCK_GAL not in drawing, (
+        "DCK-GAL files THREE months and only ONE of them is stateable -- the other two are "
+        "wholly quarantined, so the chart has one point and cannot draw. Present here, the "
+        "measure is counting FILED months, which is the distinction mixChartDraws exists to "
+        "make and which no threshold fixture can catch."
+    )
+    m = json.loads(STATS_PATH.read_text())["measures"]
+    assert _pairs_behind(con, "crossover_routes") <= drawing
+    assert m["crossover_routes"] < m["crossover_routes_drawing"] < m["sitemap_routes"]
+    assert (
+        m["crossover_routes_drawing"] - m["crossover_routes"] == m["crossover_routes_drawing_none"]
+    )
+
+
+def test_the_gauge_spread_measures_are_decimals_with_a_real_spread():
+    """The gauge figures are DERIVED measures -- seats per departure -- and the artifact's
+    first non-integers.
+
+    `low < high` is the claim the /aircraft ramp rests on: if the lightest and darkest operator
+    of an airframe had the same gauge, ordering the bands by it would encode nothing and the
+    legend rail would be describing a ramp that is not there. Typed too: an int here would mean
+    a measure had started returning a count, and every needle quoting it to one decimal would
+    then be pinning a number that cannot carry one.
+    """
+    m = json.loads(STATS_PATH.read_text())["measures"]
+    for key in ("a321nxlr", "a320_12", "b737_8"):
+        low, high = m[f"gauge_{key}_full_low"], m[f"gauge_{key}_full_high"]
+        assert isinstance(low, float) and isinstance(high, float), key
+        assert 0 < low < high, key
+        assert m[f"gauge_{key}_full_spread"] == round(high - low, 4), key

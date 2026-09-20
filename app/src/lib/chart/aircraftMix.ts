@@ -59,9 +59,9 @@ export interface MixDimension {
   absent: string;
   /** What the two ends of the ramp MEAN for this stack, and they are not the same claim.
    * Across aircraft types, a darker band is bigger metal. Across carriers of ONE type it is
-   * the same metal fitted denser -- Frontier's A321 carries 230.0 seats to JetBlue's 172.3 --
-   * so a rail saying "larger metal" on `/aircraft` would be describing an encoding the chart
-   * is not drawing. */
+   * the same metal fitted denser -- over the window this chart draws the A321 spans
+   * B6 175.9 seats per departure to F9 230.0 -- so a rail saying "larger metal" on
+   * `/aircraft` would be describing an encoding the chart is not drawing. */
   rampLight: string;
   rampDark: string;
   /** The one-line note under the colour key, in the chart's own voice. */
@@ -84,15 +84,15 @@ export const BY_AIRCRAFT_TYPE: MixDimension = {
 /** The `/aircraft` stack: seats by operating carrier.
  *
  * THE RAMP STILL ENCODES SOMETHING, MEASURED -- and every figure below names its WINDOW,
- * because they differ and this page draws the full one. Over 2015-01..2026-04, which is what
- * /aircraft fetches: the A321nXLR spans B6 176.0 -> F9 230.0 (54.0 seats, 31%, on identical
- * metal), the A320-1/2 spans MX 129.3 -> G4 181.7, and the B737-8 spans AS 159.8 -> XP 187.7.
- * Over the trailing 12 months alone the same three read B6 172.3 -> F9 230.0 (57.7, 33%),
- * AA 150.0 -> F9 184.1, and AS 159.5 -> SY 186.0 -- the source of the 172.3/230.0 pair quoted
- * in prose elsewhere in this repo, and the reason this comment used to name SY as the densest
- * B737-8 operator on a chart that draws a window in which XP is. The spread survives either
- * window, which is the claim; the unlabelled figure was not evidence for it. On this page the
- * ramp isolates CONFIGURATION choice from FLEET choice, which `/route` cannot separate.
+ * because the ranking moves with it. Over the full window 2015-01..2026-06, which is what
+ * /aircraft fetches and this chart draws, across every operating carrier that filed the type
+ * however few departures it flew: the A321nXLR spans B6 175.9 -> F9 230.0
+ * (54.1 seats, 31%, on identical metal), the A320-1/2 spans MX 129.3 -> G4 181.6, and the
+ * B737-8 spans AS 159.8 -> XP 187.5.
+ * The page's trailing-12 TABLE covers a different span and ranks them differently -- the
+ * densest B737-8 operator there is SY 186.0, XP here -- so a gauge figure carrying no window
+ * is evidence for nothing. On this page the ramp isolates CONFIGURATION choice from FLEET
+ * choice, which `/route` cannot separate.
  *
  * `op_airline_id` and not a mainline rollup: the query keeps `grouping: "operating"` (CLAUDE.md
  * -- the operating carrier is the grain and the truth), because rolling Endeavor into Delta

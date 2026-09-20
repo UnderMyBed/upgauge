@@ -147,8 +147,10 @@ describe("findCrossover", () => {
   it("returns null for JFK-LAX, which has no crossover in the window", () => {
     // Measured against the built upgauge.duckdb: the A321nXLR is the #1 type by seats in
     // every year 2015-2026 on JFK-LAX, so the flagship route this project demos carries NO
-    // annotation. Only 12,416 of 22,919 routes (54%) ever change their #1 type, so null is
-    // the common case.
+    // annotation. Neither do
+    // 4,152 of the 16,345 routes whose chart draws (25.4%)
+    // -- the population that reaches this function at all, `prepareMixPlot` having returned
+    // early on the rest -- which is why null is an ordinary outcome rather than an edge case.
     //
     // The fixture is the measured top TWO types per year, each year's annual total collapsed
     // into one month (the function aggregates by year, so that is faithful to what it

@@ -413,7 +413,13 @@ describe("fetchAircraftMix stacked by operating carrier", () => {
 describe("toBands over the real B737-8 carrier mix", () => {
   // THE fixture for this task, and it is live data rather than a hand-built one: on the 737-800
   // the seats ordering and the gauge ordering are EXACT REVERSES of each other, so a single
-  // sort cannot pass at any position. Measured against the built upgauge.duckdb, full window:
+  // sort cannot pass at any position.
+  //
+  // MEASURED OVER `FULL_FROM..FULL_TO`, THIS FILE'S PINNED WINDOW -- not "the full window",
+  // which follows `asOf` and is longer. The distinction is load-bearing twice over: the seat
+  // totals asserted below are sums over exactly this span, and docs/design/system.md quotes
+  // the same carriers over the live full window at different figures. Two windows, two right
+  // answers; a row that does not name its window is evidence for neither.
   //
   //   carrier   seats          departures   gauge     seats rank   shade
   //   WN        593,614,000     3,392,080   175.00        1        --g5

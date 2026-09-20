@@ -450,7 +450,7 @@ same-airport "routes" that are not routes)**:
 
 `HPN` (12197) / `BNH` (16954) is the measured example: id order is `HPN-BNH`, but the
 alphabetical canonical is `BNH-HPN`. Conflating the two orderings would either query the
-wrong route for that 0.7%, or mint a canonical URL nobody would type. `/route/LAX-JFK`
+wrong route for that 0.95%, or mint a canonical URL nobody would type. `/route/LAX-JFK`
 (non-canonical, both codes valid) 308s (`permanentRedirect` — this *is* the canonical URL for
 the pair, not a temporary relocation) to `/route/JFK-LAX`; `/route/ZZZZ-LAX` (an unresolvable
 code) 404s naming the offending code; two real airports with no service in the window is a
