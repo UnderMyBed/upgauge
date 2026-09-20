@@ -32,8 +32,21 @@ import type { PivotResult } from "./db";
  */
 export interface SyntheticPivot {
   /** Synthetic rows for the queries this test wants to answer; `null` runs the real query.
-   *  Rows are the pivot's own row shape -- the SELECT's columns, keyed as `runPivot` returns
-   *  them -- because everything that reads them is the production code that reads real ones. */
+   *
+   *  A ROW CARRIES ITS QUERY'S WHOLE COLUMN LIST, and the list is per QUERY, not per grain: the
+   *  measures are whatever that query asked for (the derived pair appears only where a caller
+   *  requested it), and `pivot_route.sql` emits no `quarantine_reasons` while
+   *  `pivot_segment.sql` does -- so the two map queries, identical in dimension, differ in
+   *  columns. Read the truth off `real.columns` (logging it is a three-line patch here) rather
+   *  than copying a neighbouring fixture. A row missing a key renders the same as one carrying
+   *  `null` today, which is exactly why the next test added to a describe inherits the defect
+   *  instead of meeting it.
+   *
+   *  The COUNT columns are not free either. `quarantined_rows` and `active_months` are
+   *  `count(...) FILTER` at segment grain (`sql/03_queries/pivot_segment.sql:40-44`) and, at
+   *  route grain, a `sum` over those same counts (`pivot_route.sql:42-44`) -- neither can be
+   *  NULL. `active_months` counts months with `NOT is_quarantined AND departures_performed > 0`,
+   *  so over a wholly-quarantined group it is 0 and no other value is reachable. */
   answer: ((q: PivotQuery) => Record<string, unknown>[] | null) | null;
   /** How many queries `answer` replaced. Asserted by the test, never read by the page. */
   hits: number;

@@ -616,6 +616,9 @@ function whollyQuarantinedType(q: PivotQuery): Record<string, unknown>[] | null 
       op_airline_id: DL_ID,
       seats: null,
       departures_performed: null,
+      quarantined_rows: 1,
+      quarantine_reasons: "zero_seats",
+      active_months: 0,
     }));
   }
   if (q.dimensions.length === 1 && q.dimensions[0] === "op_airline_id") {
@@ -625,8 +628,13 @@ function whollyQuarantinedType(q: PivotQuery): Record<string, unknown>[] | null 
         seats: null,
         passengers: null,
         departures_performed: null,
+        // The two DERIVED measures this query asks for, which `/airport`'s does not: ratios of
+        // FILTERed sums, so NULL over a wholly-quarantined group like their inputs.
+        load_factor: null,
+        avg_gauge: null,
         quarantined_rows: 2,
         quarantine_reasons: "zero_seats",
+        active_months: 0,
       },
     ];
   }
@@ -755,6 +763,8 @@ function whollyQuarantinedNetwork(q: PivotQuery): Record<string, unknown>[] | nu
     seats: null,
     passengers: null,
     departures_performed: null,
+    quarantined_rows: 1,
+    quarantine_reasons: "zero_seats",
     active_months: 0,
   }));
 }

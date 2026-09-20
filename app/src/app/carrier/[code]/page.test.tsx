@@ -1071,6 +1071,8 @@ function whollyQuarantinedNetwork(q: PivotQuery): Record<string, unknown>[] | nu
     seats: null,
     passengers: null,
     departures_performed: null,
+    quarantined_rows: 1,
+    quarantine_reasons: "zero_seats",
     active_months: 0,
   }));
 }
@@ -1129,10 +1131,11 @@ describe("/carrier/<code>: the legend rail's arc group follows the ARCS (#123)",
   it("DOES render it when only the TYPE MAP draws, and the diff map has no panel", async () => {
     // WHICH HALF OF THE DISJUNCTION REFUSES THIS FIXTURE. `arcsDrawn` on this page is
     // `typeMap draws || any diff panel draws`, and every other fixture here sits where the
-    // first half cannot be the reason: `F4 x SHORT360` has BOTH halves false, and an unfiltered
-    // `DL` has `typeMap === null`, so only the diff half can ever be true. Delete the type-map
-    // disjunct entirely and all of them stay green -- the guard is deletable, which is CLAUDE.md's
-    // "assert WHICH check refuses a fixture, not that something did".
+    // first half cannot be the reason: the constructed wholly-quarantined `F4 x ISLANDER`
+    // above has BOTH halves false, and an unfiltered `DL` has `typeMap === null`, so only the
+    // diff half can ever be true. Delete the type-map disjunct entirely and all of them stay
+    // green -- the guard is deletable, which is CLAUDE.md's "assert WHICH check refuses a
+    // fixture, not that something did".
     //
     // WHAT THIS FIXTURE VARIES: a carrier with ZERO diff panels whose filtered type map
     // nonetheless draws real arcs -- the one combination that isolates the first disjunct. F4

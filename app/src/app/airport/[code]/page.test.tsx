@@ -238,10 +238,10 @@ describe("/airport/<code>", () => {
   });
 
   it("DOES render the fleet-shading rail group when a chart was drawn (#123)", async () => {
-    // The other side of the #123 gate, and the reason it is here rather than only on OQZ:
-    // without it, "never render the group" satisfies the absence assertion there and silently
-    // deletes a group four pages need. SEA has many filed months, so the chart draws and the
-    // rail must explain it. Note this direction passes under the BUG too -- that is exactly why
+    // The other side of the #123 gate, and the reason it is here rather than only in the
+    // constructed wholly-quarantined window below: without it, "never render the group"
+    // satisfies the absence assertion there and silently deletes a group four pages need. SEA
+    // has many filed months, so the chart draws and the rail must explain it. Note this direction passes under the BUG too -- that is exactly why
     // the absence test is the one that catches it, and why both have to exist.
     const { container } = render(await renderSEA());
     const rail = container.querySelector("aside.legend")!;
@@ -290,6 +290,7 @@ function quarantinedTrafficRow(farId: number): Record<string, unknown> {
     departures_performed: null,
     quarantined_rows: 1,
     quarantine_reasons: "zero_seats",
+    active_months: 0,
   };
 }
 
@@ -307,6 +308,10 @@ function whollyQuarantinedAirport(farIds: number[]) {
     // The map: one undirected pair, route grain, every sum NULL -> `classifyRouteRows` counts
     // it in `quarantinedRoutes`, draws nothing, and the map is returned anyway so its
     // disclosure reaches the reader.
+    //
+    // NO `quarantine_reasons` HERE, unlike every other row in this file: `pivot_route.sql`
+    // does not select it and `pivot_segment.sql` does, so the two map queries carry different
+    // columns behind the same single `route` dimension.
     if (q.grain === "route") {
       return farIds.map((farId) => ({
         route_key_low: Math.min(SEA_ID, farId),
@@ -314,6 +319,7 @@ function whollyQuarantinedAirport(farIds: number[]) {
         seats: null,
         passengers: null,
         departures_performed: null,
+        quarantined_rows: 1,
         active_months: 0,
       }));
     }
@@ -327,9 +333,16 @@ function whollyQuarantinedAirport(farIds: number[]) {
         aircraft_type: "201",
         seats: null,
         departures_performed: null,
+        quarantined_rows: 1,
+        quarantine_reasons: "zero_seats",
+        active_months: 0,
       }));
     }
-    // The floor's denominator, grouped by carrier alone: one carrier, one month flown.
+    // The floor's denominator, grouped by carrier alone. ZERO months, and it could not be
+    // anything else: `active_months` counts
+    // `DISTINCT year_month FILTER (WHERE NOT is_quarantined AND departures_performed > 0)`
+    // (`sql/03_queries/pivot_segment.sql:43-44`), so a carrier whose every filing is
+    // quarantined has no month that counts. A 1 here is a row the warehouse cannot return.
     if (q.dimensions.length === 1 && q.dimensions[0] === "op_airline_id") {
       return [
         {
@@ -337,9 +350,9 @@ function whollyQuarantinedAirport(farIds: number[]) {
           seats: null,
           passengers: null,
           departures_performed: null,
-          active_months: 1,
           quarantined_rows: farIds.length,
           quarantine_reasons: "zero_seats",
+          active_months: 0,
         },
       ];
     }
@@ -861,8 +874,10 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
 // window with no row is neither "nobody flew" nor "0 seats flew". The two absences are
 // different findings and `AirportEmptyState` is what names which one this page is in.
 //
-// 05A has zero rows in 2025-07..2026-06 (measured). Unlike OQZ this fixture does not expire on
-// an `asOf` advance -- an airport that stopped filing stays stopped.
+// 05A has zero rows in 2025-07..2026-06 (measured). This absence is pinned LIVE rather than
+// constructed, because the two absences expire differently: an `asOf` advance walks the window
+// off a wholly-quarantined subject, which is why the rows above are built rather than borrowed,
+// but it only lengthens the silence of an airport that stopped filing.
 describe("/airport/<code> with nothing filed in the window", () => {
   async function empty() {
     const r = await resolveAirportCode("05A");
@@ -896,7 +911,8 @@ describe("/airport/<code> with nothing filed in the window", () => {
   });
 
   it("names which absence it is, rather than leaving the dashes bare", async () => {
-    // The em dash says "no measure"; only this says WHY, and it is a different why from OQZ's.
+    // The em dash says "no measure"; only this says WHY, and it is a different why from the
+    // wholly-quarantined window's above.
     // SCOPED TO THE FOOT, and the negative is the point: `seats === null` is true here too,
     // so a clause gated on that alone tells 290 pages that every filing at them was
     // quarantined -- inventing a finding on 290 pages to fix it on 2. This test caught exactly
