@@ -482,10 +482,10 @@ across every operating carrier that filed the type, however few departures it fl
 | A320-1/2 | MX 129.3 | G4 181.6 | 52.4 |
 | B737-8 | AS 159.84 | XP 187.5 | 27.6 |
 
-**The B737-8's light end carries two decimals because its two least-dense operators are 0.04
-apart.** AS 159.84 and DL 159.88 both read *159.8* rounded, so a row written to one decimal
-stays true-looking through a swap and names the wrong carrier. Precision is part of the claim
-wherever the gap is smaller than the rounding.
+**The B737-8's light end carries two decimals because its two least-dense operators are closer
+together than a tenth.** A drift too small to move a one-decimal figure can still change which
+of them is least dense, and the cell names a carrier. Whether any particular swap happens to
+cross a rounding boundary is luck; two decimals are what stop the claim from depending on it.
 
 **A gauge figure names its window, or it is evidence for nothing.** The page's trailing-12
 table covers a different span from its chart, and the ranking moves with it: the densest B737-8

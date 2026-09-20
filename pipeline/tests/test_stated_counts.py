@@ -467,12 +467,12 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
         # number: a needle with no {v} in it is the deletable-green shape -- it can never
         # refuse anything, so it is coverage on paper only.
         ("app/src/lib/chart/aircraftMix.ts", "B737-8 spans AS {v:.1f}"),
-        # TWO DECIMALS, alone among the table's six gauge cells. AS 159.8430 and DL 159.8795
-        # are 0.037 apart and both render `159.8`, so a one-decimal needle here would stay
-        # green through a swap and leave the table naming the wrong carrier. Where the gap is
-        # smaller than the rounding, the places are part of the assertion.
+        # TWO DECIMALS in the table cell, alone among its six gauge figures: this type's two
+        # least-dense operators are closer together than a tenth, so a drift too small to move
+        # a one-decimal figure can still change which carrier the cell should name. Whether a
+        # given swap crosses a rounding boundary is luck -- today's pair happens to fall either
+        # side of one, which is why the two needles above can stay at one decimal.
         ("docs/design/system.md", "| B737-8 | AS {v:.2f} |"),
-        ("docs/design/system.md", "AS {v:.2f} and DL"),
     ),
     # The SAME near-tie, one population over. The two-orderings sentence is about the chart's
     # five BANDED carriers, so binding it to the all-operator minimum above was the population

@@ -432,9 +432,13 @@ SELECT round(min(s) / 1e6, 1) FROM (
 -- measure would be the population mismatch this pair exists to avoid -- the same one
 -- gauge_b737_8_banded_high avoids on the dark end, where XP and SY are denser and in Other.
 --
--- BOTH ENDS OF THIS PAIR ARE QUOTED TO TWO DECIMALS, and that is not fussiness. AS 159.8430 and
--- DL 159.8795 are 0.037 apart and both render `159.8` at one decimal, so a needle at one
--- decimal stays green through a swap and leaves the wrong carrier named in prose.
+-- THIS MEASURE IS QUOTED TO TWO DECIMALS, and that is not fussiness. The two least-dense
+-- operators of this type are closer together than a tenth, so a drift too small to move a
+-- one-decimal figure can still change WHICH of them is least dense -- and the sentence names a
+-- carrier. Whether a given swap crosses a rounding boundary is luck, not a property, and a
+-- justification that rests on today's luck is the thing this file exists to refuse. No figure
+-- is written here for the gap or the runner-up: neither is a measure, so both would be
+-- unbindable literals in the branch that exists to remove those.
 SELECT round(min(g), 4) FROM (
     SELECT
         SUM(f.seats) FILTER (WHERE NOT f.is_quarantined) AS s,

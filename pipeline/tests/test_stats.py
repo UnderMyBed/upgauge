@@ -218,9 +218,9 @@ def test_crossover_halves_stay_copy_consistent():
     THIS IS NOT A CHECK ON THE PREDICATE, and an earlier revision of this docstring said it
     was. `crossover_routes_none` is `NOT EXISTS` over the same population with a byte-copy of
     the same chain, so the identity holds for ANY predicate: invert `code <> prev` in BOTH
-    blocks and it stays green at 12,216 + 10,419 = 22,635 while the prose states the opposite
-    of what is measured. Mutating one copy kills it, which is exactly why a one-copy mutant is
-    not evidence about a two-copy structure.
+    blocks and it stays green at the same total -- the two figures merely swap size -- while
+    the prose states the opposite of what is measured. Mutating one copy kills it, which is
+    exactly why a one-copy mutant is not evidence about a two-copy structure.
 
     What it does catch is the two copies DRIFTING APART -- the live risk of duplicating a chain
     this long -- and it proves the two halves partition the population BY COUNT: a route
