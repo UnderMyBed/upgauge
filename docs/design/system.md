@@ -480,13 +480,18 @@ across every operating carrier that filed the type, however few departures it fl
 |---|---|---|---|
 | A321nXLR | B6 175.9 | F9 230.0 | **54.1 seats (31%)** |
 | A320-1/2 | MX 129.3 | G4 181.6 | 52.4 |
-| B737-8 | AS 159.8 | XP 187.5 | 27.6 |
+| B737-8 | AS 159.84 | XP 187.5 | 27.6 |
+
+**The B737-8's light end carries two decimals because its two least-dense operators are 0.04
+apart.** AS 159.84 and DL 159.88 both read *159.8* rounded, so a row written to one decimal
+stays true-looking through a swap and names the wrong carrier. Precision is part of the claim
+wherever the gap is smaller than the rounding.
 
 **A gauge figure names its window, or it is evidence for nothing.** The page's trailing-12
 table covers a different span from its chart, and the ranking moves with it: the densest B737-8
-operator is **SY 186.0** over the trailing 12 and XP 187.5 over the full window. Same airframe,
-same measure, different answer (`docs/data/invariants.md` § Route identity records the same
-lesson about the same-airport counts).
+operator is **SY 186.0** over the trailing 12 and **XP 187.5** over the full window. Same
+airframe, same measure, different answer (`docs/data/invariants.md` § Route identity records
+the same lesson about the same-airport counts).
 
 **But it is not the same claim, so it must not carry the same words.** Across aircraft types a
 darker band is *bigger metal*. Across carriers of one type it is the *same* metal fitted denser —
@@ -502,10 +507,10 @@ title and a legend that both say "aircraft type".
 
 **The two orderings do not become one just because the bands changed.** On the 737-800 they are
 exact *reverses* — Southwest flies the most of them (**603.3 M seats**) **and** the densest
-cabin (**175.0** seats/departure), Alaska the fewest (**106.0 M**) and the least dense (159.8,
-the light end of the table above) — so a single sort mislabels all five swatches rather than
-four of five. That is the fixture the implementation is
-pinned against, precisely because a fixture whose two orders coincide lets a single sort pass.
+cabin (**175.0** seats/departure), Alaska the fewest (**106.0 M**) and the least dense of the
+five (**159.84**) — so a single sort mislabels all five swatches rather than four of five.
+That is the fixture the implementation is pinned against, precisely because a fixture whose
+two orders coincide lets a single sort pass.
 
 ### Multi-series lines
 

@@ -66,8 +66,12 @@ _SCALAR = frozenset(
         "route_health_no_schedule",
         "route_health_null_overlap",
         "route_health_same_airport_rows",
-        # The crossover annotation's population and its complement (#182). Both measured, so
-        # the identity crossover + none = sitemap_routes cross-checks the predicate.
+        # The crossover annotation's population and its complement (#182). Both measured, and
+        # `crossover + none = sitemap_routes` checks that the two blocks COUNT THE SAME SET --
+        # it does not check the predicate. The complement is a byte-copy of the same chain, so
+        # the identity holds for any predicate at all: invert `code <> prev` in both blocks and
+        # it stays green at 12,216 + 10,419. The predicate is pinned falsifiably in
+        # pipeline/tests/test_stats.py, on JFK-LAX and ATL-MCO.
         "crossover_routes",
         "crossover_routes_none",
         # The population crossover_routes is a share OF: the routes whose chart draws, which
@@ -86,6 +90,7 @@ _SCALAR = frozenset(
         "gauge_b737_8_t12_high",
         # The chart's five BANDED carriers on the B737-8 -- a different population from the
         # six above, answering the two-orderings question rather than the spread one.
+        "gauge_b737_8_banded_low",
         "gauge_b737_8_banded_high",
         "seats_b737_8_banded_high_m",
         "seats_b737_8_banded_low_m",

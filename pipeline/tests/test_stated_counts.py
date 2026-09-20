@@ -239,9 +239,14 @@ STATED: dict[str, tuple[str, ...]] = {
     # it by more than half -- 46.1% of all routes against 25.4% of the ones that draw. Both
     # sentences were literally true and one of them sized the branch wrong.
     #
-    # `crossover_routes_none` is deliberately NOT here: it is the complement over all routes,
-    # which no sentence states any more. It stays a measure because the identity in
-    # test_stats.py is what keeps the two SQL blocks copy-consistent.
+    # `crossover_routes_none` IS here, with NO sites, and the empty tuple is the point: no
+    # sentence states the all-routes complement any more, and the reverse scan is what keeps it
+    # that way. Dropping the key entirely left a real hole -- a file already registered for
+    # `sitemap_routes`, say docs/product/features.md, could state "10,442 of 22,635 routes
+    # (46.1%)" and no check would look at it. The forward loop is a no-op over no sites; the
+    # reverse loop flags 10,442 wherever it appears. If the figure is ever wanted in prose
+    # again, add the file here rather than deleting the key.
+    "crossover_routes_none": (),
     "crossover_routes_drawing": (
         "app/smoke.sh",
         "app/src/components/AircraftMixChart.test.tsx",
@@ -385,8 +390,12 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
         ("docs/data/invariants.md", "({v:.2f}%, excluding"),
         ("docs/data/invariants.md", "wrong route for that {v:.2f}%"),
     ),
-    # The no-annotation share, ALWAYS against the drawing population -- every needle names it,
-    # so a site that quietly re-based the share on all routes cannot satisfy one.
+    # The no-annotation share, always against the DRAWING population. Three of the five needles
+    # name that population in so many words; the `crossover.ts` and `system.md` two pin the
+    # sentence around the figure instead, which binds those files just as hard but does not
+    # carry the noun -- so this is not "every needle names it". A false universal inside the
+    # gate whose job is catching false statements about figures is the defect at :313 one
+    # screen up, and it is the same one.
     "crossover_routes_drawing_none_pct": (
         (
             "app/smoke.sh",
@@ -458,12 +467,26 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
         # number: a needle with no {v} in it is the deletable-green shape -- it can never
         # refuse anything, so it is coverage on paper only.
         ("app/src/lib/chart/aircraftMix.ts", "B737-8 spans AS {v:.1f}"),
-        ("docs/design/system.md", "| B737-8 | AS {v:.1f} |"),
-        ("docs/design/system.md", "the least dense ({v:.1f},"),
+        # TWO DECIMALS, alone among the table's six gauge cells. AS 159.8430 and DL 159.8795
+        # are 0.037 apart and both render `159.8`, so a one-decimal needle here would stay
+        # green through a swap and leave the table naming the wrong carrier. Where the gap is
+        # smaller than the rounding, the places are part of the assertion.
+        ("docs/design/system.md", "| B737-8 | AS {v:.2f} |"),
+        ("docs/design/system.md", "AS {v:.2f} and DL"),
+    ),
+    # The SAME near-tie, one population over. The two-orderings sentence is about the chart's
+    # five BANDED carriers, so binding it to the all-operator minimum above was the population
+    # mismatch gauge_b737_8_banded_high exists to avoid, left on the light end only.
+    "gauge_b737_8_banded_low": (
+        ("docs/design/system.md", "the least dense of the five (**{v:.2f}**)"),
     ),
     "gauge_b737_8_full_high": (
         ("app/src/lib/chart/aircraftMix.ts", "-> XP {v:.1f}"),
         ("docs/design/system.md", "| XP {v:.1f} |"),
+        # The window-flip rule states BOTH ends of the flip. SY's half is gauge_b737_8_t12_high
+        # and XP's half is this one, in the same sentence -- a second site in this file, which
+        # the reverse scan cannot find for a decimal.
+        ("docs/design/system.md", "**XP {v:.1f}** over the full window"),
     ),
     "gauge_b737_8_full_spread": (
         ("docs/design/system.md", "| XP {gauge_b737_8_full_high:.1f} | {v:.1f} |"),

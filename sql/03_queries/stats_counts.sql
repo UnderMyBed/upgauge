@@ -247,8 +247,10 @@ SELECT count(*) FROM (SELECT DISTINCT lo, hi FROM seq WHERE prev IS NOT NULL AND
 -- opposite of what is measured. What it does catch is the two copies drifting apart, which is
 -- the real risk of duplicating a chain this long. The PREDICATE is pinned falsifiably in
 -- pipeline/tests/test_stats.py, on JFK-LAX (must be ABSENT from `changed`) and ATL-MCO (must
--- be PRESENT) -- and once that holds, this identity forces this block to be the true
--- complement of a correct `changed`. A route with NO led year at all -- every
+-- be PRESENT) -- and once that holds, this identity forces the two blocks to COUNT THE SAME
+-- SET of routes. Cardinalities only: two copies could in principle drift into different sets
+-- of the same size, and saying more than that would be the species of overclaim this comment
+-- exists to correct. A route with NO led year at all -- every
 -- year tied, unknowable or flown empty -- belongs here, since it too renders no annotation.
 WITH cell AS (
     SELECT route_key_low AS lo, route_key_high AS hi, year, aircraft_type AS code,
@@ -416,6 +418,28 @@ SELECT round(max(s) / 1e6, 1) FROM (
 -- name: seats_b737_8_banded_low_m
 SELECT round(min(s) / 1e6, 1) FROM (
     SELECT SUM(f.seats) FILTER (WHERE NOT f.is_quarantined) AS s
+    FROM fct_segment_month f
+    JOIN dim_aircraft_type t ON t.code = f.aircraft_type
+    WHERE t.short_name = 'B737-8'
+    GROUP BY f.op_airline_id
+    ORDER BY s DESC
+    LIMIT 5);
+
+-- name: gauge_b737_8_banded_low
+-- The least dense cabin AMONG THE BANDED FIVE. It equals gauge_b737_8_full_low today, and the
+-- two are still different questions: that one is the min over EVERY operator of the type, this
+-- one over the five the chart bands. Binding the two-orderings sentence to the all-operator
+-- measure would be the population mismatch this pair exists to avoid -- the same one
+-- gauge_b737_8_banded_high avoids on the dark end, where XP and SY are denser and in Other.
+--
+-- BOTH ENDS OF THIS PAIR ARE QUOTED TO TWO DECIMALS, and that is not fussiness. AS 159.8430 and
+-- DL 159.8795 are 0.037 apart and both render `159.8` at one decimal, so a needle at one
+-- decimal stays green through a swap and leaves the wrong carrier named in prose.
+SELECT round(min(g), 4) FROM (
+    SELECT
+        SUM(f.seats) FILTER (WHERE NOT f.is_quarantined) AS s,
+        SUM(f.seats) FILTER (WHERE NOT f.is_quarantined)::DOUBLE
+            / NULLIF(SUM(f.departures_performed) FILTER (WHERE NOT f.is_quarantined), 0) AS g
     FROM fct_segment_month f
     JOIN dim_aircraft_type t ON t.code = f.aircraft_type
     WHERE t.short_name = 'B737-8'

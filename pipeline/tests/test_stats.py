@@ -223,8 +223,11 @@ def test_crossover_halves_stay_copy_consistent():
     not evidence about a two-copy structure.
 
     What it does catch is the two copies DRIFTING APART -- the live risk of duplicating a chain
-    this long -- and it proves the two halves partition the population, so a route with no led
-    year at all (every year tied, unknowable or flown empty) lands in exactly one of them.
+    this long -- and it proves the two halves partition the population BY COUNT: a route
+    falling into neither shows as a shortfall, into both as an excess, so one with no led year
+    at all (every year tied, unknowable or flown empty) lands in exactly one. Cardinalities
+    only. Two copies could in principle drift into different sets of the same size, and
+    claiming more than that would be the overclaim this docstring already had to lose once.
     The predicate itself is pinned by the falsifiable pair below, and the two assertions are
     complementary: the pair fixes what `changed` means, this fixes `none` against it.
     """
@@ -238,7 +241,8 @@ def test_crossover_halves_stay_copy_consistent():
 # always does. Only the pair is a test.
 _JFK_LAX = (12478, 12892)  # A321nXLR leads every year 2015-2026 -- no crossover
 _ATL_MCO = (10397, 13204)  # A321nXLR -> B757-2 in 2018
-_05A_ANC = (10005, 10299)  # one stateable month, so its chart cannot draw
+_05A_ANC = (10005, 10299)  # one filed month, one stateable -- fails the >= 2 threshold
+_DCK_GAL = (11280, 11844)  # THREE filed months, one stateable -- fails only on QUARANTINE
 
 # A MARKER, not query logic. It is the outer aggregate that turns a measure's pair set into a
 # count, and replacing it is how these tests read the set THE MEASURE ITSELF built rather than
@@ -278,12 +282,15 @@ def test_the_crossover_predicate_is_pinned_to_the_pair_that_distinguishes_it(con
 
 
 def test_the_drawing_population_is_the_routes_whose_chart_actually_draws(con):
-    """`crossover_routes_drawing` mirrors `mixChartDraws`, whose whole content is the `>= 2`.
+    """`crossover_routes_drawing` mirrors `mixChartDraws`, which is TWO rules, not one: the
+    `>= 2` threshold and the fact that it counts STATEABLE months rather than filed ones.
 
-    A count alone cannot show the threshold is right, so the two sides of it are pinned: a
-    route with one stateable month must be OUT and a route with many must be IN. Loosening to
-    `>= 1` pulls 05A-ANC in and dies here; the artifact diff alone would not say which rule
-    moved.
+    ONE FIXTURE PER RULE, because a fixture that exercises one of two asserted properties is
+    the vacuous fixture wearing half a disguise. 05A-ANC files one month and is refused by the
+    threshold; DCK-GAL files THREE and is refused only by quarantine, so it is the one that
+    moves when `FILTER (WHERE NOT is_quarantined)` is dropped. Confirmed by running that
+    mutant: the count rises, DCK-GAL crosses into `drawing`, and JFK-LAX and 05A-ANC do not
+    budge -- which is why the threshold fixtures alone left half the mirrored rule unpinned.
 
     The subset relation is asserted rather than assumed, because `crossover_routes_drawing_none`
     is derived by subtracting one from the other: a crossover needs two led years, which needs
@@ -292,8 +299,14 @@ def test_the_drawing_population_is_the_routes_whose_chart_actually_draws(con):
     drawing = _pairs_behind(con, "crossover_routes_drawing")
     assert _JFK_LAX in drawing, "JFK-LAX files every month in the window and draws a chart"
     assert _05A_ANC not in drawing, (
-        "05A-ANC has ONE stateable month. A stacked area over one month has a degenerate x "
-        "domain and serializes to zero width, which is why mixChartDraws requires >= 2."
+        "05A-ANC has ONE filed month. A stacked area over one month has a degenerate x domain "
+        "and serializes to zero width, which is why mixChartDraws requires >= 2."
+    )
+    assert _DCK_GAL not in drawing, (
+        "DCK-GAL files THREE months and only ONE of them is stateable -- the other two are "
+        "wholly quarantined, so the chart has one point and cannot draw. Present here, the "
+        "measure is counting FILED months, which is the distinction mixChartDraws exists to "
+        "make and which no threshold fixture can catch."
     )
     m = json.loads(STATS_PATH.read_text())["measures"]
     assert _pairs_behind(con, "crossover_routes") <= drawing
