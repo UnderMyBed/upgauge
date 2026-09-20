@@ -447,14 +447,16 @@ signature element; it does not own these.
   entities at compile time and React emits raw U+2019, so the check printed `ok`
   unconditionally. Anything with an entity, apostrophe or angle bracket needs a mutation run
   before it counts as coverage.
-- **`app/smoke.sh` has produced three self-defects; assume a fourth is possible.** (1) `set -o
+- **`app/smoke.sh` has produced four self-defects; assume a fifth is possible.** (1) `set -o
   pipefail` + `grep -q` made a check's result depend on where in the page the needle sat, and
   made `check_not` report a silent **ok** for a string that was present. (2) The entity-decoding
   needle above. (3) The teardown matched no process — Next rewrites its title to
   `next-server (v…)` — so every run leaked a server holding its own port and the next run's
   checks were answered by the **previous build**: two consecutive runs reported `266 ok` for a
-  build that did not contain the change under test. A gate that passes for the wrong reason is
-  the one failure this file cannot tolerate, because nothing else is watching it.
+  build that did not contain the change under test. (4) React emits a source `'` as `&#x27;`
+  and the flight payload keeps it raw, so nine needles matched the payload alone: **check a
+  needle against the response with its `<script>` blocks stripped.** A gate that passes for the
+  wrong reason is the one failure this file cannot tolerate, because nothing else is watching it.
 - **A correction is not landed until the user-facing copy carries it.** The "saved Explorer
   queries" claim was fixed in six places and left standing in the one sentence a visitor reads.
   Grep-based sweeps miss **paraphrases** — check by meaning, not by string.

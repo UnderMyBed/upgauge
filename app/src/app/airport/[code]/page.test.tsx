@@ -620,7 +620,7 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
   it("renders every measure cell as the absence marker, in order", async () => {
     // THE SEQUENCE, not "contains a dash". Load factor and average gauge are ALREADY `—` under
     // the bug (their denominators are zero), so `toContain("—")` passes on the broken page --
-    // the class of self-defect app/smoke.sh has produced three times. Only asserting the
+    // the class of self-defect app/smoke.sh has produced before. Only asserting the
     // POSITION of each dash distinguishes the fixed page from the buggy one.
     // MUTANT: restore `Number(r.seats ?? 0)` in endpoints.ts -> ["0","0","0","—","—"], red.
     const { container } = render(await oqz());
