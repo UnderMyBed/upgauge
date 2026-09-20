@@ -892,12 +892,15 @@ done
 # that standing, a phrase found anywhere in this response is a phrase the server composed and
 # shipped in the document -- and `check_rendered_404` is what supplies it, not a nicety beside
 # it. What still rests on it, now that #183 has written the reason needles in emitted bytes, is
-# the needles a PAYLOAD can satisfy: the slug regexes (here, and the siblings on /carrier and
-# /aircraft) span the payload's own string-escaping with `.{1,12}` deliberately, and `DATA AS OF`
-# below is a bare phrase the payload repeats. Measured under the reverted-`proxy.ts` mutant: all
-# four print ok against an `<html id="__next_error__">` shell carrying no <h1> and no badge at
-# all, because a body-substring grep cannot tell that shell -- which renders only under
+# the needles a PAYLOAD can satisfy: the slug regexes (here, and the siblings on /airport,
+# /carrier and /aircraft) span the payload's own string-escaping with `.{1,12}` deliberately, and
+# `DATA AS OF` below is a bare phrase the payload repeats. Measured under the reverted-`proxy.ts`
+# mutant: all FIVE print ok against an `<html id="__next_error__">` shell carrying no <h1> and no
+# badge at all, because a body-substring grep cannot tell that shell -- which renders only under
 # JavaScript (#157) -- from a rendered page. Remove `check_rendered_404` and nothing here notices.
+# The survivor is the bare `DATA AS OF` phrase only: `check_rendered_404`'s own `class="asof"` is
+# emitted markup and went red in that same run, which is the whole difference between the two.
+# (`/watch`'s equivalent regex states its own mutant at its own site and is not one of the five.)
 #
 # AND THAT STANDING STOPS AT SPELLING (#183). The payload is a JSON transcript of the same render,
 # not a second copy of the same bytes: a resolver's reason string reaches the markup through
