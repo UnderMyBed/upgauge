@@ -630,6 +630,16 @@ rather than by a fixture, because a fallback-only surface makes the call site de
 **Re-derive at every grain the fold serves.** A footprint measured at one grain is not the
 footprint.
 
+**Every subject named above sits inside the trailing 12, so the RENDERING rules are pinned with
+CONSTRUCTED rows, not with whichever page has the shape today.** A refresh walks the last filing
+out of the window, and a fixture pinned to it then passes against the very bug it guards without
+going red at the moment it stops testing anything.
+`app/src/lib/syntheticPivot.fixture.ts` substitutes a pivot's ROWS and nothing
+else: the subject, the column list, the id resolution and every consumer below `runPivot` stay
+real, so absence-not-zero, the disclosure and the withheld legend groups are asserted on a window
+no refresh can move. What stays dataset-pinned is the served-build half (`app/smoke.sh`), which
+proves a real page reaches that code path and states its own expiry beside the needles.
+
 **Every wholly-quarantined page is contradicted by its own filing, not merely unstated.** Each of
 the 14 is a `zero_seats` quarantine — a filed seat count of 0 against departures that were
 *performed* — so a strip reading "0 departures" asserts the opposite of what BTS filed. **Never a

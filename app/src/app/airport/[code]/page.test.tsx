@@ -20,6 +20,22 @@ vi.mock("next/headers", async () => {
   return { headers: vi.fn(async () => new Headers({ [RAW_QUERY_HEADER]: "" })) };
 });
 
+// THE ROWS ARE THE FIXTURE, NOT THE AIRPORT. `syntheticPivot.fixture.ts` carries the argument;
+// the short form is that a wholly-quarantined window is a SHAPE, and pinning it to whichever
+// airport happens to have that shape today ties the fixture to the trailing 12, which moves.
+// `answer` is null for every test in this file but the ones that set it, so every other
+// assertion here runs against the real warehouse exactly as before -- and a stub left installed
+// reddens the SEA totals loudly rather than silently feeding a synthetic page to a real test.
+const pivot = vi.hoisted(() => ({
+  answer: null as null | ((q: PivotQuery) => Record<string, unknown>[] | null),
+  hits: 0,
+}));
+vi.mock("@/lib/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  const { syntheticRunPivot } = await import("@/lib/syntheticPivot.fixture");
+  return { ...actual, runPivot: syntheticRunPivot(actual, pivot) };
+});
+
 import { render, screen } from "@testing-library/react";
 import { headers } from "next/headers";
 import AirportPage, { AirportView, airportRedirectTarget, generateMetadata } from "@/app/airport/[code]/page";
@@ -27,6 +43,7 @@ import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { decode } from "@/lib/pivot/urlstate";
 import { dataAsOf, loadAllowlist } from "@/lib/db";
+import type { PivotQuery } from "@/lib/pivot/types";
 
 /** `permanentRedirect`/`notFound` throw rather than return -- same helper, same reasoning, as
  * route/[pair]/page.test.tsx's. */
@@ -233,18 +250,143 @@ describe("/airport/<code>", () => {
   });
 });
 
+// ---------------------------------------------------------------------------------------
+// A WHOLLY-QUARANTINED WINDOW, CONSTRUCTED RATHER THAN BORROWED.
+//
+// Every assertion below is about a SHAPE of result: one operating carrier, one far endpoint,
+// every FILTERed sum NULL because every filing behind it failed an invariant. The page must
+// render absence instead of zero, disclose the counts that ARE facts, mount the map that
+// carries the disclosure, and withhold the two legend groups that describe a chart and an arc
+// it never drew.
+//
+// The rows come from `syntheticPivot.fixture.ts`, not from a live airport, because the live
+// ones are inside a window that moves: an airport whose whole trailing 12 is quarantined stops
+// being one on the refresh that walks its last filing out, and a fixture pinned to it then
+// passes against the very bug it exists to catch. The SUBJECT is still real -- SEA resolves,
+// has coordinates, and is this file's standing subject -- and everything downstream of
+// `runPivot` is the production path. Only the rows are constructed.
+//
+// SEA's own real figures are asserted at the top of this file, so a stub left installed past
+// its test reddens those rather than quietly answering them.
+const SEA_ID = 14747;
+/** The far endpoint of the constructed pair. Real, so `map_airport_coords.sql` resolves it and
+ *  the map can be drawn (or, here, declined); its CODE is what must not appear as a label. */
+const FAR_ID = 14057; // PDX
+const CARRIER_ID = 19790; // DL
+
+/** The trailing-12 traffic pivot's own row shape (`airportTrafficQuery`), wholly quarantined.
+ *
+ * The three measures are NULL TOGETHER and that is not stylistic: they carry the identical
+ * `FILTER (WHERE NOT is_quarantined)`, so a partially-null row is a contradiction the
+ * production classifiers throw on. `quarantined_rows` and `quarantine_reasons` are a COUNT and
+ * a `string_agg`, which cannot be NULL -- they are what the page still has to state. */
+function quarantinedTrafficRow(farId: number): Record<string, unknown> {
+  return {
+    op_airline_id: CARRIER_ID,
+    origin_airport_id: farId,
+    dest_airport_id: SEA_ID,
+    seats: null,
+    passengers: null,
+    departures_performed: null,
+    quarantined_rows: 1,
+    quarantine_reasons: "zero_seats",
+  };
+}
+
+/** Answers all four pivots `AirportView` issues. The stub is keyed on each query's own shape,
+ * so a page that stopped issuing one of them (or started issuing a fifth) fails the hit-count
+ * assertion in `quarantinedView` rather than silently rendering half real data.
+ *
+ * `farIds` is the set of far endpoints, one traffic row each: one for the singular case, two
+ * for the plural one. */
+function whollyQuarantinedAirport(farIds: number[]) {
+  return (q: PivotQuery): Record<string, unknown>[] | null => {
+    if (JSON.stringify(q.filters) !== JSON.stringify([["endpoint_airport_id", [String(SEA_ID)]]])) {
+      return null;
+    }
+    // The map: one undirected pair, route grain, every sum NULL -> `classifyRouteRows` counts
+    // it in `quarantinedRoutes`, draws nothing, and the map is returned anyway so its
+    // disclosure reaches the reader.
+    if (q.grain === "route") {
+      return farIds.map((farId) => ({
+        route_key_low: Math.min(SEA_ID, farId),
+        route_key_high: Math.max(SEA_ID, farId),
+        seats: null,
+        passengers: null,
+        departures_performed: null,
+        active_months: 0,
+      }));
+    }
+    // The chart: TWO filed months, neither statable. Two, not one, because `mixChartDraws`
+    // gates on the months that can be STATED and an earlier revision of it counted the FILED
+    // ones (`mixPlotConfig.ts` records that defect) -- a one-month fixture passes under both
+    // readings and so cannot tell them apart.
+    if (q.dimensions.includes("year_month")) {
+      return ["2025-08", "2025-09"].map((month) => ({
+        year_month: month,
+        aircraft_type: "201",
+        seats: null,
+        departures_performed: null,
+      }));
+    }
+    // The floor's denominator, grouped by carrier alone: one carrier, one month flown.
+    if (q.dimensions.length === 1 && q.dimensions[0] === "op_airline_id") {
+      return [
+        {
+          op_airline_id: CARRIER_ID,
+          seats: null,
+          passengers: null,
+          departures_performed: null,
+          active_months: 1,
+          quarantined_rows: farIds.length,
+          quarantine_reasons: "zero_seats",
+        },
+      ];
+    }
+    // The table and the stat strip: (carrier, origin, dest), one row per far endpoint.
+    if (q.dimensions.length === 3) return farIds.map(quarantinedTrafficRow);
+    // A shape this stub does not model. Answering it with the real warehouse would be a page
+    // half real and half constructed; returning null keeps the hit count short instead, which
+    // is the assertion that fails.
+    return null;
+  };
+}
+
+/** One render of the real `AirportView` over the constructed window.
+ *
+ * The hit count is the harness's own check and it is load-bearing: a stub whose dispatch
+ * stopped matching would hand these tests the real SEA page, and the negatives below -- no
+ * fleet-shading group, no arc group, no fabricated zero -- are the half of each assertion a
+ * page rendering nothing at all would also satisfy. Four pivots: the traffic table, the
+ * floor's carrier-months, the chart's mix, the map's route grain. */
+async function quarantinedView(farIds: number[] = [FAR_ID]) {
+  const r = await resolveAirportCode("SEA");
+  if (r.kind !== "ok") throw new Error("expected SEA to resolve for this fixture");
+  pivot.answer = whollyQuarantinedAirport(farIds);
+  pivot.hits = 0;
+  try {
+    const view = await AirportView({ airport: r.airport });
+    expect(pivot.hits).toBe(4);
+    return view;
+  } finally {
+    pivot.answer = null;
+  }
+}
+
+/** Every `.foot` on the page as one string -- the prose that explains the em dashes lives in
+ *  two of them, and which one carries which clause is not the property under test. */
+function feetOf(container: HTMLElement): string {
+  return [...container.querySelectorAll(".foot")].map((f) => f.textContent).join(" ");
+}
+
 // #114, at the page. The unit tests prove the producer counts and the renderer states; this
-// proves the served page mounts the map that carries it.
+// proves the page mounts the map that carries it.
 describe("/airport/<code> whose whole network is one quarantined route pair", () => {
-  // American Creek (OQZ) has exactly one filing in the trailing 12 -- GAL->OQZ, 2025-08 -- and it
-  // is quarantined `zero_seats`, having PERFORMED a departure. It is also OQZ's only filing in
-  // the entire dataset. Before #114 this page drew that pair as an arc reading 0 seats and 0
-  // departures -- dotted and muted, "barely flown" -- which is a claim the data cannot support.
-  // OQZ is sitemap-listed (`sitemap.test.ts` pins it as one of four airports resolving ONLY
-  // because quarantined rows are counted), so this is a live page. The fixture expiry note on
-  // the "unknowable sum" describe below applies to this block too.
+  // Before #114 this page drew such a pair as an arc reading 0 seats and 0 departures --
+  // dotted and muted, "barely flown" -- which is a claim the data cannot support. The map must
+  // still be mounted: it is the only thing on the page saying anything was filed at all.
   it("renders the map and its disclosure rather than dropping the section", async () => {
-    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "OQZ" }) }));
+    const { container } = render(await quarantinedView());
     // The map is mounted at all -- a gate on `arcs.length` would take the whole section, and
     // with it the only thing on this page saying anything was filed.
     expect(container.querySelector("svg[role='img']")).not.toBeNull();
@@ -255,16 +397,16 @@ describe("/airport/<code> whose whole network is one quarantined route pair", ()
   });
 
   it("renders NO fleet-shading rail group, because no chart was drawn (#123)", async () => {
-    // THE DEFECT STATED AS AN ABSENCE, which is the only form that can fail. OQZ has exactly
-    // one filed month, so `AircraftMixChart` takes its `plot === null` branch and draws a line
-    // of text -- while the rail rendered the two gauge swatches and "The shaded months are
-    // 2020-03 to 2021-06. COVID is in the window on purpose", explaining a ramp that is not on
-    // the page. A test asserting the group IS present on a normal page passes under the bug;
-    // `docs/design/system.md` names this failure directly.
+    // THE DEFECT STATED AS AN ABSENCE, which is the only form that can fail. Every filed month
+    // here is itself wholly quarantined, so `AircraftMixChart` takes its `plot === null` branch
+    // and draws a line of text -- while the rail rendered the two gauge swatches and "The
+    // shaded months are 2020-03 to 2021-06. COVID is in the window on purpose", explaining a
+    // ramp that is not on the page. A test asserting the group IS present on a normal page
+    // passes under the bug; `docs/design/system.md` names this failure directly.
     //
     // Mutant: put `fleetMix={hasMix}` back on page.tsx's `<LegendRail>` and this goes red on
-    // both assertions, while the SEA test below stays green.
-    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "OQZ" }) }));
+    // both assertions, while the SEA test above stays green.
+    const { container } = render(await quarantinedView());
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).not.toContain("Fleet shading");
     expect(rail.textContent).not.toContain("COVID is in the window on purpose");
@@ -273,22 +415,34 @@ describe("/airport/<code> whose whole network is one quarantined route pair", ()
     // it carries its unconditional groups, and the chart really did decline to draw.
     expect(rail.textContent).toContain("Gauge rail");
     expect(container.querySelector(".chart svg[role='img']")).toBeNull();
-    // THE sentence, not merely some sentence. OQZ's one filed month is ITSELF wholly quarantined,
-    // so `mixAbsenceNote` names that cause rather than the bare month count. Integrating #121 and
-    // #123 moved this string: #123 pinned the note it found here, #121 changed which branch such
-    // a page reaches, and neither unit could see the other. The property under test is unchanged
-    // -- the chart declined to draw and said why.
+    // THE sentence, not merely some sentence. Two months were FILED and neither can be stated,
+    // so `mixAbsenceNote` names that cause rather than the bare month count -- and a gate that
+    // counted filed months instead of statable ones would draw a frame here.
     expect(container.querySelector(".chart")!.textContent).toContain(
-      "wholly quarantined — every filing failed an invariant",
+      "2 months of filings in this window, every one wholly quarantined — every filing failed " +
+        "an invariant",
     );
   });
 
   it("does not draw an arc claiming the pair carried nothing", async () => {
-    // The defect stated as an absence. `GAL` is OQZ's only far endpoint in this window; a
-    // destination label for it means the fabricated arc is back.
-    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "OQZ" }) }));
-    const svg = container.querySelector("svg[role='img']")!;
-    expect(svg.textContent).not.toContain("GAL");
+    // The defect stated as an absence. The pair's far endpoint is the page's only destination;
+    // a label for it means the fabricated arc is back.
+    //
+    // SCOPED TO `.map`, not to the first `svg[role='img']` on the page. On a subject whose
+    // chart declines to draw the map IS the first one, so the loose selector agrees here and
+    // reads the CHART on any page that has one -- a needle aimed at an element that carries no
+    // airport label, green forever. Same selector as the arc-group test below.
+    const { container } = render(await quarantinedView());
+    const svg = container.querySelector(".map svg[role='img']")!;
+    expect(svg.textContent).not.toContain("PDX");
+    // THE COUNT, not only the absent label, because only the count discriminates on a page
+    // with more than one pair: `renderNetworkMap` labels the top 8 destinations by arc seats,
+    // so a fabricated arc outside that eight would leave the needle above green. One disc is
+    // the origin's own -- always painted, which is why the map is mounted at all -- and every
+    // destination that reached the map would add another.
+    expect(svg.querySelectorAll("circle").length).toBe(1);
+    // NOT VACUOUS: the map is there to be read, and it names the subject it drew nothing for.
+    expect(svg.textContent).toContain("SEA");
   });
 });
 
@@ -593,37 +747,16 @@ describe("/airport/<code>?y=<year> -- the year track (M7 Task 9)", () => {
 // actually survives DataTable -> lib/format.ts and reaches a `<td>`, which is the seam a unit
 // test of either half alone cannot see.
 //
-// OQZ (American Creek), measured at asOf 2026-06: ONE row in the entire dataset -- 2025-08,
-// op_airline 20333, GAL->OQZ, seats 0.0, departures_performed 1.0, is_quarantined true
-// (`zero_seats`), with OQZ as the DESTINATION. So its trailing-12 pivot returns a single
-// wholly-quarantined group, and under the `?? 0` bug the only row of the only table on the page
-// read "0 / 0 / 0".
-//
-// TWO THINGS TURN THIS FIXTURE RED, AND THE LIKELIER ONE IS NOT A BUG. (1) A BTS revision
-// un-quarantines that row. (2) `asOf` ADVANCES: 2025-08 is the SECOND month of the trailing 12
-// (2025-07..2026-06), so at asOf 2026-08 it rolls out of the window, OQZ has no rows at all, and
-// the page becomes the empty state -- taking every OQZ test in this file with it. Expiry is the
-// likelier cause by far, so triage the window before hunting an un-quarantine that never
-// happened. On this warehouse NO OTHER AIRPORT carries the whole property: JZM is the only other
-// airport whose trailing 12 is wholly quarantined (the same 2025-08 expiry), and it filed real
-// seats in 2021-08 and 2022-08, so its chart draws and it cannot stand in for the
-// one-filed-month tests above. When OQZ expires, re-derive a replacement from the warehouse and
-// MOVE the fixture (CLAUDE.md, "MOVE the fixture") -- never a relaxed assertion, which would
-// keep passing against the very bug this guards.
+// The constructed window above is the input: one carrier, one far endpoint, every FILTERed sum
+// NULL. Under the `?? 0` bug the only row of the only table on the page read "0 / 0 / 0".
 describe("/airport/<code> renders an unknowable sum as absence, not zero", () => {
-  async function oqz() {
-    const r = await resolveAirportCode("OQZ");
-    if (r.kind !== "ok") throw new Error("expected OQZ to resolve for this fixture");
-    return await AirportView({ airport: r.airport });
-  }
-
   it("renders every measure cell as the absence marker, in order", async () => {
     // THE SEQUENCE, not "contains a dash". Load factor and average gauge are ALREADY `—` under
     // the bug (their denominators are zero), so `toContain("—")` passes on the broken page --
     // the class of self-defect app/smoke.sh has produced before. Only asserting the
     // POSITION of each dash distinguishes the fixed page from the buggy one.
     // MUTANT: restore `Number(r.seats ?? 0)` in endpoints.ts -> ["0","0","0","—","—"], red.
-    const { container } = render(await oqz());
+    const { container } = render(await quarantinedView());
     const cells = [...container.querySelectorAll("td.num")].map((c) => c.textContent);
     expect(cells).toEqual(["—", "—", "—", "—", "—"]);
   });
@@ -631,7 +764,7 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
   it("renders no measure cell as a zero anywhere on the page", async () => {
     // The absence half. A page that dropped the row entirely would satisfy the test above
     // vacuously (zero cells is not a sequence of five), so the row's presence is asserted too.
-    const { container } = render(await oqz());
+    const { container } = render(await quarantinedView());
     expect(container.querySelectorAll("tbody tr").length).toBe(1);
     expect([...container.querySelectorAll("td.num")].some((c) => c.textContent === "0")).toBe(
       false,
@@ -639,10 +772,10 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
   });
 
   it("leaves the stat strip unknowable rather than reporting zero traffic", async () => {
-    // OQZ's whole window is that one quarantined filing, so the strip has nothing to state --
+    // The whole window is that one quarantined filing, so the strip has nothing to state --
     // but the COUNTS are still real facts about what was filed, and must not be blanked with it.
     // MUTANT: seed airportTotals' reduce at 0 again -> "0" for seats/passengers/departures, red.
-    const { container } = render(await oqz());
+    const { container } = render(await quarantinedView());
     const stats = [...container.querySelectorAll(".stat")].map((s) => [
       s.querySelector(".k")?.textContent,
       s.querySelector(".v")?.textContent,
@@ -662,31 +795,41 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
     // there are totals left to exclude from, and here there are none. The /watch/new-routes
     // class of defect: a compound claim whose clauses need re-deriving one at a time.
     // MUTANT: drop the `totals.seats === null` branch from `quarantineClause` -> red.
-    const { container } = render(await oqz());
+    const { container } = render(await quarantinedView());
     const feet = [...container.querySelectorAll(".foot")].map((f) => f.textContent).join(" ");
-    expect(feet).toContain("Every filing at OQZ in this window is quarantined");
+    expect(feet).toContain("Every filing at SEA in this window is quarantined");
     expect(feet).toContain("no measure above can be summed");
     expect(feet).not.toContain("excluded from these totals");
     // BOTH counts, which is the one thing about this sentence that is genuinely this page's:
     // /airport is the only entity page carrying a destinations count beside its carrier count,
     // and the shared clause takes that noun phrase from the caller.
-    // MUTANT: pass "The carrier count is" here -> red. The 1:1 shape of OQZ (1 row, 1 carrier,
-    // 1 destination) is exactly why a looser assertion would not notice.
+    // MUTANT: pass "The carrier count is" here -> red. The 1:1 shape of this fixture (1 row,
+    // 1 carrier, 1 destination) is exactly why a looser assertion would not notice.
     expect(feet).toContain(
       "The carrier and destination counts are counted from those rows, not net of them.",
     );
   });
 
-  it("agrees with its own count on the plural, on both halves of the sentence", async () => {
+  it("agrees with its own count on the plural, at one destination and at two", async () => {
     // `1 destinations` shipped beside a correctly singularised `1 quarantined row` in the SAME
     // sentence. Small wrongness under a DATA AS OF badge is what makes a reader doubt the large
     // numbers, and this is now the only prose on the page explaining five em dashes.
-    // MUTANT: hardcode `destinations` -> red. In-repo precedent: networkMap.test.ts asserts
-    // `not.toContain("1 quarantined routes")` for the same class of defect.
-    const { container } = render(await oqz());
-    const feet = [...container.querySelectorAll(".foot")].map((f) => f.textContent).join(" ");
-    expect(feet).toContain("1 destination counted once each");
-    expect(feet).not.toContain("1 destinations");
+    //
+    // BOTH SIDES OF THE PLURAL, because either alone is half a fixture: a one-destination page
+    // cannot fail a hard-coded `destination`, and a two-destination page cannot fail a
+    // hard-coded `destinations`. The live warehouse offered only the first (the two airports
+    // whose whole window is quarantined have one destination each); constructed rows can vary
+    // the count, which is the point of constructing them.
+    // MUTANT: hardcode `destinations` -> the one-destination half reddens. MUTANT: hardcode
+    // `destination` -> the two-destination half reddens. In-repo precedent: networkMap.test.ts
+    // asserts `not.toContain("1 quarantined routes")` for the same class of defect.
+    const one = feetOf(render(await quarantinedView()).container);
+    expect(one).toContain("1 destination counted once each");
+    expect(one).not.toContain("1 destinations");
+
+    const two = feetOf(render(await quarantinedView([FAR_ID, 11844])).container);
+    expect(two).toContain("2 destinations counted once each");
+    expect(two).not.toContain("2 destination counted");
   });
 
   it("says WHY it cannot state them, in the reason-code gutter", async () => {
@@ -694,7 +837,7 @@ describe("/airport/<code> renders an unknowable sum as absence, not zero", () =>
     // table surfaces already carry (they hand DataTable raw pivot rows; /airport rebuilds its
     // rows in TypeScript, so it has to carry the reason deliberately).
     // MUTANT: drop quarantine_reasons from carrierRows' output -> the title loses ": zero_seats".
-    const { container } = render(await oqz());
+    const { container } = render(await quarantinedView());
     const gutter = container.querySelector("td.gut abbr");
     expect(gutter?.textContent).toBe("Q");
     expect(gutter?.getAttribute("title")).toBe(
@@ -839,14 +982,15 @@ describe("/airport/<code> sorts below-floor rows last", () => {
 describe("/airport/<code>: the legend rail's arc group follows the ARCS (#123)", () => {
   // EVERY ROW IN THAT GROUP DESCRIBES AN ARC -- width by seats, dashed below the load-factor
   // floor, dotted-muted below the departure floor, and why a cross-panel arc is a straight line.
-  // A map can render with none of them, so "a map was drawn" is the wrong gate: a hub map always paints its origin disc, so `/airport/JZM` and
-  // `/airport/OQZ` render a map with zero polylines.
+  // A map can render with none of them, so "a map was drawn" is the wrong gate: a hub map
+  // always paints its origin disc, so an airport whose every pair is quarantined renders a map
+  // with zero polylines.
   //
   // Asserted as an ABSENCE, because the presence form passes under the bug. And per CALL SITE:
   // each page decides for itself what to pass, so reverting one is a live defect on that surface
   // alone. Mutant: pass `hasNetwork` back to `<LegendRail map={...}>` here and this goes red.
   it("renders NO arc-rendering group when no arc was drawn", async () => {
-    const { container } = render(await AirportPage({ params: Promise.resolve({ code: "OQZ" }) }));
+    const { container } = render(await quarantinedView());
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).not.toContain("Arc rendering");
     expect(rail.textContent).not.toContain("width scales with seats");

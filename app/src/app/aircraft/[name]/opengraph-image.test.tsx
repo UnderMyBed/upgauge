@@ -17,7 +17,22 @@ vi.mock("@/lib/og/card", async (importOriginal) => {
   renderSpy.mockImplementation(actual.renderEntityCard);
   return { ...actual, renderEntityCard: renderSpy };
 });
+
+// THE ROWS ARE THE FIXTURE, NOT THE AIRCRAFT TYPE. `syntheticPivot.fixture.ts` carries the
+// argument; the short form is that a wholly-quarantined window is a SHAPE, and pinning it to
+// whichever type happens to have that shape today ties the fixture to the trailing 12, which
+// moves. `answer` is null for every test in this file but the ones that set it.
+const pivot = vi.hoisted(() => ({
+  answer: null as null | ((q: PivotQuery) => Record<string, unknown>[] | null),
+  hits: 0,
+}));
+vi.mock("@/lib/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  const { syntheticRunPivot } = await import("@/lib/syntheticPivot.fixture");
+  return { ...actual, runPivot: syntheticRunPivot(actual, pivot) };
+});
 import Image, { alt, contentType, dynamic, size } from "@/app/aircraft/[name]/opengraph-image";
+import type { PivotQuery } from "@/lib/pivot/types";
 
 /** Real route, real `upgauge.duckdb`, no mock -- see route/[pair]/opengraph-image.test.tsx's
  * header. It matters most on THIS route: `resolveAircraftSlug` is the four-outcome resolver,
@@ -86,11 +101,65 @@ describe("/aircraft/<slug> opengraph-image", () => {
 });
 
 // ---------------------------------------------------------------------------------------
-// THE CARD'S SIXTH STAT (#121), and THIS route is the half issue #121 never measured. It scoped
-// the wholly-quarantined footprint at route grain only; re-derived at aircraft grain, BTS types
-// 201 (`/aircraft/TRISLNDR`) and 489 (`/aircraft/SHORT360`) have no un-quarantined filing either
-// -- both F4 in 2025-08, 5 and 27 PERFORMED departures against a filed seat count of zero. So the
-// reachable footprint is 14 pages, not the route grain's 12.
+// THE CARD'S SIXTH STAT (#121), and THIS route is the half issue #121 never measured: it scoped
+// the wholly-quarantined footprint at route grain only, and an aircraft type whose every
+// trailing-12 filing failed an invariant is in exactly the same state.
+//
+// THE ROWS ARE THE FIXTURE, NOT THE TYPE. Both pivots this route issues, answered as such a
+// type: one operating carrier, two filed months, every FILTERed sum NULL, and a
+// `quarantined_rows` COUNT that survives because a count is not a measure. Two months rather
+// than one because `mixChartDraws` gates on the months that can be STATED and an earlier
+// revision counted the FILED ones -- a one-month fixture cannot tell those apart. The SUBJECT
+// stays real: B737-8 resolves, and its real query supplies the column list. Only the rows are
+// constructed, because every live type in this state sits inside a window that moves.
+const DL_ID = 19790;
+function whollyQuarantinedType(q: PivotQuery): Record<string, unknown>[] | null {
+  if (!q.filters.some(([key]) => key === "aircraft_type")) return null;
+  if (q.dimensions.includes("year_month")) {
+    return ["2025-08", "2025-09"].map((month) => ({
+      year_month: month,
+      op_airline_id: DL_ID,
+      seats: null,
+      departures_performed: null,
+    }));
+  }
+  if (q.dimensions.length === 1 && q.dimensions[0] === "op_airline_id") {
+    return [
+      {
+        op_airline_id: DL_ID,
+        seats: null,
+        passengers: null,
+        departures_performed: null,
+        quarantined_rows: 2,
+        quarantine_reasons: "zero_seats",
+      },
+    ];
+  }
+  return null;
+}
+
+/** The card rasterized over the constructed window, and the `CardInput` the route handed
+ * `renderEntityCard` on the way past.
+ *
+ * The hit count is the harness's own check -- two pivots, the stat row's and the chart's --
+ * because a stub whose dispatch stopped matching would card the real B737-8, where the five
+ * dashes one describe below are trivially false but `chartSvg === null` two describes below is
+ * trivially true. Both callers read it through their own shape, the way `cardInputFor` and
+ * `cardInput` already do. */
+async function quarantinedCardInput<T>(): Promise<T> {
+  renderSpy.mockClear();
+  pivot.answer = whollyQuarantinedType;
+  pivot.hits = 0;
+  try {
+    await Image({ params: Promise.resolve({ name: "B737-8" }) });
+  } finally {
+    pivot.answer = null;
+  }
+  expect(renderSpy).toHaveBeenCalledTimes(1);
+  expect(pivot.hits).toBe(2);
+  return renderSpy.mock.calls[0][0] as T;
+}
+
 describe("the default export's card input", () => {
   async function cardInputFor(name: string) {
     renderSpy.mockClear();
@@ -104,11 +173,8 @@ describe("the default export's card input", () => {
   // MUTANT: `stats: cardStats(totals, { label: "Carriers", ... })` at the render call -> the
   // sixth stat reads `Carriers 1` -> red.
   // MUTANT: restore `?? 0` in `sumColumn` -> the first five stop being dashes -> red.
-  // DATASET-PINNED SUBJECT, and it expires: TRISLNDR's trailing-12 filings are F4's two 2025-08
-  // rows, which leave the window at asOf 2026-08, so when this reddens, re-derive an aircraft
-  // type with no un-quarantined trailing-12 filing and move the fixture there.
   it("rasterizes the quarantined count on a wholly-quarantined aircraft type", async () => {
-    const input = await cardInputFor("TRISLNDR");
+    const input = await quarantinedCardInput<{ stats: { label: string; value: string }[] }>();
     expect(input.stats.map((s) => s.label)).toEqual([
       "Seats", "Passengers", "Load factor", "Avg gauge", "Departures", "Quarantined",
     ]);
@@ -167,16 +233,16 @@ describe("the card's absence counts and note reach renderEntityCard", () => {
     expect(input.understated).toBe(12);
   });
 
-  // TRISLNDR's whole window is one quarantined filing, so it has no chart AND must carry the
+  // A type whose every filed month is itself wholly quarantined has no chart AND must carry the
   // page's own sentence -- the case the hard-coded "No filings in this window." literal was
-  // live on, since this page's own note correctly reads "1 month of filings ... wholly
-  // quarantined". MUTANT: any literal for `chartNote` -> red.
+  // live on, since this page's own note correctly names the quarantine.
+  // MUTANT: any literal for `chartNote` -> red.
   it("carries the page's own no-chart sentence, not a card-local one", async () => {
-    const input = await cardInput("TRISLNDR");
+    const input = await quarantinedCardInput<{ chartNote: string | null; chartSvg: string | null }>();
     expect(input.chartSvg).toBeNull();
     expect(input.chartNote).toBe(
-      "1 month of filings in this window, wholly quarantined — every filing failed an " +
-        "invariant, so no carrier seats can be stated and there is nothing to draw.",
+      "2 months of filings in this window, every one wholly quarantined — every filing failed " +
+        "an invariant, so no carrier seats can be stated and there is nothing to draw.",
     );
   });
 

@@ -1472,10 +1472,16 @@ check_dataset check "airport BTT: the quarantined pair is disclosed with a count
 # American Creek: the case the disclosure exists for. OQZ's ENTIRE trailing-12 network is one
 # wholly-quarantined pair -- its only row in the dataset, GAL->OQZ, 8V, 2025-08, `zero_seats` --
 # so there is nothing to draw and everything to say, and `sitemap.ts` lists it, because OQZ is
-# one of four airports that resolve only via quarantined rows. That row leaves the trailing 12 at
-# asOf 2026-08; re-derive the wholly-quarantined airports then (JZM is the only other one on
-# 2026-06, and its chart draws, so it is not a substitute). Before #114 this page's
+# one of four airports that resolve only via quarantined rows. Before #114 this page's
 # single arc was the fabricated one.
+#
+# WHAT IS SERVED-ONLY HERE IS THAT A REAL PAGE REACHES THE RULE, not the rule itself: the
+# rendering is pinned window-independently by the constructed rows in
+# `app/src/app/airport/[code]/page.test.tsx`, which no refresh can walk out of the window. These
+# needles are the live half, and the live half expires -- OQZ's one row leaves the trailing 12 at
+# asOf 2026-08 and the page becomes the empty-window state, so triage the WINDOW first and move
+# the subject (JZM is the only other wholly-quarantined airport on 2026-06, and its chart draws,
+# so it is not a substitute) rather than relaxing an assertion.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/OQZ")
 check_dataset check "airport OQZ: the map still renders with nothing drawable" "$BODY" \
   '<svg viewBox="0 354 960 190" width="960" height="190" role="img"'
@@ -1584,6 +1590,13 @@ check_not "airport ORD: ...and states no quarantined-route disclosure"          
 # DATASET-PINNED as a block, for 10c's reason: a BTS revision that un-quarantines OQZ must redden
 # this rather than silently stop testing anything. docs/data/invariants.md
 # § A wholly-quarantined group sums to NULL carries the query and the current measurement.
+#
+# AND IT EXPIRES, which is the likelier of the two reds by far: OQZ's only row is 2025-08, so at
+# asOf 2026-08 it leaves the trailing 12 and this page becomes the empty-window state 05A serves
+# below. Triage the window before hunting an un-quarantine that never happened. As in 10c, the
+# rendering rule is pinned window-independently by the constructed rows in
+# `app/src/app/airport/[code]/page.test.tsx`; these needles are here because the byte sequence
+# and the served prose are things only a served build can show.
 BODY=$(curl -s --max-time 30 "${BASE}/airport/OQZ")
 check_dataset check "airport OQZ: every measure cell is absence, in order" "$BODY" \
   '<td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>'
