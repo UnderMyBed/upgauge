@@ -890,11 +890,22 @@ done
 # `check_rendered_404` of their own and need none, because they reach the identical branch of the
 # identical view -- what is proven emitted for one cause of a family is emitted for the other. With
 # that standing, a phrase found anywhere in this response is a phrase the server composed and
-# shipped in the document: the flight payload is a JSON transcript of the same render, so it
-# cannot carry a sentence the HTML does not. Remove `check_rendered_404` and these needles are
-# payload-only -- a body-substring grep cannot tell a rendered page from an
-# `<html id="__next_error__">` shell that renders only under JavaScript (#157), and all six of
-# them print ok against that shell (measured under the reverted-`proxy.ts` mutant).
+# shipped in the document. Remove `check_rendered_404` and these needles are payload-only -- a
+# body-substring grep cannot tell a rendered page from an `<html id="__next_error__">` shell that
+# renders only under JavaScript (#157), and all six of them print ok against that shell (measured
+# under the reverted-`proxy.ts` mutant).
+#
+# AND THAT STANDING STOPS AT SPELLING (#183). The payload is a JSON transcript of the same render,
+# not a second copy of the same bytes: a resolver's reason string reaches the markup through
+# React's text serializer, which escapes ' to `&#x27;`, and reaches the payload as a JSON string
+# with the apostrophe intact. One response therefore carries the SAME SENTENCE IN TWO SPELLINGS,
+# and a needle copied from `resolveAirport.ts` matches only the payload half -- the #157 shape
+# wearing this file's self-defect #2 as a disguise. Measured on a served build, /airport/ZZZZ:
+#   markup   <p role="alert">We can’t show ‘<!-- -->ZZZZ<!-- -->’: <!-- -->unknown airport code &#x27;ZZZZ&#x27;<!-- -->.</p>
+#   payload  "p\",null,{\"role\":\"alert\",\"children\":[\"We can’t show ‘\",\"ZZZZ\",\"’: \",\"unknown airport code 'ZZZZ'\",\".\"]
+# So every reason needle in this file that carries an apostrophe is written in the ESCAPED form,
+# which is emitted-only and cannot be satisfied by the payload -- the same discriminator
+# `check_rendered_404`'s `<h1>` relies on, applied to the sentence instead of the heading.
 #
 # Fix wave 3, item 5: both of the first two checks here used to be weaker than the unit tests
 # they mirror. 'unknown airport code' alone asserts the CATEGORY, where the whole promise is
@@ -905,7 +916,7 @@ done
 # the rendered <p role="alert"> produces. The regex spans the payload's own string-escaping
 # between the two (`show ‘\",\"ZZZZ-LAX`) rather than pinning that escaping exactly.
 BODY=$(curl -s --max-time 15 "${BASE}/route/ZZZZ-LAX")
-check     "route 404: names the offending code, not just the pair" "$BODY" "unknown airport code 'ZZZZ'"
+check     "route 404: names the offending code, not just the pair" "$BODY" 'unknown airport code &#x27;ZZZZ&#x27;'
 check_re  "route 404: the SENTENCE carries the slug, not just the router state" "$BODY" 'We can.{1,3}t show .{1,12}ZZZZ-LAX'
 check     "route 404: DATA AS OF is present"                       "$BODY" 'DATA AS OF'
 check_not "route 404: does not offer every cause at once"          "$BODY" 'domestic-only'
@@ -1186,8 +1197,12 @@ done
 # satisfy any lone positive. A page the proxy does not answer for passes all four -- measured by
 # deleting the `/airport/:code` row, the sentences survive in the flight payload of the empty
 # `__next_error__` shell -- which is why `check_rendered_404` closes this block.
+#
+# `&#x27;`, never `'` (#183): React escapes the resolver's apostrophes on their way into the
+# markup and leaves them intact in the payload, so the raw spelling is a payload-only needle.
+# The rule and the measured bytes are stated once, in the route-404 block above.
 BODY=$(curl -s --max-time 15 "${BASE}/airport/ZZZZ")
-check     "airport 404: names the offending code"       "$BODY" "unknown airport code 'ZZZZ'"
+check     "airport 404: names the offending code"       "$BODY" 'unknown airport code &#x27;ZZZZ&#x27;'
 check_not "airport 404: not every cause at once"        "$BODY" 'domestic-only'
 BODY=$(curl -s --max-time 15 "${BASE}/airport/LHR")
 check     "airport 404: a real airport outside the dataset says so" "$BODY" 'domestic-only'
@@ -1226,14 +1241,19 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/SEA?y=1999")
 check     "airport?y=1999: an out-of-range year is no-store"          "$HDRS" "no-store"
 check_not "airport?y=1999: ...and is never long-cached"              "$HDRS" "s-maxage"
 
+# `&#x27;`, never `'` (#183; the route-404 block above states the rule): page.tsx interpolates a
+# RUNTIME string into `<p role="alert">`, so React escapes the apostrophes into the markup while
+# the payload keeps them raw. The DASHES are not escaped and stay literal -- em dash U+2014 in the
+# sentence, en dash U+2013 in the range -- because React's serializer touches only & < > " '.
+# Measured on a served build: `role="alert">unknown year &#x27;1999&#x27; — this dataset covers 2015–2026</p>`.
 BODY=$(curl -s --max-time 15 "${BASE}/airport/SEA?y=1999")
 check_dataset check "airport?y=1999: names the offending value and the covered range" "$BODY" \
-  "unknown year '1999' — this dataset covers 2015–2026"
+  'unknown year &#x27;1999&#x27; — this dataset covers 2015–2026'
 check_dataset check_not "airport?y=1999: does not silently fall back to the default view" "$BODY" '53,343,024'
 
 BODY=$(curl -s --max-time 15 "${BASE}/airport/SEA?y=nonsense")
 check     "airport?y=nonsense: malformed input is the same named error, not a 500" "$BODY" \
-  "unknown year 'nonsense'"
+  'unknown year &#x27;nonsense&#x27;'
 
 # 10c. M7 Tasks 4-8: the airport network map, in the served HTML. ORD, not SEA -- it is the
 # database's own worst case (measured 274 destinations after the same-airport row is excluded,
@@ -1348,7 +1368,7 @@ HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/airport/ORD?y=nonsense")
 check     "airport map ?y=nonsense: malformed input is no-store"            "$HDRS" "no-store"
 check_not "airport map ?y=nonsense: ...and is never long-cached"           "$HDRS" "s-maxage"
 BODY=$(curl -s --max-time 15 "${BASE}/airport/ORD?y=nonsense")
-check     "airport map ?y=nonsense: names the offending year" "$BODY" "unknown year 'nonsense'"
+check     "airport map ?y=nonsense: names the offending year" "$BODY" 'unknown year &#x27;nonsense&#x27;'
 
 # 10b. The Pacific panels' coastline (#111). Before this block `grep -in "pac" app/smoke.sh`
 # returned two COMMENTS and zero checks -- so the one thing a unit test structurally cannot
@@ -2017,7 +2037,9 @@ BODY=$(curl -s --max-time 15 "${BASE}/carrier/ZZ")
 check     "carrier: ZZ is a 404"                        "$CODE" '404'
 check_not "carrier: 404 (ZZ) is not long-cached"        "$HDRS" "s-maxage"
 check     "carrier: 404 (ZZ) is no-store"               "$HDRS" "no-store"
-check     "carrier 404: ZZ is unrecognized, not merely unfiled" "$BODY" "unknown carrier code 'ZZ'"
+# `&#x27;`, never `'` here and on PA below -- React escapes `lib/carrier.ts`'s apostrophes into the
+# markup and leaves them raw in the payload (#183; the route-404 block in § 8 states the rule).
+check     "carrier 404: ZZ is unrecognized, not merely unfiled" "$BODY" 'unknown carrier code &#x27;ZZ&#x27;'
 check_not "carrier 404: ZZ is not reported as recognized"       "$BODY" "recognized by BTS"
 check_rendered_404 "carrier" "$BODY" 'Carrier not found'
 
@@ -2033,7 +2055,7 @@ BODY=$(curl -s --max-time 15 "${BASE}/carrier/PA")
 check     "carrier: PA is a 404"                             "$CODE" '404'
 check_not "carrier: 404 (PA) is not long-cached"             "$HDRS" "s-maxage"
 check     "carrier: 404 (PA) is no-store"                    "$HDRS" "no-store"
-check     "carrier 404: PA is recognized, never filed"       "$BODY" "'PA' is recognized by BTS"
+check     "carrier 404: PA is recognized, never filed"       "$BODY" '&#x27;PA&#x27; is recognized by BTS'
 check_not "carrier 404: PA is not reported as unknown"       "$BODY" "unknown carrier code"
 check     "carrier 404: names the first Pan American holder"  "$BODY" 'Pan American World Airways, airline_id 20384'
 check     "carrier 404: names the second Pan American holder" "$BODY" 'Pan American World Airways, airline_id 20386'
@@ -2211,7 +2233,9 @@ BODY=$(curl -s --max-time 15 "${BASE}/aircraft/NOPE-1")
 check     "aircraft: an unknown slug is a 404"      "$CODE" '404'
 check_not "aircraft: 404 is not long-cached"        "$HDRS" "s-maxage"
 check     "aircraft: 404 is no-store"               "$HDRS" "no-store"
-check     "aircraft 404: names the offending slug"  "$BODY" "unknown aircraft type 'NOPE-1'"
+# `&#x27;`, never `'` here and on the lower-case slug below -- `aircraftSlug.ts`'s apostrophes are
+# escaped into the markup and raw in the payload (#183; § 8's route-404 block states the rule).
+check     "aircraft 404: names the offending slug"  "$BODY" 'unknown aircraft type &#x27;NOPE-1&#x27;'
 check_rendered_404 "aircraft" "$BODY" 'Aircraft type not found'
 # The lower-case slug is echoed as TYPED while the reason names the upper-cased form -- the same
 # discriminator /carrier gets, on the page that has the widest divergence available and had no
@@ -2221,7 +2245,7 @@ CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "${BASE}/aircraft/no
 BODY=$(curl -s --max-time 15 "${BASE}/aircraft/nope-1")
 check     "aircraft: an unknown lower-case slug is a 404 too"      "$CODE" '404'
 check_re  "aircraft 404: the SENTENCE carries the slug as typed"   "$BODY" 'We can.{1,3}t show .{1,12}nope-1'
-check     "aircraft 404: ...and the REASON names the canonical"    "$BODY" "unknown aircraft type 'NOPE-1'"
+check     "aircraft 404: ...and the REASON names the canonical"    "$BODY" 'unknown aircraft type &#x27;NOPE-1&#x27;'
 
 # THE ONE THIS SECTION EXISTS FOR. `resolveAircraftSlug` has FOUR outcomes, not three:
 # `/aircraft/CE-180` names BTS codes 030 (CESSNA 180) and 031 (CESSNA 180A/B), both of which
