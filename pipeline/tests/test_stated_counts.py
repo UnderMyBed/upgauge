@@ -35,10 +35,12 @@ from __future__ import annotations
 
 import json
 import re
+import string
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).parents[2]
-MEASURES: dict[str, int] = json.loads(
+MEASURES: dict[str, Any] = json.loads(
     (ROOT / "pipeline" / "reference" / "stats.generated.json").read_text()
 )["measures"]
 
@@ -75,6 +77,9 @@ STATED: dict[str, tuple[str, ...]] = {
         "app/src/app/sitemap.ts",
         "app/src/lib/entityFacts.ts",
         "app/src/lib/entityLink.ts",
+        "app/src/lib/chart/crossover.test.ts",
+        "app/src/lib/chart/crossover.ts",
+        "app/src/lib/routePair.test.ts",
         "app/src/lib/routePair.ts",
         "app/src/lib/search.test.ts",
         "app/src/lib/sitemap.test.ts",
@@ -145,7 +150,6 @@ STATED: dict[str, tuple[str, ...]] = {
         "app/src/lib/chart/aircraftMix.test.ts",
         "app/src/lib/chart/aircraftMix.ts",
         "app/src/lib/map/carrierTypeNetwork.ts",
-        "app/src/lib/routePair.test.ts",
         "docs/architecture/hosting.md",
         "docs/data/invariants.md",
         "docs/design/system.md",
@@ -220,6 +224,20 @@ STATED: dict[str, tuple[str, ...]] = {
     # byte count 412,995,560, say -- is a collision, not a statement, and registering the file to
     # match one would gate a coincidence. Its same-airport statement is the 532-pairs sentence,
     # gated in ANCHORED under same_airport_pairs.
+    # The crossover annotation's two populations (#182). BOTH are stated, and both are
+    # measured, because the sentence's claim is which of them is larger: it shipped reading
+    # "`null` is the common case" directly above a figure saying 54% of routes DO cross over,
+    # so the bolded rule and its own evidence disagreed. A single count with the other half
+    # subtracted in prose is what let that stand.
+    "crossover_routes": (
+        "app/src/lib/chart/crossover.ts",
+        "docs/design/system.md",
+    ),
+    "crossover_routes_none": (
+        "app/src/lib/chart/crossover.test.ts",
+        "app/src/lib/chart/crossover.ts",
+        "docs/design/system.md",
+    ),
     "same_airport_filings": (
         "app/src/app/airport/[code]/endpoints.ts",
         "app/src/app/explore/page.test.tsx",
@@ -231,13 +249,21 @@ STATED: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# Measures under 1,000. Their digits are not distinctive -- `532` is also Cloudflare error 530's
-# neighbour in deploy.md, and `-215.2` is Guam's longitude in invariants.md -- so scanning for
-# them bare would either miss real sites or flag unrelated numbers. Each site is registered with
-# the PHRASE that pins the meaning, and these are gated FORWARD ONLY. Stated rather than
-# implied: a new file stating `532` without being added here goes unnoticed. Widening the scan
-# to bare three-digit numbers would flag every line number and percentage in the repo, which is
-# worse than the gap.
+# Measures whose rendering is not distinctive enough to scan for: counts under 1,000, every
+# PERCENTAGE, and every DECIMAL. `532` is also Cloudflare error 530's neighbour in deploy.md,
+# `-215.2` is Guam's longitude in invariants.md, and `187.5` is both a gauge figure and the
+# longitude of the westernmost basemap point in system.md -- so scanning for them bare would
+# either miss real sites or flag unrelated numbers. Each site is registered with the PHRASE
+# that pins the meaning, and these are gated FORWARD ONLY. Stated rather than implied: a new
+# file stating `532` without being added here goes unnoticed. Widening the scan to bare
+# three-digit numbers would flag every line number and percentage in the repo, which is worse
+# than the gap.
+#
+# A DECIMAL's needle carries the carrier code beside the number (`B6 {v:.1f}`), and that is
+# deliberate: the measure is "the lightest gauge on this airframe", so a needle pinning the
+# number alone would stay green if the lightest OPERATOR changed while its figure did not. The
+# phrase catches the ordinary case -- a new carrier brings a new number -- and the residual is
+# written down here rather than left to be discovered.
 ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
     "route_order_disagreeing_pairs": (
         ("CLAUDE.md", "{v} of {sitemap_routes} pairs"),
@@ -247,7 +273,11 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
         ("app/src/app/route/[pair]/page.tsx", "{v} routes where the"),
         ("app/src/lib/entityFacts.ts", "{v} of {sitemap_routes} routes"),
         ("app/src/lib/entityLink.ts", "{v} of {sitemap_routes} pairs"),
-        ("app/src/lib/routePair.test.ts", "{v} of {route_pairs_with_same_airport} routes"),
+        # Was registered against route_pairs_with_same_airport and read "215 of 23,167 routes"
+        # (#182). True of neither population: the 215 are pairs the sitemap SERVES, counted by
+        # a measure that excludes same-airport pairs, so 23,167 was a denominator the numerator
+        # is not drawn from -- and every other site states the same 215 over 22,635.
+        ("app/src/lib/routePair.test.ts", "{v} of {sitemap_routes} routes"),
         ("app/src/lib/routePair.ts", "{v} of {sitemap_routes} routes"),
         ("app/src/lib/search.test.ts", "{v} of {sitemap_routes} pairs"),
         ("app/src/lib/sitemap.ts", "{v} of {sitemap_routes} pairs"),
@@ -327,16 +357,135 @@ ANCHORED: dict[str, tuple[tuple[str, str], ...]] = {
         ("docs/product/features.md", "{v} same-airport pairs"),
         ("pipeline/pivot.py", "{v} airports"),
     ),
+    # #182. The share, not just the count: invariants.md and pipeline.md each stated `0.95%`
+    # and then `0.7%` for the same 215 pairs, two lines apart, and no gate could see either.
+    "route_order_disagreeing_pct": (
+        ("app/src/lib/routePair.ts", "({v:.2f}%, excluding"),
+        ("app/src/lib/routePair.ts", "wrong route for that {v:.2f}%"),
+        ("docs/architecture/pipeline.md", "({v:.2f}%, excluding"),
+        ("docs/architecture/pipeline.md", "wrong route for that {v:.2f}%"),
+        ("docs/data/invariants.md", "({v:.2f}%, excluding"),
+        ("docs/data/invariants.md", "wrong route for that {v:.2f}%"),
+    ),
+    "crossover_routes_pct": (
+        (
+            "app/src/lib/chart/crossover.ts",
+            "{crossover_routes} of {sitemap_routes} routes ({v:.1f}%)",
+        ),
+        (
+            "docs/design/system.md",
+            "**{crossover_routes} of {sitemap_routes} routes ({v:.1f}%)**",
+        ),
+    ),
+    "crossover_routes_none_pct": (
+        ("app/src/lib/chart/crossover.ts", "{crossover_routes_none} ({v:.1f}%)"),
+        (
+            "app/src/lib/chart/crossover.test.ts",
+            "{crossover_routes_none} of {sitemap_routes} routes ({v:.1f}%)",
+        ),
+        ("docs/design/system.md", "**{crossover_routes_none} ({v:.1f}%)**"),
+    ),
+    # THE CARRIER GAUGE SPREAD (#182), and the reason this module learned decimals. `172.3`
+    # was stated in seven files as the trailing-12 figure for a ramp the chart draws over the
+    # FULL window, and it had moved to 172.2 besides -- two different wrongnesses in one
+    # number, neither visible to a gate. Every site now quotes the window it describes.
+    "gauge_a321nxlr_full_low": (
+        ("app/src/app/aircraft/[name]/page.tsx", "B6's {v:.1f}"),
+        ("app/src/components/AircraftMixChart.test.tsx", "B6's {v:.1f}"),
+        ("app/src/components/AircraftMixChart.tsx", "B6's {v:.1f}"),
+        ("app/src/lib/chart/aircraftMix.ts", "B6 {v:.1f} seats per departure"),
+        ("app/src/lib/chart/aircraftMix.ts", "A321nXLR spans B6 {v:.1f}"),
+        ("docs/data/invariants.md", "(B6 {v:.1f}"),
+        ("docs/design/system.md", "| A321nXLR | B6 {v:.1f} |"),
+        ("docs/product/features.md", "B6 at {v:.1f} seats/departure"),
+    ),
+    "gauge_a321nxlr_full_high": (
+        ("app/src/app/aircraft/[name]/page.tsx", "F9 fits {v:.1f} seats"),
+        ("app/src/components/AircraftMixChart.test.tsx", "F9 fits {v:.1f} seats"),
+        ("app/src/components/AircraftMixChart.tsx", "F9 {v:.1f} seats in"),
+        ("app/src/lib/chart/aircraftMix.ts", "departure to F9 {v:.1f}"),
+        ("app/src/lib/chart/aircraftMix.ts", "-> F9 {v:.1f}"),
+        ("docs/data/invariants.md", "→ F9 {v:.1f})"),
+        ("docs/design/system.md", "| F9 {v:.1f} |"),
+        ("docs/product/features.md", "F9 at {v:.1f}"),
+    ),
+    "gauge_a321nxlr_full_spread": (
+        ("app/src/lib/chart/aircraftMix.ts", "({v:.1f} seats,"),
+        ("docs/design/system.md", "**{v:.1f} seats ({gauge_a321nxlr_full_spread_pct:.0f}%)**"),
+    ),
+    "gauge_a321nxlr_full_spread_pct": (
+        ("app/src/app/aircraft/[name]/page.tsx", "a {v:.0f}% spread"),
+        ("app/src/lib/chart/aircraftMix.ts", "seats, {v:.0f}%,"),
+        ("docs/product/features.md", "a {v:.0f}% spread"),
+    ),
+    "gauge_a320_12_full_low": (
+        ("app/src/lib/chart/aircraftMix.ts", "A320-1/2 spans MX {v:.1f}"),
+        ("docs/design/system.md", "| A320-1/2 | MX {v:.1f} |"),
+    ),
+    "gauge_a320_12_full_high": (
+        ("app/src/lib/chart/aircraftMix.ts", "MX {gauge_a320_12_full_low:.1f} -> G4 {v:.1f}"),
+        ("docs/design/system.md", "| G4 {v:.1f} |"),
+    ),
+    "gauge_a320_12_full_spread": (
+        ("docs/design/system.md", "| G4 {gauge_a320_12_full_high:.1f} | {v:.1f} |"),
+    ),
+    "gauge_b737_8_full_low": (
+        ("app/src/app/aircraft/[name]/page.test.tsx", "down to AS {v:.1f}"),
+        ("app/src/lib/chart/aircraftMix.ts", "B737-8 spans"),
+        ("app/src/lib/chart/aircraftMix.ts", "AS {v:.1f} -> XP"),
+        ("docs/design/system.md", "| B737-8 | AS {v:.1f} |"),
+    ),
+    "gauge_b737_8_full_high": (
+        ("app/src/lib/chart/aircraftMix.ts", "-> XP {v:.1f}"),
+        ("docs/design/system.md", "| XP {v:.1f} |"),
+    ),
+    "gauge_b737_8_full_spread": (
+        ("docs/design/system.md", "| XP {gauge_b737_8_full_high:.1f} | {v:.1f} |"),
+    ),
+    # The window every gauge figure above is measured over, bound to the dataset rather than
+    # typed: it was written as `2026-04` in three files on a 2026-06 warehouse, which is what
+    # made "the trailing 12" and "the full window" indistinguishable to a reader.
+    "max_year_month": (
+        ("app/src/lib/chart/aircraftMix.ts", "full window 2015-01..{v}"),
+        ("docs/design/system.md", "full window `2015-01 → {v}`"),
+        ("docs/product/features.md", "full window 2015-01 → {v}"),
+    ),
 }
 
 
-def _fmt(template: str, value: int) -> str:
+class _NeedleFormat(string.Formatter):
+    """How a measure renders inside a needle.
+
+    With no format spec a value renders the way this repo WRITES it: an int in its comma form,
+    a string (`max_year_month`) as itself. A DECIMAL has no such default and must carry an
+    explicit spec -- `{v:.1f}`, `{v:.0f}` -- for two reasons. A bare `{v}` on 175.9158 would
+    render the full binary expansion and match nothing, which is a red that says nothing about
+    the prose. And the places are the ASSERTION: the gauge figures this gate covers are quoted
+    to one decimal, so a needle rendering `176` would accept `176.0`, `175.9` and `176.4`
+    alike, and the wrong tenth -- the exact defect #182 was opened for -- would pass silently.
+    An unspecced decimal is therefore refused rather than defaulted."""
+
+    def format_field(self, value: Any, spec: str) -> str:
+        if spec:
+            return format(value, spec)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return f"{value:,}"
+        if isinstance(value, str):
+            return value
+        raise ValueError(
+            f"{value!r} is a decimal measure, so its needle must state the places it is "
+            f"written to (e.g. '{{v:.1f}}'). A bare '{{v}}' renders the binary expansion, "
+            f"and a coarser spec would let a wrong decimal pass."
+        )
+
+
+def _fmt(template: str, value: Any) -> str:
     """Render a needle. `{v}` is the measure's own value; any other `{name}` is another
     measure, so a phrase like `215 of 22,635` moves in BOTH of its halves when the dataset
     does -- a needle that hard-coded the denominator would be a stale literal inside the very
     gate that exists to catch stale literals."""
-    others = {k: f"{n:,}" for k, n in MEASURES.items() if isinstance(n, int)}
-    return template.format(v=f"{value:,}", **others)
+    others = {k: n for k, n in MEASURES.items() if isinstance(n, int | float | str)}
+    return _NeedleFormat().vformat(template, (), {**others, "v": value})
 
 
 def _flat(text: str) -> str:
@@ -405,6 +554,25 @@ def test_no_unregistered_file_states_a_gated_value():
                     f"{rel} states {want} ({key}) but is not registered in STATED, so nothing "
                     f"would catch it going stale on the next refresh. Add it to the manifest."
                 )
+
+
+def test_a_decimal_needle_must_state_the_places_it_is_written_to():
+    """The half of the decimal support that no manifest entry can prove.
+
+    `_fmt("{v}", 175.9158)` rendering `176` would make every gauge needle accept any figure
+    that rounds to the same integer -- and #182 was opened for a stated `172.3` against a
+    measured `172.2`, a defect exactly one tenth wide. So a bare `{v}` on a float is refused
+    rather than defaulted, and the spec-carrying forms render what the prose writes."""
+    import pytest
+
+    with pytest.raises(ValueError, match="must state the places"):
+        _fmt("{v}", 175.9158)
+    assert _fmt("{v:.1f}", 175.9158) == "175.9"
+    assert _fmt("{v:.2f}", 0.9499) == "0.95"
+    assert _fmt("{v:.0f}", 30.7356) == "31"
+    # Ints and strings keep rendering the way the repo writes them, with no spec at all.
+    assert _fmt("{v} of {sitemap_routes}", 215) == f"215 of {MEASURES['sitemap_routes']:,}"
+    assert _fmt("{v}", MEASURES["max_year_month"]) == MEASURES["max_year_month"]
 
 
 def test_the_manifest_names_only_real_measures():

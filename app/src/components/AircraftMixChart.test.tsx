@@ -513,9 +513,9 @@ describe("AircraftMixChart stacked by operating carrier", () => {
 
   it("says what the ramp means for THIS stack, which is not what it means across types", () => {
     // Across aircraft types a darker band is bigger metal. Across carriers of ONE type it is
-    // the SAME metal fitted denser -- measured, F9 fits 230.0 seats into the A321 to B6's
-    // 172.3. Breaks if the key's note stays "smallest metal", which would describe an encoding
-    // this chart is not drawing.
+    // the SAME metal fitted denser -- measured over the full window, F9 fits 230.0 seats into
+    // the A321 to B6's 175.9. Breaks if the key's note stays "smallest metal", which would
+    // describe an encoding this chart is not drawing.
     const key = chart(FLEET_BY_CARRIER, "B737-8", BY_CARRIER).querySelector(".ckey")!.textContent;
     expect(key).toContain("least dense cabin");
     expect(key).not.toContain("smallest metal");

@@ -210,3 +210,38 @@ def test_route_order_halves_account_for_every_pair(con):
     assert (
         m["route_order_agreeing_pairs"] + m["route_order_disagreeing_pairs"] == m["sitemap_routes"]
     )
+
+
+def test_crossover_halves_account_for_every_route():
+    """changed + never-changed = sitemap_routes, with BOTH halves measured independently.
+
+    Same shape as the route-order pair above, and for the same reason (#182). The sentence
+    these two figures carry -- `crossover.ts`'s "`null` is an ordinary outcome" -- is a claim
+    about WHICH half is larger, and it shipped bolded above evidence saying the opposite. A
+    derived complement would move with whichever half was measured, so inverting the predicate
+    would swap the two figures and leave the prose reading correctly about the wrong one.
+
+    It also proves the two predicates partition the population: a route whose every year is
+    tied, unknowable or flown empty has no led year at all, belongs to the never-changed half,
+    and a shortfall here is the only thing that would show it had fallen out of both.
+    """
+    m = json.loads(STATS_PATH.read_text())["measures"]
+    assert m["crossover_routes"] + m["crossover_routes_none"] == m["sitemap_routes"]
+
+
+def test_the_gauge_spread_measures_are_decimals_with_a_real_spread():
+    """The gauge figures are DERIVED measures -- seats per departure -- and the artifact's
+    first non-integers.
+
+    `low < high` is the claim the /aircraft ramp rests on: if the lightest and darkest operator
+    of an airframe had the same gauge, ordering the bands by it would encode nothing and the
+    legend rail would be describing a ramp that is not there. Typed too: an int here would mean
+    a measure had started returning a count, and every needle quoting it to one decimal would
+    then be pinning a number that cannot carry one.
+    """
+    m = json.loads(STATS_PATH.read_text())["measures"]
+    for key in ("a321nxlr", "a320_12", "b737_8"):
+        low, high = m[f"gauge_{key}_full_low"], m[f"gauge_{key}_full_high"]
+        assert isinstance(low, float) and isinstance(high, float), key
+        assert 0 < low < high, key
+        assert m[f"gauge_{key}_full_spread"] == round(high - low, 4), key

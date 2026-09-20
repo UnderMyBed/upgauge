@@ -473,28 +473,20 @@ answers the better question — who adopted this type, and when. `/route`, `/air
 same airframe very differently, so ordering carrier bands by seats per departure is a real
 encoding rather than a decorative reuse:
 
-**Over the full window `2015-01 → 2026-04`, which is the window `/aircraft` actually draws:**
+**Over the full window `2015-01 → 2026-06`, which is the window `/aircraft` actually draws**,
+across every operating carrier that filed the type, however few departures it flew:
 
 | type | lightest | darkest | spread |
 |---|---|---|---|
-| A321nXLR | B6 176.0 | F9 230.0 | **54.0 seats (31%)** |
-| A320-1/2 | MX 129.2 | G4 181.7 | 52.5 |
-| B737-8 | AS 159.8 | XP 187.7 | 27.9 |
+| A321nXLR | B6 175.9 | F9 230.0 | **54.1 seats (31%)** |
+| A320-1/2 | MX 129.3 | G4 181.6 | 52.4 |
+| B737-8 | AS 159.8 | XP 187.5 | 27.6 |
 
-**Over the trailing 12 months `2025-05 → 2026-04`** — the window originally measured here, and
-the source of the `172.3 → 230.0` pair quoted in prose elsewhere in this repo:
-
-| type | lightest | darkest | spread |
-|---|---|---|---|
-| A321nXLR | B6 172.3 | F9 230.0 | **57.7 seats (33%)** |
-| A320-1/2 | AA 150.0 | F9 184.1 | 34.1 |
-| B737-8 | AS 159.5 | SY 186.0 | 26.5 |
-
-Both are given because neither alone is the whole claim: the table justifies an encoding the
-chart draws over the **full** window, while the figure everyone quotes was measured over the
-**trailing 12**, where SY rather than XP tops the B737-8. The spread survives either way, which
-is the point — but an unlabelled row is not evidence (`docs/data/invariants.md` § Route identity
-records the same lesson about the same-airport counts).
+**A gauge figure names its window, or it is evidence for nothing.** The page's trailing-12
+table covers a different span from its chart, and the ranking moves with it: SY is the densest
+B737-8 operator over the trailing 12, XP over the full window. Same airframe, same measure,
+different answer (`docs/data/invariants.md` § Route identity records the same lesson about the
+same-airport counts).
 
 **But it is not the same claim, so it must not carry the same words.** Across aircraft types a
 darker band is *bigger metal*. Across carriers of one type it is the *same* metal fitted denser —
@@ -509,9 +501,8 @@ in one object, deliberately: splitting them is how a chart ends up stacked by ca
 title and a legend that both say "aircraft type".
 
 **The two orderings do not become one just because the bands changed.** On the 737-800 they are
-exact *reverses* — Southwest flies the most of them **and** the densest cabin (593.6 M seats,
-175.0 seats/departure), Alaska the fewest and the least dense (104.2 M, 159.8) — so a single sort
-mislabels all five swatches rather than four of five. That is the fixture the implementation is
+exact *reverses* — Southwest flies the most of them **and** the densest cabin, Alaska the fewest
+and the least dense — so a single sort mislabels all five swatches rather than four of five. That is the fixture the implementation is
 pinned against, precisely because a fixture whose two orders coincide lets a single sort pass.
 
 ### Multi-series lines
@@ -535,12 +526,14 @@ below — it binds every time-series mark, not only lines.
 - **Annotations must be derived, never hand-written.** The mockup's *"A321 overtakes
   737-800 · 2018"* is computed from the yearly mix (2017: 84% vs 15%; 2018: 51% vs 48%). A
   hand-typed annotation rots silently the first month the data moves.
-  **No annotation is a designed state, not a gap.** Measured: only **12,416 of 22,919 routes
-  (54%)** ever change their #1 type, and JFK–LAX — the flagship example — is not one of them.
-  So nearly half of all charts carry none, and the chart must never manufacture one, never fall
-  back to labelling the largest type (that is not an event, it would appear on every chart, and
-  it teaches readers to ignore annotations), and never break a tie to produce one. Three rules
-  decide what counts, all of them suppressive: **a tie has no leader** (breaking it gives the
+  **No annotation is a designed state, not a gap.** Measured over the full window, on the
+  annotation's own predicate — the #1 type by seats in a year differs from the previous *led*
+  year's — it fires on **12,193 of 22,635 routes (53.9%)**, and JFK–LAX — the flagship
+  example — is not one of them. The other **10,442 (46.1%)** carry none, and the chart must
+  never manufacture one, never fall back to labelling the largest type (that is not an event,
+  it would appear on every chart, and it teaches readers to ignore annotations), and never
+  break a tie to produce one. Three rules decide what counts, all of them suppressive: **a
+  tie has no leader** (breaking it gives the
   annotation a direction the reader cannot see, which flips when the row order changes); **a
   leader must have flown** (T-100's zero-seat no-service filings are ordinary, and "X overtakes
   Y" drawn from two zeroes is a claim about nothing); and **a year with no leader is skipped,

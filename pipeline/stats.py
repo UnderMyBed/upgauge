@@ -66,6 +66,19 @@ _SCALAR = frozenset(
         "route_health_no_schedule",
         "route_health_null_overlap",
         "route_health_same_airport_rows",
+        # The crossover annotation's population and its complement (#182). Both measured, so
+        # the identity crossover + none = sitemap_routes cross-checks the predicate.
+        "crossover_routes",
+        "crossover_routes_none",
+        # DECIMAL measures (#182): the carrier gauge spread on one airframe. Scalars like the
+        # rest -- the only thing new is the type, which every consumer must render with an
+        # explicit decimal spec (pipeline/tests/test_stated_counts.py).
+        "gauge_a321nxlr_full_low",
+        "gauge_a321nxlr_full_high",
+        "gauge_a320_12_full_low",
+        "gauge_a320_12_full_high",
+        "gauge_b737_8_full_low",
+        "gauge_b737_8_full_high",
     }
 )
 
@@ -134,11 +147,12 @@ def _derive(measures: dict[str, Any]) -> None:
     `+ 5` is /watch and its four presets: entity pages that appear in the sitemap but have no OG
     card, and therefore the one asymmetry between the two totals.
 
-    Nothing else belongs here. `route_order_agreeing_pairs` was derived this way and had to be
-    moved back into SQL: computing it as `sitemap_routes - disagreeing` made the identity that
-    checks the pair vacuous, and reversing the comparison in the disagreeing measure left every
-    test green. If a value can be measured, measure it -- a derived value cannot cross-check
-    the thing it was derived from.
+    Only totals and RATIOS of measures belong here. `route_order_agreeing_pairs` was derived
+    this way and had to be moved back into SQL: computing it as `sitemap_routes - disagreeing`
+    made the identity that checks the pair vacuous, and reversing the comparison in the
+    disagreeing measure left every test green. If a value can be measured, measure it -- a
+    derived value cannot cross-check the thing it was derived from. A percentage is the
+    exception the block below states, because it has nothing to cross-check against.
     """
     entity = sum(
         measures[k]
@@ -148,6 +162,27 @@ def _derive(measures: dict[str, Any]) -> None:
     measures["sitemap_urls_total"] = entity + 5
     measures["sitemap_route_and_airport_urls"] = (
         measures["sitemap_routes"] + measures["sitemap_airports"]
+    )
+
+    # SHARES AND SPREADS (#182). A percentage is the one thing that genuinely cannot be
+    # measured independently: it is the two figures beside it and nothing else, so a SQL
+    # measure for it could disagree with its own numerator and denominator -- the drift this
+    # module exists to remove. The figures it divides are all measured.
+    #
+    # Rounded to 4 places for the reason stats_counts.sql states about the gauge measures: a
+    # parallel SUM over DOUBLEs is not bit-stable, and an artifact that diffs on a rerun with
+    # no data change trains a reader to ignore the diff.
+    def pct(part: str, whole: str) -> float:
+        return round(100.0 * measures[part] / measures[whole], 4)
+
+    measures["route_order_disagreeing_pct"] = pct("route_order_disagreeing_pairs", "sitemap_routes")
+    measures["crossover_routes_pct"] = pct("crossover_routes", "sitemap_routes")
+    measures["crossover_routes_none_pct"] = pct("crossover_routes_none", "sitemap_routes")
+    for key in ("a321nxlr", "a320_12", "b737_8"):
+        low, high = measures[f"gauge_{key}_full_low"], measures[f"gauge_{key}_full_high"]
+        measures[f"gauge_{key}_full_spread"] = round(high - low, 4)
+    measures["gauge_a321nxlr_full_spread_pct"] = round(
+        100.0 * measures["gauge_a321nxlr_full_spread"] / measures["gauge_a321nxlr_full_low"], 4
     )
 
 

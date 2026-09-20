@@ -185,8 +185,9 @@ export async function AircraftView({
     // BY_CARRIER, and this is the point of the page: stacking by aircraft type here would
     // draw ONE band, since the page IS one aircraft type. Stacked by operating carrier the
     // ramp isolates CONFIGURATION choice from FLEET choice -- something /route cannot
-    // separate -- and it still encodes something real (measured: F9 fits 230.0 seats into
-    // the A321 to B6's 172.3, a 33% spread on identical metal).
+    // separate -- and it still encodes something real (measured over the full window drawn
+    // below: F9 fits 230.0 seats into the A321 to B6's 175.9, a 31% spread on identical
+    // metal).
     fetchAircraftMix(filters, EARLIEST_MONTH, asOf, BY_CARRIER),
     // `/carrier?type=` and `/aircraft?carrier=` are ONE view entered from two sides -- same
     // query, same renderer, same cap -- so this is `fetchCarrierTypeNetwork` with the two

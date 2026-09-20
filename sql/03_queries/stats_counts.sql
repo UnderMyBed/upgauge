@@ -203,3 +203,146 @@ WHERE p12_months_present = 0 AND t12_departures_scheduled = 0;
 -- name: route_health_same_airport_rows
 SELECT count(*) FROM mart_route_health WHERE route_key_low = route_key_high;
 
+
+-- name: crossover_routes
+-- Routes whose #1 aircraft type by seats CHANGES at least once: the population the chart's
+-- crossover annotation (app/src/lib/chart/crossover.ts) can fire on at all. The predicate is
+-- that function's, re-stated in SQL rather than approximated, because an approximation would
+-- justify a rendering rule it does not describe:
+--   * the year x type cell is `SUM(seats) FILTER (WHERE NOT is_quarantined)`, so a type whose
+--     every filing that year was quarantined is NULL -- UNKNOWN, never 0
+--   * a year holding any such NULL type has NO leader: no other type can be shown to have
+--     beaten a size nobody has
+--   * a year whose largest type flew 0 seats has no leader (T-100's no-service filings)
+--   * a TIE at the top has no leader
+--   * a year with no leader is SKIPPED, not treated as a wall -- `lag()` over the LED years
+--     compares A to B across a tied year between them, which is what a crossover looks like
+--     mid-transition
+-- Same-airport pairs are excluded, so the denominator is sitemap_routes: the annotation is
+-- quoted as a share of ROUTES, and a same-airport pair is not one (CLAUDE.md).
+WITH cell AS (
+    SELECT route_key_low AS lo, route_key_high AS hi, year, aircraft_type AS code,
+           SUM(seats) FILTER (WHERE NOT is_quarantined) AS seats
+    FROM fct_segment_month
+    WHERE route_key_low <> route_key_high
+    GROUP BY 1, 2, 3, 4),
+yr AS (
+    SELECT lo, hi, year, max(seats) AS top, count(*) FILTER (WHERE seats IS NULL) AS unknown
+    FROM cell GROUP BY 1, 2, 3),
+led AS (
+    SELECT c.lo, c.hi, c.year, min(c.code) AS code
+    FROM cell c JOIN yr y ON y.lo = c.lo AND y.hi = c.hi AND y.year = c.year
+    WHERE y.unknown = 0 AND y.top > 0 AND c.seats = y.top
+    GROUP BY 1, 2, 3
+    HAVING count(*) = 1),
+seq AS (
+    SELECT lo, hi, code, lag(code) OVER (PARTITION BY lo, hi ORDER BY year) AS prev FROM led)
+SELECT count(*) FROM (SELECT DISTINCT lo, hi FROM seq WHERE prev IS NOT NULL AND code <> prev);
+
+-- name: crossover_routes_none
+-- The complement, MEASURED rather than subtracted, for the reason route_order_agreeing_pairs
+-- is: a derived complement cannot cross-check the thing it was derived from. Inverting the
+-- predicate above would swap the two figures and leave every assertion green, which is the
+-- exact shape of the bug this pair exists to catch. A route with NO led year at all -- every
+-- year tied, unknowable or flown empty -- belongs here, since it too renders no annotation.
+WITH cell AS (
+    SELECT route_key_low AS lo, route_key_high AS hi, year, aircraft_type AS code,
+           SUM(seats) FILTER (WHERE NOT is_quarantined) AS seats
+    FROM fct_segment_month
+    WHERE route_key_low <> route_key_high
+    GROUP BY 1, 2, 3, 4),
+yr AS (
+    SELECT lo, hi, year, max(seats) AS top, count(*) FILTER (WHERE seats IS NULL) AS unknown
+    FROM cell GROUP BY 1, 2, 3),
+led AS (
+    SELECT c.lo, c.hi, c.year, min(c.code) AS code
+    FROM cell c JOIN yr y ON y.lo = c.lo AND y.hi = c.hi AND y.year = c.year
+    WHERE y.unknown = 0 AND y.top > 0 AND c.seats = y.top
+    GROUP BY 1, 2, 3
+    HAVING count(*) = 1),
+seq AS (
+    SELECT lo, hi, code, lag(code) OVER (PARTITION BY lo, hi ORDER BY year) AS prev FROM led),
+changed AS (SELECT DISTINCT lo, hi FROM seq WHERE prev IS NOT NULL AND code <> prev)
+SELECT count(*) FROM (
+    SELECT DISTINCT route_key_low AS lo, route_key_high AS hi
+    FROM fct_segment_month
+    WHERE route_key_low <> route_key_high) p
+WHERE NOT EXISTS (SELECT 1 FROM changed ch WHERE ch.lo = p.lo AND ch.hi = p.hi);
+
+-- name: gauge_a321nxlr_full_low
+-- SHARED BY ALL SIX GAUGE MEASURES BELOW. The carrier gauge spread on one airframe -- the evidence that /aircraft's colour ramp encodes
+-- something real rather than reusing /route's. THESE ARE DECIMALS, and the first non-integer
+-- measures in the artifact, so two things are stated once here for all six.
+--
+-- WINDOW: the FULL one, 2015-01 -> max(year_month), which is what /aircraft's chart actually
+-- draws (EARLIEST_MONTH -> asOf, app/src/app/aircraft/[name]/page.tsx). The trailing-12 window
+-- the page's TABLE uses ranks the carriers differently -- SY tops the B737-8 there, XP here --
+-- so a gauge figure that does not name its window is not evidence for anything. No date
+-- predicate appears below because the full window IS the whole fact table.
+--
+-- PREDICATE: every operating carrier that filed the type, however few departures it flew. MX's
+-- 51 A320-1/2 departures set that type's light end, and narrowing to the banded carriers would
+-- be measuring the chart's top five instead of the configuration spread the sentence claims.
+-- Ratio of sums per carrier, never an average of gauges (CLAUDE.md), and quarantine-filtered on
+-- both halves so numerator and denominator come from the identical row set -- the same
+-- expression meta_pivot_measures gives `avg_gauge`.
+--
+-- min()/max() IGNORE a carrier whose every filing was quarantined (gauge NULL). That is the
+-- right verdict -- an unknowable gauge is not the smallest cabin -- but it is a silent one, so
+-- it is written down here rather than discovered later.
+--
+-- round(..., 4) IS NOT COSMETIC. DuckDB sums DOUBLEs in parallel, so the last bits of a SUM
+-- depend on how the scan was partitioned -- an unrounded ratio would diff `make stats` on a rerun
+-- with no data change, and a diff that means nothing is a diff nobody reads.
+SELECT round(min(g), 4) FROM (
+    SELECT SUM(f.seats) FILTER (WHERE NOT f.is_quarantined)::DOUBLE
+           / NULLIF(SUM(f.departures_performed) FILTER (WHERE NOT f.is_quarantined), 0) AS g
+    FROM fct_segment_month f
+    JOIN dim_aircraft_type t ON t.code = f.aircraft_type
+    WHERE t.short_name = 'A321nXLR'
+    GROUP BY f.op_airline_id);
+
+-- name: gauge_a321nxlr_full_high
+SELECT round(max(g), 4) FROM (
+    SELECT SUM(f.seats) FILTER (WHERE NOT f.is_quarantined)::DOUBLE
+           / NULLIF(SUM(f.departures_performed) FILTER (WHERE NOT f.is_quarantined), 0) AS g
+    FROM fct_segment_month f
+    JOIN dim_aircraft_type t ON t.code = f.aircraft_type
+    WHERE t.short_name = 'A321nXLR'
+    GROUP BY f.op_airline_id);
+
+-- name: gauge_a320_12_full_low
+SELECT round(min(g), 4) FROM (
+    SELECT SUM(f.seats) FILTER (WHERE NOT f.is_quarantined)::DOUBLE
+           / NULLIF(SUM(f.departures_performed) FILTER (WHERE NOT f.is_quarantined), 0) AS g
+    FROM fct_segment_month f
+    JOIN dim_aircraft_type t ON t.code = f.aircraft_type
+    WHERE t.short_name = 'A320-1/2'
+    GROUP BY f.op_airline_id);
+
+-- name: gauge_a320_12_full_high
+SELECT round(max(g), 4) FROM (
+    SELECT SUM(f.seats) FILTER (WHERE NOT f.is_quarantined)::DOUBLE
+           / NULLIF(SUM(f.departures_performed) FILTER (WHERE NOT f.is_quarantined), 0) AS g
+    FROM fct_segment_month f
+    JOIN dim_aircraft_type t ON t.code = f.aircraft_type
+    WHERE t.short_name = 'A320-1/2'
+    GROUP BY f.op_airline_id);
+
+-- name: gauge_b737_8_full_low
+SELECT round(min(g), 4) FROM (
+    SELECT SUM(f.seats) FILTER (WHERE NOT f.is_quarantined)::DOUBLE
+           / NULLIF(SUM(f.departures_performed) FILTER (WHERE NOT f.is_quarantined), 0) AS g
+    FROM fct_segment_month f
+    JOIN dim_aircraft_type t ON t.code = f.aircraft_type
+    WHERE t.short_name = 'B737-8'
+    GROUP BY f.op_airline_id);
+
+-- name: gauge_b737_8_full_high
+SELECT round(max(g), 4) FROM (
+    SELECT SUM(f.seats) FILTER (WHERE NOT f.is_quarantined)::DOUBLE
+           / NULLIF(SUM(f.departures_performed) FILTER (WHERE NOT f.is_quarantined), 0) AS g
+    FROM fct_segment_month f
+    JOIN dim_aircraft_type t ON t.code = f.aircraft_type
+    WHERE t.short_name = 'B737-8'
+    GROUP BY f.op_airline_id);

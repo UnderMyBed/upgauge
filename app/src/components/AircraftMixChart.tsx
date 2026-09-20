@@ -88,8 +88,9 @@ export function AircraftMixChart({
         ))}
         {/* What the ramp MEANS, and it is not the same claim on both stacks: across aircraft
             types a darker band is bigger metal, across carriers of one type it is the same
-            metal fitted denser (F9 230.0 seats in the A321 to B6's 172.3, measured). The
-            sentence therefore comes from the dimension, never from here. */}
+            metal fitted denser (measured over the chart's own full window, F9 230.0 seats in
+            the A321 to B6's 175.9). The sentence therefore comes from the dimension, never
+            from here. */}
         <span className="gnum">{dimension.rampNote}</span>
         {/* Stated on the chart, not only in the aria-label: a hole in a stacked area is easy
             to read as "flat and small" rather than "not filed", and the count is per-subject
