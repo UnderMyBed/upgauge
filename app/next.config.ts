@@ -24,6 +24,33 @@ const nextConfig: NextConfig = {
   // reads the raw query from a header -- neither works without the other, and a page can never
   // use `searchParams` for this. See docs/architecture/hosting.md § What `proxy.ts` owns.
   skipProxyUrlNormalize: true,
+
+  // A SECURITY CONTROL, not a tidy-up (#186). `/_next/image?url=<local path>` does not read a
+  // file: for any path `localPatterns` admits, `fetchInternalImage` calls the server's OWN
+  // request handler (node_modules/next/dist/server/image-optimizer.js --
+  // `handleRequest(mocked.req, mocked.res, parseReqUrl(href))`), so the PAGE RENDERS IN FULL,
+  // DuckDB reads included, and the buffer is refused for not being an image only afterwards.
+  // With no `images` block at all every local path is admitted by construction --
+  // shared/lib/match-local-pattern.js: "if the user didn't define localPatterns, we allow all
+  // local images" -- so the endpoint rendered any page on the site.
+  //
+  // That is the cost class #113, #117 and #172 closed, reached through the ONE prefix the edge
+  // deliberately leaves out: deploy/cloudflare/rate-limit.json excludes `/_next/` because a
+  // single real page view asks for more static chunks than 1 req/s allows, and every distinct
+  // `url=` is its own CDN key that misses. MEASURED on a served build 2026-09-19 with probes on
+  // `proxy()` and on db.ts's `connect()`: `?url=/airport/SEA` fired two proxy invocations and
+  // **24 DuckDB connections**, the same 24 a direct `GET /airport/SEA` makes; after this line,
+  // one invocation and zero. The app imports `next/image` nowhere, so nothing here needs the
+  // endpoint.
+  //
+  // `[]`, not a pattern set that "matches nothing": server/config.js APPENDS
+  // `/_next/static/media/**` and `/_next/static/immutable/media/**` to whatever array it is
+  // given, so static imports keep working and that append is also the residual this does not
+  // close (docs/architecture/hosting.md, which carries the measurement table and why
+  // `unoptimized: true` is the weaker of the two options). The refusal is `validateParams`'
+  // 400 `"url" parameter is not allowed`, emitted before anything is fetched -- the status is
+  // 400 either way, so app/smoke.sh § 8d asserts the BODY.
+  images: { localPatterns: [] },
 };
 
 export default nextConfig;
