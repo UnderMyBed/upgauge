@@ -630,6 +630,38 @@ rather than by a fixture, because a fallback-only surface makes the call site de
 **Re-derive at every grain the fold serves.** A footprint measured at one grain is not the
 footprint.
 
+**Every subject named above sits inside the trailing 12, so on the three surfaces converted so
+far the RENDERING rules are pinned with CONSTRUCTED rows, not with whichever page has the shape
+today.** A refresh walks the last filing out of the window, and a fixture pinned to it then passes
+against the very bug it guards without going red at the moment it stops testing anything.
+`app/src/lib/syntheticPivot.fixture.ts` substitutes a pivot's ROWS and nothing else: the subject,
+the column list, the id resolution and every consumer below `runPivot` stay real, so
+absence-not-zero, the disclosure and the withheld legend groups are asserted on a window no
+refresh can move. It is used by `/airport` (`app/src/app/airport/[code]/page.test.tsx`),
+`/aircraft` (its `page.test.tsx` and `opengraph-image.test.tsx`) and `/carrier`'s carrier×type
+network (`app/src/app/carrier/[code]/page.test.tsx`), and nowhere else.
+
+**The rest of this rule is still dataset-pinned, and each pin reddens for its own reason —
+triage the WINDOW before the rule.** Constructed rows cover rendering on those three surfaces
+only; they do not cover route grain, and they cover no query.
+
+- `app/src/lib/map/carrierTypeNetwork.test.ts` is the PRODUCER half: `fetchCarrierTypeNetwork(F4,
+  "489", …)` over a view whose every pair is wholly quarantined. Its window is the fixed literal
+  `2025-06`..`2026-05`, so an `asOf` advance leaves it alone — it reddens when BTS revises those
+  months, or when the dataset stops covering them.
+- `app/src/app/route/[pair]/page.test.tsx` pins a RENDERING rule — the `AET–AIN` strip and foot —
+  on a live subject, because route grain is not one of the three converted surfaces. That row
+  leaves the trailing 12 at asOf 2027-03.
+- `app/smoke.sh` is the served-build half, which proves a real page reaches the code path at all:
+  `AET–AIN` at asOf 2027-03, `OQZ` and `/aircraft/TRISLNDR`/`SHORT360` at asOf 2026-08. Each block
+  states its own expiry beside its needles.
+
+**The SQL half is proven only against live rows.** That a wholly-quarantined group's every
+`SUM(...) FILTER` arrives NULL is asserted by the producer test and the served-build blocks, never
+by a constructed row — constructing the rows is what removes the query from the test. Both remaining
+proofs fail loudly rather than silently, which is the split this mechanism intends: constructed rows
+for the rendering, real rows for the query.
+
 **Every wholly-quarantined page is contradicted by its own filing, not merely unstated.** Each of
 the 14 is a `zero_seats` quarantine — a filed seat count of 0 against departures that were
 *performed* — so a strip reading "0 departures" asserts the opposite of what BTS filed. **Never a

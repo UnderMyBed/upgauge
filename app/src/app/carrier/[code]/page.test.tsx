@@ -34,7 +34,22 @@ vi.mock("next/headers", async () => {
   // the bare canonical path with no stray `?`.
   return { headers: vi.fn(async () => new Headers({ [RAW_QUERY_HEADER]: "" })) };
 });
+
+// THE ROWS ARE THE FIXTURE, NOT THE (CARRIER, TYPE) PAIR. `syntheticPivot.fixture.ts` carries
+// the argument; the short form is that a view with a map and no arc is a SHAPE, and pinning it
+// to whichever pair has that shape today ties the fixture to the trailing 12, which moves.
+// `answer` is null for every test in this file but the one that sets it.
+const pivot = vi.hoisted(() => ({
+  answer: null as null | ((q: PivotQuery) => Record<string, unknown>[] | null),
+  hits: 0,
+}));
+vi.mock("@/lib/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  const { syntheticRunPivot } = await import("@/lib/syntheticPivot.fixture");
+  return { ...actual, runPivot: syntheticRunPivot(actual, pivot) };
+});
 import { describe, expect, it } from "vitest";
+import type { PivotQuery } from "@/lib/pivot/types";
 import { headers } from "next/headers";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
 import { render, screen } from "@testing-library/react";
@@ -1034,6 +1049,48 @@ function filteredCarrier(code: string, rawQuery: string) {
   return CarrierPage({ params: Promise.resolve({ code }) });
 }
 
+/** Every pair the carrier x type map would draw, wholly quarantined: the three measures NULL
+ * together, so `drawableRoutes` counts each in `quarantinedRoutes` and the map comes back with
+ * a disclosure and no segment. Real airport ids, so the pairs are the shape the pivot returns
+ * -- nothing resolves coordinates for them, because a map with no drawable route looks none up.
+ *
+ * The discriminator names the map's query exactly: the undirected route as its only dimension
+ * WITH an aircraft-type filter. The Top-N routes table one member along in the same
+ * `Promise.all` also groups by `route`, and carries no type filter -- so the table, the chart
+ * and both Top-N tables on this page stay real. */
+function whollyQuarantinedNetwork(q: PivotQuery): Record<string, unknown>[] | null {
+  if (q.dimensions.length !== 1 || q.dimensions[0] !== "route") return null;
+  if (!q.filters.some(([key]) => key === "aircraft_type")) return null;
+  return [
+    [11844, 13924],
+    [13924, 14057],
+    [14057, 14747],
+  ].map(([low, high]) => ({
+    route_key_low: low,
+    route_key_high: high,
+    seats: null,
+    passengers: null,
+    departures_performed: null,
+    quarantined_rows: 1,
+    quarantine_reasons: "zero_seats",
+    active_months: 0,
+  }));
+}
+
+/** One render of the real filtered page over a network whose every pair is quarantined. The
+ * hit count is the harness's own check: one pivot of the five this page issues, the map's. */
+async function quarantinedNetworkView() {
+  pivot.answer = whollyQuarantinedNetwork;
+  pivot.hits = 0;
+  try {
+    const view = await filteredCarrier("F4", "type=ISLANDER");
+    expect(pivot.hits).toBe(1);
+    return view;
+  } finally {
+    pivot.answer = null;
+  }
+}
+
 describe("/carrier/<code>: the legend rail's arc group follows the ARCS (#123)", () => {
   // EVERY ROW IN THAT GROUP DESCRIBES AN ARC -- width by seats, dashed below the load-factor
   // floor, dotted-muted below the departure floor, and why a cross-panel arc is a straight line.
@@ -1041,15 +1098,15 @@ describe("/carrier/<code>: the legend rail's arc group follows the ARCS (#123)",
   // segments when every route of a pair is quarantined, so its disclosure reaches the reader --
   // `F4 x SHORT360` is that view, pinned at the producer by `carrierTypeNetwork.test.ts`.
   //
-  // DATASET-PINNED SUBJECT, and it expires: F4's SHORT360 filings are all 2025-08 and leave the
-  // trailing 12 at asOf 2026-08, so when this reddens, re-derive a carrier x type whose
-  // trailing-12 groups are all quarantined or same-airport and move the fixture there.
+  // THE ROWS ARE THE FIXTURE, NOT THE (CARRIER, TYPE) PAIR, and the subject is deliberately the
+  // SAME `F4` x `ISLANDER` the third test below draws three arcs on: the two differ in nothing
+  // but whether the pairs are quarantined, so neither can pass for a reason the other shares.
   //
   // Asserted as an ABSENCE, because the presence form passes under the bug. And per CALL SITE:
   // each page decides for itself what to pass, so reverting one is a live defect on that surface
   // alone. Mutant: pass `hasMap` back to `<LegendRail map={...}>` here and this goes red.
   it("renders NO arc-rendering group when no arc was drawn", async () => {
-    const { container } = render(await filteredCarrier("F4", "type=SHORT360"));
+    const { container } = render(await quarantinedNetworkView());
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).not.toContain("Arc rendering");
     expect(rail.textContent).not.toContain("width scales with seats");
@@ -1058,6 +1115,11 @@ describe("/carrier/<code>: the legend rail's arc group follows the ARCS (#123)",
     expect(container.querySelector(".map svg[role='img']")).not.toBeNull();
     expect(container.querySelectorAll("polyline").length).toBe(0);
     expect(rail.textContent).toContain("Gauge rail");
+    // WHICH DISJUNCT IS FALSE, named rather than left to the polyline count: `arcsDrawn` here is
+    // `typeMap draws || any diff panel draws`, and this fixture has to have BOTH halves false
+    // for the absence above to be the type map's doing. F4 has no diff panel at all (the third
+    // test below varies exactly that axis), so the second half cannot be what refuses it.
+    expect(container.querySelectorAll('[data-testid="diff-panel"]').length).toBe(0);
   });
 
   it("DOES render it when arcs were drawn", async () => {
@@ -1069,10 +1131,11 @@ describe("/carrier/<code>: the legend rail's arc group follows the ARCS (#123)",
   it("DOES render it when only the TYPE MAP draws, and the diff map has no panel", async () => {
     // WHICH HALF OF THE DISJUNCTION REFUSES THIS FIXTURE. `arcsDrawn` on this page is
     // `typeMap draws || any diff panel draws`, and every other fixture here sits where the
-    // first half cannot be the reason: `F4 x SHORT360` has BOTH halves false, and an unfiltered
-    // `DL` has `typeMap === null`, so only the diff half can ever be true. Delete the type-map
-    // disjunct entirely and all of them stay green -- the guard is deletable, which is CLAUDE.md's
-    // "assert WHICH check refuses a fixture, not that something did".
+    // first half cannot be the reason: the constructed wholly-quarantined `F4 x ISLANDER`
+    // above has BOTH halves false, and an unfiltered `DL` has `typeMap === null`, so only the
+    // diff half can ever be true. Delete the type-map disjunct entirely and all of them stay
+    // green -- the guard is deletable, which is CLAUDE.md's "assert WHICH check refuses a
+    // fixture, not that something did".
     //
     // WHAT THIS FIXTURE VARIES: a carrier with ZERO diff panels whose filtered type map
     // nonetheless draws real arcs -- the one combination that isolates the first disjunct. F4

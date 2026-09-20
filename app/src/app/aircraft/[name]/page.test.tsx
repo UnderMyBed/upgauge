@@ -17,6 +17,21 @@ vi.mock("next/headers", async () => {
   // the bare canonical path with no stray `?`.
   return { headers: vi.fn(async () => new Headers({ [RAW_QUERY_HEADER]: "" })) };
 });
+
+// THE ROWS ARE THE FIXTURE, NOT THE AIRCRAFT TYPE. `syntheticPivot.fixture.ts` carries the
+// argument; the short form is that a wholly-quarantined window is a SHAPE, and pinning it to
+// whichever type happens to have that shape today ties the fixture to the trailing 12, which
+// moves. `answer` is null for every test in this file but the ones that set it, so every other
+// assertion here runs against the real warehouse exactly as before.
+const pivot = vi.hoisted(() => ({
+  answer: null as null | ((q: PivotQuery) => Record<string, unknown>[] | null),
+  hits: 0,
+}));
+vi.mock("@/lib/db", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/db")>();
+  const { syntheticRunPivot } = await import("@/lib/syntheticPivot.fixture");
+  return { ...actual, runPivot: syntheticRunPivot(actual, pivot) };
+});
 import { describe, expect, it } from "vitest";
 import { headers } from "next/headers";
 import { RAW_QUERY_HEADER } from "@/lib/rawQuery";
@@ -31,6 +46,7 @@ import { dataAsOf, loadAllowlist, runPivot } from "@/lib/db";
 import { resolveAircraftSlug } from "@/lib/aircraftSlug";
 import { resolveCarrierFilter } from "@/lib/map/mapFilter";
 import { AIRCRAFT_CARRIER_LIMIT, trailing12Query } from "@/lib/entityFacts";
+import type { PivotQuery } from "@/lib/pivot/types";
 
 /** `permanentRedirect`/`notFound` throw rather than return -- calling `AircraftPage` on a slug
  * that hits either branch rejects with that thrown Error. Same narrowing as
@@ -568,14 +584,8 @@ describe("/aircraft/<slug> network map on a type with nothing in the window", ()
 
 /** THE STAT STRIP AND THE FOOT ON AN UNKNOWABLE PAGE (#121), and this surface is the half the
  * issue never measured: it scoped the wholly-quarantined footprint at route grain only. At
- * aircraft grain, BTS types 201 and 489 have no un-quarantined filing in the trailing 12
- * either -- both F4 in 2025-08, 5 and 27 PERFORMED departures against a filed seat count of
- * zero. `/aircraft/TRISLNDR` and `/aircraft/SHORT360` rendered three fabricated zeros, so the
- * reachable footprint is 14 pages, not the route grain's 12.
- *
- * DATASET-PINNED SUBJECT, and it expires: TRISLNDR's trailing-12 filings are F4's two 2025-08
- * rows, which leave the window at asOf 2026-08, so when these redden, re-derive an aircraft type
- * with no un-quarantined trailing-12 filing and move the fixture there.
+ * aircraft grain a type whose every trailing-12 filing failed an invariant rendered three
+ * fabricated zeros in its strip.
  *
  * The strip is read as an ORDERED LIST, never searched for a dash: load factor and average gauge
  * rendered `—` under the bug too, so the buggy page read `0 · 0 · — · — · 0`. */
@@ -583,20 +593,85 @@ function statStrip(container: HTMLElement): string[] {
   return [...container.querySelectorAll(".stats .v")].map((n) => n.textContent ?? "");
 }
 
+const DL_ID = 19790;
+
+/** THE ROWS ARE THE FIXTURE, NOT THE TYPE. Both pivots an unfiltered /aircraft page issues,
+ * answered as a type whose every filing in the window was quarantined: one operating carrier,
+ * two filed months, every FILTERed sum NULL.
+ *
+ * The three measures go NULL TOGETHER because they carry the identical
+ * `FILTER (WHERE NOT is_quarantined)`; `quarantined_rows` is a COUNT and cannot be NULL, which
+ * is precisely why the strip must still state it. TWO filed months, not one: `mixChartDraws`
+ * gates on the months that can be STATED and an earlier revision counted the FILED ones, so a
+ * one-month fixture passes under both readings and cannot tell them apart.
+ *
+ * The SUBJECT stays real -- B737-8 resolves, and the page's real query supplies the column
+ * list its table is built from. Only the rows are constructed, because the live types in this
+ * state are inside a trailing-12 window that moves them out again. */
+function whollyQuarantinedType(q: PivotQuery): Record<string, unknown>[] | null {
+  if (!q.filters.some(([key]) => key === "aircraft_type")) return null;
+  if (q.dimensions.includes("year_month")) {
+    return ["2025-08", "2025-09"].map((month) => ({
+      year_month: month,
+      op_airline_id: DL_ID,
+      seats: null,
+      departures_performed: null,
+      quarantined_rows: 1,
+      quarantine_reasons: "zero_seats",
+      active_months: 0,
+    }));
+  }
+  if (q.dimensions.length === 1 && q.dimensions[0] === "op_airline_id") {
+    return [
+      {
+        op_airline_id: DL_ID,
+        seats: null,
+        passengers: null,
+        departures_performed: null,
+        // The two DERIVED measures this query asks for, which `/airport`'s does not: ratios of
+        // FILTERed sums, so NULL over a wholly-quarantined group like their inputs.
+        load_factor: null,
+        avg_gauge: null,
+        quarantined_rows: 2,
+        quarantine_reasons: "zero_seats",
+        active_months: 0,
+      },
+    ];
+  }
+  return null;
+}
+
+/** One render of the real page over the constructed window. The hit count is the harness's own
+ * check: a stub whose dispatch stopped matching would hand these tests the real B737-8 page,
+ * where the strip's five dashes are trivially false -- but the foot's `not.toContain` is
+ * trivially TRUE on it, which is the half of the fixture this count exists to keep honest. Two
+ * pivots: the table's trailing 12 and the chart's full window. */
+async function quarantinedTypePage() {
+  pivot.answer = whollyQuarantinedType;
+  pivot.hits = 0;
+  try {
+    const view = await page("B737-8");
+    expect(pivot.hits).toBe(2);
+    return view;
+  } finally {
+    pivot.answer = null;
+  }
+}
+
 describe("an aircraft type whose every filing was quarantined states absence, not zero", () => {
   // MUTANT: restore `?? 0` inside `sumColumn` -> `["0", "0", "—", "—", "0", ...]` -> red.
   // MUTANT: remove the `??` and fold on `+` -> identical output -> red.
   it("renders the five measures as absence and keeps the counts", async () => {
-    const { container } = render(await page("TRISLNDR"));
+    const { container } = render(await quarantinedTypePage());
     expect(statStrip(container)).toEqual(["—", "—", "—", "—", "—", "1", "2"]);
   });
 
   // MUTANT: drop the `totals.seats === null` branch -> the foot claims "2 quarantined rows
   // excluded from these totals" under five em dashes -> red.
   it("explains the dashes instead of miscounting them", async () => {
-    const { container } = render(await page("TRISLNDR"));
+    const { container } = render(await quarantinedTypePage());
     const feet = [...container.querySelectorAll(".foot")].map((n) => n.textContent ?? "").join(" ");
-    expect(feet).toContain("Every filing on the TRISLNDR in this window is quarantined");
+    expect(feet).toContain("Every filing on the B737-8 in this window is quarantined");
     expect(feet).toContain("2 rows, each having failed an invariant");
     expect(feet).not.toContain("excluded from these totals");
   });
@@ -667,24 +742,65 @@ describe("/aircraft/<name>: the legend rail follows the CHART, not the rows (#12
   });
 });
 
+/** Every pair the carrier x type map would draw, wholly quarantined: the three measures NULL
+ * together, so `drawableRoutes` counts each in `quarantinedRoutes` and the map comes back with
+ * a disclosure and no segment. Real airport ids, so the pairs are the shape the pivot returns
+ * -- nothing resolves coordinates for them, because a map with no drawable route looks none up.
+ *
+ * The discriminator names the map's query exactly -- the undirected route as its only
+ * dimension, with the page's aircraft type pinned by a filter -- so the table and the chart
+ * beside it stay real. */
+function whollyQuarantinedNetwork(q: PivotQuery): Record<string, unknown>[] | null {
+  if (q.dimensions.length !== 1 || q.dimensions[0] !== "route") return null;
+  if (!q.filters.some(([key]) => key === "aircraft_type")) return null;
+  return [
+    [11844, 13924],
+    [13924, 14057],
+    [14057, 14747],
+  ].map(([low, high]) => ({
+    route_key_low: low,
+    route_key_high: high,
+    seats: null,
+    passengers: null,
+    departures_performed: null,
+    quarantined_rows: 1,
+    quarantine_reasons: "zero_seats",
+    active_months: 0,
+  }));
+}
+
+/** One render of the real filtered page over a network whose every pair is quarantined. The
+ * hit count is the harness's own check: one pivot, the map's. */
+async function quarantinedNetworkView() {
+  pivot.answer = whollyQuarantinedNetwork;
+  pivot.hits = 0;
+  try {
+    const view = await filtered("B737-8", "carrier=DL");
+    expect(pivot.hits).toBe(1);
+    return view;
+  } finally {
+    pivot.answer = null;
+  }
+}
+
 describe("/aircraft/<name>: the legend rail's arc group follows the ARCS (#123)", () => {
   // EVERY ROW IN THAT GROUP DESCRIBES AN ARC -- width by seats, dashed below the load-factor
   // floor, dotted-muted below the departure floor, and why a cross-panel arc is a straight line.
-  // A map can render with none of them, so "a map was drawn" is the wrong gate: `fetchCarrierTypeNetwork` returns a map with ZERO segments when
-  // every route pair is quarantined -- `F4 x SHORT360` is that view, pinned at the producer by
-  // `carrierTypeNetwork.test.ts` as `F4` x `489` -- or when the only filing is same-airport.
+  // A map can render with none of them, so "a map was drawn" is the wrong gate:
+  // `fetchCarrierTypeNetwork` returns a map with ZERO segments when every route pair is
+  // quarantined (pinned at the producer by `carrierTypeNetwork.test.ts`) -- or when the only
+  // filing is same-airport -- so that its disclosure reaches the reader.
   //
-  // DATASET-PINNED SUBJECT, and it expires: F4's five SHORT360 filings are all 2025-08, all
-  // quarantined `zero_seats`, across three pairs, and they leave the trailing 12 at asOf 2026-08.
-  // No view with a map and no arc lasts longer in this window: the other two are F4 x TRISLNDR
-  // (same month) and 8E x R44 (one same-airport filing, 2025-07). When this reddens, re-derive a
-  // carrier x type whose trailing-12 groups are all quarantined or same-airport.
+  // THE ROWS ARE THE FIXTURE, NOT THE (CARRIER, TYPE) PAIR, and the subject is deliberately the
+  // SAME `DL` x `B737-8` the positive control below draws 400 arcs on: the two tests differ in
+  // nothing but whether the pairs are quarantined, so neither can pass for a reason the other
+  // shares. Every live view in this state sits inside the trailing 12, which moves.
   //
   // Asserted as an ABSENCE, because the presence form passes under the bug. And per CALL SITE:
   // each page decides for itself what to pass, so reverting one is a live defect on that surface
   // alone. Mutant: pass `hasMap` back to `<LegendRail map={...}>` here and this goes red.
   it("renders NO arc-rendering group when no arc was drawn", async () => {
-    const { container } = render(await filtered("SHORT360", "carrier=F4"));
+    const { container } = render(await quarantinedNetworkView());
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).not.toContain("Arc rendering");
     expect(rail.textContent).not.toContain("width scales with seats");

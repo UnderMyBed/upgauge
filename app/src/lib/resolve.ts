@@ -178,7 +178,14 @@ export function filterValueRows(
  * function, without going through connect() -- this codebase has no mocks, so the only other
  * way to observe these two properties would be indirectly, through map.size after a real
  * query, which cannot distinguish "bound once" from "bound N times with the same value" or
- * "no query ran" from "a query ran and matched nothing". */
+ * "no query ran" from "a query ran and matched nothing".
+ *
+ * ONE SEAM SUBSTITUTES DATA, and it is a row substitution rather than a mocked database: a
+ * rendering rule whose only live subjects sit inside the trailing 12 is pinned by constructing
+ * the pivot's ROWS (`lib/syntheticPivot.fixture.ts`), with the connection, the allowlist, this
+ * resolver and every consumer below `runPivot` left real. The claim is about the DATA layer and
+ * nothing wider: four test files substitute `next/headers`, which supplies a request rather than
+ * a row, and no database query in this codebase is answered by a fake. */
 export function collectIds(
   rows: Record<string, unknown>[],
   allowlist: Allowlist,
