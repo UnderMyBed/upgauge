@@ -605,7 +605,7 @@ describe("/explore discloses a mainline rollup filtered on the operating carrier
   it("says so when the rollup and the carrier filter are both active", async () => {
     const { container } = render(await ExploreView({ rawQuery: MAINLINE_FILTERED }));
     expect(container.querySelector(".foot")!.textContent).toContain(
-      "rolled-up row can show more seats",
+      "rolled-up row counts only the flying of the filtered carriers, not its whole group",
     );
   });
 

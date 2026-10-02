@@ -455,8 +455,8 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
                 <>
                   {" "}
                   Grouped by <strong>mainline</strong> but filtered on the{" "}
-                  <strong>operating</strong> carrier, so a rolled-up row can show more seats than
-                  the filter selected.
+                  <strong>operating</strong> carrier, so a rolled-up row counts only the flying
+                  of the filtered carriers, not its whole group.
                 </>
               ) : null}
             </p>
