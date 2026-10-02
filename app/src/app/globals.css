@@ -418,6 +418,63 @@ svg.plot {
   color: var(--ink-3);
 }
 
+/* The seasonality heatmap (system.md § Seasonality heatmap): a hand-built SVG grid inside the
+   same .chart frame. Responsive through its viewBox -- width follows the column, height
+   follows the aspect ratio, nothing pinned. The mark rules are scoped to .heatmap because
+   their names (hairline, tick, dot) are generic and must not reach any other chart. */
+svg.heatmap-grid {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.heatmap .hlab {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  fill: var(--ink-3);
+}
+/* An unfilled cell's border is --rule-2, not the table's --rule: --rule on --panel is 1.26:1,
+   so an unfiled month would read as no cell at all -- the same as "outside the span", which is
+   the distinction the hairline exists to draw. --rule-2 is 3.13:1, over the 3:1 non-text floor.
+   Non-scaling, so it stays a hairline at any column width. */
+.heatmap .hairline {
+  stroke: var(--rule-2);
+  stroke-width: 0.5px;
+  vector-effect: non-scaling-stroke;
+}
+.heatmap .tick,
+.heatmap .dot {
+  fill: var(--ink-3);
+  /* The cell's <title> is on its rect; the mark must not swallow the hover that shows it. */
+  pointer-events: none;
+}
+.hkey {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 0;
+  align-items: center;
+  margin-top: 5px;
+  font-size: 10.5px;
+  color: var(--ink-2);
+}
+.hkey i {
+  display: inline-block;
+  width: 18px;
+  height: 9px;
+  outline: 1px solid var(--rule);
+}
+.hkey .gnum {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 9.5px;
+  color: var(--ink-3);
+  margin: 0 6px;
+}
+/* The key sentences after the range: each its own line-able unit, spaced like .ckey's. */
+.hkey i + .gnum ~ .gnum {
+  margin-left: 12px;
+}
+
 /* ---------- stat / meta strip (docs/design/system.md "Stat strip") ---------- */
 .stats {
   display: flex;

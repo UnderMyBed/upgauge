@@ -519,6 +519,68 @@ five (**159.84**) — so a single sort mislabels all five swatches rather than f
 That is the fixture the implementation is pinned against, precisely because a fixture whose
 two orders coincide lets a single sort pass.
 
+### Seasonality heatmap
+
+**Seats by month, one row per year, 12 columns** — the year-over-year shape the stacked area
+cannot show, because the stack runs left to right through every month and a July is never
+beside the July before it. Absolute seats on one scale per chart; no per-year index.
+
+**It adds no query.** It is drawn from the rows the aircraft-mix chart above it receives, and a
+month's seats are the sum of that month's **stateable** bands — exactly the height the stack
+draws there — so the cell and the stack cannot disagree. On `/aircraft` the rows are by carrier;
+the monthly sum is the same seats. It appears exactly when the mix chart draws
+(`mixChartDraws`); when the mix chart states its absence in words, the heatmap renders nothing
+rather than a second empty frame.
+
+| cell | when | drawn |
+|---|---|---|
+| value | every band that month is stateable | filled with its bin's token |
+| understated | at least one stateable band **and** at least one wholly-quarantined band | filled at the stateable sum, plus an `--ink-3` corner tick — the true total is higher by an amount that cannot be stated |
+| unknown | filed, and every band wholly quarantined | no fill, hairline border, a centred `--ink-3` dot |
+| unfiled | no filing, inside the span | no fill, hairline border |
+| outside | before the span or after it | nothing |
+
+**A wholly-quarantined month is unknown, never 0, and an unfiled one is a hairline, never a
+low fill.** Both are the "gaps are gaps" rule below in a grid: a pale cell is a small number, so
+drawing either absence as one invents a month.
+
+**The span is the first filed month to the last filed month**, where *filed* means at least one
+row of any kind — so a wholly-quarantined month at either edge is inside it and draws as an
+unknown cell. That is the window the mix chart states and pins its x domain to; the stack itself
+draws no area over such an edge month, so the heatmap's outermost drawn cell can lie beyond the
+stack's outermost drawn month. A dormant subject ends at its last filing, not at `DATA AS OF`
+(`/carrier/VX` ends at 2018-03). Rows run from the span's first year to its last; the months of
+those years outside the span are *outside*.
+
+**Bins are five equal intervals over the chart's own [min, max]** of value and understated
+sums: `bin = min === max ? 5 : min(5, 1 + floor((v − min) / (max − min) × 5))`, so the min is
+`--g1` and the max `--g5`. Five discrete tokens, `--g1`…`--g5`, never an interpolated colour —
+that is what keeps the ramp one family with the fleet chart, and a token change reaches every cell.
+`--g0` is the mix chart's Other and is never a heatmap fill. Darker is more seats, which on this
+chart is volume, not gauge; the subtitle says so (`darker is more`).
+
+Geometry: 22-unit rows (the data table's row height at full column width) with 1-unit `--panel`
+gutters, month initials across the top, years in mono down the left, cells sharing the remaining
+width in 12 equal columns. The SVG is responsive — a `viewBox` and `width: 100%`, never a pinned
+pixel width. The hairline is `--rule-2`, non-scaling: the table's `--rule` is 1.26:1 on
+`--panel`, which would make an unfiled month indistinguishable from an outside one.
+
+**Legend and key.** A strip beneath: the min in mono tabular figures, the five swatches, the max.
+Then one sentence per **non-zero** count — unfiled months, wholly-quarantined months,
+understated months — each worded for the grid, not the stack.
+
+**Truncation.** When the fetch behind the rows came back at its row limit, every monthly total
+understates by an unknown amount, so no cell is drawn: the frame states *"The monthly totals
+cannot be stated: the fetch behind this chart hit its row limit."* and there is no SVG.
+
+**Accessibility.** The SVG is `role="img"` with one `aria-label`: the span, the highest and
+lowest month with their seats, and each non-zero count — `Seats by month, <first> to <last>.
+Highest <month> <seats> seats, lowest <month> <seats> seats. <N> months with no filings. <N>
+months filed but wholly quarantined. <N> months understated.`, zero counts omitted. Every
+drawn cell carries a `<title>` (`2016-12 · 1,234,567 seats`, `… seats, understated`,
+`filed, wholly quarantined`, `no filings`), so the value under the pointer is readable without
+the legend. Labels and key are server-rendered markup: visible with JS off.
+
 ### Multi-series lines
 
 **No hue at all.** Series are distinguished by weight, dash, and a direct end-label:
@@ -1394,14 +1456,6 @@ of these are **normal** in T-100.
 
 These reuse components above and were specified rather than built. Concrete enough to
 implement without another design pass.
-
-### Seasonality heatmap
-
-Year × month grid, one row per year, 12 columns. Cells are **`--panel` → `--g5` on the same
-gauge ramp**, so it reads as one family with the fleet chart. Cell 22px tall to match table
-rows, 1px `--panel` gutters. Month initials on top, years in mono down the left. **Absent
-months are unfilled with a hairline border** — distinct from a filled low value. A legend
-strip beneath shows the value range with min and max labelled.
 
 ### `/watch` leaderboard
 
