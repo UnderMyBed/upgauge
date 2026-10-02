@@ -93,17 +93,12 @@ two ranges never share a month.
     `>` breaks both real-traffic boundary tests; flipping `<` to `<=` breaks only the
     synthetic-probe test — proof the naive "real data will catch it" assumption was false for
     this specific boundary.
-  - `pipeline/mainline_map.py`'s `MapEntry.covers()` and `check_no_overlaps()` now use the
-    same inclusive-`effective_from`/exclusive-`effective_to` semantics as this SQL join —
-    this was flagged as a doc-only mismatch in Task 5's first pass, then found to be a real
-    bug: `parent_for(21171, "2018-04")` returned Alaska on the real shipped VX row (build-time
-    validation only, never reached query time, so it never produced a wrong pivot answer, but
-    it contradicted this doc and the SQL). A **gap-free handoff between two parents is one
-    row's `effective_to` equal to the next row's `effective_from`** — `check_no_overlaps` was
-    also fixed, since under the old inclusive reading it rejected that exact shape as an
-    overlap, which would have broken `make build` (where the map is validated) the next time a
-    date-ranged acquisition was entered using this convention. See
-    `pipeline/reference/mainline_group.csv`'s header comment, corrected to match.
+  - `pipeline/mainline_map.py`'s `MapEntry.covers()` and `check_no_overlaps()` use the same
+    inclusive-`effective_from`/exclusive-`effective_to` semantics as this SQL join. A
+    **gap-free handoff between two parents is one row's `effective_to` equal to the next
+    row's `effective_from`**; `check_no_overlaps` accepts that shape, so `make build` (where
+    the map is validated) does not reject it. See `pipeline/reference/mainline_group.csv`'s
+    header comment.
 - **Admission rule.** `basis = owned`: a wholly-owned subsidiary, for the months of
   ownership. `basis = contract`: a regional admitted ONLY for months in which ALL of its
   scheduled passenger flying was for this one parent (capacity purchase or prorate) — no
@@ -151,17 +146,24 @@ down, Endeavor CRJ seats up" is *still fully visible*.
 
 1. **A group is not "all branded flying."** `Delta group` = DL + 9E. It does **not** include
    SkyWest/Republic flights also sold as Delta Connection (unattributable). Label precisely:
-   *"Delta (mainline + subsidiaries + exclusive contract carriers)"* — never imply it's every
+   *"<Parent> (mainline + carriers it owned or that flew only for it)"* — never imply it's every
    flight painted as Delta. Misattribution-by-omission is still misattribution.
-2. **Group-vs-group is still not all-branded flying vs all-branded flying.** United owns no
+2. **Group-vs-group is not all-branded flying vs all-branded flying.** United owns no
    subsidiary operators, so its group is United plus contract carriers only: CommutAir
    throughout, plus Air Wisconsin, GoJet, Mesa, ExpressJet and Trans States in their months.
    The shared regionals carry most of every mainline's Express/Connection flying and roll up
    to none of them. Annotate it, and always keep operating-carrier truth one toggle away.
 3. **Group composition changes over time, and a time series must show that.** `Alaska group`
-   means AS+QX in 2015, AS+QX+VX in 2017, and AS+QX+HA from late 2024. United's group changes
-   composition at 2018-03, 2019-01, 2019-02, 2020-05, 2020-10, 2021-01, 2023-03, 2023-05 and
-   2025-12; Air Wisconsin moves American → United → American. Group capacity steps at each
+   means AS+QX in 2015, AS+QX+VX in 2017, and AS+QX+HA from late 2024. Every parent whose
+   group changes, with the first month each change takes effect:
+   - Alaska: VX joins 2016-12 and leaves 2018-04; HA joins 2024-09.
+   - American: Air Wisconsin leaves 2017-09, returns 2023-07, and leaves again 2025-04.
+   - Hawaiian: Empire leaves 2021-02. From 2024-09 Hawaiian itself rolls up to Alaska.
+   - United: 2018-03, 2019-01, 2019-02, 2020-05, 2020-10, 2021-01, 2023-03, 2023-05 and
+     2025-12 (Air Wisconsin, Trans States, ExpressJet, GoJet and Mesa entering or leaving).
+   - Delta: none; DL + 9E throughout.
+
+   Air Wisconsin moves American → United → American. Group capacity steps at each
    boundary, and **that step is an ownership or contract event, not organic growth.**
    Annotate the boundary on any grouped series that crosses it. An unannotated step change
    here is the single most misleading chart this product can draw.

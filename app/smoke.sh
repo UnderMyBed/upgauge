@@ -692,9 +692,11 @@ check_not "explore: no rollup disclosure on a filtered operating view" "$BODY" '
 check     "explore: ...and that operating view really rendered its foot" "$BODY" 'quarantined row'
 
 # What "Mainline" includes, stated on the mainline view only. The operating body is the one the D4
-# block already proved renders its foot.
+# block already proved renders its foot. The POSITIVE needle carries the emitted `<strong>` markup:
+# the sentence's words alone also sit in the RSC flight payload, so a bare needle could pass on the
+# payload without the HTML ever carrying the disclosure. The NEGATIVE stays bare, which is stricter.
 BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=ml")
-check     "explore: the mainline view says what mainline includes" "$BODY" 'flew only for that parent'
+check     "explore: the mainline view says what mainline includes" "$BODY" '<strong>Mainline</strong> counts a carrier'
 BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&f=op_airline_id:19790&s=-seats&n=25&g=op")
 check_not "explore: ...and the operating view does not" "$BODY" 'flew only for that parent'
 
