@@ -194,7 +194,15 @@ count()   { printf '%s' "$1" | grep -oF -- "$2" | wc -l | tr -d ' '; }
 # Watch checks below exist to avoid. Every marker used with this is the served HTML's FIRST
 # occurrence of that string; the RSC flight payload repeats it further down the same body, but
 # `#*"$2"` and `%%"$3"*` both resolve to the nearest, not the last, occurrence.
+#
+# AN ABSENT START MARKER YIELDS NOTHING, never the whole haystack. `#*"$2"` strips nothing when
+# `$2` is absent, so the bare expansion would hand back the ENTIRE body as the "region" and every
+# positive needle on it would be answered by the rest of the page -- with every `fit-mid` and
+# `fit-narrow` wrapper renamed away, the per-render chart counts below all read 1 that way. Empty
+# fails every positive check instead. A check_not on a region is therefore vacuous when the
+# region is absent: pair it with a positive check that pins the region is really there.
 between() { # between <haystack> <start-marker> <end-marker>
+  has "$1" "$2" || return 0
   local rest="${1#*"$2"}"
   printf '%s' "${rest%%"$3"*}"
 }
@@ -651,9 +659,8 @@ check     "explore: labels a row with its URL key" "$BODY" 'class="chip-key">d<'
 # page, so `<button` and `<input` are BOTH present in this body legitimately. Run against `$BODY`
 # these two report FAIL for the right page -- measured, not predicted. `between` cuts from the
 # builder's own class to the `.body` div that follows it. If the builder were missing entirely
-# the cut would start at the top of the document and sweep the top bar's form back in, so the
-# absence checks go RED rather than vacuously green; the positive check below pins that the
-# region extracted really is the builder.
+# `between` returns nothing, so the two absence checks would pass vacuously -- the positive check
+# below is what goes RED then: it pins that the region extracted really is the builder.
 BUILDER=$(between "$BODY" 'class="builder"' 'class="body"')
 check     "explore: the extracted region really is the builder" "$BUILDER" 'class="chip-key"'
 check_not "explore: the builder emits no button"   "$BUILDER" '<button'
@@ -1109,7 +1116,22 @@ check_dataset check_not "chart: a route with no crossover gets NO annotation (JF
 # The negative half of the gap pair below. JFK-LAX filed in all 138 months of the window
 # (measured), so it must claim no gaps AND draw each band in exactly one piece.
 check_not "chart: a route with no gaps claims none (JFK-LAX)" "$BODY" 'no filings'
-check_re  "chart: an ungapped band is ONE path (JFK-LAX)" "$(count "$BODY" '<path fill="var(--g5)" d=')" '^1$'
+#
+# PER RENDER, not per page. The chart is drawn once per width band (ChartFit: `fit-wide`,
+# `fit-mid`, `fit-narrow`) and CSS shows one, so the page carries the band three times. Each
+# render is isolated with `between` -- the HTML form `<div class="fit-X">` occurs first for the mix
+# chart (it precedes the heatmap; the flight payload spells it `"className":"fit-X"`), and its
+# first `</svg>` closes that render's Plot SVG -- and each must hold exactly one piece. A page-wide
+# count of 3 would pass for one render with three pieces and two with none.
+check_re  "chart: the page carries two chart-fit wrappers, mix + heatmap (JFK-LAX)" "$(count "$BODY" '<div class="chart-fit">')" '^2$'
+for FIT in wide mid narrow; do
+  # The wrapper itself, once per chart: without it `between` returns nothing and the count
+  # below reads 0, but this names the cause.
+  check_re "chart: the $FIT render's wrapper is present for both charts (JFK-LAX)" \
+    "$(count "$BODY" "<div class=\"fit-$FIT\">")" '^2$'
+  check_re "chart: an ungapped band is ONE path in the $FIT render (JFK-LAX)" \
+    "$(count "$(between "$BODY" "<div class=\"fit-$FIT\">" '</svg>')" '<path fill="var(--g5)" d=')" '^1$'
+done
 BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-MCO")
 check_dataset check "chart: a route with one gets the derived annotation (ATL-MCO)" "$BODY" 'B757-2 overtakes A321nXLR · 2018'
 
@@ -1129,7 +1151,13 @@ check_dataset check "chart: a route with one gets the derived annotation (ATL-MC
 # occurs only in the HTML body; the RSC flight payload's copy is backslash-escaped.
 BODY=$(curl -s --max-time 30 "${BASE}/route/HNL-LAS")
 check    "chart: the unfiled months are stated (HNL-LAS)" "$BODY" '6 months with no filings, drawn as gaps rather than interpolated.'
-check_re "chart: the band BREAKS at them, drawn as two paths (HNL-LAS)" "$(count "$BODY" '<path fill="var(--g5)" d=')" '^2$'
+# Per render, isolated the same way as JFK-LAX's above: every render breaks at the hole.
+for FIT in wide mid narrow; do
+  check_re "chart: the $FIT render's wrapper is present for both charts (HNL-LAS)" \
+    "$(count "$BODY" "<div class=\"fit-$FIT\">")" '^2$'
+  check_re "chart: the band BREAKS at them, drawn as two paths in the $FIT render (HNL-LAS)" \
+    "$(count "$(between "$BODY" "<div class=\"fit-$FIT\">" '</svg>')" '<path fill="var(--g5)" d=')" '^2$'
+done
 # The seats-by-month heatmap (#7) under the mix chart, in the served bytes. `aria-label="` is
 # the HTML attribute form; the flight payload carries it as `"aria-label":"`, so this needle
 # matches the rendered markup only. HNL-LAS is the gap route, so its label must also carry the
@@ -3398,13 +3426,12 @@ F87="v=1&k=seg&d=op_airline_id&m=seats&s=-seats&g=op&t=2025-05:2026-04&n=25"
 F87R="v=1&k=route&d=route&m=seats&t=2015-01:2016-12&s=-seats&n=5&g=op"
 MSG87='must be a plain whole number'
 
-# `between` returns its input UNCHANGED when the start marker is absent, so a needle asserted
-# against a "region" extracted from a page that has none is answered by the WHOLE PAGE. Not
-# hypothetical: Next's __next_error__ 500 page embeds the RSC flight payload, which echoes the
-# request URL -- so `d=op_airline_id` appears SIX times in it and the page carries no `</p>` at
-# all, and a bare `check "$ALERT" 'op_airline_id'` printed **ok** against the very 500 this
-# section exists to fail. Measured at 01ea39e while writing these checks. This wrapper turns that
-# silent pass into a guaranteed red, which is the only reason it exists.
+# A region from a page that has none must answer no needle. Next's __next_error__ 500 page embeds
+# the RSC flight payload, which echoes the request URL -- `d=op_airline_id` appears SIX times in it
+# and the page carries no `</p>` at all -- so a needle asserted on anything wider than the alert
+# region prints **ok** against the very 500 this section exists to fail (measured at 01ea39e).
+# `between` already yields nothing for an absent start marker; this wrapper makes the absence a
+# named sentinel, so a failing check's output says why the region is empty.
 alert_region() { # alert_region <body> -> the <p role="alert"> text, or a sentinel matching no needle
   has "$1" 'role="alert"' || { printf '%s' '(no alert region on this page)'; return; }
   between "$1" 'role="alert"' '</p>'
@@ -3419,9 +3446,9 @@ BODY=$(curl -s                              --max-time 15 "${BASE}/explore?${F87
 check     "87: /explore does not 5xx on a non-numeric INTEGER filter value" "$CODE" '200'
 check     "87: ...and is never cached"                                     "$HDRS" 'no-store'
 check_not "87: ...so there is no long-cached 500 (the defect itself)"       "$HDRS" 's-maxage'
-# Anti-vacuity, printing its own line because `between` returns its input UNCHANGED when the start
-# marker is absent -- a silent-pass shape, and a cousin of self-defect #1. Measured at 01ea39e: on
-# the 500 page the marker is absent and the "isolated" region came back as all 7,413 body bytes.
+# Anti-vacuity, printing its own line: on a page with no alert region the extracted region is
+# empty, and every check_not below would pass against it -- a silent-pass shape, and a cousin of
+# self-defect #1. This positive needle is what goes red there instead.
 check     "87: ...rendering the named permalink error page, not Next's own 500" "$BODY" 'role="alert"'
 ALERT=$(alert_region "$BODY")
 check_not "87: ...and that region really is isolated (excludes the page's own body copy)" "$ALERT" 'known-valid'
@@ -3738,6 +3765,25 @@ check_re "static asset: the proxy leaves Next's own Cache-Control on a built chu
   '^[Cc]ache-[Cc]ontrol: public, max-age=31536000, immutable$'
 check_re "responsive: the table keeps its own scroll container" "$CSS_BODY" \
   '\.table-scroll\{[^}]*overflow-x:auto'
+# One chart render per width band (docs/design/system.md § Charts): the container and the two
+# @container blocks that swap renders, in the minified bytes the build emits. globals.css writes
+# the range form `@container (width < 860px)`; Lightning CSS emits it as the exact equivalent
+# `@container not (min-width:860px)` -- measured from the served file, so a needle copied from
+# source could never fire. globals.test.ts evaluates the cascade off disk; this is that it reaches
+# a browser. Without the default hide the narrow and mid renders would show beside the wide one.
+check "responsive: the chart frame is an inline-size container" "$CSS_BODY" \
+  '.chart-fit{container-type:inline-size}'
+check "responsive: the mid and narrow renders are hidden by default" "$CSS_BODY" \
+  '.fit-mid,.fit-narrow{display:none}'
+check_re "responsive: below 860px the wide render gives way to the mid one" "$CSS_BODY" \
+  '@container not \(min-width:860px\)\{\.fit-wide\{display:none\}\.fit-mid\{display:block\}'
+check_re "responsive: below 480px the mid render gives way to the narrow one" "$CSS_BODY" \
+  '@container not \(min-width:480px\)\{\.fit-mid\{display:none\}\.fit-narrow\{display:block\}'
+# ORDER IS THE CASCADE. A sub-480px column matches BOTH blocks, and equal specificity means the
+# later one wins: emitted the other way round, `.fit-mid{display:block}` would land last and a
+# phone would show the mid render. The two needles above each pass in either order.
+check_re "responsive: the <480px block follows the <860px one, so it wins on a phone" "$CSS_BODY" \
+  '@container not \(min-width:860px\)\{.*@container not \(min-width:480px\)\{'
 # The collapsed single-column grid keeps its zero minimum. This is the bug. `[^@]*` cannot run
 # past the block: this stylesheet is dense with @font-face rules on both sides of it.
 check_re "responsive: the <=920px grid track keeps minmax(0,...) in the served CSS" "$CSS_BODY" \

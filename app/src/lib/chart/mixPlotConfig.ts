@@ -8,6 +8,7 @@ import {
   type MonthAxis,
   type SeriesPoint,
 } from "@/lib/chart/aircraftMix";
+import { FIT_VIEW_W, type Fit } from "@/lib/chart/fit";
 
 /** The mix chart's Plot config: everything `renderPlotToSvg` (lib/chart/svg.ts) needs to draw
  * the stacked area, and nothing else. `AircraftMixChart` calls this to render the chart it
@@ -20,9 +21,40 @@ import {
  * are Plot's, not the mockup's hand-rolled padding: left clears a `~s` seat tick ("1.2M"),
  * bottom clears the year ticks, and top clears the crossover annotation, which sits inside
  * the frame at the top the way the mockup draws it. */
-const WIDTH = 960;
-const HEIGHT = 230;
 const MARGIN = { left: 46, right: 10, top: 18, bottom: 22 };
+
+/** One render's geometry. The chart's SVG is `width: 100%` over its viewBox, so its 10-unit
+ * labels render at `10 * column / width` CSS px: a single 960-unit render is ~3.5px on a phone.
+ * The page therefore draws the chart once per `Fit` (lib/chart/fit.ts) and CSS shows the one
+ * whose viewBox suits the column (docs/design/system.md § Charts, "One render per width band").
+ *
+ * `xTicks` is coarser where the frame is narrower, so Plot's year labels never collide.
+ * `lineWidth` (ems) wraps the crossover annotation where one line would run past the frame's
+ * edge; `undefined` leaves it one line. `marginTop` grows with it on a chart that has an
+ * annotation, and the annotation is lifted by the difference, so a wrapped annotation sits in the
+ * margin above the stack rather than on it. */
+export interface MixLayout {
+  width: number;
+  height: number;
+  marginTop: number;
+  xTicks: string;
+  lineWidth: number | undefined;
+}
+
+export const MIX_LAYOUTS: Record<Fit, MixLayout> = {
+  wide: { width: FIT_VIEW_W.wide, height: 230, marginTop: MARGIN.top, xTicks: "1 year", lineWidth: undefined },
+  mid: { width: FIT_VIEW_W.mid, height: 190, marginTop: MARGIN.top, xTicks: "1 year", lineWidth: undefined },
+  narrow: { width: FIT_VIEW_W.narrow, height: 224, marginTop: 40, xTicks: "3 years", lineWidth: 12 },
+};
+
+/** Wrap options for the crossover annotation, where the layout asks for wrapping. `monospace` makes
+ * Plot measure the line in the mono metrics the root style draws it in; the family is restated
+ * because `monospace: true` would otherwise default the mark to the generic `monospace` face. */
+function wrap(layout: MixLayout): Record<string, unknown> {
+  return layout.lineWidth === undefined
+    ? {}
+    : { lineWidth: layout.lineWidth, monospace: true, fontFamily: "var(--font-mono)" };
+}
 
 /** `--panel-2` across 2020-03 -> 2021-06 (docs/design/system.md, "COVID is drawn, not
  * hidden"). The edges land ON those two months' samples rather than bracketing them: every
@@ -222,7 +254,10 @@ function describe({
  * `args` from its own props and calls this directly; a future caller that only has the same
  * shape of data -- never a pivot row, a warehouse id, or a React prop -- gets the identical
  * chart back. */
-export function buildMixPlotConfig(args: MixPlotArgs): Plot.PlotOptions {
+export function buildMixPlotConfig(
+  args: MixPlotArgs,
+  layout: MixLayout = MIX_LAYOUTS.wide,
+): Plot.PlotOptions {
   const {
     title,
     dimension,
@@ -238,13 +273,16 @@ export function buildMixPlotConfig(args: MixPlotArgs): Plot.PlotOptions {
     annotationLate,
   } = args;
 
+  // The annotation's extra margin is spent only when there is an annotation to put in it.
+  const marginTop = crossover === null || crossoverAt === null ? MARGIN.top : layout.marginTop;
+
   return {
     className: "plot",
-    width: WIDTH,
-    height: HEIGHT,
+    width: layout.width,
+    height: layout.height,
     marginLeft: MARGIN.left,
     marginRight: MARGIN.right,
-    marginTop: MARGIN.top,
+    marginTop,
     marginBottom: MARGIN.bottom,
     // CLAUDE.md's non-negotiable: all numerics MONOSPACED and tabular. Plot sets
     // font-variant on its two axis-tick-label groups already, but its root style hardcodes
@@ -284,7 +322,7 @@ export function buildMixPlotConfig(args: MixPlotArgs): Plot.PlotOptions {
     x: {
       type: "utc",
       label: null,
-      ticks: "1 year",
+      ticks: layout.xTicks,
       tickFormat: "%Y",
       domain: [monthStart(first), monthStart(last)],
     },
@@ -326,9 +364,10 @@ export function buildMixPlotConfig(args: MixPlotArgs): Plot.PlotOptions {
               frameAnchor: "top",
               textAnchor: annotationLate ? "end" : "start",
               dx: annotationLate ? -5 : 5,
-              dy: 2,
+              dy: 2 - (marginTop - MARGIN.top),
               fill: "var(--ink)",
               fontWeight: 500,
+              ...wrap(layout),
             }),
           ]),
     ],

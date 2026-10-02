@@ -1,6 +1,16 @@
 import { renderPlotToSvg } from "@/lib/chart/svg";
 import { BY_AIRCRAFT_TYPE, type MixDimension, type MixRow } from "@/lib/chart/aircraftMix";
-import { buildMixPlotConfig, gapNote, understatedNote, unknowableNote, mixAbsenceNote, prepareMixPlot } from "@/lib/chart/mixPlotConfig";
+import type { Fit } from "@/lib/chart/fit";
+import {
+  buildMixPlotConfig,
+  gapNote,
+  understatedNote,
+  unknowableNote,
+  mixAbsenceNote,
+  prepareMixPlot,
+  MIX_LAYOUTS,
+} from "@/lib/chart/mixPlotConfig";
+import { ChartFit } from "@/components/ChartFit";
 
 /** The project's first chart (docs/design/system.md § Charts, and CLAUDE.md's workflow rule
  * that this one is built before the load-factor chart): a stacked area of monthly seats,
@@ -67,7 +77,9 @@ export function AircraftMixChart({
   }
 
   const { args, stack, gaps, unknowable, understated } = plot;
-  const svg = withImgRole(renderPlotToSvg(buildMixPlotConfig(args)));
+  // ONE `args`, drawn once per width band (ChartFit). Every render reads the same prepared
+  // rows; only the layout -- viewBox width, height, tick interval, wrapping -- differs.
+  const svgFor = (fit: Fit) => withImgRole(renderPlotToSvg(buildMixPlotConfig(args, MIX_LAYOUTS[fit])));
 
   return (
     <Frame title={title} dimension={dimension}>
@@ -76,7 +88,7 @@ export function AircraftMixChart({
           written through the DOM by Plot and escaped by jsdom's serializer, not concatenated
           into the markup here. It is the only way to land a server-rendered SVG in a Server
           Component. */}
-      <div dangerouslySetInnerHTML={{ __html: svg }} />
+      <ChartFit render={(fit) => <div dangerouslySetInnerHTML={{ __html: svgFor(fit) }} />} />
       <div className="ckey">
         {/* Darkest first, so the key reads top-of-stack down, the order the eye meets the
             bands in. Mirrors the mockup's own `ser.slice().reverse()`. */}

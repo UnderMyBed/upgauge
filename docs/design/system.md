@@ -428,6 +428,39 @@ Plex Mono. Every Plot chart passes `style: { fontFamily: "var(--font-mono)", fon
 "tabular-nums" }`; the token, not a literal family, so `globals.css` stays the single source
 the way it already is for the `--g*` ramp. The mockups do this with a dedicated `.axl` class.
 
+**One render per width band.** A chart SVG is `width: 100%` over a fixed viewBox, so its text
+scales with the column: a 10-unit label renders at `10 × column ÷ viewBox width` CSS px, and a
+single 960-unit render put every axis and grid label at about 3.5px on a 375px phone. Each chart
+is therefore server-rendered three times from one prepared result (`prepareMixPlot` /
+`heatmapGrid`, never recomputed per render), and CSS shows exactly one:
+
+| fit | viewBox width | shown at column width | 10-unit label |
+|---|---|---|---|
+| `narrow` | 300 | below 480px | 10.7px at a 320px column, 16.0px at 479px |
+| `mid` | 540 | 480–859px | 8.9px → 15.9px |
+| `wide` | 960 | 860px and wider | 9.0px → 9.6px at the 922px desktop column |
+
+- **The column decides, not the viewport.** `.chart-fit` is an inline-size container and its
+  `@container (width < N)` rules display one of `.fit-wide` / `.fit-mid` / `.fit-narrow`; `display: none`
+  also takes the other two out of the accessibility tree, so one `aria-label` is announced. The
+  rail's collapse at 920px therefore needs no rule of its own: the column jumps from 880px
+  (wide) to 643px (mid) across it and the container query follows. The breakpoints live in
+  `lib/chart/fit.ts` (`FIT_BREAKPOINTS`) and are restated in `globals.css`; `globals.test.ts`
+  binds the two and evaluates the cascade on both sides of each.
+- **Phone target: every axis, tick and grid label renders at ≥ 10 CSS px at a 375px viewport**,
+  and between roughly 9 and 16px at every column width from 320px to the desktop maximum. The
+  wide render stays at 960 units so the desktop chart does not change, and at that width a
+  label reaches 9px only from a column of about 864px. That leaves 320–860px, a 2.7× span,
+  against the 16 ÷ 9 = 1.8× one render holds — so it takes two more renders, three in all.
+- **Only the SVG is repeated.** The mix chart's key, the heatmap's legend and every note are
+  HTML, once, outside the renders. No render may carry an `id`: three copies of one would be
+  invalid, and a `url(#id)` could resolve into a hidden render.
+- **Geometry may differ per fit; data may not.** The narrow mix chart ticks every 3 years
+  rather than every year, and wraps the crossover annotation into a taller top margin; the
+  narrow heatmap's cells go square. Band membership, shade, gaps and every count are identical
+  across the three.
+- **The OG card draws one render**, the wide one — `buildMixPlotConfig`'s default layout.
+
 ### Aircraft-type mix — build this before the load-factor chart
 
 All four entity pages share one component. What follows is the encoding rule plus the traps
@@ -567,7 +600,9 @@ chart is volume, not gauge; the subtitle says so (`darker is more`).
 Geometry: 22-unit rows (the data table's row height at full column width) with 1-unit `--panel`
 gutters, month initials across the top, years in mono down the left, cells sharing the remaining
 width in 12 equal columns. The SVG is responsive — a `viewBox` and `width: 100%`, never a pinned
-pixel width. The hairline is `--rule-2` at 1px, non-scaling: `--rule-2` is 3.13:1 on `--panel`, over the
+pixel width — and drawn once per fit (§ Charts, "One render per width band"): only the viewBox
+width changes, so the label column, the row height and the 10-unit `.hlab` text keep their size in
+units while the columns narrow toward square cells. The hairline is `--rule-2` at 1px, non-scaling: `--rule-2` is 3.13:1 on `--panel`, over the
 3:1 non-text floor, where the table's `--rule` is 1.26:1 and would make an unfiled month
 indistinguishable from an outside one. It stays a full pixel because a half-pixel stroke renders
 anti-aliased at half coverage and no longer meets the floor.

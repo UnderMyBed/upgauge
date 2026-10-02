@@ -2,7 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { render } from "@testing-library/react";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
-import { BY_CARRIER, type MixDimension, type MixRow } from "@/lib/chart/aircraftMix";
+import { BY_AIRCRAFT_TYPE, BY_CARRIER, type MixDimension, type MixRow } from "@/lib/chart/aircraftMix";
+import { buildMixPlotConfig, prepareMixPlot } from "@/lib/chart/mixPlotConfig";
 
 // ---------------------------------------------------------------------------------------
 // Fixtures
@@ -120,15 +121,19 @@ function chart(rowSet: MixRow[], title = "JFK–LAX", dimension?: MixDimension) 
   return container;
 }
 
+/** The WIDE render -- the desktop chart, and the one every geometry test below reads. The chart
+ * is drawn once per fit (ChartFit); the per-fit properties are pinned in their own describe
+ * block at the end of this file, so these helpers stay scoped to one render and a count of
+ * paths means one chart's paths, never three charts' summed. */
 function svgOf(container: HTMLElement): SVGSVGElement {
-  const svg = container.querySelector("svg");
+  const svg = container.querySelector(".chart-fit > .fit-wide svg");
   if (svg === null) throw new Error("no <svg> in the rendered output");
   return svg as unknown as SVGSVGElement;
 }
 
 /** The band areas, in document order (which is stack order, bottom first). */
 function bandPaths(container: HTMLElement): Element[] {
-  return [...container.querySelectorAll('path[fill^="var(--g"]')];
+  return [...svgOf(container).querySelectorAll('path[fill^="var(--g"]')];
 }
 
 function fillsOf(container: HTMLElement): string[] {
@@ -138,7 +143,7 @@ function fillsOf(container: HTMLElement): string[] {
 /** Every path drawn in one ramp token, in document order. More than one means the band is
  * broken into pieces, which is what a month with no filings must produce. */
 function pathsFor(container: HTMLElement, token: string): Element[] {
-  return [...container.querySelectorAll(`path[fill="var(${token})"]`)];
+  return [...svgOf(container).querySelectorAll(`path[fill="var(${token})"]`)];
 }
 
 /** The x coordinates in a path's outline -- its horizontal extent, which is what says whether
@@ -176,11 +181,11 @@ function xScale(svg: SVGSVGElement): (iso: string) => number {
 }
 
 function covidRect(container: HTMLElement): Element | null {
-  return container.querySelector('g[fill="var(--panel-2)"] rect');
+  return svgOf(container).querySelector('g[fill="var(--panel-2)"] rect');
 }
 
 function textsOf(container: HTMLElement): string[] {
-  return [...container.querySelectorAll("svg text")].map((t) => t.textContent ?? "");
+  return [...svgOf(container).querySelectorAll("text")].map((t) => t.textContent ?? "");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -391,7 +396,7 @@ describe("AircraftMixChart", () => {
     const isolate = monthRange("2020-01", "2020-12").filter((m) => m !== "2020-06");
     const container = chart(rows(MEMBERS, WINDOW_FROM, WINDOW_TO, isolate));
     const x = xScale(svgOf(container));
-    const stroked = [...container.querySelectorAll('path[stroke^="var(--g"]')];
+    const stroked = [...svgOf(container).querySelectorAll('path[stroke^="var(--g"]')];
     // One hairline column per band, all of them at 2020-06 and nowhere else.
     expect(stroked.length).toBe(RAMP.length);
     expect(new Set(stroked.map((p) => p.getAttribute("stroke")))).toEqual(
@@ -681,5 +686,83 @@ describe("the drawn x axis spans the window the chart claims", () => {
     const svg = svgOf(container);
     const [, right] = drawnExtent(container);
     expect(right).toBeCloseTo(Number(svg.getAttribute("width")) - 10, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// One render per width band (docs/design/system.md § Charts; lib/chart/fit.ts)
+// ---------------------------------------------------------------------------------------
+
+describe("AircraftMixChart -- one render per width band", () => {
+  const renders = (container: HTMLElement) =>
+    (["wide", "mid", "narrow"] as const).map((fit) => {
+      const svg = container.querySelector(`.chart-fit > .fit-${fit} svg`);
+      if (svg === null) throw new Error(`no ${fit} render`);
+      return svg;
+    });
+
+  // Mutant: ChartFit renders only the wide child (or the chart bypasses ChartFit).
+  it("draws exactly three SVGs, one per fit, inside the container-query wrapper", () => {
+    const container = chart(FLEET);
+    expect(container.querySelectorAll("svg").length).toBe(3);
+    const fit = container.querySelector(".chart-fit")!;
+    expect([...fit.children].map((c) => c.className)).toEqual(["fit-wide", "fit-mid", "fit-narrow"]);
+    expect(renders(container).map((s) => Number(s.getAttribute("width")))).toEqual([960, 540, 300]);
+  });
+
+  // Mutant: the narrow render is fed different rows (a sliced or re-prepared row set).
+  it("draws every render from the same rows: same bands, same pieces, same label", () => {
+    // HNL-LAS-shaped: a six-month hole, so each band is TWO pieces in every render. A render fed
+    // other rows -- a slice, a re-prepare over a different window -- changes the piece count,
+    // the fill set or the aria-label's window, and the three disagree.
+    const container = chart(
+      rows(MEMBERS, WINDOW_FROM, WINDOW_TO, ["04", "05", "06", "07", "08", "09"].map((m) => `2020-${m}`)),
+    );
+    const shape = (svg: Element) =>
+      [...svg.querySelectorAll('path[fill^="var(--g"]')].map((p) => p.getAttribute("fill"));
+    const [wide, mid, narrow] = renders(container);
+    expect(shape(wide).length).toBe(RAMP.length * 2);
+    expect(shape(mid)).toEqual(shape(wide));
+    expect(shape(narrow)).toEqual(shape(wide));
+    const label = wide.getAttribute("aria-label");
+    expect(mid.getAttribute("aria-label")).toBe(label);
+    expect(narrow.getAttribute("aria-label")).toBe(label);
+  });
+
+  // Mutant: a fixed id injected into the shared serialization (every render then repeats it).
+  it("repeats no id across the three renders", () => {
+    const container = chart(crossoverAt(2019));
+    const ids = [...container.querySelectorAll("[id]")].map((e) => e.id);
+    expect(ids.length).toBe(new Set(ids).size);
+  });
+
+  // Mutant: the narrow layout keeps the wide "1 year" interval -- eleven 4-digit labels in a
+  // 244-unit frame collide.
+  it("ticks the narrow render's years coarser than the wide one's", () => {
+    const years = (svg: Element) =>
+      [...svg.querySelectorAll('g[aria-label="x-axis tick label"] text')].map((t) => Number(t.textContent));
+    const [wide, , narrow] = renders(chart(FLEET));
+    expect(years(wide).length).toBeGreaterThan(10);
+    const gaps = years(narrow).slice(1).map((y, i) => y - years(narrow)[i]);
+    expect(gaps.length).toBeGreaterThan(1);
+    for (const g of gaps) expect(g).toBe(3);
+  });
+
+  // Mutant: the HTML key moved inside ChartFit's render -- it would then appear three times.
+  it("keeps the HTML key once, outside the renders", () => {
+    const container = chart(rows(MEMBERS, WINDOW_FROM, WINDOW_TO, ["2020-05"]));
+    expect(container.querySelectorAll(".ckey").length).toBe(1);
+    expect(container.querySelector(".chart-fit .ckey")).toBeNull();
+  });
+
+  // Mutant: `buildMixPlotConfig`'s default layout changed -- the OG card, which calls it with no
+  // layout, would stop drawing the chart it draws today.
+  it("defaults to the wide layout for callers that pass none (the OG card)", () => {
+    const { plot } = prepareMixPlot(FLEET, "JFK–LAX", BY_AIRCRAFT_TYPE);
+    const config = buildMixPlotConfig(plot!.args);
+    expect(config.width).toBe(960);
+    expect(config.height).toBe(230);
+    expect(config.marginTop).toBe(18);
+    expect((config.x as { ticks: string }).ticks).toBe("1 year");
   });
 });
