@@ -32,8 +32,18 @@ make promote
 ```
 
 Prints every promotable build newest-first, marks the one the box is serving, dispatches
-`promote.yml` with the row you pick, and watches the run. `make promote TAG=warehouse-2026.05-9cf20ab`
-skips the picker. The underlying dispatch, for a machine that has no checkout:
+`promote.yml` with the row you pick, watches the run, then **confirms the deploy from the
+operator's machine**. `make promote TAG=warehouse-2026.05-9cf20ab` skips the picker.
+
+**That local confirmation is the result, not the workflow's exit code.** The workflow polls
+`/api/health` from a GitHub runner, and Bot Fight Mode serves runners a challenge page (measured
+2026-10-02: 30 of 30 attempts a 403, against a box serving the promoted build under `ok`). So
+`deploy/promote.py` polls `/api/health` itself — 12 attempts, 10s apart — through
+`promote_check.assess`, the workflow's own verdict function, and exits 0 only on the promoted build
+under `ok`. Degraded, a different build, or a body this machine cannot read either each exit 1 with
+their own remedy; the last is reported as blind, never as a failed deploy.
+
+The underlying dispatch, for a machine that has no checkout (confirm by hand afterwards, below):
 
 ```bash
 gh workflow run promote.yml -f tag=warehouse-2026.05-eb4da0d
@@ -207,8 +217,9 @@ condition this section exists to describe.
 **`promote.yml` reads a build AND a status, and each finding earns its own remedy.** A wrong
 build is a promote the box never took; the promoted build under a report that is not `ok` is a
 promote it took and cannot serve (below). Where no build was read at all, it names what came back
-instead and hands over the check that separates the two readings. Run that check from a network
-that reaches the site, and act on what it shows, not on the failed run:
+instead and hands over the check that separates the two readings. `make promote` runs that check
+for you from the operator's machine (§ Promote); after a bare `gh workflow run`, run it from a
+network that reaches the site, and act on what it shows, not on the failed run:
 
 ```bash
 curl -sS -D - https://upgauge.shipman.dev/api/health

@@ -50,6 +50,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -58,6 +59,10 @@ sys.path.insert(0, str(Path(__file__).parents[1] / ".github" / "scripts"))
 
 from promote_check import (  # noqa: E402
     _HAND_CHECK,
+    DEGRADED,
+    MATCHED,
+    UNREADABLE,
+    assess,
     parse_promoted_tag,
     printable,
     read_health,
@@ -77,6 +82,12 @@ _RUN_LOOKUP_INTERVAL = 2
 #: Local clock vs GitHub's. The run is matched by "created after we dispatched", so any skew
 #: toward a fast local clock would discard the real run and report it missing.
 _CLOCK_SKEW = timedelta(seconds=60)
+
+#: The confirmation poll, run from the operator's machine after the workflow ends. The workflow
+#: has already given the box up to 300s, and retag-to-serving measures ~55s (deploy.md), so this
+#: budget covers a workflow that ended early rather than a slow box: 12 x 10s.
+_CONFIRM_ATTEMPTS = 12
+_CONFIRM_INTERVAL = 10
 
 _UNKNOWN_TS = datetime.min.replace(tzinfo=UTC)
 
@@ -371,6 +382,48 @@ def find_run(dispatched_at: datetime) -> int | None:
     return None
 
 
+def confirm(
+    tag: str,
+    fetch: Callable[[], tuple[str, int]] | None = None,
+    sleep: Callable[[float], None] | None = None,
+    attempts: int = _CONFIRM_ATTEMPTS,
+    interval: float = _CONFIRM_INTERVAL,
+) -> tuple[int, str]:
+    """`(exit code, message)` for a promote, decided from what THIS machine reads (#209).
+
+    `promote.yml` polls from a GitHub runner, which Bot Fight Mode answers with a challenge
+    page, so its exit code says nothing about the box. The verdict is `promote_check.assess`'s,
+    never a second copy of its rules: only the promoted build under `ok` exits 0 (#79), and a
+    box this machine cannot read either is reported as blind -- not evidence either way.
+    """
+    fetch = fetch or fetch_health
+    sleep = sleep or time.sleep
+    verdict = None
+    for attempt in range(attempts):
+        if attempt:
+            sleep(interval)
+        verdict = assess(tag, *fetch())
+        if verdict.outcome == MATCHED:
+            return 0, f"Confirmed from this machine: {verdict.reason}."
+    assert verdict is not None
+    if verdict.outcome == UNREADABLE:
+        return 1, (
+            f"Could not read the box from this machine either: {verdict.reason}\n"
+            "That is NOT evidence the deploy failed, nor that it succeeded. Check by hand:\n"
+            f"  {_HAND_CHECK}\n"
+            "Only the promoted build under `ok` is a deploy."
+        )
+    if verdict.outcome == DEGRADED:
+        return 1, (
+            f"{verdict.reason}.\nThe box took the image and cannot serve with it. "
+            "ROLL BACK to a tag that serves: make promote TAG=<previous known-good tag>"
+        )
+    return 1, (
+        f"The box is not serving the promoted build: {verdict.reason}.\n"
+        f"Re-dispatch a tag that serves: make promote TAG=<tag>"
+    )
+
+
 def dispatch(tag: str) -> int:
     dispatched_at = datetime.now(UTC) - _CLOCK_SKEW
     done = _run(["gh", "workflow", "run", WORKFLOW, "-f", f"tag={tag}"])
@@ -391,7 +444,13 @@ def dispatch(tag: str) -> int:
         return 1
 
     print(f"Watching run {run_id} -- it polls /api/health for up to 300s.\n")
-    return subprocess.run(["gh", "run", "watch", str(run_id), "--exit-status"]).returncode
+    workflow_rc = subprocess.run(["gh", "run", "watch", str(run_id), "--exit-status"]).returncode
+    # The workflow's poll runs from a runner Cloudflare may challenge, so its exit code decides
+    # nothing. This machine's read does, in both directions.
+    print(f"\nThe workflow exited {workflow_rc}. Confirming from this machine ...")
+    code, message = confirm(tag)
+    print(message, file=sys.stderr if code else sys.stdout)
+    return code
 
 
 def main(argv: list[str]) -> int:
