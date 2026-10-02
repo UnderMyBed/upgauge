@@ -701,20 +701,29 @@ BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&
 check_not "explore: ...and the operating view does not" "$BODY" 'flew only for that parent'
 
 # #203: a mainline view grouped by carrier marks the month a group's composition changes and
-# lists the step in its foot. Alaska over 2016-06..2017-06: VX joins at 2016-12, mid-window.
-# Both positives are written in HTML-only bytes: the attribute form `aria-label="…"` and the
-# emitted `<strong>` -- the flight payload spells props as JSON, so neither can match there.
-# STEPS_Q is the canonical spelling (encode(decodeRequest(…)) returns it byte-for-byte), so
-# neither request is answered by a 307.
-STEPS_Q="v=1&k=seg&d=year_month,op_airline_id&m=seats&t=2016-06:2017-06&f=op_airline_id:19930&s=-seats&n=25"
+# lists the crossed steps of the carriers on the page in its foot. Alaska plus Virgin America
+# over 2016-06..2017-06: VX joins AS at 2016-12, mid-window. Under g=ml the op_airline_id filter
+# targets the raw fact column, so VX must be in it for the AS 2016-12 row to hold VX metal; the
+# AS-only view below holds none and must claim nothing. No VX row sits in 2016-12 (VX counts
+# under AS from then), so VX's own step is in the foot only. Every positive is written in
+# HTML-only bytes: the attribute form `aria-label="…"`, and React's `<!-- -->` text-node
+# separators around the foot list -- the flight payload spells props as JSON, so neither can
+# match there. STEPS_Q is the canonical spelling (encode(decodeRequest(…)) returns it
+# byte-for-byte), so no request here is answered by a 307.
+STEPS_Q="v=1&k=seg&d=year_month,op_airline_id&m=seats&t=2016-06:2017-06&f=op_airline_id:19930,21171&s=-seats&n=25"
 BODY=$(curl -s --max-time 15 "${BASE}/explore?${STEPS_Q}&g=ml")
 check     "explore: marks the month a mainline group's composition changes" \
   "$BODY" 'aria-label="Group composition changes: VX joins 2016-12"'
-check     "explore: lists the crossed composition step in the foot" \
-  "$BODY" '<strong>Composition</strong> changes in this window:'
+check     "explore: lists both carriers' crossed composition steps in the foot" \
+  "$BODY" '<!-- -->AS: VX joins 2016-12; VX: counted under AS from 2016-12<!-- -->.'
 BODY=$(curl -s --max-time 15 "${BASE}/explore?${STEPS_Q}&g=op")
 check_not "explore: ...and the operating view marks nothing" "$BODY" 'Group composition changes'
-check     "explore: ...and that operating view really rendered its foot" "$BODY" 'quarantined row'
+check     "explore: ...and that steps-window operating view rendered its foot" "$BODY" 'quarantined row'
+STEPS_AS_ONLY_Q="v=1&k=seg&d=year_month,op_airline_id&m=seats&t=2016-06:2017-06&f=op_airline_id:19930&s=-seats&n=25"
+BODY=$(curl -s --max-time 15 "${BASE}/explore?${STEPS_AS_ONLY_Q}&g=ml")
+check_not "explore: ...and Alaska's own metal alone claims no VX step" "$BODY" 'VX joins 2016-12'
+check     "explore: ...and that Alaska-only mainline view rendered its foot" \
+  "$BODY" '<strong>Mainline</strong> counts a carrier under its parent'
 
 # 5. The caching header is the cost control, so it is a test, not a hope.
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=5&g=op")

@@ -34,6 +34,21 @@ function inBucket(q: PivotQuery, row: Record<string, unknown>, month: string): b
   return true;
 }
 
+/** Under `g=ml` an `op_airline_id` filter targets the RAW fact column, not the rolled-up one
+ * (render.ts filters `op_airline_id IN (...)` on the fact; sql/03_queries/pivot_mainline_join.sql
+ * "KNOWN SEMANTIC GAP"). So `f=op_airline_id:19930` keeps AS-operated metal only, and its
+ * 2016-12 row holds no VX seats. Rule: under such a filter a `joins`/`leaves` step is kept only
+ * when its other airline passes the filter too -- otherwise the row never held the metal the
+ * step names. `rolls_up`/`rolls_out` are already constrained: the subject's own row exists only
+ * when the subject passes. Repeated `op_airline_id` filters AND together in render.ts, so the
+ * admitted set is their intersection. No filter, no constraint. */
+function admittedByFilter(q: PivotQuery): (s: MainlineStep) => boolean {
+  const lists = q.filters.filter(([key]) => key === "op_airline_id").map(([, values]) => values);
+  if (lists.length === 0) return () => true;
+  const admits = (id: string) => lists.every((values) => values.includes(id));
+  return (s) => (s.kind !== "joins" && s.kind !== "leaves") || admits(String(s.otherAirlineId));
+}
+
 export function rowSteps(
   q: PivotQuery,
   row: Record<string, unknown>,
@@ -41,7 +56,10 @@ export function rowSteps(
 ): MainlineStep[] {
   if (!stepsApply(q)) return [];
   const id = Number(row.op_airline_id);
-  return steps.filter((s) => s.subjectAirlineId === id && inBucket(q, row, s.month));
+  const admitted = admittedByFilter(q);
+  return steps.filter(
+    (s) => s.subjectAirlineId === id && inBucket(q, row, s.month) && admitted(s),
+  );
 }
 
 export function stepPhrase(step: MainlineStep): string {
@@ -70,11 +88,11 @@ export function rowNote(
     : `Group composition changes: ${matched.map(stepPhrase).join("; ")}`;
 }
 
-/** The foot's list: every crossed step whose subject appears among the result's rows, in the
- * query file's order. Bucket-free on purpose -- a view with no time dimension, or rows that do
- * not show the bucket, still has to say what moved inside its window. Steps arrive ordered by
- * subject (mainline_steps.sql's ORDER BY), so a subject's steps are contiguous and the merge
- * below is adjacency-based. */
+/** The foot's list: every crossed step whose subject appears among the result's rows and that
+ * the `op_airline_id` filter admits, in the query file's order. Bucket-free on purpose -- a view
+ * with no time dimension, or rows that do not show the bucket, still has to say what moved
+ * inside its window. Steps arrive ordered by subject (mainline_steps.sql's ORDER BY), so a
+ * subject's steps are contiguous and the merge below is adjacency-based. */
 export function stepsBySubject(
   q: PivotQuery,
   rows: readonly Record<string, unknown>[],
@@ -82,9 +100,10 @@ export function stepsBySubject(
 ): { subjectAirlineId: number; phrases: string[] }[] {
   if (!stepsApply(q)) return [];
   const present = new Set(rows.map((r) => Number(r.op_airline_id)));
+  const admitted = admittedByFilter(q);
   const out: { subjectAirlineId: number; phrases: string[] }[] = [];
   for (const s of steps) {
-    if (!present.has(s.subjectAirlineId)) continue;
+    if (!present.has(s.subjectAirlineId) || !admitted(s)) continue;
     const last = out[out.length - 1];
     if (last && last.subjectAirlineId === s.subjectAirlineId) last.phrases.push(stepPhrase(s));
     else out.push({ subjectAirlineId: s.subjectAirlineId, phrases: [stepPhrase(s)] });

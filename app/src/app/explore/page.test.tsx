@@ -649,17 +649,23 @@ describe("/explore says what the mainline grouping includes", () => {
 });
 
 // #203: the mainline view grouped by carrier marks the row whose month holds a composition step
-// and lists every crossed step in its foot. Window 2016-06..2017-06, filtered to Alaska so the
-// table is one row per month: VX joins at 2016-12, mid-series, not at an edge. This spelling is
-// canonical -- `encode(decodeRequest(...))` returns it byte-for-byte and `canonicalize` calls it
-// clean -- so smoke.sh's identical STEPS_Q is served as a 200, never a 307.
+// and lists the crossed steps of the carriers on the page in its foot. Window 2016-06..2017-06,
+// filtered to Alaska AND Virgin America: under g=ml the op_airline_id filter targets the raw
+// fact column, so only with VX admitted does the AS 2016-12 row really hold the VX metal its
+// "VX joins" mark names (filtered to AS alone it holds none, and compositionSteps drops the
+// step). VX joins at 2016-12, mid-series, not at an edge. Under g=ml this is 19 rows: AS every
+// month (13) and VX 2016-06..2016-11 (6) -- from 2016-12 VX counts under AS, so NO VX row sits
+// in 2016-12 and VX's own step ("counted under AS from 2016-12") marks no row; it appears in the
+// foot only. This spelling is canonical -- `encode(decodeRequest(...))` returns it
+// byte-for-byte and `canonicalize` calls it clean -- so smoke.sh's identical STEPS_Q is served
+// as a 200, never a 307.
 const AS_STEPS = {
   v: "1",
   k: "seg",
   d: "year_month,op_airline_id",
   m: "seats",
   t: "2016-06:2017-06",
-  f: "op_airline_id:19930",
+  f: "op_airline_id:19930,21171",
   s: "-seats",
   n: "25",
   g: "ml",
@@ -668,21 +674,41 @@ const AS_STEPS = {
 describe("/explore marks mainline composition steps", () => {
   it("marks the 2016-12 Alaska row and only it", async () => {
     const { container } = render(await ExploreView({ rawQuery: qs(AS_STEPS) }));
-    const marks = [...container.querySelectorAll(".step-mark")];
-    expect(marks.map((m) => m.getAttribute("aria-label"))).toEqual([
-      "Group composition changes: VX joins 2016-12",
-    ]);
-    expect(marks[0].closest("tr")?.textContent).toContain("2016-12");
+    // Not vacuous: all 19 rows rendered, VX's six among them.
+    const rows = [...container.querySelectorAll("tbody tr")];
+    expect(rows.length).toBe(19);
+    const marked = rows.filter((r) => r.querySelector(".step-mark"));
+    expect(
+      marked.map((r) => [
+        r.textContent!.match(/\d{4}-\d{2}/)?.[0],
+        r.querySelector(".step-mark")!.getAttribute("aria-label"),
+      ]),
+    ).toEqual([["2016-12", "Group composition changes: VX joins 2016-12"]]);
+    expect(marked[0].textContent).toContain("AS");
   });
 
-  // The subject is named by its resolved CODE: "AS: VX joins", never "19930: VX joins".
-  it("lists the crossed step in the foot", async () => {
+  // The subject is named by its resolved CODE: "AS: VX joins", never "19930: VX joins". Two
+  // subjects, so both separators are pinned: "; " between carriers, ", " within one.
+  it("lists the crossed steps of both carriers in the foot", async () => {
     const { container } = render(await ExploreView({ rawQuery: qs(AS_STEPS) }));
     const foot = container.querySelector(".foot");
     expect(foot?.innerHTML).toContain("<strong>Composition</strong>");
     expect(foot?.textContent).toContain(
-      "Composition changes in this window: AS: VX joins 2016-12.",
+      "Composition changes in this window: AS: VX joins 2016-12; VX: counted under AS from 2016-12.",
     );
+  });
+
+  it("drops the joins step when the filter admits Alaska's own metal only", async () => {
+    // The raw-column filter: f=op_airline_id:19930 holds no VX seats, so no row and no foot
+    // entry may claim VX joined.
+    const { container } = render(
+      await ExploreView({ rawQuery: qs({ ...AS_STEPS, f: "op_airline_id:19930" }) }),
+    );
+    expect(container.querySelectorAll("tbody tr").length).toBe(13);
+    expect(container.querySelector(".step-mark")).toBeNull();
+    const foot = container.querySelector(".foot")!.textContent;
+    expect(foot).toContain("flew only for that parent");
+    expect(foot).not.toContain("Composition changes");
   });
 
   it("never queries steps on the operating view", async () => {
@@ -690,8 +716,8 @@ describe("/explore marks mainline composition steps", () => {
     const { container } = render(await ExploreView({ rawQuery: qs({ ...AS_STEPS, g: "op" }) }));
     expect(mainlineSteps).not.toHaveBeenCalled();
     expect(container.querySelector(".step-mark")).toBeNull();
-    // Not vacuous: the operating fixture rendered the same 13 monthly rows and its foot.
-    expect(container.querySelectorAll("tbody tr").length).toBe(13);
+    // Not vacuous: the operating fixture rendered rows (26 exist, n=25 caps them) and its foot.
+    expect(container.querySelectorAll("tbody tr").length).toBe(25);
     expect(container.querySelector(".foot")!.textContent).not.toContain("Composition");
   });
 });

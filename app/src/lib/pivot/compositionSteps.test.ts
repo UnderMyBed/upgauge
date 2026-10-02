@@ -172,3 +172,56 @@ describe("stepsBySubject -- the foot list", () => {
     expect(stepsBySubject(q({ grouping: "operating" }), AS_MONTHLY, [VX_JOINS])).toEqual([]);
   });
 });
+
+describe("the op_airline_id filter rule -- a raw-column filter constrains joins/leaves", () => {
+  // Under g=ml the op_airline_id filter targets the RAW fact column, so f=op_airline_id:19930 is
+  // AS-operated metal only: its 2016-12 row holds no VX seats and must not claim "VX joins".
+  const VX_ROLLS_UP: MainlineStep = {
+    subjectAirlineId: VX, month: "2016-12", otherAirlineId: AS, otherCode: "AS", kind: "rolls_up",
+  };
+  const asOnly = q({ filters: [["op_airline_id", [String(AS)]]] });
+  const asAndVx = q({ filters: [["op_airline_id", [String(AS), String(VX)]]] });
+
+  it("filtered to AS alone, the AS 2016-12 row carries no mark", () => {
+    // Catches: rowSteps ignoring the filter (the row would claim VX metal it does not hold).
+    expect(rowSteps(asOnly, AS_MONTHLY[6], [VX_JOINS])).toEqual([]);
+    expect(rowNote(asOnly, AS_MONTHLY[6], [VX_JOINS])).toBeNull();
+  });
+  it("filtered to AS alone, the foot has no AS entry", () => {
+    // Catches: stepsBySubject ignoring the filter.
+    expect(stepsBySubject(asOnly, AS_MONTHLY, [VX_JOINS])).toEqual([]);
+  });
+  it("filtered to AS and VX, the mark and the foot entry are back", () => {
+    // Catches: a filter rule that drops every joins/leaves step under any op_airline_id filter.
+    expect(rowSteps(asAndVx, AS_MONTHLY[6], [VX_JOINS])).toEqual([VX_JOINS]);
+    expect(stepsBySubject(asAndVx, AS_MONTHLY, [VX_JOINS])).toEqual([
+      { subjectAirlineId: AS, phrases: ["VX joins 2016-12"] },
+    ]);
+  });
+  it("repeated op_airline_id filters intersect, as render.ts ANDs them", () => {
+    // Catches: unioning repeated filters -- AS-and-VX AND AS-only admits AS metal alone.
+    const both = q({
+      filters: [["op_airline_id", [String(AS), String(VX)]], ["op_airline_id", [String(AS)]]],
+    });
+    expect(rowSteps(both, AS_MONTHLY[6], [VX_JOINS])).toEqual([]);
+    expect(stepsBySubject(both, AS_MONTHLY, [VX_JOINS])).toEqual([]);
+  });
+  it("leaves rolls_up alone -- the subject's own row already passed the filter", () => {
+    // Catches: applying the other-airline test to every kind (VX filtered alone would lose its
+    // own "counted under AS" step, though its row is VX metal and the step is about VX).
+    const vxOnly = q({ filters: [["op_airline_id", [String(VX)]]] });
+    const row = { year_month: "2016-12", op_airline_id: VX, seats: 1 };
+    expect(rowSteps(vxOnly, row, [VX_ROLLS_UP])).toEqual([VX_ROLLS_UP]);
+    expect(stepsBySubject(vxOnly, [row], [VX_ROLLS_UP])).toEqual([
+      { subjectAirlineId: VX, phrases: ["counted under AS from 2016-12"] },
+    ]);
+  });
+  it("a filter on another dimension changes nothing", () => {
+    // Catches: treating any filter as the op_airline_id filter.
+    const other = q({ filters: [["origin_airport_id", ["12892"]]] });
+    expect(rowSteps(other, AS_MONTHLY[6], [VX_JOINS])).toEqual([VX_JOINS]);
+    expect(stepsBySubject(other, AS_MONTHLY, [VX_JOINS])).toEqual([
+      { subjectAirlineId: AS, phrases: ["VX joins 2016-12"] },
+    ]);
+  });
+});
