@@ -11,10 +11,11 @@ import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
+import { SeasonalityHeatmap } from "@/components/SeasonalityHeatmap";
 import { segmentArcsDrawn } from "@/lib/map/segmentMap";
 import { MapPicker } from "@/components/MapPicker";
 import { SegmentMap } from "@/components/SegmentMap";
-import { BY_CARRIER, fetchAircraftMix } from "@/lib/chart/aircraftMix";
+import { AIRCRAFT_MIX_LIMIT, BY_CARRIER, fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
 import { fetchCarrierTypeNetwork } from "@/lib/map/carrierTypeNetwork";
 import { rawFilterValue, resolveCarrierFilter } from "@/lib/map/mapFilter";
@@ -359,6 +360,13 @@ export async function AircraftView({
           <div>
             {hasMix ? (
               <AircraftMixChart rows={mix} title={canonical} dimension={BY_CARRIER} />
+            ) : null}
+            {hasMix ? (
+              <SeasonalityHeatmap
+                rows={mix}
+                title={canonical}
+                truncated={mix.length >= AIRCRAFT_MIX_LIMIT}
+              />
             ) : null}
             {isEmpty ? (
               <AircraftEmptyState query={query} type={type} />

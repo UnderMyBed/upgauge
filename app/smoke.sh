@@ -1130,6 +1130,13 @@ check_dataset check "chart: a route with one gets the derived annotation (ATL-MC
 BODY=$(curl -s --max-time 30 "${BASE}/route/HNL-LAS")
 check    "chart: the unfiled months are stated (HNL-LAS)" "$BODY" '6 months with no filings, drawn as gaps rather than interpolated.'
 check_re "chart: the band BREAKS at them, drawn as two paths (HNL-LAS)" "$(count "$BODY" '<path fill="var(--g5)" d=')" '^2$'
+# The seats-by-month heatmap (#7) under the mix chart, in the served bytes. `aria-label="` is
+# the HTML attribute form; the flight payload carries it as `"aria-label":"`, so this needle
+# matches the rendered markup only. HNL-LAS is the gap route, so its label must also carry the
+# unfiled count -- the heatmap's own statement of the six-month hole the chart above breaks at.
+check    "route: renders the seats-by-month heatmap" "$BODY" 'aria-label="Seats by month, '
+check_re "route: the heatmap's label states the unfiled months (HNL-LAS)" "$BODY" \
+  'aria-label="Seats by month, [^"]* [0-9]+ months? with no filings\.'
 
 # The OTHER branch of the window line, in the served bytes. ATL-CAK filed 67 months, 2015-01 ->
 # 2022-06, and nothing since; the chart is fetched over the full window but can only draw to
@@ -1199,6 +1206,7 @@ check_not "airport: renders no bare AIRPORT_ID" "$BODY" '>14747<'
 check     "airport: the chart SVG is in the served HTML" "$BODY" '<svg role="img"'
 check     "airport: ramp tokens reach the area fills (lightest)" "$BODY" '<path fill="var(--g0)" d='
 check     "airport: ramp tokens reach the area fills (darkest)"  "$BODY" '<path fill="var(--g5)" d='
+check     "airport: renders the seats-by-month heatmap" "$BODY" 'aria-label="Seats by month, '
 # The positive half of /aircraft's "not by aircraft type" below. An absence check whose needle
 # is served by no page in the app is an absence check that can never fire; this is the page that
 # proves the string exists and reaches the served bytes.
@@ -1966,6 +1974,7 @@ check     "carrier: links an aircraft cell to /aircraft/B737-8" "$BODY" 'href="/
 check     "carrier: the chart SVG is in the served HTML" "$BODY" '<svg role="img"'
 check     "carrier: ramp tokens reach the area fills (lightest)" "$BODY" '<path fill="var(--g0)" d='
 check     "carrier: ramp tokens reach the area fills (darkest)"  "$BODY" '<path fill="var(--g5)" d='
+check     "carrier: renders the seats-by-month heatmap" "$BODY" 'aria-label="Seats by month, '
 check_dataset check "carrier: the page states the chart's own window" "$BODY" 'chart: the full window · 2015-01 → 2026-06'
 # Final whole-branch review, M11 (third of four canonical checks -- see /route's own comment).
 check     "carrier: carries a self-referential canonical link (Task 2)" "$BODY" \
@@ -2261,6 +2270,7 @@ check_not "aircraft: renders no bare AIRLINE_ID" "$BODY" '>19393<'
 check     "aircraft: the chart SVG is in the served HTML" "$BODY" '<svg role="img"'
 check     "aircraft: ramp tokens reach the area fills (lightest)" "$BODY" '<path fill="var(--g0)" d='
 check     "aircraft: ramp tokens reach the area fills (darkest)"  "$BODY" '<path fill="var(--g5)" d='
+check     "aircraft: renders the seats-by-month heatmap" "$BODY" 'aria-label="Seats by month, '
 # The stack is CARRIERS here, not aircraft types -- this page IS one type, so a type stack would
 # be one band whose shading encodes nothing (system.md § Charts). Built as one template literal
 # for the same reason as the carrier caveats above.

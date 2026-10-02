@@ -614,3 +614,26 @@ describe("/route/<pair>: the legend rail follows the CHART, not the rows (#123)"
     expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
   });
 });
+
+// The seats-by-month heatmap (#7) is drawn from the mix chart's own rows, so it belongs directly
+// under that chart: what is asserted is the MOUNT -- that it renders on this page, in document
+// order after the mix chart, with its own accessible name. The grid itself belongs to
+// SeasonalityHeatmap.test.tsx and seasonality.test.ts.
+describe("/route/<pair>: the seats-by-month heatmap", () => {
+  it("renders under the aircraft-mix chart, with its own accessible name", async () => {
+    const { container } = render(await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }));
+    const mixChart = container.querySelector(".chart:not(.heatmap)");
+    const heatmap = container.querySelector(".chart.heatmap");
+    expect(mixChart).not.toBeNull();
+    expect(heatmap).not.toBeNull();
+    // Order, not presence: a heatmap mounted above the chart it is read against satisfies
+    // every existence check here.
+    expect(mixChart!.compareDocumentPosition(heatmap!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    // The svg exists only when the grid is drawn, so a `truncated` flag wired to the wrong
+    // value (the grid replaced by its can't-be-stated note) fails here too.
+    const label = heatmap!.querySelector("svg[role='img']")?.getAttribute("aria-label") ?? "";
+    expect(label.startsWith("Seats by month, ")).toBe(true);
+  });
+});

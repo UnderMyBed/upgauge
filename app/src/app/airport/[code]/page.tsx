@@ -17,6 +17,7 @@ import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
+import { SeasonalityHeatmap } from "@/components/SeasonalityHeatmap";
 import { networkArcsDrawn } from "@/lib/map/networkMap";
 import { NetworkMap } from "@/components/NetworkMap";
 import { AIRCRAFT_MIX_LIMIT } from "@/lib/chart/aircraftMix";
@@ -411,6 +412,9 @@ export async function AirportView({
         <div className="body">
           <div>
             {hasMix ? <AircraftMixChart rows={mix.rows} title={airport.code} /> : null}
+            {hasMix ? (
+              <SeasonalityHeatmap rows={mix.rows} title={airport.code} truncated={mix.truncated} />
+            ) : null}
             {/* The chart's own truncation, disclosed separately from the table's: they are two
                 separate pivots (one per grain) with separate limits, and either can be short
                 while the other is whole. Saying "the totals above" here would be false -- the
