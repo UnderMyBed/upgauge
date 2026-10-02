@@ -222,12 +222,13 @@ the metal — a Delta-branded regional flown by Endeavor files as `9E`, not `DL`
 carriers on a route does *not* double-count. There is no marketing-carrier field; don't try
 to infer one.
 
-**`map_mainline_group` is DATE-RANGED and wholly-owned only.** Alaska acquired Virgin
-America (2016-12) and Hawaiian (2024-09), both in-window, so a flat map is wrong before each
-acquisition and omission is wrong after. Never roll up shared regionals (SkyWest `OO`,
-Republic `YX`, Mesa `YV`) or contract carriers — no date range fixes those; they fly for
-several mainlines on the same day. Test: no overlapping ranges per `airline_id`, and
-Hawaiian rolls up from 2024-09 but not 2024-08.
+**`map_mainline_group` is DATE-RANGED, and every row is `owned` or a sourced exclusive
+`contract`.** Alaska acquired Virgin America (2016-12) and Hawaiian (2024-09), both in-window,
+so a flat map is wrong before each acquisition and omission is wrong after. A contract row
+covers only months with ONE partner and cites its source; transition months stay at the
+operating carrier. Never roll up shared regionals (SkyWest `OO`, Republic `YX`) — they fly for
+several mainlines on the same day. Test: no overlapping ranges per `airline_id`, and Hawaiian
+rolls up from 2024-09 but not 2024-08.
 
 **Don't reuse the name `carrier_group`.** T-100 already ships `CARRIER_GROUP` /
 `CARRIER_GROUP_NEW` — BTS's revenue-based filing classification, unrelated to our rollup.

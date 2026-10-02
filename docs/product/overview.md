@@ -36,7 +36,7 @@ load factor is. Do not dumb it down; do make it legible.
 | Decision | Resolution |
 |---|---|
 | Product name | **Upgauge.** Trademark checked — clear in our class. Hosted at **`upgauge.shipman.dev`**; no domain purchase for v0. |
-| Rollup model | **Operating carrier is the grain + truth. Optional _date-ranged_ rollup to parent for wholly-owned subsidiaries only.** See [carrier-model](../data/carrier-model.md). |
+| Rollup model | **Operating carrier is the grain + truth. Optional _date-ranged_ rollup to parent for wholly-owned subsidiaries and exclusive contract carriers only.** See [carrier-model](../data/carrier-model.md). |
 | History window | **2015 → present.** COVID is in-window on purpose. |
 | Public or private | **Public from day one.** |
 | Aesthetic | Handled in a separate design session. See [design brief](../design/brief.md). |

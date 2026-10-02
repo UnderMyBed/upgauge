@@ -18,8 +18,9 @@ Mainlines do not file metal they didn't operate. Therefore:
   flies for several mainlines simultaneously.
 
 **Decision: operating carrier is the grain and the source of truth. A `mainline_group`
-dimension provides an OPTIONAL rollup, but ONLY for wholly-owned subsidiaries**, where
-single-parent exclusivity is guaranteed by ownership.
+dimension provides an OPTIONAL rollup for wholly-owned subsidiaries and serially-exclusive
+contract carriers, in the months each was exclusive** — single-parent exclusivity guaranteed
+by ownership or shown by a sourced contract. Each map row is labelled `owned` or `contract`.
 
 ---
 
@@ -33,20 +34,39 @@ after it.
 The map is keyed `(airline_id, effective_from, effective_to) → parent`, and the ingest
 joins on it by month.
 
-| Parent | Wholly-owned subsidiary | From | To | Note |
-|---|---|---|---|---|
-| Delta | Endeavor (9E) | window start | present | Delta-owned since 2013, pre-window |
-| American | Envoy (MQ) | window start | present | AAG-owned throughout |
-| American | PSA (OH) | window start | present | AAG-owned throughout |
-| American | Piedmont (PT) | window start | present | AAG-owned throughout |
-| Alaska | Horizon (QX) | window start | present | Air Group-owned throughout |
-| **Alaska** | **Virgin America (VX)** | **2016-12** | **2018-04 (exclusive)** | Acquisition closed Dec 2016; SOC Jan 2018; brand retired Apr 2018; last filing under VX is 2018-03 |
-| **Alaska** | **Hawaiian (HA)** | **2024-09** | **present** | AAG acquired Hawaiian Holdings Sept 2024; SOC Oct 2025; `HA` flight numbers retire ~Apr 2026 |
-| **United** | **— none —** | | | United owns no subsidiary operators; gets no rollup |
+| Parent | Carrier | Basis | From | To (exclusive) | Note |
+|---|---|---|---|---|---|
+| Delta | Endeavor (9E) | owned | window start | present | Delta-owned since 2013, pre-window |
+| American | Envoy (MQ) | owned | window start | present | AAG-owned throughout |
+| American | PSA (OH) | owned | window start | present | AAG-owned throughout |
+| American | Piedmont (PT) | owned | window start | present | AAG-owned throughout |
+| Alaska | Horizon (QX) | owned | window start | present | Air Group-owned throughout |
+| **Alaska** | **Virgin America (VX)** | owned | **2016-12** | **2018-04** | Acquisition closed Dec 2016; SOC Jan 2018; brand retired Apr 2018; last filing under VX is 2018-03 |
+| **Alaska** | **Hawaiian (HA)** | owned | **2024-09** | **present** | AAG acquired Hawaiian Holdings Sept 2024; SOC Oct 2025; `HA` flight numbers retire ~Apr 2026 |
 
-**The concept is ownership, not aircraft size.** This is no longer "wholly-owned
-*regionals*" — Virgin America and Hawaiian are mainline carriers that became wholly-owned
-subsidiaries.
+Contract rows, each with the passengers it moves (passenger configs, non-quarantined,
+2015-01..2026-06) and the evidence for its boundary months. The `source` column of
+`pipeline/reference/mainline_group.csv` carries each row's primary URL.
+
+| Parent | Carrier | Basis | From | To (exclusive) | Pax | Evidence |
+|---|---|---|---|---|---|---|
+| United | CommutAir (C5) | contract | window start | present | 26.6M | United Express only (commuteair.com/about); United holds 40% since 2016. Hub share ~100% United every quarter |
+| American | Air Wisconsin (ZW) | contract | window start | 2017-09 | 12.9M | Harbor Diversified 10-K FY2019: American flying ended before March 2018, United began 2017-09. Hub share ~90% American to 2017-Q3 |
+| United | Air Wisconsin (ZW) | contract | 2018-03 | 2023-03 | 15.3M | Harbor 10-K FY2022; FY2024 note R9: second American contract from 2023-03, United withdrawn early 2023-06. Hub-share overlap visible 2017-Q4/2018-Q1 |
+| American | Air Wisconsin (ZW) | contract | 2023-07 | 2025-04 | 3.7M | Harbor FY2024 R9; 8-K EX-99.1: American contract ended 2025-04-03. Off United hubs from 2023-Q2 |
+| United | Mesa (YV) | contract | 2023-05 | 2025-12 | 13.3M | Mesa 10-K FY2023: American wound down by 2023-04-03. Republic–Mesa merger closed 2025-11-25. Hub share ~100% United from 2023-Q2 |
+| United | GoJet (G7) | contract | 2021-01 | present | 13.0M | Delta 10-K FY2019: GoJet ends by end of 2020; absent from FY2020. United hub share jumps 2021-Q4 |
+| United | ExpressJet (EV) | contract | 2019-02 | 2020-10 | 6.4M | Delta flying ended 2018-11 (Bend Bulletin 2018-12-19), American 2019-01; last United flight 2020-09-30 (AirlineGeeks 2020-08-24); SkyWest 10-K FY2018 |
+| United | Trans States (AX) | contract | 2019-01 | 2020-05 | 3.6M | American flying lasted until December 2018 (Cranky Flier 2020-08-20); last United flight 2020-04-01. Medium source; American hub share 10% → 0% at 2019-Q1 corroborates |
+| Hawaiian | Empire (EM) | contract | window start | 2021-02 | 1.1M | 'Ohana by Hawaiian 2014-03 → 2021-01-14 (Civil Beat 2014-03; Maui Now 2021-05-27; Star-Advertiser 2021-01-06) |
+
+The nine contract rows move 95.9M passengers, 1.1% of the window's; 78.3M of it rolls up to
+United, +8.2% on the 951.3M United carries itself.
+
+**The concept is single-parent exclusivity, by ownership or by contract — not aircraft
+size.** Virgin America and Hawaiian are mainline carriers that became wholly-owned
+subsidiaries; Empire rolls up to Hawaiian years before Hawaiian rolls up to Alaska, and the
+two ranges never share a month.
 
 ### Rules for the map
 
@@ -84,6 +104,15 @@ subsidiaries.
     overlap, which would have broken `make ingest`/`make warehouse` the next time a
     date-ranged acquisition was entered using this convention. See
     `pipeline/reference/mainline_group.csv`'s header comment, corrected to match.
+- **Admission rule.** `basis = owned`: a wholly-owned subsidiary, for the months of
+  ownership. `basis = contract`: a regional admitted ONLY for months in which ALL of its
+  scheduled passenger flying was for this one parent (capacity purchase or prorate) — no
+  concurrent second partner, no own-brand flying. Every contract row cites a fetched source
+  for its boundary months, and its per-quarter hub share must not contradict it. Transition
+  months (flying for two partners) are left as GAPS between rows: they stay at the operating
+  carrier. Never shared regionals (SkyWest OO, Republic YX): they fly for several mainlines in
+  the same month, which no date range can express. The loader refuses a `basis` outside
+  `owned`/`contract` and a `contract` row with no `source`.
 - Verify all dates against filings at ingest. **Do not trust the table above as gospel** —
   it is a starting point, and the single most reviewable artifact in the pipeline. Keep it
   as a checked-in declarative file (CSV/YAML), not code, so a reviewer needn't read Python
@@ -97,12 +126,20 @@ subsidiaries.
 
 Two distinct reasons:
 
-- **Shared regionals** (SkyWest OO, Republic YX, Mesa YV, GoJet…) fly for several mainlines
-  at once → not attributable at all, at any date.
-- **Serially-exclusive contract regionals** (Air Wisconsin ZW, ExpressJet EV…) flew for one
-  mainline *at a time* but *changed masters* mid-window. These are now **mechanically
-  expressible** — the date-ranged map above is the same shape they need — but they stay out
-  of v0 because sourcing the contract dates correctly is the hard part, not the schema.
+- **Shared regionals** (SkyWest OO, Republic YX, and Mesa YV before 2023-05) fly for several
+  mainlines at once → not attributable in those months.
+- **Contract months that fail the admission rule.** Excluded, and why:
+  - **SkyWest OO, Republic YX, Shuttle America S5** — concurrent partners throughout.
+  - **Mesa before 2023-05** — concurrent American and United. **Mesa from 2025-12** —
+    post-merger flying unsourced.
+  - **Compass CP 2015-01..2015-02 (Delta)** — sourced, but the hub data shows no change at the
+    claimed 2015-03 switch, so nothing corroborates it; 0.6M pax.
+  - **GoJet 2020-04..2020-12** — only Wikipedia dates the Delta exit to 2020-03.
+  - **ExpressJet aha! 2021-10..2022-08** — own brand.
+  - Every month outside the contract rows above — multi-partner, transition or own-brand:
+    Air Wisconsin 2017-09..2018-02, 2023-03..2023-06 and from 2025-04; ExpressJet before
+    2019-02 and from 2020-10; Trans States before 2019-01; GoJet before 2021-01; Empire from
+    2021-02.
 
 **The rollup is a grouping layered on the operating-carrier grain, NOT a replacement.**
 Aircraft type stays at the grain, so "Delta group downgauged PDX–SLC — mainline 737 seats
@@ -114,14 +151,18 @@ down, Endeavor CRJ seats up" is *still fully visible*.
 
 1. **A group is not "all branded flying."** `Delta group` = DL + 9E. It does **not** include
    SkyWest/Republic flights also sold as Delta Connection (unattributable). Label precisely:
-   *"Delta (mainline + wholly-owned subsidiaries)"* — never imply it's every flight painted
-   as Delta. Misattribution-by-omission is still misattribution.
-2. **United looks artificially small in group view** because it owns no subsidiary operators
-   while the others do. A naive group-vs-group comparison is apples-to-oranges. Annotate it,
-   and always keep operating-carrier truth one toggle away.
+   *"Delta (mainline + subsidiaries + exclusive contract carriers)"* — never imply it's every
+   flight painted as Delta. Misattribution-by-omission is still misattribution.
+2. **Group-vs-group is still not all-branded flying vs all-branded flying.** United owns no
+   subsidiary operators, so its group is United plus contract carriers only: CommutAir
+   throughout, plus Air Wisconsin, GoJet, Mesa, ExpressJet and Trans States in their months.
+   The shared regionals carry most of every mainline's Express/Connection flying and roll up
+   to none of them. Annotate it, and always keep operating-carrier truth one toggle away.
 3. **Group composition changes over time, and a time series must show that.** `Alaska group`
-   means AS+QX in 2015, AS+QX+VX in 2017, and AS+QX+HA from late 2024. Group capacity steps
-   up at each acquisition, and **that step is an ownership event, not organic growth.**
+   means AS+QX in 2015, AS+QX+VX in 2017, and AS+QX+HA from late 2024. United's group changes
+   composition at 2018-03, 2019-01, 2019-02, 2020-05, 2020-10, 2021-01, 2023-03, 2023-05 and
+   2025-12; Air Wisconsin moves American → United → American. Group capacity steps at each
+   boundary, and **that step is an ownership or contract event, not organic growth.**
    Annotate the boundary on any grouped series that crosses it. An unannotated step change
    here is the single most misleading chart this product can draw.
 
@@ -131,13 +172,9 @@ Default view is **operating carrier**; `mainline_group` is an opt-in toggle.
 
 ## 📌 Backlog (v1+): full mainline attribution
 
-The rollup above covers only wholly-owned metal. To attribute the rest:
+The rollup above covers owned and exclusive-contract metal. To attribute the rest:
 
-1. **Serially-exclusive contract carriers** (Air Wisconsin, ExpressJet, CommutAir…) need a
-   date-ranged `(airline_id × period → parent)` mapping. **v0 now ships exactly this
-   mechanism**, so this is no longer a schema change — purely a data-sourcing job. Add rows,
-   source the contract dates carefully, ship. Meaningfully smaller than originally scoped.
-2. **Shared regionals** (SkyWest-type) need an external join — operator + flight number +
+- **Shared regionals** (SkyWest-type) need an external join — operator + flight number +
    date → marketing carrier, via a schedule feed (OAG/Cirium) or the DOT O&D survey. The
    only honest way to attribute them. Genuine v1+ scope. **No date-ranged map can fix
    these** — they fly for several mainlines on the same day.

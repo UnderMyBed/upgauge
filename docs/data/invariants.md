@@ -104,12 +104,14 @@ Regionals file under their own IDs. Key on the operating carrier — it is the g
 truth. Summing operators on a route does *not* double-count; each physical flight is filed
 once, by whoever operated the metal. See [carrier-model.md](carrier-model.md).
 
-## `mainline_group` rollup is wholly-owned only, and date-ranged
+## `mainline_group` rollup is owned or exclusive-contract only, and date-ranged
 
-`map_mainline_group` may cover ONLY the wholly-owned subsidiaries listed in
-[carrier-model.md](carrier-model.md), each with its own `effective_from`/`effective_to`.
-Never roll up shared regionals (SkyWest/Republic/Mesa) or serially-exclusive contract
-carriers (Air Wisconsin/ExpressJet) — that fabricates attribution T-100 can't support.
+`map_mainline_group` may cover ONLY the rows listed in [carrier-model.md](carrier-model.md),
+each with its own `effective_from`/`effective_to` and a `basis`: `owned` for a wholly-owned
+subsidiary, `contract` for a regional in the months ALL its flying was for that one parent,
+with a cited `source`. Transition months stay at the operating carrier. Never roll up shared
+regionals (SkyWest/Republic) — that fabricates attribution T-100 can't support. The loader
+refuses an unknown `basis` and an unsourced `contract` row.
 
 **Test that the map has no overlapping ranges per `airline_id`, and that Hawaiian rolls up
 from 2024-09 but *not* from 2024-08.** That single assertion catches the whole bug class.

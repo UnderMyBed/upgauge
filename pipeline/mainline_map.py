@@ -1,4 +1,4 @@
-"""The date-ranged wholly-owned rollup.
+"""The date-ranged rollup: wholly-owned subsidiaries and exclusive contract carriers.
 
 The rollup is a *display grouping layered on the operating-carrier grain*, never a
 replacement for it. Aircraft type stays at the grain, so downgauge stories remain visible.
@@ -71,7 +71,8 @@ class MainlineMap:
         """The parent this carrier rolled up to in that month, or None.
 
         None means the carrier did not roll up that month — which covers independents, shared
-        regionals, and subsidiaries before their acquisition. All of them stay at the
+        regionals, subsidiaries before their acquisition, and contract carriers outside their
+        exclusive months. All of them stay at the
         operating-carrier grain, which is the default view anyway.
         """
         for entry in self.entries:

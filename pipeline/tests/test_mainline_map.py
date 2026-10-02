@@ -1,4 +1,4 @@
-"""The date-ranged wholly-owned rollup.
+"""The date-ranged rollup: wholly-owned subsidiaries and exclusive contract carriers.
 
 An earlier draft of the spec assumed ownership held for the whole window and a flat
 carrier→parent map would do. It does not: Alaska acquired Virgin America in 2016 and
@@ -31,6 +31,8 @@ AA, ENVOY, PSA, PIEDMONT = 19805, 20398, 20397, 20427
 AS, HORIZON, HAWAIIAN, VIRGIN_AMERICA = 19930, 19687, 19690, 21171
 UA = 19977
 SKYWEST, REPUBLIC, MESA = 20304, 20452, 20378
+COMMUTAIR, AIR_WISCONSIN, GOJET, EXPRESSJET = 20445, 20046, 20500, 20366
+TRANS_STATES, EMPIRE, COMPASS = 20237, 20263, 21167
 
 
 @pytest.fixture
@@ -105,11 +107,11 @@ def test_wholly_owned_subsidiaries_roll_up_for_the_whole_window(mapping, subsidi
 
 
 def test_united_gets_no_rollup(mapping):
-    """United owns no subsidiary operators. This is why group-vs-group is apples-to-oranges."""
+    """United is a parent, never a child."""
     assert mapping.parent_for(UA, "2020-06") is None
 
 
-@pytest.mark.parametrize("shared", [SKYWEST, REPUBLIC, MESA])
+@pytest.mark.parametrize("shared", [SKYWEST, REPUBLIC])
 @pytest.mark.parametrize("month", ["2015-01", "2020-06", "2026-01"])
 def test_shared_regionals_are_never_rolled_up(mapping, shared, month):
     """They fly for several mainlines on the same day. No date range can fix that."""
@@ -119,7 +121,68 @@ def test_shared_regionals_are_never_rolled_up(mapping, shared, month):
 def test_shared_regionals_are_absent_from_the_map_entirely(mapping):
     """Not merely unmapped — they must not appear, so a stray parent can't be added."""
     mapped = {e.airline_id for e in mapping.entries}
-    assert mapped.isdisjoint({SKYWEST, REPUBLIC, MESA})
+    assert mapped.isdisjoint({SKYWEST, REPUBLIC})
+
+
+@pytest.mark.parametrize("month", ["2015-01", "2020-06", "2023-04", "2025-12", "2026-01"])
+def test_mesa_does_not_roll_up_while_shared_or_unsourced(mapping, month):
+    """American Eagle and United Express concurrently until 2023-04; post-merger
+    (2025-11-25) flying unsourced."""
+    assert mapping.parent_for(MESA, month) is None
+
+
+# ------------------------------------------------------- exclusive contract carriers
+
+
+@pytest.mark.parametrize(
+    ("carrier", "month", "parent"),
+    [
+        (COMMUTAIR, "2015-01", UA),
+        (COMMUTAIR, "2026-06", UA),
+        (AIR_WISCONSIN, "2017-08", AA),
+        (AIR_WISCONSIN, "2018-03", UA),
+        (AIR_WISCONSIN, "2023-02", UA),
+        (AIR_WISCONSIN, "2023-07", AA),
+        (AIR_WISCONSIN, "2025-03", AA),
+        (MESA, "2023-05", UA),
+        (MESA, "2025-11", UA),
+        (GOJET, "2021-01", UA),
+        (EXPRESSJET, "2019-02", UA),
+        (EXPRESSJET, "2020-09", UA),
+        (TRANS_STATES, "2019-01", UA),
+        (TRANS_STATES, "2020-04", UA),
+        (EMPIRE, "2015-01", HAWAIIAN),
+        (EMPIRE, "2021-01", HAWAIIAN),
+    ],
+)
+def test_contract_carriers_roll_up_inside_their_exclusive_months(mapping, carrier, month, parent):
+    assert mapping.parent_for(carrier, month) == parent
+
+
+@pytest.mark.parametrize(
+    ("carrier", "month"),
+    [
+        (AIR_WISCONSIN, "2017-09"),  # AA + UA concurrently
+        (AIR_WISCONSIN, "2018-02"),
+        (AIR_WISCONSIN, "2023-03"),  # UA + second AA contract
+        (AIR_WISCONSIN, "2023-06"),
+        (AIR_WISCONSIN, "2025-04"),  # 3 days AA, then own brand
+        (GOJET, "2020-12"),  # Delta exit dated only by Wikipedia
+        (EXPRESSJET, "2019-01"),  # AA flying ended this month
+        (EXPRESSJET, "2020-10"),
+        (TRANS_STATES, "2018-12"),
+        (EMPIRE, "2021-02"),
+        (COMPASS, "2015-01"),  # sourced, uncorroborated by hub data; excluded
+    ],
+)
+def test_transition_and_excluded_months_stay_at_the_operating_carrier(mapping, carrier, month):
+    assert mapping.parent_for(carrier, month) is None
+
+
+def test_every_contract_row_cites_a_url(mapping):
+    for e in mapping.entries:
+        if e.basis == "contract":
+            assert e.source.startswith("https://"), e
 
 
 # ------------------------------------------------------- structural checks

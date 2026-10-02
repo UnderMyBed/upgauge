@@ -48,8 +48,11 @@ dim_city_market       city_market_id, name
                       -- nondeterministic pick would drift between builds and break the
                       -- byte-identical Parquet gate.
 
-map_mainline_group    airline_id, parent_airline_id, effective_from, effective_to
-                      -- DATE-RANGED. Wholly-owned subsidiaries ONLY.
+map_mainline_group    airline_id, parent_airline_id, effective_from, effective_to,
+                      basis, source
+                      -- DATE-RANGED. basis = owned (wholly-owned subsidiary) or
+                      -- contract (exclusive to one parent in those months; source
+                      -- required). Never shared regionals.
 
 mart_route_health     one row per (op_airline_id, route_key_low, route_key_high)
                       UNDIRECTED, and the only materialized TABLE in the database.
@@ -386,8 +389,9 @@ GROUP BY coalesce(m.parent_airline_id, f.op_airline_id)
 
 `>= effective_from` and `< effective_to`. Hawaiian must roll up from 2024-09 and **not** from
 2024-08; Virgin America from 2016-12 and not 2016-11. Both boundaries get a real-data test.
-Shared regionals (`OO`, `YX`, `YV`) cannot leak in because the map contains only wholly-owned
-carriers — structural, not a filter. See [carrier-model.md](carrier-model.md).
+Shared regionals (`OO`, `YX`) cannot leak in because the map contains only wholly-owned
+carriers and exclusive contract carriers in their single-partner months — structural, not a
+filter. See [carrier-model.md](carrier-model.md).
 
 > 🔴 **Derived measures are computed from summed numerators and denominators — never
 > averaged.**

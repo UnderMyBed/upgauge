@@ -1,4 +1,5 @@
-# Wholly-owned subsidiary -> parent, DATE-RANGED. See docs/data/carrier-model.md.
+# Mainline rollup: wholly-owned subsidiary or exclusive contract carrier -> parent, DATE-RANGED.
+# See docs/data/carrier-model.md.
 #
 # THIS FILE IS THE MOST REVIEWABLE ARTIFACT IN THE PIPELINE. It is data, not code, so it
 # can be audited without reading Python. Verify every date against filings before trusting it.
@@ -13,12 +14,17 @@
 #     MapEntry.covers(). A clean, gap-free handoff between two parents is one row's
 #     effective_to equal to the next row's effective_from.
 #   - Ownership changes mid-month are attributed to the whole month. Stated approximation.
-#   - ONLY wholly-owned subsidiaries. Never shared regionals (SkyWest/Republic/Mesa) or
-#     serially-exclusive contract carriers (Air Wisconsin/ExpressJet) — a rollup of those
-#     fabricates attribution T-100 cannot support.
+#   - basis = owned: a wholly-owned subsidiary, for the months of ownership.
+#   - basis = contract: a regional admitted ONLY for months in which ALL of its scheduled
+#     passenger flying was for this one parent (capacity purchase or prorate) -- no
+#     concurrent second partner, no own-brand flying. Every contract row cites a fetched
+#     source for its boundary months, and its per-quarter hub share must not contradict it.
+#     Transition months (flying for two partners) are left as GAPS between rows: they stay
+#     at the operating carrier. See docs/data/carrier-model.md for each row's evidence.
+#   - Never shared regionals (SkyWest OO, Republic YX): they fly for several mainlines in
+#     the same month, which no date range can express.
 #   - basis is owned or contract. source is a URL; required on contract rows.
-#   - United owns no subsidiary operators and therefore has no rows here. That is not an
-#     omission; it is why group-vs-group comparison is apples-to-oranges.
+#   - United owns no subsidiary operators; its rows are all contract rows.
 #
 airline_id,carrier_code,parent_airline_id,parent_code,effective_from,effective_to,note,basis,source
 20363,9E,19790,DL,2015-01,,Endeavor — Delta-owned since 2013 (pre-window),owned,
@@ -28,3 +34,12 @@ airline_id,carrier_code,parent_airline_id,parent_code,effective_from,effective_t
 19687,QX,19930,AS,2015-01,,Horizon — Air Group-owned throughout window,owned,
 21171,VX,19930,AS,2016-12,2018-04,Virgin America — acquisition closed Dec 2016; SOC Jan 2018; brand retired Apr 2018,owned,
 19690,HA,19930,AS,2024-09,,Hawaiian — AAG acquired Hawaiian Holdings Sept 2024; SOC Oct 2025,owned,
+20445,C5,19977,UA,2015-01,,CommutAir — United Express only; United holds 40% since 2016,contract,https://www.commuteair.com/about/
+20046,ZW,19805,AA,2015-01,2017-09,Air Wisconsin — US Airways/American only until United flying began 2017-09,contract,https://www.otcmarkets.com/filing/html?id=14268350&guid=lhsqUKABeEnGwyh
+20046,ZW,19977,UA,2018-03,2023-03,Air Wisconsin — United only after American ended Feb 2018; second American contract began 2023-03,contract,https://www.sec.gov/Archives/edgar/data/899394/000119312523088392/d443202d10k.htm
+20046,ZW,19805,AA,2023-07,2025-04,Air Wisconsin — American only after United withdrawn early Jun 2023; contract ended 2025-04-03,contract,https://www.sec.gov/Archives/edgar/data/899394/000089939425000011/R9.htm
+20378,YV,19977,UA,2023-05,2025-12,Mesa — United only after American wound down by 2023-04-03; Republic merger closed 2025-11-25,contract,https://www.sec.gov/Archives/edgar/data/810332/000095017024007799/mesa-20230930.htm
+20500,G7,19977,UA,2021-01,,GoJet — United only once Delta Connection ended (gone from Delta's FY2020 10-K),contract,https://www.sec.gov/Archives/edgar/data/27904/000002790421000003/dal-20201231.htm
+20366,EV,19977,UA,2019-02,2020-10,ExpressJet — United only after Delta (2018-11) and American (2019-01) ended; shut 2020-09-30,contract,https://www.airlinegeeks.com/2020/08/24/expressjet-to-end-operations-on-september-30/
+20237,AX,19977,UA,2019-01,2020-05,Trans States — United only after American flying ended Dec 2018; shut 2020-04,contract,https://crankyflier.com/2020/08/20/a-look-at-changing-regional-alliances-american-part-1/
+20263,EM,19690,HA,2015-01,2021-02,Empire — 'Ohana by Hawaiian ATR flying 2014-03 to 2021-01-14,contract,https://mauinow.com/2021/05/27/hawaiian-airlines-ends-ohana-by-hawaiian-service/

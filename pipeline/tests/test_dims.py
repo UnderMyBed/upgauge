@@ -250,7 +250,7 @@ def mapping(tmp_path):
 
 
 def test_map_is_materialized_from_the_checked_in_csv(mapping):
-    assert one(mapping, "SELECT count(*) FROM map_mainline_group") == 7
+    assert one(mapping, "SELECT count(*) FROM map_mainline_group") == 16
 
 
 def test_map_carries_date_ranges(mapping):
@@ -276,6 +276,7 @@ def test_open_ended_ranges_stay_null_not_sentinel(mapping):
 
 
 def test_shared_regionals_are_absent(mapping):
-    """SkyWest, Republic, Mesa. Never rolled up, at any date."""
+    """SkyWest and Republic. Never rolled up, at any date. (Mesa has a row only for its
+    United-only months, 2023-05..2025-11.)"""
     ids = {r[0] for r in mapping.execute("SELECT airline_id FROM map_mainline_group").fetchall()}
-    assert ids.isdisjoint({20304, 20452, 20378})
+    assert ids.isdisjoint({20304, 20452})
