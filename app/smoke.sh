@@ -1132,6 +1132,18 @@ for FIT in wide mid narrow; do
   check_re "chart: an ungapped band is ONE path in the $FIT render (JFK-LAX)" \
     "$(count "$(between "$BODY" "<div class=\"fit-$FIT\">" '</svg>')" '<path fill="var(--g5)" d=')" '^1$'
 done
+# THE COVID LABEL IS PAINTED OVER THE STACK (#213). SVG paints in document order, so a label
+# emitted before the area paths is covered wherever the subject filed seats. JFK-LAX filed all
+# 16 COVID months (measured), so a band sits under the label's whole run -- a gapped pair like
+# HNL-LAS cannot tell the orders apart, the label showing through its hole either way. Per render:
+# the label element is present, the render has areas, and no area path follows the label.
+for FIT in wide mid narrow; do
+  REGION=$(between "$BODY" "<div class=\"fit-$FIT\">" '</svg>')
+  check "chart: the $FIT render carries the COVID label element (JFK-LAX)" "$REGION" '>COVID — in window on purpose.<'
+  check "chart: the $FIT render draws its seat areas (JFK-LAX)" "$REGION" '<path fill="var(--g'
+  check_not "chart: no seat area is painted over the COVID label in the $FIT render (JFK-LAX)" \
+    "$(between "$REGION" '>COVID — in window on purpose.<' '</svg>')" '<path fill="var(--g'
+done
 BODY=$(curl -s --max-time 30 "${BASE}/route/ATL-MCO")
 check_dataset check "chart: a route with one gets the derived annotation (ATL-MCO)" "$BODY" 'B757-2 overtakes A321nXLR · 2018'
 

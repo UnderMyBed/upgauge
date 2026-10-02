@@ -336,22 +336,31 @@ export function buildMixPlotConfig(
       domain: stack.map((s) => s.key),
       range: stack.map((s) => `var(${s.token})`),
     },
+    // PAINT ORDER IS ARRAY ORDER. The COVID band is background, so it is listed before the
+    // areas; its label is foreground, so it is listed after every area, solo columns included.
+    // Listed with the band, the stack covered the label wherever the subject filed seats (#213).
     marks: [
       ...(covid === null
         ? []
+        : [Plot.rect([covid], { x1: "covidFrom", x2: "covidTo", fill: "var(--panel-2)" })]),
+      area(runPoints, {}),
+      ...(soloPoints.length === 0 ? [] : [area(soloPoints, { stroke: "k", strokeWidth: 1.5 })]),
+      ...(covid === null
+        ? []
         : [
-            Plot.rect([covid], { x1: "covidFrom", x2: "covidTo", fill: "var(--panel-2)" }),
-            // Bottom of the frame, because the crossover annotation owns the top.
+            // Bottom of the frame, because the crossover annotation owns the top. Haloed in the
+            // panel colour, stroke painted under the glyphs, so it reads over the darkest band.
             Plot.text([{ t: midpoint(covid.covidFrom, covid.covidTo) }], {
               x: "t",
               text: () => COVID_LABEL,
               frameAnchor: "bottom",
               dy: -4,
               fill: "var(--ink-2)",
+              stroke: "var(--panel)",
+              strokeWidth: 3,
+              paintOrder: "stroke",
             }),
           ]),
-      area(runPoints, {}),
-      ...(soloPoints.length === 0 ? [] : [area(soloPoints, { stroke: "k", strokeWidth: 1.5 })]),
       ...(crossover === null || crossoverAt === null
         ? []
         : [

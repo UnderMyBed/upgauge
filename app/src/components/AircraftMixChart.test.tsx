@@ -748,6 +748,58 @@ describe("AircraftMixChart -- one render per width band", () => {
     for (const g of gaps) expect(g).toBe(3);
   });
 
+  // THE COVID LABEL IS FOREGROUND (#213). Plot paints marks in array order, so a label listed
+  // before the areas is covered wherever the subject filed seats. FLEET files every COVID month,
+  // so a band occupies the label's spot -- a fixture with a COVID gap cannot tell the two orders
+  // apart, because the label shows through the hole either way.
+  const covidLabel = (svg: Element) => {
+    const label = [...svg.querySelectorAll("text")].find(
+      (t) => t.textContent === "COVID — in window on purpose.",
+    );
+    if (label === undefined) throw new Error("no COVID label in this render");
+    return label;
+  };
+
+  // Mutant: the COVID `Plot.text` listed before `area(runPoints)` again.
+  it("paints the COVID label after every seat area, in every render", () => {
+    expect(prepareMixPlot(FLEET, "JFK–LAX", BY_AIRCRAFT_TYPE).plot!.gaps).toBe(0);
+    for (const svg of renders(chart(FLEET))) {
+      const areas = [...svg.querySelectorAll('path[fill^="var(--g"]')];
+      expect(areas.length).toBe(RAMP.length + 1);
+      const label = covidLabel(svg);
+      for (const area of areas) {
+        expect(area.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      }
+    }
+  });
+
+  // Mutant: the COVID `Plot.text` listed between the run areas and the stroked solo areas -- a
+  // one-month run is a hairline column that would still cross the label.
+  it("paints the COVID label after the stroked one-month areas too", () => {
+    // 2020-05 and 2020-07 unfiled leaves 2020-06 a one-month run, inside the band.
+    const container = chart(rows(MEMBERS, WINDOW_FROM, WINDOW_TO, ["2020-05", "2020-07"]));
+    for (const svg of renders(container)) {
+      const solos = [...svg.querySelectorAll('path[stroke^="var(--g"], g[stroke^="var(--g"] path')];
+      expect(solos.length).toBeGreaterThan(0);
+      const label = covidLabel(svg);
+      for (const solo of solos) {
+        expect(solo.compareDocumentPosition(label) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      }
+    }
+  });
+
+  // Mutant: the halo's stroke (or its paint-order) dropped -- the label is then drawn in ink-2
+  // straight over the darkest band, or the stroke is painted OVER the glyph fill and erases it.
+  it("haloes the COVID label in the panel colour, stroke painted under the glyphs", () => {
+    for (const svg of renders(chart(FLEET))) {
+      const group = covidLabel(svg).closest('g[aria-label="text"]')!;
+      expect(group.getAttribute("fill")).toBe("var(--ink-2)");
+      expect(group.getAttribute("stroke")).toBe("var(--panel)");
+      expect(group.getAttribute("stroke-width")).toBe("3");
+      expect(group.getAttribute("paint-order")).toBe("stroke");
+    }
+  });
+
   // Mutant: the HTML key moved inside ChartFit's render -- it would then appear three times.
   it("keeps the HTML key once, outside the renders", () => {
     const container = chart(rows(MEMBERS, WINDOW_FROM, WINDOW_TO, ["2020-05"]));
