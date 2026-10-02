@@ -562,8 +562,10 @@ chart is volume, not gauge; the subtitle says so (`darker is more`).
 Geometry: 22-unit rows (the data table's row height at full column width) with 1-unit `--panel`
 gutters, month initials across the top, years in mono down the left, cells sharing the remaining
 width in 12 equal columns. The SVG is responsive — a `viewBox` and `width: 100%`, never a pinned
-pixel width. The hairline is `--rule-2`, non-scaling: the table's `--rule` is 1.26:1 on
-`--panel`, which would make an unfiled month indistinguishable from an outside one.
+pixel width. The hairline is `--rule-2` at 1px, non-scaling: `--rule-2` is 3.13:1 on `--panel`, over the
+3:1 non-text floor, where the table's `--rule` is 1.26:1 and would make an unfiled month
+indistinguishable from an outside one. It stays a full pixel because a half-pixel stroke renders
+anti-aliased at half coverage and no longer meets the floor.
 
 **Legend and key.** A strip beneath: the min in mono tabular figures, the five swatches, the max.
 Then one sentence per **non-zero** count — unfiled months, wholly-quarantined months,

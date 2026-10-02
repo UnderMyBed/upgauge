@@ -69,6 +69,26 @@ function titleOf(container: HTMLElement, m: string): string | null {
 
 const num = (el: Element, attr: string) => Number(el.getAttribute(attr));
 
+/** Bounding box of an absolute M/L/H/V/Z path -- jsdom has no getBBox. Throws on any other
+ * command rather than guessing, so a path this cannot read fails the test loudly. */
+function pathBox(d: string) {
+  const xs: number[] = [];
+  const ys: number[] = [];
+  let x = 0;
+  let y = 0;
+  for (const [, cmd, args] of d.matchAll(/([A-Za-z])([^A-Za-z]*)/g)) {
+    const n = args.trim() ? args.trim().split(/[\s,]+/).map(Number) : [];
+    if (cmd === "M" || cmd === "L") [x, y] = n;
+    else if (cmd === "H") x = n[0];
+    else if (cmd === "V") y = n[0];
+    else if (cmd === "Z") continue;
+    else throw new Error(`pathBox cannot read command ${cmd} in ${d}`);
+    xs.push(x);
+    ys.push(y);
+  }
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) };
+}
+
 describe("SeasonalityHeatmap -- cell kinds", () => {
   // Mutant: an off-by-one or reversed token mapping (`--g${6 - bin}`): the max month would
   // draw --g1 and the min --g5.
@@ -88,9 +108,27 @@ describe("SeasonalityHeatmap -- cell kinds", () => {
     const rect = cellOf(c, "2016-05");
     expect(rect.getAttribute("data-kind")).toBe("understated");
     expect(rect.getAttribute("fill")).toBe("var(--g3)");
+    expect(rect.classList.contains("hairline")).toBe(false);
     expect(marksOf(c, "2016-05").tick).not.toBeNull();
     expect(marksOf(c, "2016-05").dot).toBeNull();
     expect(titleOf(c, "2016-05")).toBe("2016-05 · 600,000 seats, understated");
+  });
+
+  // Mutants: the tick drawn at the top-LEFT corner; the tick drawn as a full-cell overlay. Both
+  // still emit a `path.tick`, so only its geometry tells them from the real mark.
+  it("places the understated tick in the cell's top-right corner, covering a small part of it", () => {
+    const c = heatmap(ALL_KINDS);
+    const rect = cellOf(c, "2016-05");
+    const [rx, ry, rw, rh] = ["x", "y", "width", "height"].map((a) => num(rect, a));
+    const b = pathBox(marksOf(c, "2016-05").tick!.getAttribute("d")!);
+    // Inside the cell, flush with its right and top edges.
+    expect(b.maxX).toBeCloseTo(rx + rw);
+    expect(b.minY).toBeCloseTo(ry);
+    expect(b.maxY).toBeLessThanOrEqual(ry + rh);
+    // In the right half and the top half: a corner, not an edge band or the whole cell.
+    expect(b.minX).toBeGreaterThan(rx + rw / 2);
+    expect(b.maxY).toBeLessThan(ry + rh / 2);
+    expect((b.maxX - b.minX) * (b.maxY - b.minY)).toBeLessThan((rw * rh) / 10);
   });
 
   // Mutant: swap the unknown/unfiled branches -- the dot lands on the unfiled month and

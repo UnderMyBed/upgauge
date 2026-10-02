@@ -77,8 +77,10 @@ function Cell({ c, x, y }: { c: HeatCell; x: number; y: number }) {
       </g>
     );
   }
-  // unknown / unfiled: no fill, a hairline inset by half a stroke so it stays inside the cell
-  // and never meets a neighbour's across the 1-unit gutter.
+  // unknown / unfiled: no fill and a hairline. The rect is inset 0.5 viewBox units on each side,
+  // but the stroke is non-scaling (1 CSS px at every width), so the two only line up at the full
+  // 960-unit width, where the stroke sits exactly inside the cell. Narrower, the inset shrinks
+  // with the grid while the stroke does not, so up to half a pixel of it falls in the gutter.
   return (
     <g>
       <rect
