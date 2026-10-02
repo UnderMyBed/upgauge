@@ -27,7 +27,7 @@ from pipeline.mainline_map import (
 
 # Real DOT AIRLINE_IDs, observed in the 2015 extract.
 DL, ENDEAVOR = 19790, 20363
-AA, ENVOY, PSA, PIEDMONT = 19805, 20398, 20397, 20427
+AA, ENVOY, PSA, PIEDMONT, US_AIRWAYS = 19805, 20398, 20397, 20427, 20355
 AS, HORIZON, HAWAIIAN, VIRGIN_AMERICA = 19930, 19687, 19690, 21171
 UA = 19977
 SKYWEST, REPUBLIC, MESA = 20304, 20452, 20378
@@ -83,6 +83,20 @@ def test_virgin_america_stops_rolling_up_at_its_exclusive_thru_month(mapping):
     Before this fix, parent_for(21171, "2018-04") returned 19930 (Alaska), directly
     contradicting the SQL and the docs this task corrected."""
     assert mapping.parent_for(VIRGIN_AMERICA, "2018-04") is None
+
+
+# ------------------------------------------------------- US Airways (#202)
+
+
+@pytest.mark.parametrize("month", ["2015-01", "2015-06", "2015-12"])
+def test_us_airways_rolls_up_to_american_until_it_merged_into_it(mapping, month):
+    """A wholly-owned AAG subsidiary from 2013-12-09 until it merged into American on
+    2015-12-30. Its last T-100 filing is 2015-06."""
+    assert mapping.parent_for(US_AIRWAYS, month) == AA
+
+
+def test_us_airways_stops_rolling_up_at_its_exclusive_thru_month(mapping):
+    assert mapping.parent_for(US_AIRWAYS, "2016-01") is None
 
 
 # ------------------------------------------------------- steady-state subsidiaries
