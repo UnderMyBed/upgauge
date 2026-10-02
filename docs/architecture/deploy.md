@@ -21,9 +21,9 @@ never the box.
 new one is confirmed healthy. An image that pulls but fails its healthcheck takes the site down
 and the 30s timer retries it forever. Accepted: every image passes `make image-smoke` before it
 can reach the registry, and blue/green on a 4 GB box is not worth it for ~12 deploys a year.
-`promote.yml`'s health poll is the detector; **rolling back is the remedy and is the same
-operation as deploying.** The poll detects it only when it can read the box — see § What to do
-when each alert fires.
+`make promote`'s confirmation is the detector; **rolling back is the remedy and is the same
+operation as deploying.** It detects a bad promote only when it can read the box — see § What to
+do when each alert fires.
 
 ## Promote
 
@@ -35,15 +35,22 @@ Prints every promotable build newest-first, marks the one the box is serving, di
 `promote.yml` with the row you pick, watches the run, then **confirms the deploy from the
 operator's machine**. `make promote TAG=warehouse-2026.05-9cf20ab` skips the picker.
 
-**That local confirmation is the result, not the workflow's exit code.** The workflow polls
-`/api/health` from a GitHub runner, and Bot Fight Mode serves runners a challenge page (measured
-2026-10-02: 30 of 30 attempts a 403, against a box serving the promoted build under `ok`). So
-`deploy/promote.py` polls `/api/health` itself — 12 attempts, 10s apart — through
-`promote_check.assess`, the workflow's own verdict function, and exits 0 only on the promoted build
-under `ok`. Degraded, a different build, or a body this machine cannot read either each exit 1 with
-their own remedy; the last is reported as blind, never as a failed deploy.
+**`promote.yml` only retags, and its exit code means only that.** Green is "`:deploy` moved", never
+"the deploy is serving"; red is "`:deploy` did not move", and `make promote` stops there — the box is
+unchanged, so there is nothing to confirm. The workflow does not read the site: Bot Fight Mode
+serves a GitHub runner a challenge page (measured on both 2026-10-02 promotes: 30 of 30 attempts a
+403, against a box serving the promoted build under `ok`), so a check from there measures nothing.
 
-The underlying dispatch, for a machine that has no checkout (confirm by hand afterwards, below):
+**Detection is `make promote`'s, from the operator's machine.** Once the retag has gone through,
+`deploy/promote.py` polls `/api/health` — 30 attempts, 10s apart, a 300s budget, far above the
+retag-to-serving time measured below — through `promote_check.assess`, and exits 0 only on the promoted build under `ok`.
+A degraded box keeps it polling (§ The promoted build, serving 503). When the budget runs out, the
+verdict and its remedy are `promote_check`'s `exhausted_report`: a different build, the promoted
+build degraded, or a body this machine cannot read each exit 1 with their own remedy, and the last is
+reported as blind, never as a failed deploy.
+
+The underlying dispatch, for a machine that has no checkout. It retags and confirms nothing, so it
+**must** be followed by the hand check below:
 
 ```bash
 gh workflow run promote.yml -f tag=warehouse-2026.05-eb4da0d
@@ -87,8 +94,8 @@ serving.
 
 **The target is a tag you know serves, which is not always the one the box is on.** A promote made
 to *fix* an outage, against a box that then never pulls it, leaves the box running the build that
-is failing — so "the previous tag" there is the outage. `promote.yml`'s mismatch verdict says
-which, because it has read that build's status over the full poll.
+is failing — so "the previous tag" there is the outage. `make promote`'s mismatch verdict says
+which, because it has read that build's status over its full budget.
 
 ```bash
 make promote TAG=warehouse-2026.05-6ea164b
@@ -184,14 +191,15 @@ a runner, so that reading argues in neither direction. **The status code never d
 build read from one of those is as real as any other.
 
 **What served the challenge is Bot Fight Mode, and it is not configurable.** Identified from the
-zone's own firewall events for the 2026-08-21 16:26Z promote, which name it rather than imply it:
+zone's own firewall events for a runner's health checks during the 2026-08-21 16:26Z promote, which
+name it rather than imply it:
 
 ```
 30x  source=botFight  action=managed_challenge  ruleId=bot_fight_mode
      path=/api/health  asn=8075  ua=curl/8.5.0
 ```
 
-Thirty events for thirty poll attempts, from AS8075 (Microsoft/Azure — where GitHub-hosted runners
+Thirty events for thirty attempts, from AS8075 (Microsoft/Azure — where GitHub-hosted runners
 live). Not Security Level, which reads `medium`, its default; not Browser Integrity Check, which is
 on but keys on headers and passes every bot-shaped User-Agent tried against it from a residential
 address. **Bot Fight Mode cannot be narrowed to a path or a hostname** — it runs outside the
@@ -214,34 +222,35 @@ cannot live in `deploy/cloudflare/` and `make cloudflare-apply` cannot re-assert
 switched back on, nothing fails loudly — the watchdogs simply go blind again, which is the
 condition this section exists to describe.
 
-**`promote.yml` reads a build AND a status, and each finding earns its own remedy.** A wrong
-build is a promote the box never took; the promoted build under a report that is not `ok` is a
-promote it took and cannot serve (below). Where no build was read at all, it names what came back
-instead and hands over the check that separates the two readings. `make promote` runs that check
-for you from the operator's machine (§ Promote); after a bare `gh workflow run`, run it from a
-network that reaches the site, and act on what it shows, not on the failed run:
+**`make promote`'s confirmation reads a build AND a status, and each finding earns its own
+remedy.** A wrong build is a promote the box never took; the promoted build under a report that is
+not `ok` is a promote it took and cannot serve (below). Where no build was read at all, it names
+what came back instead and hands over the check that separates the two readings. Run that check
+after a bare `gh workflow run` too — the workflow confirms nothing — from a network that reaches
+the site, and act on what it shows:
 
 ```bash
 curl -sS -D - https://upgauge.shipman.dev/api/health
 ```
 
 Down, serving a build other than the promoted one, or reporting anything but `ok` → roll back.
-The promoted build under `ok` → the run was blind and the deploy is fine. **A build identity does
+The promoted build under `ok` → the deploy is fine. **A build identity does
 not close it**: `/api/health` serves the promoted pair verbatim under a 503 whenever the data layer
 is degraded (below), so a hand check read for the build alone hands out the same false all-clear
-the poll itself is built to refuse.
+the confirmation itself is built to refuse.
 
 ### The promoted build, serving 503, is its own verdict
 
 **A build identity is not a health check.** `build.sha` and `build.warehouse` are baked build
 args, so a container whose data layer never opened reports the promoted pair exactly as a healthy
-one does, and `/api/health` serves that report under a 503 with the body unchanged. The poll
-confirms `status: "ok"` as well as the identity, and only `"ok"` — an allow-list, because
+one does, and `/api/health` serves that report under a 503 with the body unchanged. `make
+promote` confirms `status: "ok"` as well as the identity, and only `"ok"` — an allow-list, because
 `status` is a string and nothing further is promised about it.
 
-**A degraded box does not stop the poll early.** Promoting a new image is *how* a degraded box
-gets fixed, and that promote's early attempts read the old, still-degraded build; failing fast
-would red the very deploy that repairs the outage. It polls its full budget, then reports.
+**A degraded box does not stop the confirmation early.** Promoting a new image is *how* a
+degraded box gets fixed, and that promote's early attempts read the old, still-degraded build;
+failing fast would red the very deploy that repairs the outage. It polls its full budget, then
+reports.
 
 When the budget elapses on it, the verdict carries the cause `/api/health` named — `data.missing`
 for the catalog probe, `data.error` for the freshness one — and **orders a rollback**. The box has
@@ -324,8 +333,10 @@ for i in $(seq 1 40); do curl -sS -o /dev/null -w '%{http_code} ' "https://upgau
 `/api/`, so it matches the same rule — after a burst, health polls from the same address return
 429 and read as "the site is down" or "the deploy failed". Wait out the mitigation timeout
 before believing a health check that follows a burst. The pollers themselves are safely under
-the limit: `promote.yml` polls once per 10s (30 attempts), and `live-check.yml` makes single
-calls, with its own burst step last.
+the limit: `make promote` polls from the operator's machine once per 10s for up to 30 attempts,
+and `live-check.yml` makes single calls, with its own burst step last. A burst from the operator's
+own address just before a promote makes the first attempts read 429 — reported as unreadable, not
+as a failed deploy — and the confirmation recovers once the 10s mitigation timeout lapses.
 
 ## Cost, and when to revisit
 

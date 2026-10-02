@@ -73,12 +73,11 @@ def test_an_empty_code_span_says_so_rather_than_rendering_two_backticks():
 
 
 def test_a_snippet_collapses_newlines_so_no_line_can_open_a_workflow_command():
-    """Security-relevant, not cosmetic. `promote_check.py`'s exhausted path emits one
-    `::error::` per line of its report, so a newline inside edge-controlled evidence would put
-    attacker-chosen bytes at the START of a line on the runner's stdout -- where Actions parses
-    `::add-mask::` and `::stop-commands::`, in a job holding `packages: write`. The collapse is
-    what makes that unreachable, and both existing fixtures were single-line, so nothing
-    exercised it."""
+    """Security-relevant, not cosmetic. `live_check.py` prints its report to the runner's stdout,
+    so a newline inside edge-controlled evidence would put attacker-chosen bytes at the START of
+    a line there -- where Actions parses `::add-mask::` and `::stop-commands::`, in a job holding
+    `issues: write`. The collapse is what makes that unreachable, and both existing fixtures were
+    single-line, so nothing exercised it."""
     body = "<html>\n::stop-commands::deadbeef\r\n::add-mask::hunter2\n</html>"
     s = snippet(body)
     assert "\n" not in s and "\r" not in s

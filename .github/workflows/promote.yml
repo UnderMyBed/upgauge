@@ -1,20 +1,27 @@
 name: Promote
 
-# The promote hop (D5). Nothing here reaches the box: this moves a tag in the registry, and
-# the box's own timer notices within 30s. That is what lets "no inbound ports" and "a human
-# decides when" hold at the same time -- and it makes ROLLBACK the same operation with an
-# older tag, so the emergency path is the one that gets exercised every deploy.
+# The promote hop (D5). Nothing here reaches the box: this moves `:deploy` in the registry and
+# nothing else, and the box's own timer notices within 30s. That is what lets "no inbound ports"
+# and "a human decides when" hold at the same time -- and it makes ROLLBACK the same operation
+# with an older tag, so the emergency path is the one that gets exercised every deploy.
 #
-# What the box does with a new `:deploy` digest is itself a hazard this workflow exists to
-# catch, not just describe: `deploy/upgauge-deploy.service`'s `docker compose up -d --wait`
-# RECREATES the running container, stopping the old healthy one BEFORE the new one is confirmed
-# healthy. An image that pulls but fails its healthcheck therefore takes the site DOWN, and the
-# box's 30s timer just keeps retrying the same failing image forever -- it never reverts on its
-# own. That was accepted deliberately (every image is gated by `make image-smoke` before it can
-# reach the registry at all, and blue/green on a 4 GB box isn't worth it for ~12 deploys a
-# year), which is exactly what makes the "Wait for the box to be serving it" step below the
-# thing that DETECTS a bad promote, and re-dispatching this same workflow with the previous
-# known-good tag the REMEDY. See that step's failure message.
+# THIS WORKFLOW'S EXIT CODE MEANS "THE RETAG WENT THROUGH", NEVER "THE DEPLOY IS SERVING". It
+# does not read the site: Bot Fight Mode serves a GitHub runner a challenge page, so a health
+# check from here measures nothing (docs/architecture/deploy.md). Detecting a bad promote is
+# `make promote`'s job, run from the operator's machine: it dispatches this workflow, and once
+# the retag has gone through it confirms the promoted build under `ok` on `/api/health`.
+# A bare `gh workflow run promote.yml` must be followed by that check by hand (deploy.md,
+# Promote).
+#
+# The detector matters because of what the box does with a new `:deploy` digest:
+# `deploy/upgauge-deploy.service`'s `docker compose up -d --wait` RECREATES the running
+# container, stopping the old healthy one BEFORE the new one is confirmed healthy. An image that
+# pulls but fails its healthcheck therefore takes the site DOWN, and the box's 30s timer just
+# keeps retrying the same failing image forever -- it never reverts on its own. That was accepted
+# deliberately (every image is gated by `make image-smoke` before it can reach the registry at
+# all, and blue/green on a 4 GB box isn't worth it for ~12 deploys a year), which is exactly
+# what makes `make promote`'s confirmation the thing that DETECTS a bad promote, and promoting
+# the previous known-good tag the REMEDY.
 on:
   workflow_dispatch:
     inputs:
@@ -36,7 +43,7 @@ jobs:
     timeout-minutes: 15
     steps:
       # `.github/scripts/promote_check.py` and its `gha.py` helper must be present on the
-      # runner -- this job calls them below, unlike the pure re-tag steps, which need only
+      # runner -- the validate step calls them, unlike the re-tag step, which needs only
       # `docker`.
       - uses: actions/checkout@v7
 
@@ -48,13 +55,12 @@ jobs:
           install: true
           cache: true
 
-      # Fast-fail on a typo'd tag. `promote_check.py`'s `assess()` already reports this exact
-      # failure from inside the poll loop below, but only after the loop's full 30-attempt/300s
-      # budget elapses -- an operator who fat-fingered `-f tag=` deserves an answer in seconds,
-      # not five minutes, and shouldn't have to wait through a login and a registry round trip
-      # first either. `--validate` is an explicit flag rather than an inferred argument count,
-      # because it and a successful poll both exit 0; see `promote_check.py`'s `main()`.
-      - name: Validate the tag's shape before polling
+      # Fast-fail on a typo'd tag. A tag that is not the `warehouse-YYYY.MM-<sha>` shape
+      # `image.yml` publishes was never a real image; an operator who fat-fingered `-f tag=`
+      # deserves that answer in seconds, named as a typo, rather than after a login and five
+      # retried registry round trips that end in "does not exist". `--validate` is an explicit
+      # flag; see `promote_check.py`'s `main()`.
+      - name: Validate the tag's shape before touching the registry
         env:
           TAG: ${{ inputs.tag }}
         run: |
@@ -112,115 +118,4 @@ jobs:
 
           echo "::notice::promoted $src ($digest)"
           echo "### Promoted \`$src\` ($digest)" >> "$GITHUB_STEP_SUMMARY"
-
-      # The deploy's own proof. Without this the workflow reports success for having moved a
-      # tag, which is not the thing anyone wanted done -- the box could be down, the timer
-      # stopped, or the image unable to start, and this would still be green.
-      #
-      # The tag-parsing half of the comparison lives in `.github/scripts/promote_check.py`, not
-      # here -- see that module's docstring for the bash last-dash-splitting bug it exists to
-      # avoid (breaks on a `-dirty` sha). `TAG` reaches the script only as an argv value under
-      # `env:`, never spliced through `${{ }}` into this script's text.
-      #
-      # A `curl` failure reads as "not yet" deliberately: this loop already retries every 10s
-      # for up to 5 minutes, so a single dropped connection must not abort the whole workflow --
-      # the SAME "never treat a failure as an empty answer" rule other workflows apply to `gh`
-      # calls means something different in a loop that is ALREADY the retry: it is the FINAL
-      # verdict after every attempt is exhausted that must not be silently swallowed, and it
-      # isn't.
-      #
-      # THE HTTP STATUS IS MEASURED, NOT ONLY THE BODY, and the final verdict comes from
-      # `promote_check.py --exhausted` rather than a bare `echo` here. This step used to emit
-      # "The tag moved; the deploy did not" and "ROLL BACK NOW" unconditionally; on 2026-08-1x
-      # it emitted both against a healthy, correctly-promoted deploy, because all 30 attempts
-      # had been served a challenge page and the workflow had never read the box at all. A
-      # message hardcoded in bash cannot be conditional on the evidence, and a rollback is a real
-      # production action -- so the decision lives with the rest of the decisions, in the script.
-      # See its `exhausted_report` for which verdict earns the rollback and which does not.
-      #
-      # A MATCHING BUILD IS NOT A DEPLOY (#79). `build.sha`/`build.warehouse` are baked build
-      # args, so a container whose data layer never opened reports the promoted pair exactly as a
-      # healthy one does, and /api/health serves that report under a 503 with the body unchanged.
-      # The poll confirms the report's own `status` as well as the identity, on an allow-list:
-      # only `ok` ends the loop. A degraded box keeps polling for the full budget -- promoting a
-      # new image is HOW a degraded box gets fixed, so failing fast would red the very deploy
-      # that repairs the outage -- and then earns its own verdict, neither a mismatch nor a blind
-      # poll, with its own remedy. See `promote_check.py`'s `exhausted_report`.
-      #
-      # 30 attempts x 10s = 300s budget. Where that number comes from, and what part of it is
-      # actually measured:
-      #
-      #   MEASURED (read straight from the committed config, not guessed):
-      #     - deploy/upgauge-deploy.timer: OnUnitActiveSec=30s -- the box's timer fires at most
-      #       every 30s, so a promote landing right after a tick can wait up to ~30s before the
-      #       NEXT tick even notices the digest moved.
-      #     - deploy/compose.yml / Dockerfile HEALTHCHECK: start_period=20s, interval=30s -- the
-      #       container's healthcheck doesn't count a failure during the first 20s, and the
-      #       first check fires at the ~30s interval mark, so a freshly-started container is
-      #       realistically confirmed healthy on the order of 30-50s after `compose up` returns.
-      #     - deploy/upgauge-deploy.sh: `docker compose pull --quiet app` runs unconditionally
-      #       every tick, THEN `docker compose up -d --wait` gates on the healthcheck above.
-      #
-      #   MEASURED END TO END, against the live box: retag to serving, and the same for a
-      #   rollback. `docs/architecture/deploy.md` (Promote, Roll back) is where those two
-      #   figures are recorded; they are deliberately not restated here, because a number
-      #   written in two places is a number that will disagree with itself.
-      #
-      #   The end-to-end figure supersedes the per-part arithmetic this comment used to carry,
-      #   including its NOT-MEASURED pull-duration assumption: the whole path has now been timed
-      #   on the real box, so the parts no longer have to be summed to justify the budget. Both
-      #   observations sit far inside the 300s here.
-      - name: Wait for the box to be serving it
-        env:
-          TAG: ${{ inputs.tag }}
-        run: |
-          set -euo pipefail
-          code=000
-          body=''
-          # The last attempt that actually READ a build, kept separately: `code`/`body` are
-          # overwritten every iteration, so one flaky sample at attempt 30 would otherwise
-          # decide a verdict about all 30 -- and would downgrade an earned rollback order to
-          # the conditional blind path. Exit status 2 from the poll is what marks such an
-          # attempt; see promote_check.py's main() for the three-way contract.
-          seen_code=''
-          seen_body=''
-          for attempt in $(seq 1 30); do
-            # Truncated first, so a fetch that fails part-way is never read as the PREVIOUS
-            # attempt's body. 8000 bytes is far above any real report (~150) and bounds what a
-            # broken origin can put into argv.
-            body_file="${RUNNER_TEMP:-/tmp}/health.body"
-            : > "$body_file"
-            # NOT `$(curl ... || echo 000)`: curl writes its `-w` output even when the transfer
-            # fails, so the fallback CONCATENATES onto it. Measured with curl 8.18.0: `000000`
-            # on a refused connection, and `200000` when --max-time expires mid-body -- which
-            # then prints as `HTTP 200000`. Assign in the failure branch instead.
-            if ! code=$(curl -sS -o "$body_file" -w '%{http_code}' --max-time 10 \
-                        https://upgauge.shipman.dev/api/health); then
-              code=000
-            fi
-            body=$(head -c 8000 "$body_file")
-            echo "attempt ${attempt}:"
-            rc=0
-            mise exec -- python .github/scripts/promote_check.py "$TAG" "$code" "$body" || rc=$?
-            if [ "$rc" = 0 ]; then
-              printf '%s' "$body" | jq . >> "$GITHUB_STEP_SUMMARY"
-              exit 0
-            fi
-            if [ "$rc" = 64 ]; then
-              echo "::error::promote_check.py rejected its own call shape (exit 64). That is a"
-              echo "::error::wiring bug in this workflow, not a condition of the site -- the poll"
-              echo "::error::is not measuring anything and must not be read as one that did."
-              exit 1
-            fi
-            if [ "$rc" = 2 ]; then
-              seen_code=$code
-              seen_body=$body
-            fi
-            sleep 10
-          done
-          # Writes its own `::error::` lines and its own step summary, then exits 1. The bare
-          # `exit 1` under it is the backstop that keeps this step failing even if that ever
-          # stops being true.
-          mise exec -- python .github/scripts/promote_check.py \
-            --exhausted "$TAG" "${seen_code:-$code}" "${seen_body:-$body}" "$attempt"
-          exit 1
+          echo "The retag went through. Whether the box is serving it is not measured here -- \`make promote\` confirms it, or check by hand (docs/architecture/deploy.md, Promote)." >> "$GITHUB_STEP_SUMMARY"

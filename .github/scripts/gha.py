@@ -52,9 +52,8 @@ def printable(text: str) -> str:
 
     So a `$GITHUB_OUTPUT` or step-summary write raises on the runner today, and any value read
     out of a PARSED body (a status, a warehouse name, an error message) carries the same risk as
-    a raw one. A crash there means the alert dies before filing anything -- and in
-    `promote_check` it exits 1, the code for "read nothing", silently downgrading an earned
-    rollback to the blind path. A no-op for valid text.
+    a raw one. A crash there means the alert dies before filing anything. A no-op for valid
+    text.
     """
     return text.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
 
