@@ -99,7 +99,9 @@ describe("rowSteps -- the bucket rule", () => {
   });
   it("marks every row of the subject when there is no time dimension", () => {
     const nq = q({ dimensions: ["op_airline_id", "origin_airport_id"] });
-    expect(rowSteps(nq, { op_airline_id: AS, origin_airport_id: 1 }, [VX_JOINS])).toEqual([VX_JOINS]);
+    expect(rowSteps(nq, { op_airline_id: AS, origin_airport_id: 1 }, [VX_JOINS])).toEqual([
+      VX_JOINS,
+    ]);
     expect(rowSteps(nq, { op_airline_id: DL, origin_airport_id: 1 }, [VX_JOINS])).toEqual([]);
   });
   it("marks nothing on an operating view", () => {
@@ -114,7 +116,11 @@ describe("stepPhrase", () => {
     ["joins", { ...VX_JOINS }, "VX joins 2016-12"],
     ["leaves", { ...VX_JOINS, month: "2018-04", kind: "leaves" as const }, "VX leaves 2018-04"],
     ["rolls_up", { ...base, kind: "rolls_up" as const }, "counted under AS from 2016-12"],
-    ["rolls_out", { ...base, month: "2018-04", kind: "rolls_out" as const }, "counted as itself from 2018-04"],
+    [
+      "rolls_out",
+      { ...base, month: "2018-04", kind: "rolls_out" as const },
+      "counted as itself from 2018-04",
+    ],
   ])("%s", (_k, step, phrase) => {
     expect(stepPhrase(step as MainlineStep)).toBe(phrase);
   });
@@ -125,7 +131,12 @@ describe("stepPhrase", () => {
 
 describe("rowNote", () => {
   it("joins every matching step into one label", () => {
-    const leaves: MainlineStep = { ...VX_JOINS, otherAirlineId: 1, otherCode: "ZZ", kind: "leaves" };
+    const leaves: MainlineStep = {
+      ...VX_JOINS,
+      otherAirlineId: 1,
+      otherCode: "ZZ",
+      kind: "leaves",
+    };
     expect(rowNote(q({}), AS_MONTHLY[6], [VX_JOINS, leaves])).toBe(
       "Group composition changes: VX joins 2016-12; ZZ leaves 2016-12",
     );
@@ -141,6 +152,15 @@ describe("stepsBySubject -- the foot list", () => {
     // Catches: listing every step in the window (DL is not in these rows).
     expect(stepsBySubject(q({}), AS_MONTHLY, [VX_JOINS, DL_STEP])).toEqual([
       { subjectAirlineId: AS, phrases: ["VX joins 2016-12"] },
+    ]);
+  });
+  it("merges one subject's consecutive steps into one entry, in the query's order", () => {
+    // Catches: pushing a new entry per step (AS would appear twice) and any reordering.
+    const as_leaves: MainlineStep = { ...VX_JOINS, month: "2018-04", kind: "leaves" };
+    const rows = [...AS_MONTHLY, { year_month: "2016-12", op_airline_id: DL, seats: 1 }];
+    expect(stepsBySubject(q({}), rows, [VX_JOINS, as_leaves, DL_STEP])).toEqual([
+      { subjectAirlineId: AS, phrases: ["VX joins 2016-12", "VX leaves 2018-04"] },
+      { subjectAirlineId: DL, phrases: ["XX joins 2016-12"] },
     ]);
   });
   it("lists steps regardless of the time bucket (a no-time view needs them most)", () => {

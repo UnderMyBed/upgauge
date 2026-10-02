@@ -72,7 +72,9 @@ export function rowNote(
 
 /** The foot's list: every crossed step whose subject appears among the result's rows, in the
  * query file's order. Bucket-free on purpose -- a view with no time dimension, or rows that do
- * not show the bucket, still has to say what moved inside its window. */
+ * not show the bucket, still has to say what moved inside its window. Steps arrive ordered by
+ * subject (mainline_steps.sql's ORDER BY), so a subject's steps are contiguous and the merge
+ * below is adjacency-based. */
 export function stepsBySubject(
   q: PivotQuery,
   rows: readonly Record<string, unknown>[],
