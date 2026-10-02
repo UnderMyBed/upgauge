@@ -422,8 +422,8 @@ These are encoding rules, not library configuration.
 
 **Axis numerics obey the same rule as every other numeric here: monospaced and
 tabular-figure.** On the Plot chart this takes an explicit style: Plot's root style hardcodes
-`font-family: system-ui, sans-serif`, and `font-variant-numeric` alone does not override it. The trap is shipping with the y ticks ("1.2M"), the
-year ticks and the annotation's year in the sans face while every other numeric on the page was
+`font-family: system-ui, sans-serif`, and `font-variant-numeric` alone does not override it.
+The trap is shipping with the y ticks ("1.2M"), the year ticks and the annotation's year in the sans face while every other numeric on the page was
 Plex Mono. Every Plot chart passes `style: { fontFamily: "var(--font-mono)", fontVariantNumeric:
 "tabular-nums" }`; the token, not a literal family, so `globals.css` stays the single source
 the way it already is for the `--g*` ramp. The mockups do this with a dedicated `.axl` class.
