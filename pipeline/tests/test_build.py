@@ -145,3 +145,43 @@ def test_verify_command_fails_when_out_dir_disagrees_with_a_fresh_build_from_raw
 
     assert rc != 0, "a fabricated out_dir partition must fail the gate, not pass it"
     assert "year=2099" in caplog.text
+
+
+def _fresh_out_dir(raw, tmp_path):
+    out_dir = tmp_path / "out"
+    build_all(raw, out_dir)
+    return out_dir
+
+
+def test_verify_command_passes_an_out_dir_carrying_only_a_retired_artifact(raw, tmp_path, caplog):
+    """The restored asset predates the map's retirement, so it carries
+    `dims/map_mainline_group.parquet` that no fresh build writes. That is not staleness: the
+    nightly verify would otherwise be red until the next publish, for a file nothing reads."""
+    from pipeline.build import RETIRED_ARTIFACTS
+
+    out_dir = _fresh_out_dir(raw, tmp_path)
+    assert "dims/map_mainline_group.parquet" in RETIRED_ARTIFACTS
+    retired = out_dir / "dims" / "map_mainline_group.parquet"
+    shutil.copy(out_dir / "dims" / "dim_carrier.parquet", retired)
+
+    with caplog.at_level("INFO"):
+        rc = main(["--raw-dir", str(raw), "--out-dir", str(out_dir), "--verify"])
+
+    assert rc == 0, caplog.text
+    assert "matches a fresh build" in caplog.text
+
+
+def test_verify_command_still_names_an_extra_file_that_is_not_retired(raw, tmp_path, caplog):
+    """The retired-name skip is EXACT: an on-disk-only file under any other name -- here one
+    beside the retired one, in the same directory -- is still staleness, and is named."""
+    out_dir = _fresh_out_dir(raw, tmp_path)
+    shutil.copy(
+        out_dir / "dims" / "dim_carrier.parquet", out_dir / "dims" / "map_mainline_group_v2.parquet"
+    )
+
+    with caplog.at_level("INFO"):
+        rc = main(["--raw-dir", str(raw), "--out-dir", str(out_dir), "--verify"])
+
+    assert rc != 0
+    assert "dims/map_mainline_group_v2.parquet" in caplog.text
+    assert "differ from a fresh build" in caplog.text

@@ -95,8 +95,8 @@ invariant from assumption is how you get a green suite that is confidently wrong
 
 `upgauge.duckdb` is a **hybrid**: facts and dims are views over the Parquet tree, and
 `mart_route_health` is the only materialized table derived from it. `map_mainline_group` is the
-other table, and it is not derived from the Parquet at all (§ The views). Views keep the byte-identical Parquet gate
-covering everything derived-free, and the mart materializes because trailing-12 windowing over
+other table, and it is not derived from the Parquet at all (§ The mainline map table). Views
+keep the byte-identical Parquet gate covering everything derived-free, and the mart materializes because trailing-12 windowing over
 the full window is the one genuinely expensive thing in the layer.
 
 Scope is `fct_route_month`, `dim_city_market`, and `mart_route_health`. **There is no
@@ -132,6 +132,8 @@ single-file read. No derived measure column
 quarantined rows are retained with their flag rather than dropped — the view is the fact
 table, so this is the last point at which dropping them would be reversible.
 
+### The mainline map table
+
 **`map_mainline_group` is a TABLE that `make build` reads from the checked-in
 `pipeline/reference/mainline_group.csv`, never from `data/parquet`.** It is a function of the
 commit, not of BTS, so it ships with the code exactly as the marts do: CI and the image restore
@@ -148,7 +150,7 @@ naming only the warehouse tag (§ Toolchain, the `actions/cache` paragraph).
   `test_marts.py` holds the table equal, row for row, to what the loader validated.
 - The warehouse writes no `dims/map_mainline_group.parquet`, and `build_all` deletes any it
   finds: `warehouse.yml` builds in place over the previous asset's tree, so a leftover copy would
-  ride every future asset and fail `make verify`'s freshness check.
+  ride every future asset (the freshness check below does not count it as staleness).
 
 **`year` is a content column AND a Hive partition key — `hive_partitioning = true` is for
 pruning, not schema.** `normalize_t100_segment.sql` already casts `raw.YEAR` into the Parquet
@@ -234,7 +236,8 @@ deploy.
    database gate's object *count* doesn't change when a fact-year partition goes stale,
    because it counts objects, not files, so without this check that staleness is
    invisible to `make verify` and only shows up later as `DATA AS OF` silently failing to
-   advance.
+   advance. A name in `build.py`'s `RETIRED_ARTIFACTS` present only on disk is not staleness:
+   a fresh build deletes it, and exactly those names are skipped — any other extra is named.
 3. **Database:** `pipeline.marts.verify_database` builds `upgauge.duckdb` twice
    from the same Parquet and, for every catalog object, exports it through a
    `COPY (SELECT * FROM <object>) TO ... (FORMAT PARQUET)` on a connection with

@@ -57,7 +57,9 @@ map_mainline_group    airline_id, parent_airline_id, effective_from, effective_t
                       -- on owned rows, as an open effective_to is.
 
 mart_route_health     one row per (op_airline_id, route_key_low, route_key_high)
-                      UNDIRECTED, and the only materialized TABLE in the database.
+                      UNDIRECTED, and the only materialized TABLE derived from the
+                      Parquet tree (map_mainline_group, the other table, is read
+                      from the checked-in CSV).
                       Global trailing-12 / prior-12 windows, a RATE floor of 30 performed
                       departures per month FLOWN (t12_months_flown, never months present),
                       NULL (not huge-positive) deltas when the prior window is empty.
