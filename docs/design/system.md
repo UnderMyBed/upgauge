@@ -642,7 +642,12 @@ below — it binds every time-series mark, not only lines.
   and 2021-06 samples rather than bracketing them — every month is plotted at its first day, so
   a band stopping at 2021-05-31 visibly falls short of the month it names — and it is clamped
   to the chart's own window and **dropped entirely** when the two are disjoint, so a chart
-  starting after 2021 never carries a `--panel-2` slab at a meaningless x.
+  starting after 2021 never carries a `--panel-2` slab at a meaningless x. **The band is
+  background and the label is foreground:** the band paints under the seat areas, the label
+  over all of them (solo columns included), at the frame's bottom, haloed in `--panel` (stroke 3,
+  painted under the glyphs) so it reads over the darkest band. Plot paints marks in array order,
+  so a label listed with its band is covered wherever the subject filed seats and shows only
+  through unfiled months.
 - **Annotations must be derived, never hand-written.** The mockup's *"A321 overtakes
   737-800 · 2018"* is computed from the yearly mix (2017: 84% vs 15%; 2018: 51% vs 48%). A
   hand-typed annotation rots silently the first month the data moves.
