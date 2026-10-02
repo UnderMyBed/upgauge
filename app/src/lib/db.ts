@@ -4,6 +4,7 @@ import { DuckDBInstance, type DuckDBConnection } from "@duckdb/node-api";
 import { renderPivot } from "@/lib/pivot/render";
 import type { Allowlist } from "@/lib/pivot/allowlist";
 import type { PivotQuery } from "@/lib/pivot/types";
+import type { MainlineStep, StepKind } from "@/lib/pivot/compositionSteps";
 import { resolveRows, type Resolved } from "@/lib/resolve";
 
 // Same anchor, same reason, as render.ts's QUERIES_DIR: process.cwd() is correct in
@@ -282,4 +283,22 @@ export async function runPivot(q: PivotQuery): Promise<PivotResult> {
     quarantinedRowsOnPage: converted.reduce((a, r) => a + Number(r.quarantined_rows ?? 0), 0),
     resolved,
   };
+}
+
+/** The mainline-group composition steps a window crosses (sql/03_queries/mainline_steps.sql,
+ * #203). Bound by name like runPivot; the file owns the window rule. */
+export async function mainlineSteps(timeFrom: string, timeTo: string): Promise<MainlineStep[]> {
+  const con = await connect();
+  const prepared = await con.prepare(sql("mainline_steps"));
+  prepared.bind({ time_from: timeFrom, time_to: timeTo });
+  const rows = ((await (await prepared.run()).getRowObjects()) as Record<string, unknown>[]).map(
+    demoteBigInts,
+  );
+  return rows.map((r) => ({
+    subjectAirlineId: Number(r.subject_airline_id),
+    month: String(r.month),
+    otherAirlineId: Number(r.other_airline_id),
+    otherCode: r.other_code === null || r.other_code === undefined ? null : String(r.other_code),
+    kind: String(r.kind) as StepKind,
+  }));
 }

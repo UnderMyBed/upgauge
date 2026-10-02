@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { connect, dataAsOf, demoteBigInts, loadAllowlist, runPivot } from "@/lib/db";
+import { connect, dataAsOf, demoteBigInts, loadAllowlist, mainlineSteps, runPivot } from "@/lib/db";
 import { resolutionKey } from "@/lib/resolve";
 import { FIXTURE } from "@/lib/pivot/allowlist.fixture";
 import type { PivotQuery } from "@/lib/pivot/types";
@@ -208,5 +208,21 @@ describe("allowlist.fixture.ts stays in sync with the real catalog", () => {
     expect(live.meas.size).toBeGreaterThan(0);
     expect(FIXTURE.dims.size).toBe(live.dims.size);
     expect(FIXTURE.meas.size).toBe(live.meas.size);
+  });
+});
+
+describe("mainlineSteps", () => {
+  it("lists Virgin America joining Alaska inside a window that crosses 2016-12", async () => {
+    const steps = await mainlineSteps("2016-06", "2017-06");
+    expect(steps).toContainEqual({
+      subjectAirlineId: 19930, month: "2016-12", otherAirlineId: 21171, otherCode: "VX", kind: "joins",
+    });
+  });
+  it("binds the window: a window starting at 2016-12 does not cross it", async () => {
+    // Catches: the two params bound swapped or the window ignored.
+    const steps = await mainlineSteps("2016-12", "2026-12");
+    // Non-empty, so swapped params (an empty window) cannot pass vacuously.
+    expect(steps.length).toBeGreaterThan(0);
+    expect(steps.some((s) => s.month === "2016-12")).toBe(false);
   });
 });
