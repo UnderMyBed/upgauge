@@ -288,7 +288,7 @@ describe("/route/<pair> aircraft-mix chart", () => {
     const { container } = render(
       await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }),
     );
-    const label = container.querySelector(".chart svg[role='img']")?.getAttribute("aria-label");
+    const label = container.querySelector(".chart:not(.heatmap) svg[role='img']")?.getAttribute("aria-label");
     expect(label).toContain(`2015-01 to ${asOf}`);
   });
 

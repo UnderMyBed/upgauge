@@ -519,6 +519,24 @@ describe("/airport/<code> truncation disclosure", () => {
     render(await view());
     expect(screen.queryByText(/row limit/i)).toBeNull();
   });
+
+  it("keeps the chart's row-limit note with the chart, above the heatmap", async () => {
+    // The note says "The chart hit its N-row limit" -- it is about the mix chart, so it sits
+    // directly under that chart, and the heatmap (which states its own truncation in its own
+    // frame) comes after it. A heatmap mounted between the chart and its note reads as the
+    // subject of the note. 50, not 5: the capped rows must span enough months for both charts
+    // to draw, or the heatmap is absent and order is unassertable.
+    const { container } = render(await view(undefined, 50));
+    const note = [...container.querySelectorAll(".foot")].find(
+      (p) => !p.closest(".heatmap") && /The chart hit its/.test(p.textContent ?? ""),
+    );
+    const heatmap = container.querySelector(".chart.heatmap");
+    expect(note).toBeDefined();
+    expect(heatmap).not.toBeNull();
+    expect(note!.compareDocumentPosition(heatmap!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
 });
 
 describe("airportRedirectTarget", () => {

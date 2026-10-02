@@ -1136,7 +1136,7 @@ check_re "chart: the band BREAKS at them, drawn as two paths (HNL-LAS)" "$(count
 # unfiled count -- the heatmap's own statement of the six-month hole the chart above breaks at.
 check    "route: renders the seats-by-month heatmap" "$BODY" 'aria-label="Seats by month, '
 check_re "route: the heatmap's label states the unfiled months (HNL-LAS)" "$BODY" \
-  'aria-label="Seats by month, [^"]* [0-9]+ months? with no filings\.'
+  'aria-label="Seats by month, [^"]* [1-9][0-9]* months? with no filings\.'
 
 # The OTHER branch of the window line, in the served bytes. ATL-CAK filed 67 months, 2015-01 ->
 # 2022-06, and nothing since; the chart is fetched over the full window but can only draw to

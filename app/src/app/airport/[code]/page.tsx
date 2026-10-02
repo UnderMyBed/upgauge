@@ -412,9 +412,6 @@ export async function AirportView({
         <div className="body">
           <div>
             {hasMix ? <AircraftMixChart rows={mix.rows} title={airport.code} /> : null}
-            {hasMix ? (
-              <SeasonalityHeatmap rows={mix.rows} title={airport.code} truncated={mix.truncated} />
-            ) : null}
             {/* The chart's own truncation, disclosed separately from the table's: they are two
                 separate pivots (one per grain) with separate limits, and either can be short
                 while the other is whole. Saying "the totals above" here would be false -- the
@@ -425,6 +422,9 @@ export async function AirportView({
                 missing from it; the table and the totals above are unaffected.
               </p>
             )}
+            {hasMix ? (
+              <SeasonalityHeatmap rows={mix.rows} title={airport.code} truncated={mix.truncated} />
+            ) : null}
             {isEmpty ? (
               <AirportEmptyState airport={airport} timeFrom={trailing12} timeTo={asOf} />
             ) : (
