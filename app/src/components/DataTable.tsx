@@ -224,6 +224,11 @@ interface DataTableBaseProps {
    * sorts `rows` itself before handing them here. */
   rows: Record<string, unknown>[];
   resolved?: Map<string, Resolved>;
+  /** A per-row note; a string marks the row with a `Δ` after its first identifier cell's
+   * content, naming the note as the mark's `aria-label` and `title`. Separate from the
+   * reason-code gutter because that gutter shows ONE glyph, chosen by severity, and would hide
+   * either signal. `/explore` is the one caller (mainline-group composition steps, #203). */
+  rowNotes?: (row: Record<string, unknown>) => string | null;
 }
 
 /** `rank` and `partition` are ONE choice, not two independent ones, so the props make the
@@ -273,6 +278,7 @@ export function DataTable(props: DataTableProps) {
   const rank = props.rank ?? false;
   const partition = props.partition ?? true;
   const ordered = orderRows(rows, partition);
+  const noteColumn = props.rowNotes ? columns.findIndex((c) => c.kind === "identifier") : -1;
   return (
     <div className="table-scroll">
       <table className="data-table">
@@ -296,6 +302,7 @@ export function DataTable(props: DataTableProps) {
         <tbody>
           {ordered.map(({ row, belowFloor, rank: position }, i) => {
             const reason = reasonFor(row);
+            const note = props.rowNotes?.(row) ?? null;
             return (
               <tr key={i} data-below-floor={belowFloor ? "true" : undefined}>
                 <ReasonCode
@@ -313,7 +320,7 @@ export function DataTable(props: DataTableProps) {
                     {position ?? "\u2014"}
                   </td>
                 )}
-                {columns.map((c) => (
+                {columns.map((c, ci) => (
                   <td key={c.key} className={c.kind === "identifier" ? "id" : "num"}>
                     {c.dimKey ? (
                       <DimensionCell spec={c} row={row} resolved={resolved} />
@@ -322,6 +329,11 @@ export function DataTable(props: DataTableProps) {
                     ) : (
                       format(c.kind, row[c.key])
                     )}
+                    {ci === noteColumn && note ? (
+                      <span className="step-mark" role="img" aria-label={note} title={note}>
+                        {"\u0394"}
+                      </span>
+                    ) : null}
                   </td>
                 ))}
                 <td>

@@ -10,7 +10,12 @@ import { render, screen } from "@testing-library/react";
 // itself can validate.
 vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
-  return { ...actual, runPivot: vi.fn(actual.runPivot) };
+  return {
+    ...actual,
+    runPivot: vi.fn(actual.runPivot),
+    // Real implementation, wrapped only so the operating-view case can assert it was never called.
+    mainlineSteps: vi.fn(actual.mainlineSteps),
+  };
 });
 
 // Same partial-mock idiom, same reason: wraps the REAL exploreHref so every other test in this
@@ -25,7 +30,7 @@ vi.mock("@/lib/pivot/builder", async (importOriginal) => {
 
 import { ExploreView } from "@/app/explore/page";
 import { recoveryHref, recoveryQuery } from "@/lib/pivot/recovery";
-import { dataAsOf, loadAllowlist, runPivot } from "@/lib/db";
+import { dataAsOf, loadAllowlist, mainlineSteps, runPivot } from "@/lib/db";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 import { trailing12From } from "@/lib/entityFacts";
 import { exploreHref } from "@/lib/pivot/builder";
@@ -640,5 +645,79 @@ describe("/explore says what the mainline grouping includes", () => {
     const foot = container.querySelector(".foot")!.textContent;
     expect(foot).toContain("quarantined row");
     expect(foot).not.toContain("flew only for that parent");
+  });
+});
+
+// #203: the mainline view grouped by carrier marks the row whose month holds a composition step
+// and lists the crossed steps of the carriers on the page in its foot. Window 2016-06..2017-06,
+// filtered to Alaska AND Virgin America: under g=ml the op_airline_id filter targets the raw
+// fact column, so only with VX admitted does the AS 2016-12 row really hold the VX metal its
+// "VX joins" mark names (filtered to AS alone it holds none, and compositionSteps drops the
+// step). VX joins at 2016-12, mid-series, not at an edge. Under g=ml this is 19 rows: AS every
+// month (13) and VX 2016-06..2016-11 (6) -- from 2016-12 VX counts under AS, so NO VX row sits
+// in 2016-12 and VX's own step ("counted under AS from 2016-12") marks no row; it appears in the
+// foot only. This spelling is canonical -- `encode(decodeRequest(...))` returns it
+// byte-for-byte and `canonicalize` calls it clean -- so smoke.sh's identical STEPS_Q is served
+// as a 200, never a 307.
+const AS_STEPS = {
+  v: "1",
+  k: "seg",
+  d: "year_month,op_airline_id",
+  m: "seats",
+  t: "2016-06:2017-06",
+  f: "op_airline_id:19930,21171",
+  s: "-seats",
+  n: "25",
+  g: "ml",
+};
+
+describe("/explore marks mainline composition steps", () => {
+  it("marks the 2016-12 Alaska row and only it", async () => {
+    const { container } = render(await ExploreView({ rawQuery: qs(AS_STEPS) }));
+    // Not vacuous: all 19 rows rendered, VX's six among them.
+    const rows = [...container.querySelectorAll("tbody tr")];
+    expect(rows.length).toBe(19);
+    const marked = rows.filter((r) => r.querySelector(".step-mark"));
+    expect(
+      marked.map((r) => [
+        r.textContent!.match(/\d{4}-\d{2}/)?.[0],
+        r.querySelector(".step-mark")!.getAttribute("aria-label"),
+      ]),
+    ).toEqual([["2016-12", "Group composition changes: VX joins 2016-12"]]);
+    expect(marked[0].textContent).toContain("AS");
+  });
+
+  // The subject is named by its resolved CODE: "AS: VX joins", never "19930: VX joins". Two
+  // subjects, so both separators are pinned: "; " between carriers, ", " within one.
+  it("lists the crossed steps of both carriers in the foot", async () => {
+    const { container } = render(await ExploreView({ rawQuery: qs(AS_STEPS) }));
+    const foot = container.querySelector(".foot");
+    expect(foot?.innerHTML).toContain("<strong>Composition</strong>");
+    expect(foot?.textContent).toContain(
+      "Composition changes in this window: AS: VX joins 2016-12; VX: counted under AS from 2016-12.",
+    );
+  });
+
+  it("drops the joins step when the filter admits Alaska's own metal only", async () => {
+    // The raw-column filter: f=op_airline_id:19930 holds no VX seats, so no row and no foot
+    // entry may claim VX joined.
+    const { container } = render(
+      await ExploreView({ rawQuery: qs({ ...AS_STEPS, f: "op_airline_id:19930" }) }),
+    );
+    expect(container.querySelectorAll("tbody tr").length).toBe(13);
+    expect(container.querySelector(".step-mark")).toBeNull();
+    const foot = container.querySelector(".foot")!.textContent;
+    expect(foot).toContain("flew only for that parent");
+    expect(foot).not.toContain("Composition changes");
+  });
+
+  it("never queries steps on the operating view", async () => {
+    vi.mocked(mainlineSteps).mockClear();
+    const { container } = render(await ExploreView({ rawQuery: qs({ ...AS_STEPS, g: "op" }) }));
+    expect(mainlineSteps).not.toHaveBeenCalled();
+    expect(container.querySelector(".step-mark")).toBeNull();
+    // Not vacuous: the operating fixture rendered rows (26 exist, n=25 caps them) and its foot.
+    expect(container.querySelectorAll("tbody tr").length).toBe(25);
+    expect(container.querySelector(".foot")!.textContent).not.toContain("Composition");
   });
 });

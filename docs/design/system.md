@@ -199,6 +199,13 @@ never from the gutter**; the *reason-code
 gutter* section below has the mechanism, and names gating on the glyph as the bug it exists to
 prevent.
 
+**A `Δ` after a row's first identifier marks a mainline-group composition step.** On
+`/explore`'s mainline view grouped by carrier, a row whose time bucket holds a step in that
+group's membership carries the mark; its `aria-label` and `title` name each step. It is not a
+gutter glyph: the gutter carries one signal, chosen by severity, and a second code there would
+hide whichever lost. The page foot lists the crossed steps of the carriers on the page. The rule
+behind it is `docs/data/carrier-model.md` caveat 3.
+
 On a ranked table they sort below every scored row, so the sparse rows read as one block at the
 foot instead of salted through the ranking — the treatment's value is that they are separable
 at a glance, and interleaved they are not. Where the table carries a rank column, a below-floor

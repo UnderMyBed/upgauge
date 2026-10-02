@@ -791,3 +791,41 @@ describe("DataTable reads the floor per month flown, not per window", () => {
     expect(flagOf(container, "EEE–FFF")).toBeNull();
   });
 });
+
+describe("rowNotes -- the composition step mark", () => {
+  const columns: ColumnSpec[] = [
+    { key: "year_month", label: "Month", kind: "identifier" },
+    { key: "carrier", label: "Carrier", kind: "identifier" },
+    { key: "seats", label: "Seats", kind: "seats" },
+  ];
+  const rows = [
+    { year_month: "2016-11", carrier: "AS", seats: 1 },
+    { year_month: "2016-12", carrier: "AS", seats: 2 },
+  ];
+  const note = (r: Record<string, unknown>) =>
+    r.year_month === "2016-12" ? "Group composition changes: VX joins 2016-12" : null;
+
+  it("marks the noted row, in its first identifier cell, with the note as its label", () => {
+    const { container } = render(
+      <DataTable columns={columns} rows={rows} partition={false} rowNotes={note} />,
+    );
+    const marks = container.querySelectorAll(".step-mark");
+    expect(marks).toHaveLength(1);
+    expect(marks[0].getAttribute("aria-label")).toBe(
+      "Group composition changes: VX joins 2016-12",
+    );
+    expect(marks[0].getAttribute("title")).toBe("Group composition changes: VX joins 2016-12");
+    expect(marks[0].getAttribute("role")).toBe("img");
+    expect(marks[0].textContent).toBe("Δ");
+    // Position, not presence: the mark sits in row 2's FIRST identifier cell.
+    const tr = container.querySelectorAll("tbody tr")[1];
+    const firstId = tr.querySelectorAll("td.id")[0];
+    expect(firstId.querySelector(".step-mark")).not.toBeNull();
+    expect(container.querySelectorAll("tbody tr")[0].querySelector(".step-mark")).toBeNull();
+  });
+
+  it("renders no mark without the prop", () => {
+    const { container } = render(<DataTable columns={columns} rows={rows} partition={false} />);
+    expect(container.querySelector(".step-mark")).toBeNull();
+  });
+});

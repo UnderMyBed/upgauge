@@ -3,7 +3,7 @@ import { encode, UrlStateError } from "@/lib/pivot/urlstate";
 import { decodeRequest } from "@/lib/pivot/bounds";
 import { NON_DISPLAY_COLUMNS, PivotError } from "@/lib/pivot/types";
 import { rawQueryFromHeaders } from "@/lib/rawQuery";
-import { dataAsOf, loadAllowlist, runPivot, type PivotResult } from "@/lib/db";
+import { dataAsOf, loadAllowlist, mainlineSteps, runPivot, type PivotResult } from "@/lib/db";
 import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { formatCount } from "@/lib/format";
 import { EARLIEST_MONTH } from "@/lib/entityFacts";
@@ -13,6 +13,7 @@ import { ExplorerBuilder } from "@/components/builder/ExplorerBuilder";
 import { exploreHref } from "@/lib/pivot/builder";
 import { recoveryHref, recoveryQuery } from "@/lib/pivot/recovery";
 import { LegendRail } from "@/components/LegendRail";
+import { rowNote, stepsApply, stepsBySubject } from "@/lib/pivot/compositionSteps";
 import { TopBar } from "@/components/TopBar";
 import type { PivotQuery } from "@/lib/pivot/types";
 import type { Allowlist } from "@/lib/pivot/allowlist";
@@ -289,6 +290,21 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
     ...result.resolved,
   ]);
 
+  // #203: the mainline group composition steps this window crosses (docs/data/carrier-model.md
+  // caveat 3). Outside the try/catch like `resolveFilterValues` above, and safe there for the
+  // same reason: `mainline_steps.sql` binds only `timeFrom`/`timeTo`, two `YYYY-MM` strings
+  // `decodeRequest` has already bounded to this dataset's window, so no visitor-chosen value
+  // reaches it and it has no PivotError-class failure to name. Not fetched on the empty state
+  // (no row to mark, no subject to list) nor when `stepsApply` says no row could step.
+  const steps =
+    stepsApply(query) && !isEmpty ? await mainlineSteps(query.timeFrom, query.timeTo) : [];
+  const footSteps = stepsBySubject(query, result.rows, steps);
+  // The subject's display code through the same `displayValue` contract DimensionCell uses.
+  // `builderResolved` holds the pivot's own `op_airline_id` entries (every listed subject is a
+  // row on this page) plus the filter's, so the key is present whether or not the view filters.
+  const carrierCode = (id: number) =>
+    displayValue(builderResolved.get(resolutionKey("op_airline_id", id)), id);
+
   // Gated on BOTH operands, and the two-case test beside it is what keeps it that way. Keyed on
   // the grouping alone this fires on every mainline view, which has no carrier filter to be
   // inconsistent with; keyed on the filter alone it fires on every carrier-filtered OPERATING
@@ -405,6 +421,7 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
                 rows={displayRows}
                 resolved={result.resolved}
                 partition={false}
+                rowNotes={steps.length ? (row) => rowNote(query, row, steps) : undefined}
               />
             )}
             <p className="foot">
@@ -419,6 +436,19 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
                   <strong>Mainline</strong> counts a carrier under its parent in the months the
                   parent wholly owned it or it flew only for that parent. Regionals flying for
                   several mainlines at once (SkyWest, Republic) stay as themselves.
+                  {footSteps.length > 0 ? (
+                    <>
+                      {" "}
+                      <strong>Composition</strong> changes in this window:{" "}
+                      {footSteps
+                        .map(
+                          ({ subjectAirlineId, phrases }) =>
+                            `${carrierCode(subjectAirlineId)}: ${phrases.join(", ")}`,
+                        )
+                        .join("; ")}
+                      .
+                    </>
+                  ) : null}
                 </>
               ) : null}
               {mainlineRollupFiltered ? (
