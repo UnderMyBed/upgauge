@@ -121,8 +121,8 @@ what is TRUE about the system; the tracker says what is PLANNED.
 **M8 — the gap between "built" and "reachable" — is CLOSED:** the deploy artifact and
 portability test (#1), ingest and freshness alerting (#2), cache correctness (#3), launch
 configuration (#4), and an edge rate limit on every path that reaches the origin uncached (#83).
-**Bot Fight Mode stays on**, so nothing watches the site on a schedule — that is #96, and it sits
-in M9. Everything in M9 is a surface the product works without.
+**Bot Fight Mode stays on**, so nothing watches the site on a schedule — an accepted gap, not
+planned work (#96, closed). Everything in M9 is a surface the product works without.
 
 One finding worth keeping here rather than only in the tracker, because it is a rule:
 
