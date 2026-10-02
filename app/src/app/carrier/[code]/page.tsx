@@ -13,7 +13,8 @@ import { segmentArcsDrawn } from "@/lib/map/segmentMap";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
-import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
+import { SeasonalityHeatmap } from "@/components/SeasonalityHeatmap";
+import { AIRCRAFT_MIX_LIMIT, fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
 import { fetchCarrierDiff } from "@/lib/map/carrierDiff";
 import { exploreHref } from "@/lib/pivot/builder";
@@ -483,6 +484,13 @@ export async function CarrierView({
                 panel on the page with anything in it, and the empty state under it is what
                 says the flying stopped. */}
             {hasMix ? <AircraftMixChart rows={mix} title={carrier.code} /> : null}
+            {hasMix ? (
+              <SeasonalityHeatmap
+                rows={mix}
+                title={carrier.code}
+                truncated={mix.length >= AIRCRAFT_MIX_LIMIT}
+              />
+            ) : null}
             {isEmpty ? (
               <CarrierEmptyState query={query} carrier={carrier} />
             ) : (

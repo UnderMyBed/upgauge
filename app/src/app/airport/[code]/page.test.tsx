@@ -172,7 +172,7 @@ describe("/airport/<code>", () => {
   it("draws the fleet-mix chart above the table, over the full window", async () => {
     const asOf = await dataAsOf();
     const { container } = render(await renderSEA());
-    const svg = container.querySelector(".chart svg[role='img']");
+    const svg = container.querySelector(".chart:not(.heatmap) svg[role='img']");
     const table = container.querySelector("table");
     expect(svg).not.toBeNull();
     expect(table).not.toBeNull();
@@ -191,7 +191,7 @@ describe("/airport/<code>", () => {
     // endpoints and 2,675,160 departing only (measured, 2025-07), so a 4M tick exists on the
     // honest chart and CANNOT exist on an origin-only one.
     const { container } = render(await renderSEA());
-    const ticks = [...(container.querySelectorAll(".chart svg text") ?? [])].map(
+    const ticks = [...(container.querySelectorAll(".chart:not(.heatmap) svg text") ?? [])].map(
       (t) => t.textContent,
     );
     expect(ticks).toContain("4M");
@@ -246,7 +246,7 @@ describe("/airport/<code>", () => {
     const { container } = render(await renderSEA());
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).toContain("Fleet shading");
-    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(container.querySelector(".chart:not(.heatmap) svg[role='img']")).not.toBeNull();
   });
 });
 
@@ -431,7 +431,7 @@ describe("/airport/<code> whose whole network is one quarantined route pair", ()
     // THE sentence, not merely some sentence. Two months were FILED and neither can be stated,
     // so `mixAbsenceNote` names that cause rather than the bare month count -- and a gate that
     // counted filed months instead of statable ones would draw a frame here.
-    expect(container.querySelector(".chart")!.textContent).toContain(
+    expect(container.querySelector(".chart:not(.heatmap)")!.textContent).toContain(
       "2 months of filings in this window, every one wholly quarantined — every filing failed " +
         "an invariant",
     );
@@ -475,7 +475,7 @@ describe("/airport/<code> with nothing in the trailing 12 months", () => {
     // over a chart that stops in 2019 is the same fabrication as interpolating a gap (M4c).
     const asOf = await dataAsOf();
     const { container } = render(await AirportPage({ params: Promise.resolve({ code: "ISN" }) }));
-    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(container.querySelector(".chart:not(.heatmap) svg[role='img']")).not.toBeNull();
     const line = container.querySelector(".window")?.textContent ?? "";
     const chartHalf = line.slice(line.indexOf("chart:"));
     expect(chartHalf).toContain("2015-01 → 2019-10");
@@ -518,6 +518,24 @@ describe("/airport/<code> truncation disclosure", () => {
   it("does not disclose a truncated chart at the real limit", async () => {
     render(await view());
     expect(screen.queryByText(/row limit/i)).toBeNull();
+  });
+
+  it("keeps the chart's row-limit note with the chart, above the heatmap", async () => {
+    // The note says "The chart hit its N-row limit" -- it is about the mix chart, so it sits
+    // directly under that chart, and the heatmap (which states its own truncation in its own
+    // frame) comes after it. A heatmap mounted between the chart and its note reads as the
+    // subject of the note. 50, not 5: the capped rows must span enough months for both charts
+    // to draw, or the heatmap is absent and order is unassertable.
+    const { container } = render(await view(undefined, 50));
+    const note = [...container.querySelectorAll(".foot")].find(
+      (p) => !p.closest(".heatmap") && /The chart hit its/.test(p.textContent ?? ""),
+    );
+    const heatmap = container.querySelector(".chart.heatmap");
+    expect(note).toBeDefined();
+    expect(heatmap).not.toBeNull();
+    expect(note!.compareDocumentPosition(heatmap!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
   });
 });
 
@@ -1021,5 +1039,28 @@ describe("/airport/<code>: the legend rail's arc group follows the ARCS (#123)",
     const { container } = render(await renderSEA());
     expect(container.querySelector("aside.legend")!.textContent).toContain("Arc rendering");
     expect(container.querySelectorAll("polyline").length).toBeGreaterThan(0);
+  });
+});
+
+// The seats-by-month heatmap (#7) is drawn from the mix chart's own rows, so it belongs directly
+// under that chart: what is asserted is the MOUNT -- that it renders on this page, in document
+// order after the mix chart, with its own accessible name. The grid itself belongs to
+// SeasonalityHeatmap.test.tsx and seasonality.test.ts.
+describe("/airport/<code>: the seats-by-month heatmap", () => {
+  it("renders under the aircraft-mix chart, with its own accessible name", async () => {
+    const { container } = render(await renderSEA());
+    const mixChart = container.querySelector(".chart:not(.heatmap)");
+    const heatmap = container.querySelector(".chart.heatmap");
+    expect(mixChart).not.toBeNull();
+    expect(heatmap).not.toBeNull();
+    // Order, not presence: a heatmap mounted above the chart it is read against satisfies
+    // every existence check here.
+    expect(mixChart!.compareDocumentPosition(heatmap!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    // The svg exists only when the grid is drawn, so a `truncated` flag wired to the wrong
+    // value (the grid replaced by its can't-be-stated note) fails here too.
+    const label = heatmap!.querySelector("svg[role='img']")?.getAttribute("aria-label") ?? "";
+    expect(label.startsWith("Seats by month, ")).toBe(true);
   });
 });

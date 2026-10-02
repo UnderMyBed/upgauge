@@ -157,10 +157,10 @@ describe("/aircraft/<slug>", () => {
     // the degenerate version -- the title names the dimension, and the type stack would render
     // "Seats by aircraft type" with one band.
     const { container } = render(await page("B737-8"));
-    expect(container.querySelector(".chart .ctitle")?.textContent).toBe(
+    expect(container.querySelector(".chart:not(.heatmap) .ctitle")?.textContent).toBe(
       "Seats by operating carrier",
     );
-    const svg = container.querySelector(".chart svg[role='img']");
+    const svg = container.querySelector(".chart:not(.heatmap) svg[role='img']");
     const table = container.querySelector("table");
     expect(svg).not.toBeNull();
     expect(svg!.compareDocumentPosition(table!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
@@ -345,7 +345,7 @@ describe("/aircraft/<slug> for a type that has stopped flying", () => {
   // the same shape as /route's ATL-CAK, and on this page it is the retirement story itself.
   it("still draws the history when the trailing-12 table is empty", async () => {
     const { container } = render(await page("MD-80"));
-    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(container.querySelector(".chart:not(.heatmap) svg[role='img']")).not.toBeNull();
     // Scoped to the empty state: the chart's own key also says "N months with no filings" for
     // this type (it filed 68 of the 100 months it spans), so an unscoped text match finds two
     // nodes and throws -- and would have been satisfied by the chart alone, which is the
@@ -738,7 +738,7 @@ describe("/aircraft/<name>: the legend rail follows the CHART, not the rows (#12
     const { container } = render(await AircraftPage({ params: Promise.resolve({ name: "B737-8" }) }));
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).toContain("Fleet shading");
-    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(container.querySelector(".chart:not(.heatmap) svg[role='img']")).not.toBeNull();
   });
 });
 
@@ -817,5 +817,28 @@ describe("/aircraft/<name>: the legend rail's arc group follows the ARCS (#123)"
     const { container } = render(await filtered("B737-8", "carrier=DL"));
     expect(container.querySelector("aside.legend")!.textContent).toContain("Arc rendering");
     expect(container.querySelectorAll("polyline").length).toBeGreaterThan(0);
+  });
+});
+
+// The seats-by-month heatmap (#7) is drawn from the mix chart's own rows, so it belongs directly
+// under that chart: what is asserted is the MOUNT -- that it renders on this page, in document
+// order after the mix chart, with its own accessible name. The grid itself belongs to
+// SeasonalityHeatmap.test.tsx and seasonality.test.ts.
+describe("/aircraft/<slug>: the seats-by-month heatmap", () => {
+  it("renders under the aircraft-mix chart, with its own accessible name", async () => {
+    const { container } = render(await page("B737-8"));
+    const mixChart = container.querySelector(".chart:not(.heatmap)");
+    const heatmap = container.querySelector(".chart.heatmap");
+    expect(mixChart).not.toBeNull();
+    expect(heatmap).not.toBeNull();
+    // Order, not presence: a heatmap mounted above the chart it is read against satisfies
+    // every existence check here.
+    expect(mixChart!.compareDocumentPosition(heatmap!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    // The svg exists only when the grid is drawn, so a `truncated` flag wired to the wrong
+    // value (the grid replaced by its can't-be-stated note) fails here too.
+    const label = heatmap!.querySelector("svg[role='img']")?.getAttribute("aria-label") ?? "";
+    expect(label.startsWith("Seats by month, ")).toBe(true);
   });
 });

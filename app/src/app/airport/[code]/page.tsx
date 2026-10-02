@@ -17,6 +17,7 @@ import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
+import { SeasonalityHeatmap } from "@/components/SeasonalityHeatmap";
 import { networkArcsDrawn } from "@/lib/map/networkMap";
 import { NetworkMap } from "@/components/NetworkMap";
 import { AIRCRAFT_MIX_LIMIT } from "@/lib/chart/aircraftMix";
@@ -421,6 +422,9 @@ export async function AirportView({
                 missing from it; the table and the totals above are unaffected.
               </p>
             )}
+            {hasMix ? (
+              <SeasonalityHeatmap rows={mix.rows} title={airport.code} truncated={mix.truncated} />
+            ) : null}
             {isEmpty ? (
               <AirportEmptyState airport={airport} timeFrom={trailing12} timeTo={asOf} />
             ) : (

@@ -9,7 +9,8 @@ import { DataTable, type ColumnSpec } from "@/components/DataTable";
 import { LegendRail } from "@/components/LegendRail";
 import { TopBar } from "@/components/TopBar";
 import { AircraftMixChart } from "@/components/AircraftMixChart";
-import { fetchAircraftMix } from "@/lib/chart/aircraftMix";
+import { SeasonalityHeatmap } from "@/components/SeasonalityHeatmap";
+import { AIRCRAFT_MIX_LIMIT, fetchAircraftMix } from "@/lib/chart/aircraftMix";
 import { mixChartDraws } from "@/lib/chart/mixPlotConfig";
 import { exploreHref } from "@/lib/pivot/builder";
 import {
@@ -287,6 +288,13 @@ export async function RouteView({
                 already states that finding in words, and a second panel repeating it in the
                 chart's own voice would be the card soup CLAUDE.md's density rule rules out. */}
             {hasMix ? <AircraftMixChart rows={mix} title={title} /> : null}
+            {hasMix ? (
+              <SeasonalityHeatmap
+                rows={mix}
+                title={title}
+                truncated={mix.length >= AIRCRAFT_MIX_LIMIT}
+              />
+            ) : null}
             {isEmpty ? (
               // `a`/`b` (alphabetical, same order as the header above), NOT `low`/`high`
               // (id order) -- Minor, final whole-branch review: for the 215 routes where the

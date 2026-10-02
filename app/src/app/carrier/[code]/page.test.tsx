@@ -245,7 +245,7 @@ describe("/carrier/<code> aircraft-mix chart", () => {
   it("draws the chart above the table, over the FULL window", async () => {
     const asOf = await dataAsOf();
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
-    const svg = container.querySelector(".chart svg[role='img']");
+    const svg = container.querySelector(".chart:not(.heatmap) svg[role='img']");
     const table = container.querySelector("table");
     expect(svg).not.toBeNull();
     expect(table).not.toBeNull();
@@ -292,7 +292,7 @@ describe("/carrier/<code> with nothing in the trailing 12 months", () => {
     // interpolating across a gap (M4c, Finding 1).
     const asOf = await dataAsOf();
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
-    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(container.querySelector(".chart:not(.heatmap) svg[role='img']")).not.toBeNull();
     const line = container.querySelector(".window")?.textContent ?? "";
     const chartHalf = line.slice(line.indexOf("chart:"));
     expect(chartHalf).toContain("2015-01 → 2018-03");
@@ -1038,7 +1038,7 @@ describe("/carrier/<code>: the legend rail follows the CHART, not the rows (#123
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).toContain("Fleet shading");
-    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(container.querySelector(".chart:not(.heatmap) svg[role='img']")).not.toBeNull();
   });
 });
 
@@ -1149,5 +1149,28 @@ describe("/carrier/<code>: the legend rail's arc group follows the ARCS (#123)",
     expect(container.querySelectorAll('[data-testid="diff-panel"]').length).toBe(0);
     expect(container.querySelectorAll("polyline").length).toBeGreaterThan(0);
     expect(container.querySelector("aside.legend")!.textContent).toContain("Arc rendering");
+  });
+});
+
+// The seats-by-month heatmap (#7) is drawn from the mix chart's own rows, so it belongs directly
+// under that chart: what is asserted is the MOUNT -- that it renders on this page, in document
+// order after the mix chart, with its own accessible name. The grid itself belongs to
+// SeasonalityHeatmap.test.tsx and seasonality.test.ts.
+describe("/carrier/<code>: the seats-by-month heatmap", () => {
+  it("renders under the aircraft-mix chart, with its own accessible name", async () => {
+    const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
+    const mixChart = container.querySelector(".chart:not(.heatmap)");
+    const heatmap = container.querySelector(".chart.heatmap");
+    expect(mixChart).not.toBeNull();
+    expect(heatmap).not.toBeNull();
+    // Order, not presence: a heatmap mounted above the chart it is read against satisfies
+    // every existence check here.
+    expect(mixChart!.compareDocumentPosition(heatmap!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    // The svg exists only when the grid is drawn, so a `truncated` flag wired to the wrong
+    // value (the grid replaced by its can't-be-stated note) fails here too.
+    const label = heatmap!.querySelector("svg[role='img']")?.getAttribute("aria-label") ?? "";
+    expect(label.startsWith("Seats by month, ")).toBe(true);
   });
 });
