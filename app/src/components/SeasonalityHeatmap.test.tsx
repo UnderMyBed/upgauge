@@ -51,8 +51,17 @@ function heatmap(rows: MixRow[], truncated = false, title = "JFK–LAX") {
   return container;
 }
 
+/** The WIDE render -- the desktop grid, which every cell and geometry test reads. The grid is
+ * drawn once per fit (ChartFit); the per-fit properties are pinned in their own describe block,
+ * so these helpers stay scoped to one render. */
+function wideOf(container: HTMLElement): Element {
+  const svg = container.querySelector(".chart-fit > .fit-wide svg");
+  if (svg === null) throw new Error("no wide render");
+  return svg;
+}
+
 function cellOf(container: HTMLElement, m: string): SVGRectElement {
-  const rect = container.querySelector(`rect[data-month="${m}"]`);
+  const rect = wideOf(container).querySelector(`rect[data-month="${m}"]`);
   if (rect === null) throw new Error(`no cell for ${m}`);
   return rect as unknown as SVGRectElement;
 }
@@ -166,7 +175,7 @@ describe("SeasonalityHeatmap -- cell kinds", () => {
     for (const m of ["2016-01", "2016-02", "2017-03", "2017-12"]) {
       expect(c.querySelector(`[data-month="${m}"]`)).toBeNull();
     }
-    expect([...c.querySelectorAll("rect[data-month]")].map((r) => r.getAttribute("data-month")))
+    expect([...wideOf(c).querySelectorAll("rect[data-month]")].map((r) => r.getAttribute("data-month")))
       .toEqual(["2016-03", "2016-04", "2016-05", "2016-06", "2016-07", ...STEADY]);
   });
 });
@@ -197,7 +206,7 @@ describe("SeasonalityHeatmap -- geometry", () => {
   // Mutant: month labels drawn in reverse or year labels missing.
   it("labels the twelve month columns in order and each year row", () => {
     const c = heatmap(ALL_KINDS);
-    const texts = [...c.querySelectorAll("svg text")].map((t) => t.textContent);
+    const texts = [...wideOf(c).querySelectorAll("text")].map((t) => t.textContent);
     expect(texts.slice(0, 12)).toEqual(["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"]);
     expect(texts.slice(12)).toEqual(["2016", "2017"]);
   });
@@ -273,5 +282,64 @@ describe("SeasonalityHeatmap -- not drawn", () => {
   it("renders nothing for a single stated month", () => {
     expect(heatmap(month("2016-03", 100, 0)).innerHTML).toBe("");
     expect(heatmap(month("2016-03", 100, 0), true).innerHTML).toBe("");
+  });
+});
+
+describe("SeasonalityHeatmap -- one render per width band", () => {
+  const renders = (c: HTMLElement) =>
+    (["wide", "mid", "narrow"] as const).map((fit) => {
+      const svg = c.querySelector(`.chart-fit > .fit-${fit} svg`);
+      if (svg === null) throw new Error(`no ${fit} render`);
+      return svg;
+    });
+
+  // Mutant: ChartFit renders only the wide child.
+  it("draws exactly three grids, one per fit, over 960/540/300-unit viewBoxes", () => {
+    const c = heatmap(ALL_KINDS);
+    expect(c.querySelectorAll("svg").length).toBe(3);
+    expect([...c.querySelector(".chart-fit")!.children].map((e) => e.className)).toEqual([
+      "fit-wide",
+      "fit-mid",
+      "fit-narrow",
+    ]);
+    expect(renders(c).map((s) => s.getAttribute("viewBox")!.split(" ")[2])).toEqual(["960", "540", "300"]);
+  });
+
+  // Mutant: the narrow grid is fed a different grid (another row set).
+  it("draws every grid from the same rows: same cells, same kinds, same label", () => {
+    const c = heatmap(ALL_KINDS);
+    const cells = (svg: Element) =>
+      [...svg.querySelectorAll("rect[data-month]")].map(
+        (r) => `${r.getAttribute("data-month")}:${r.getAttribute("data-kind")}:${r.getAttribute("fill")}`,
+      );
+    const [wide, mid, narrow] = renders(c);
+    expect(cells(wide).length).toBeGreaterThan(0);
+    expect(cells(mid)).toEqual(cells(wide));
+    expect(cells(narrow)).toEqual(cells(wide));
+    for (const s of [mid, narrow]) expect(s.getAttribute("aria-label")).toBe(wide.getAttribute("aria-label"));
+  });
+
+  // Mutant: the narrow grid keeps the wide column pitch -- its last column then falls outside
+  // its own 300-unit viewBox.
+  it("fits all twelve columns inside each render's own viewBox", () => {
+    for (const svg of renders(heatmap(ALL_KINDS))) {
+      const w = Number(svg.getAttribute("viewBox")!.split(" ")[2]);
+      const months = [...svg.querySelectorAll("text")].slice(0, 12).map((t) => Number(t.getAttribute("x")));
+      expect(Math.max(...months)).toBeLessThan(w);
+      expect(Math.max(...months)).toBeGreaterThan(w * 0.9);
+    }
+  });
+
+  // Mutant: the key moved inside ChartFit's render, so it appears three times.
+  it("keeps the HTML key once, outside the renders", () => {
+    const c = heatmap(ALL_KINDS);
+    expect(c.querySelectorAll(".hkey").length).toBe(1);
+    expect(c.querySelector(".chart-fit .hkey")).toBeNull();
+  });
+
+  // Mutant: a fixed id on the grid's svg -- three copies in one document.
+  it("repeats no id across the three renders", () => {
+    const ids = [...heatmap(ALL_KINDS).querySelectorAll("[id]")].map((e) => e.id);
+    expect(ids.length).toBe(new Set(ids).size);
   });
 });

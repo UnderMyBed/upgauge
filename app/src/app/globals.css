@@ -391,6 +391,40 @@ svg.plot {
   width: 100%;
   height: auto;
 }
+/* One render per width band (docs/design/system.md § Charts; lib/chart/fit.ts). A chart SVG
+   scales its text with the column, so each chart is drawn three times over three viewBox
+   widths and the chart's own column picks one: 960 units at 860px and wider, 540 from 480px,
+   300 below. The breakpoints are FIT_BREAKPOINTS, restated here because CSS cannot import;
+   globals.test.ts binds the two. Wide is the default, so a browser without container queries
+   still shows exactly one. `display: none` also takes the hidden renders out of the
+   accessibility tree. Range syntax, so a column of 859.5px has no seam between the bands; the
+   <480 block must follow the <860 one, since both match a narrow column and the later wins. */
+.chart-fit {
+  container-type: inline-size;
+}
+.fit-wide {
+  display: block;
+}
+.fit-mid,
+.fit-narrow {
+  display: none;
+}
+@container (width < 860px) {
+  .fit-wide {
+    display: none;
+  }
+  .fit-mid {
+    display: block;
+  }
+}
+@container (width < 480px) {
+  .fit-mid {
+    display: none;
+  }
+  .fit-narrow {
+    display: block;
+  }
+}
 /* The colour key: which shade is which type, darkest first. The ramp is ordered, so this
    doubles as the statement that reading it top-down is reading metal size down. */
 .ckey {

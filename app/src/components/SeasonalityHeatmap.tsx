@@ -4,7 +4,10 @@ import {
   heatmapKeyNotes,
   heatmapLabel,
   type HeatCell,
+  type HeatGrid,
 } from "@/lib/chart/seasonality";
+import { FIT_VIEW_W } from "@/lib/chart/fit";
+import { ChartFit } from "@/components/ChartFit";
 import { formatSeats } from "@/lib/format";
 
 /** docs/design/system.md § Seasonality heatmap: seats by month, one row per year, drawn from the
@@ -21,18 +24,24 @@ import { formatSeats } from "@/lib/format";
  * `<!-- -->` between adjacent text nodes, which a raw-bytes needle in app/smoke.sh cannot see
  * through. */
 
-// Geometry in viewBox units. The viewBox width is the content column's own width, so at full
-// width a unit is a CSS pixel and a row is 22px -- the data table's row height. Narrower, the
-// whole grid scales down together; no width is ever pinned.
-const VIEW_W = 960;
+// Geometry in viewBox units. At the wide fit the viewBox width is the content column's own
+// width, so a unit is a CSS pixel and a row is 22px -- the data table's row height. The grid is
+// drawn once per fit (ChartFit, lib/chart/fit.ts): only the viewBox width changes between them,
+// so the columns narrow toward square cells while the label column, the row height and the
+// 10-unit `.hlab` text keep their size in units -- and therefore near 9-16 CSS px at every
+// column width. No width is ever pinned.
 const LABEL_W = 36; // the year column
 const TOP = 16; // the month-initials row
 const ROW = 22;
 const GUTTER = 1; // --panel shows through
-const COL_PITCH = (VIEW_W - LABEL_W) / 12;
-const CELL_W = COL_PITCH - GUTTER;
 const ROW_PITCH = ROW + GUTTER;
 const TICK = 6;
+
+/** Column geometry for one fit's viewBox width. */
+function columns(viewW: number) {
+  const pitch = (viewW - LABEL_W) / 12;
+  return { pitch, cellW: pitch - GUTTER };
+}
 const MONTH_INITIALS = ["J", "F", "M", "A", "M", "J", "J", "A", "S", "O", "N", "D"];
 const RAMP = ["--g1", "--g2", "--g3", "--g4", "--g5"] as const;
 
@@ -52,7 +61,7 @@ function cellTitle(c: HeatCell): string {
   }
 }
 
-function Cell({ c, x, y }: { c: HeatCell; x: number; y: number }) {
+function Cell({ c, x, y, cellW }: { c: HeatCell; x: number; y: number; cellW: number }) {
   const title = <title>{cellTitle(c)}</title>;
   if (c.kind === "value" || c.kind === "understated") {
     return (
@@ -62,7 +71,7 @@ function Cell({ c, x, y }: { c: HeatCell; x: number; y: number }) {
           data-kind={c.kind}
           x={x}
           y={y}
-          width={CELL_W}
+          width={cellW}
           height={ROW}
           fill={`var(${RAMP[c.bin! - 1]})`}
         >
@@ -71,7 +80,7 @@ function Cell({ c, x, y }: { c: HeatCell; x: number; y: number }) {
         {c.kind === "understated" ? (
           <path
             className="tick"
-            d={`M${x + CELL_W - TICK} ${y}H${x + CELL_W}V${y + TICK}Z`}
+            d={`M${x + cellW - TICK} ${y}H${x + cellW}V${y + TICK}Z`}
           />
         ) : null}
       </g>
@@ -89,14 +98,14 @@ function Cell({ c, x, y }: { c: HeatCell; x: number; y: number }) {
         className="hairline"
         x={x + 0.5}
         y={y + 0.5}
-        width={CELL_W - 1}
+        width={cellW - 1}
         height={ROW - 1}
         fill="none"
       >
         {title}
       </rect>
       {c.kind === "unknown" ? (
-        <circle className="dot" cx={x + CELL_W / 2} cy={y + ROW / 2} r={2.5} />
+        <circle className="dot" cx={x + cellW / 2} cy={y + ROW / 2} r={2.5} />
       ) : null}
     </g>
   );
@@ -124,34 +133,11 @@ export function SeasonalityHeatmap({
     );
   }
 
-  const height = TOP + grid.years.length * ROW_PITCH - GUTTER;
+  // ONE grid and ONE label, drawn once per fit: the renders differ in geometry only.
+  const label = heatmapLabel(grid);
   return (
     <Frame title={title}>
-      <svg
-        role="img"
-        aria-label={heatmapLabel(grid)}
-        viewBox={`0 0 ${VIEW_W} ${height}`}
-        className="heatmap-grid"
-        preserveAspectRatio="xMinYMin meet"
-      >
-        {MONTH_INITIALS.map((m, i) => (
-          <text key={`m${i}`} className="hlab" x={LABEL_W + i * COL_PITCH + CELL_W / 2} y={TOP - 4} textAnchor="middle">
-            {m}
-          </text>
-        ))}
-        {grid.years.map(({ year }, r) => (
-          <text key={`y${year}`} className="hlab" x={LABEL_W - 6} y={TOP + r * ROW_PITCH + ROW / 2} textAnchor="end" dominantBaseline="central">
-            {`${year}`}
-          </text>
-        ))}
-        {grid.years.flatMap(({ cells }, r) =>
-          cells.map((c, col) =>
-            c.kind === "outside" ? null : (
-              <Cell key={c.month} c={c} x={LABEL_W + col * COL_PITCH} y={TOP + r * ROW_PITCH} />
-            ),
-          ),
-        )}
-      </svg>
+      <ChartFit render={(fit) => <Grid grid={grid} label={label} viewW={FIT_VIEW_W[fit]} />} />
       <div className="hkey">
         <span className="gnum">{formatSeats(grid.min)}</span>
         {RAMP.map((t) => (
@@ -165,6 +151,38 @@ export function SeasonalityHeatmap({
         ))}
       </div>
     </Frame>
+  );
+}
+
+function Grid({ grid, label, viewW }: { grid: HeatGrid; label: string; viewW: number }) {
+  const { pitch, cellW } = columns(viewW);
+  const height = TOP + grid.years.length * ROW_PITCH - GUTTER;
+  return (
+    <svg
+      role="img"
+      aria-label={label}
+      viewBox={`0 0 ${viewW} ${height}`}
+      className="heatmap-grid"
+      preserveAspectRatio="xMinYMin meet"
+    >
+      {MONTH_INITIALS.map((m, i) => (
+        <text key={`m${i}`} className="hlab" x={LABEL_W + i * pitch + cellW / 2} y={TOP - 4} textAnchor="middle">
+          {m}
+        </text>
+      ))}
+      {grid.years.map(({ year }, r) => (
+        <text key={`y${year}`} className="hlab" x={LABEL_W - 6} y={TOP + r * ROW_PITCH + ROW / 2} textAnchor="end" dominantBaseline="central">
+          {`${year}`}
+        </text>
+      ))}
+      {grid.years.flatMap(({ cells }, r) =>
+        cells.map((c, col) =>
+          c.kind === "outside" ? null : (
+            <Cell key={c.month} c={c} x={LABEL_W + col * pitch} y={TOP + r * ROW_PITCH} cellW={cellW} />
+          ),
+        ),
+      )}
+    </svg>
   );
 }
 

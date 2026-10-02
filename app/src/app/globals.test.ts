@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { FIT_BREAKPOINTS, FIT_VIEW_W, FITS, type Fit } from "@/lib/chart/fit";
 
 /**
  * Every bespoke class name a component renders has a rule in globals.css.
@@ -240,5 +241,110 @@ describe("globals.css covers every bespoke class a component renders", () => {
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * One chart render per width band (docs/design/system.md § Charts; lib/chart/fit.ts).
+ *
+ * Every chart is drawn three times, and the stylesheet alone decides which one a reader sees:
+ * `.chart-fit` is an inline-size container, and its `@container` rules display exactly one of
+ * `.fit-wide` / `.fit-mid` / `.fit-narrow`. Two visible is a doubled chart; none is a blank frame.
+ *
+ * jsdom evaluates no container query, so this reads the cascade itself: top-level `.fit-*`
+ * display declarations, then each `@container (width < Npx)` block in source order, applied
+ * at a set of column widths on both sides of every breakpoint. Equal specificity throughout, so
+ * later wins -- the same rule the browser applies. A condition shape it cannot read FAILS.
+ */
+type Block = { cond: number | null; body: string };
+
+/** Top-level statements in order: plain rules (cond null) and `@container (width < N)` blocks. */
+function topLevel(css: string): Block[] {
+  const out: Block[] = [];
+  let i = 0;
+  while (i < css.length) {
+    const open = css.indexOf("{", i);
+    if (open === -1) break;
+    const head = css.slice(i, open).trim();
+    let depth = 1;
+    let j = open + 1;
+    while (depth > 0 && j < css.length) {
+      if (css[j] === "{") depth += 1;
+      if (css[j] === "}") depth -= 1;
+      j += 1;
+    }
+    const body = css.slice(open + 1, j - 1);
+    if (head.startsWith("@container")) {
+      const m = /^@container\s*\(\s*width\s*<\s*([\d.]+)px\s*\)$/.exec(head);
+      if (m === null) throw new Error(`unreadable container condition: ${head}`);
+      out.push({ cond: Number(m[1]), body });
+    } else if (head.startsWith("@")) {
+      // Any other at-rule is skipped by this evaluator, so a `.fit-*` rule inside one (an
+      // @media override, say) would change what the browser shows without this test seeing it.
+      if (/\.fit-/.test(body)) throw new Error(`.fit-* rule inside an unevaluated block: ${head}`);
+    } else {
+      out.push({ cond: null, body: `${head}{${body}}` });
+    }
+    i = j;
+  }
+  return out;
+}
+
+function shownAt(css: string, width: number): Fit[] {
+  const display = new Map<Fit, string>();
+  for (const { cond, body } of topLevel(css)) {
+    if (cond !== null && !(width < cond)) continue;
+    for (const m of body.matchAll(/([^{}]+)\{([^}]*)\}/g)) {
+      const value = /display\s*:\s*([\w-]+)/.exec(m[2])?.[1];
+      if (value === undefined) continue;
+      for (const sel of m[1].split(",").map((x) => x.trim())) {
+        const fit = /^\.fit-(wide|mid|narrow)$/.exec(sel)?.[1] as Fit | undefined;
+        if (fit !== undefined) display.set(fit, value);
+      }
+    }
+  }
+  return FITS.filter((f) => (display.get(f) ?? "block") !== "none");
+}
+
+describe("globals.css shows exactly one chart render per width band", () => {
+  const css = () => withoutComments(readFileSync(path.join(SRC, "app", "globals.css"), "utf8"));
+
+  it("makes .chart-fit an inline-size container", () => {
+    // Mutant: drop container-type -- every @container rule then matches nothing and all widths
+    // show the wide render.
+    const rule = /\.chart-fit\s*\{([^}]*)\}/.exec(css());
+    expect(rule).not.toBeNull();
+    expect(rule![1]).toMatch(/container-type\s*:\s*inline-size/);
+  });
+
+  // Mutant: delete any one `display: none` -- two renders show in that band.
+  it("shows one render on each side of each breakpoint, switching AT FIT_BREAKPOINTS", () => {
+    const { mid, wide } = FIT_BREAKPOINTS;
+    const expected: [number, Fit][] = [
+      [320, "narrow"],
+      [mid - 0.5, "narrow"],
+      [mid, "mid"],
+      [wide - 0.5, "mid"],
+      [wide, "wide"],
+      [1160, "wide"],
+    ];
+    for (const [width, fit] of expected) expect([width, shownAt(css(), width)]).toEqual([width, [fit]]);
+  });
+
+  // Mutant: move a breakpoint or a viewBox width so a band's labels leave the range.
+  it("keeps 10-unit labels within ~9-16 CSS px across each fit's band of column widths", () => {
+    // A 10-unit label renders at 10 * column / viewBoxWidth. Bands: 320px (a 375px phone's
+    // column is wider) to the mid breakpoint, the mid band, and the wide breakpoint to 922px --
+    // the desktop column (1200 - 2*20 gutter - 24 gap - 214 rail).
+    const bands: [Fit, number, number][] = [
+      ["narrow", 320, FIT_BREAKPOINTS.mid],
+      ["mid", FIT_BREAKPOINTS.mid, FIT_BREAKPOINTS.wide],
+      ["wide", FIT_BREAKPOINTS.wide, 922],
+    ];
+    for (const [fit, lo, hi] of bands) {
+      const px = (col: number) => (10 * col) / FIT_VIEW_W[fit];
+      expect([fit, px(lo) >= 8.85]).toEqual([fit, true]);
+      expect([fit, px(hi) <= 16.05]).toEqual([fit, true]);
+    }
   });
 });
