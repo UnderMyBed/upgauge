@@ -52,7 +52,9 @@ map_mainline_group    airline_id, parent_airline_id, effective_from, effective_t
                       basis, source
                       -- DATE-RANGED. basis = owned (wholly-owned subsidiary) or
                       -- contract (exclusive to one parent in those months; source
-                      -- required). Never shared regionals.
+                      -- required). Never shared regionals. A TABLE built by
+                      -- `make build` from the checked-in CSV; source is NULL
+                      -- on owned rows, as an open effective_to is.
 
 mart_route_health     one row per (op_airline_id, route_key_low, route_key_high)
                       UNDIRECTED, and the only materialized TABLE in the database.
@@ -127,7 +129,7 @@ Nothing to do with mainline rollup. **Ours is `mainline_group`; theirs is preser
 | `dim_city_market` | Master Coordinate (same zip — no extra fetch) | 288 |
 | `dim_carrier` | Carrier Decode | 304 |
 | `dim_aircraft_type` | AircraftTypes | 300 |
-| `map_mainline_group` | `pipeline/reference/mainline_group.csv` (checked in) | — |
+| `map_mainline_group` | `pipeline/reference/mainline_group.csv` (checked in) — a TABLE `make build` reads into the database, never a Parquet file in the asset | — |
 
 All three live in **DB 595 (Aviation Support Tables)**, which needs a *different subject
 param* from T-100. Getting it wrong does not error — BTS answers 200 with its homepage. The

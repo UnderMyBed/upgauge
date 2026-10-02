@@ -101,7 +101,7 @@ two ranges never share a month.
     it contradicted this doc and the SQL). A **gap-free handoff between two parents is one
     row's `effective_to` equal to the next row's `effective_from`** — `check_no_overlaps` was
     also fixed, since under the old inclusive reading it rejected that exact shape as an
-    overlap, which would have broken `make ingest`/`make warehouse` the next time a
+    overlap, which would have broken `make build` (where the map is validated) the next time a
     date-ranged acquisition was entered using this convention. See
     `pipeline/reference/mainline_group.csv`'s header comment, corrected to match.
 - **Admission rule.** `basis = owned`: a wholly-owned subsidiary, for the months of

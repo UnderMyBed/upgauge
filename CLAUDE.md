@@ -81,7 +81,7 @@ box its own timer keeps at `:deploy`. `warehouse.yml` polls BTS and publishes th
 `image.yml` builds and gates the container, `promote.yml` moves the tag. `make portability` proves
 the WORKDIR/data contract by breaking it, and is hand-run — no workflow invokes it.
 
-Current gates (`app-smoke` and `image-smoke` measured 2026-09-20, `app-check` 2026-09-16, `verify`/`goldens` 2026-08-08,
+Current gates (`app-smoke` and `image-smoke` measured 2026-09-20, `app-check` 2026-09-16, `verify`/`goldens` 2026-10-02,
 `portability` 2026-08-09, the rest 2026-08-10; the only counts kept here — history lives in git):
 
 | gate | result |
@@ -91,7 +91,7 @@ Current gates (`app-smoke` and `image-smoke` measured 2026-09-20, `app-check` 20
 | `make app-smoke` | 812 served-build checks |
 | `make image-smoke` | the host set less the 10 host-only gap checks (printed as a named three-section block, never as `skip` lines — that shape is `check_dataset`'s), **plus the 1 container-only check** (#162's artifact-level toolchain probe) — three terms, because the two modes now OVERLAP and neither contains the other; each prints the term it is missing — **803, measured 2026-09-20** by `image-contract.yml` on #190 (run 35480898685, job `gate`), and it reconciles against the rule — derived from both logs, not asserted: of the 812 host `ok` lines (`ci.yml` run 35480898686, job `smoke`) exactly 10 sit inside the three `==> gap check:` sections, and the container log's own `==> host-only sections NOT run in container mode (3)` block confirms none of them ran there. #147's two ordering checks are deliberately not dataset-pinned and were confirmed running in the container, not merely inferred from a local `SMOKE_DATASET_PINNED=0` run. Needs Docker plus the pinned release asset — that is `image-contract.yml`'s form, run **unoverridden** on a PR touching the image contract: pinned tag, needles on. `image.yml` runs the same target against the newest release with `SMOKE_DATASET_PINNED=0`, which reports **fewer** — the dataset-pinned checks skip without incrementing |
 | `make portability` | **hand-run, no workflow invokes it** · **zero** served-build checks — three negative cases, each reproducing its own documented failure |
-| `make verify` | 17 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
+| `make verify` | 16 Parquet artifacts byte-identical · 10 database objects identical · basemap zero-diff |
 | `make goldens` | byte-identical |
 
 **The Python test total is no longer written here, and that is the point.** It moved four times
@@ -166,7 +166,7 @@ versions.** `make` shells through `mise exec`, so the commands below work withou
 | `make fetch` | BTS T-100 zips → `data/raw/` (skips cached years) | ✅ |
 | `make fetch-reference` | BTS support tables → `data/raw/` | ✅ |
 | `make normalize` | Raw zips → `data/parquet/t100_segment/year=YYYY/` | ✅ |
-| `make warehouse` | Facts + all 5 dims from `data/raw/` | ✅ |
+| `make warehouse` | Facts + the 4 BTS dims from `data/raw/` | ✅ |
 | **`make verify`** | **M2 gate: build twice, prove Parquet + database byte-identical** | ✅ |
 | `make ingest` | `fetch` + `fetch-reference` + `warehouse`, **force-refetching the last 2 years**. Rejects `ARGS` — two of its four steps must override it | ✅ |
 | `make build` | Run `sql/` in order → `upgauge.duckdb` | ✅ |
@@ -239,7 +239,7 @@ This is what lets the pipeline and the server share definitions and keeps a Duck
 possible.
 
 **Marts are rebuilt from `sql/`, never taken from the asset** — CI after the restore, and the image's
-`warehouse` BUILDER. Bake them and a mart change waits for BTS; `pipeline/` never reaches runtime.
+`warehouse` BUILDER; `map_mainline_group` too, a table from `mainline_group.csv`. Bake them and a change waits for BTS.
 
 **Segment only.** Never blend T-100 Segment with Market or DB1B.
 

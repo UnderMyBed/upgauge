@@ -129,7 +129,8 @@ runs:
 
     # THE MARTS SHIP WITH THE CODE, NOT WITH THE ASSET. `sql/02_marts/` is versioned in this
     # repository and `mart_route_health` (and the other nine objects) are a pure function of
-    # `data/parquet` plus that directory -- `pipeline/marts.py`'s `build_database` reads the
+    # `data/parquet` plus that directory and `pipeline/reference/mainline_group.csv`, which
+    # `map_mainline_group` is a TABLE read from -- `pipeline/marts.py`'s `build_database` reads the
     # existing upgauge.duckdb not at all, it builds a staging file and renames over it. The
     # published asset's own copy of the database is therefore a snapshot of whatever `sql/`
     # looked like on publish day, and the asset republishes only when BTS advances a month

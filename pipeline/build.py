@@ -19,7 +19,6 @@ from pipeline.dims import (
     build_airport_dim,
     build_carrier_dim,
     build_city_market_dim,
-    build_mainline_map,
 )
 from pipeline.fetch import T100D_SEGMENT_US, Table, latest_raw
 from pipeline.lookups import AIRCRAFT_TYPES, CARRIER_DECODE, MASTER_COORDINATE
@@ -27,6 +26,7 @@ from pipeline.normalize import NormalizeError, discover_raw_years, normalize_yea
 
 FACTS_SUBDIR = "t100_segment"
 DIMS_SUBDIR = "dims"
+RETIRED_MAINLINE_MAP = "map_mainline_group.parquet"
 
 
 def _require(raw_dir: Path, table: Table) -> Path:
@@ -45,7 +45,7 @@ def _require(raw_dir: Path, table: Table) -> Path:
 
 
 def build_all(raw_dir: Path, out_dir: Path) -> list[Path]:
-    """Normalize every cached fact year and build all five dimensions.
+    """Normalize every cached fact year and build all four BTS-derived dimensions.
 
     Returns the artifacts written. Raises if anything required is missing.
     """
@@ -76,7 +76,10 @@ def build_all(raw_dir: Path, out_dir: Path) -> list[Path]:
     written.append(build_city_market_dim(sources["airport"], dims))
     written.append(build_carrier_dim(sources["carrier"], dims))
     written.append(build_aircraft_type_dim(sources["aircraft_type"], dims))
-    written.append(build_mainline_map(dims))
+    # Retired artifact. The map is materialized by `make build` from the checked-in CSV, but
+    # warehouse.yml builds IN PLACE over the previous asset's tree, so an old copy here would
+    # ride every future asset and fail `make verify`'s freshness check against a fresh build.
+    (dims / RETIRED_MAINLINE_MAP).unlink(missing_ok=True)
     return written
 
 

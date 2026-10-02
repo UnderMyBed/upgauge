@@ -47,8 +47,22 @@ def test_build_all_produces_facts_and_every_dim(raw, tmp_path):
     assert "dim_city_market.parquet" in names
     assert "dim_carrier.parquet" in names
     assert "dim_aircraft_type.parquet" in names
-    assert "map_mainline_group.parquet" in names
+    # The map is the checked-in CSV's, materialized by `make build`. A copy here would ride the
+    # release asset and shadow the commit's map wherever the asset is restored.
+    assert "map_mainline_group.parquet" not in names
     assert (out / "t100_segment" / "year=2015").exists()
+
+
+def test_build_all_removes_the_retired_mainline_map_parquet(raw, tmp_path):
+    """`warehouse.yml` builds IN PLACE over the previous asset's `data/parquet`, so a file the
+    warehouse no longer writes would ride every future asset -- and `make verify`'s freshness
+    check names it as a difference from a fresh build, nightly, forever."""
+    out = tmp_path / "parquet"
+    retired = out / "dims" / "map_mainline_group.parquet"
+    retired.parent.mkdir(parents=True)
+    retired.write_bytes(b"PAR1 stale asset copy")
+    build_all(raw, out)
+    assert not retired.exists()
 
 
 def test_build_all_fails_when_a_reference_table_is_missing(raw, tmp_path):
@@ -74,9 +88,9 @@ def test_verify_reproducible_passes_on_a_clean_build(raw, tmp_path):
 
 
 def test_verify_reproducible_checks_every_artifact(raw, tmp_path):
-    """Facts plus five dims — a gate that only checked one file would prove little."""
+    """Facts plus four dims — a gate that only checked one file would prove little."""
     report = verify_reproducible(raw, tmp_path / "work")
-    assert report.artifacts >= 6
+    assert report.artifacts >= 5
 
 
 def test_verify_reproducible_reports_a_mismatch_rather_than_raising(raw, tmp_path, monkeypatch):
@@ -84,19 +98,19 @@ def test_verify_reproducible_reports_a_mismatch_rather_than_raising(raw, tmp_pat
     import pipeline.build as build
 
     calls = {"n": 0}
-    real = build.build_mainline_map
+    real = build.build_aircraft_type_dim
 
-    def drifting(out_dir, csv_path=None):
+    def drifting(zip_path, out_dir):
         calls["n"] += 1
-        path = real(out_dir, csv_path)
+        path = real(zip_path, out_dir)
         if calls["n"] == 2:  # second build differs
             path.write_bytes(path.read_bytes() + b"\x00")
         return path
 
-    monkeypatch.setattr(build, "build_mainline_map", drifting)
+    monkeypatch.setattr(build, "build_aircraft_type_dim", drifting)
     report = verify_reproducible(raw, tmp_path / "work")
     assert not report.reproducible
-    assert any("map_mainline_group" in name for name in report.differing)
+    assert report.differing == ["dims/dim_aircraft_type.parquet"]
 
 
 def test_verify_command_fails_when_out_dir_disagrees_with_a_fresh_build_from_raw(

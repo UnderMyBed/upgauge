@@ -228,7 +228,8 @@ copied in). `runtime` runs as `USER node` — confirmed: `docker run --rm upgaug
 `uid=1000(node) gid=1000(node) groups=1000(node)`. No `output: "standalone"` (§ above).
 
 **The image rebuilds the marts; the asset does not carry them.** `mart_route_health` and the
-other nine database objects are a pure function of `data/parquet` plus `sql/02_marts/` —
+other nine database objects are a pure function of `data/parquet` plus `sql/02_marts/` and the
+checked-in `pipeline/reference/mainline_group.csv` (the `map_mainline_group` table) —
 `pipeline/marts.py`'s `build_database` reads the existing `upgauge.duckdb` not at all, it builds
 a staging file and renames over it — while the release asset carries a copy frozen at publish
 time and `warehouse.yml` republishes only when BTS advances a month. Shipping the asset's copy

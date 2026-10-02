@@ -16,7 +16,6 @@ from pipeline.dims import (
     build_aircraft_type_dim,
     build_airport_dim,
     build_carrier_dim,
-    build_mainline_map,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -239,44 +238,3 @@ def test_no_seats_typical_is_stored(types_dim):
     """Seats-per-departure is derived from the facts. A nominal value on the dim would
     invite averaging it."""
     assert "seats_typical" not in types_of(types_dim, "dim_aircraft_type")
-
-
-# ----------------------------------------------------------------- map_mainline_group
-
-
-@pytest.fixture
-def mapping(tmp_path):
-    return view(build_mainline_map(tmp_path), "map_mainline_group")
-
-
-def test_map_is_materialized_from_the_checked_in_csv(mapping):
-    assert one(mapping, "SELECT count(*) FROM map_mainline_group") == 16
-
-
-def test_map_carries_date_ranges(mapping):
-    assert one(mapping, "SELECT count(*) FROM map_mainline_group WHERE effective_from IS NULL") == 0
-
-
-def test_map_carries_basis_and_source(mapping):
-    cols = [r[0] for r in mapping.execute("DESCRIBE map_mainline_group").fetchall()]
-    assert cols[-2:] == ["basis", "source"]
-    assert one(mapping, "SELECT count(*) FROM map_mainline_group WHERE basis IS NULL") == 0
-
-
-def test_hawaiian_range_starts_september_2024(mapping):
-    assert (
-        one(mapping, "SELECT effective_from FROM map_mainline_group WHERE airline_id = 19690")
-        == "2024-09"
-    )
-
-
-def test_open_ended_ranges_stay_null_not_sentinel(mapping):
-    """A sentinel like 9999-12 in the stored data would leak into the UI."""
-    assert one(mapping, "SELECT count(*) FROM map_mainline_group WHERE effective_to IS NULL") > 0
-
-
-def test_shared_regionals_are_absent(mapping):
-    """SkyWest and Republic. Never rolled up, at any date. (Mesa has a row only for its
-    United-only months, 2023-05..2025-11.)"""
-    ids = {r[0] for r in mapping.execute("SELECT airline_id FROM map_mainline_group").fetchall()}
-    assert ids.isdisjoint({20304, 20452})
