@@ -35,19 +35,28 @@ Prints every promotable build newest-first, marks the one the box is serving, di
 `promote.yml` with the row you pick, watches the run, then **confirms the deploy from the
 operator's machine**. `make promote TAG=warehouse-2026.05-9cf20ab` skips the picker.
 
-**`promote.yml` only retags, and its exit code means only that.** Green is "`:deploy` moved", never
-"the deploy is serving"; red is "`:deploy` did not move", and `make promote` stops there — the box is
-unchanged, so there is nothing to confirm. The workflow does not read the site: Bot Fight Mode
-serves a GitHub runner a challenge page (measured on both 2026-10-02 promotes: 30 of 30 attempts a
-403, against a box serving the promoted build under `ok`), so a check from there measures nothing.
+**`promote.yml` only retags, and its result means only that.** `make promote` reads the run's
+recorded state (`gh run view --json status,conclusion,jobs`), never `gh run watch`'s exit code,
+which is also red when the watch itself fails:
+
+| run | `:deploy` | `make promote` |
+|---|---|---|
+| completed, `success` | moved | confirms the deploy (below) |
+| completed, the retag step did not succeed | not moved | stops; the box is unchanged |
+| unreadable, unfinished, or red after the retag step succeeded | unknown | stops, and prints `gh run view` and the hand check |
+
+The workflow does not read the site: Bot Fight Mode serves a GitHub runner a challenge page
+(measured on both 2026-10-02 promotes: 30 of 30 attempts a 403, against a box serving the promoted
+build under `ok`), so a check from there measures nothing.
 
 **Detection is `make promote`'s, from the operator's machine.** Once the retag has gone through,
 `deploy/promote.py` polls `/api/health` — 30 attempts, 10s apart, a 300s budget, far above the
-retag-to-serving time measured below — through `promote_check.assess`, and exits 0 only on the promoted build under `ok`.
-A degraded box keeps it polling (§ The promoted build, serving 503). When the budget runs out, the
-verdict and its remedy are `promote_check`'s `exhausted_report`: a different build, the promoted
-build degraded, or a body this machine cannot read each exit 1 with their own remedy, and the last is
-reported as blind, never as a failed deploy.
+retag-to-serving time measured below — through `promote_check.assess`, and exits 0 only on the
+promoted build under `ok`. A degraded box keeps it polling (§ The promoted build, serving 503).
+When the budget runs out, the verdict and its remedy are `promote_check`'s `exhausted_report`,
+built from the last attempt that read a build: a different build, the promoted build degraded, or
+no attempt this machine could read each exit 1 with their own remedy, and the last is reported as
+blind, never as a failed deploy.
 
 The underlying dispatch, for a machine that has no checkout. It retags and confirms nothing, so it
 **must** be followed by the hand check below:
@@ -335,8 +344,9 @@ for i in $(seq 1 40); do curl -sS -o /dev/null -w '%{http_code} ' "https://upgau
 before believing a health check that follows a burst. The pollers themselves are safely under
 the limit: `make promote` polls from the operator's machine once per 10s for up to 30 attempts,
 and `live-check.yml` makes single calls, with its own burst step last. A burst from the operator's
-own address just before a promote makes the first attempts read 429 — reported as unreadable, not
-as a failed deploy — and the confirmation recovers once the 10s mitigation timeout lapses.
+own address just before a promote means the first attempts read 429 and the poll keeps going: a
+429 is an unreadable attempt, and the verdict keeps the last attempt that read a build, so a
+blind attempt never overrides one that saw the box.
 
 ## Cost, and when to revisit
 

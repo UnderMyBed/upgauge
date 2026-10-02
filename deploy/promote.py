@@ -66,6 +66,7 @@ sys.path.insert(0, str(Path(__file__).parents[1] / ".github" / "scripts"))
 from promote_check import (  # noqa: E402
     _HAND_CHECK,
     MATCHED,
+    UNREADABLE,
     assess,
     parse_promoted_tag,
     printable,
@@ -82,6 +83,21 @@ HEALTH_URL = "https://upgauge.shipman.dev/api/health"
 #: started. 15 x 2s.
 _RUN_LOOKUP_ATTEMPTS = 15
 _RUN_LOOKUP_INTERVAL = 2
+
+#: Reading the finished run's recorded state, retried for the same reason `find_run` is: one
+#: failed `gh` call is one observation, not "the run cannot be read". 5 x 2s.
+_RUN_VIEW_ATTEMPTS = 5
+_RUN_VIEW_INTERVAL = 2
+
+#: `promote.yml`'s retag step, by its exact `name:`. Whether `:deploy` moved is read off THIS
+#: step's conclusion, so a rename that is not mirrored here would send every red run to
+#: "unknown" -- `test_promote_confirm.py` pins it against the workflow file.
+RETAG_STEP = "Point :deploy at the requested digest"
+
+#: `retag_outcome` values.
+MOVED = "moved"
+NOT_MOVED = "not-moved"
+UNKNOWN = "unknown"
 
 #: Local clock vs GitHub's. The run is matched by "created after we dispatched", so any skew
 #: toward a fast local clock would discard the real run and report it missing.
@@ -389,6 +405,53 @@ def find_run(dispatched_at: datetime) -> int | None:
     return None
 
 
+def read_run(run_id: int) -> dict | None:
+    """The run's recorded `status`, `conclusion` and `jobs`, or None if `gh` cannot say."""
+    for attempt in range(_RUN_VIEW_ATTEMPTS):
+        if attempt:
+            time.sleep(_RUN_VIEW_INTERVAL)
+        done = _run(["gh", "run", "view", str(run_id), "--json", "status,conclusion,jobs"])
+        if done.returncode != 0:
+            continue
+        try:
+            run = json.loads(done.stdout)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(run, dict):
+            return run
+    return None
+
+
+def retag_outcome(run: dict | None) -> str:
+    """Whether `:deploy` moved, read off the run's RECORDED state -- never `gh run watch`'s exit
+    code, which is also non-zero when the watch itself fails (a dropped connection, an
+    interrupted terminal) on a run that retagged fine.
+
+      MOVED     -- the run completed with conclusion `success`.
+      NOT_MOVED -- the run completed and the retag step did not succeed: it failed, was skipped
+                   because an earlier step failed, or was cancelled.
+      UNKNOWN   -- everything else: the run cannot be read, has not completed, the retag step is
+                   not in it, or the retag step succeeded and the run is red anyway. Each of
+                   those is consistent with `:deploy` having moved, so none may be reported as
+                   either answer.
+    """
+    if not isinstance(run, dict) or run.get("status") != "completed":
+        return UNKNOWN
+    if run.get("conclusion") == "success":
+        return MOVED
+    steps = [
+        step
+        for job in run.get("jobs") or []
+        if isinstance(job, dict)
+        for step in job.get("steps") or []
+        if isinstance(step, dict) and step.get("name") == RETAG_STEP
+    ]
+    conclusions = {step.get("conclusion") for step in steps}
+    if steps and all(isinstance(c, str) and c and c != "success" for c in conclusions):
+        return NOT_MOVED
+    return UNKNOWN
+
+
 def confirm(
     tag: str,
     fetch: Callable[[], tuple[str, int]] | None = None,
@@ -406,14 +469,21 @@ def confirm(
     fetch = fetch or fetch_health
     sleep = sleep or time.sleep
     verdict = None
+    # The last attempt that READ a build. One challenge page or dropped connection on the final
+    # attempt must not decide a verdict about all of them: 29 reads of the wrong build earn the
+    # unconditional rollback, and reporting only the last, blind sample would downgrade that to
+    # the conditional hand-check path.
+    last_read = None
     for attempt in range(attempts):
         if attempt:
             sleep(interval)
         verdict = assess(tag, *fetch())
         if verdict.outcome == MATCHED:
             return 0, f"Confirmed from this machine: {verdict.reason}."
+        if verdict.outcome != UNREADABLE:
+            last_read = verdict
     assert verdict is not None
-    return 1, verdict.exhausted_report(attempts)
+    return 1, (last_read or verdict).exhausted_report(attempts)
 
 
 def dispatch(tag: str) -> int:
@@ -436,14 +506,25 @@ def dispatch(tag: str) -> int:
         return 1
 
     print(f"Watching run {run_id} -- it re-tags :deploy.\n")
-    workflow_rc = subprocess.run(["gh", "run", "watch", str(run_id), "--exit-status"]).returncode
-    # The workflow's exit code decides the RETAG and nothing else; this machine decides the
-    # DEPLOY. A red run moved nothing, so there is no promote to confirm.
-    if workflow_rc != 0:
+    # The watch is for the operator's eyes; its exit code decides nothing. The run's RECORDED
+    # state decides the RETAG (see `retag_outcome`), and this machine decides the DEPLOY.
+    subprocess.run(["gh", "run", "watch", str(run_id), "--exit-status"])
+    outcome = retag_outcome(read_run(run_id))
+    if outcome == NOT_MOVED:
         print(
-            f"\nThe workflow exited {workflow_rc}: the retag did not go through. `:deploy` was "
-            "not moved and the box is unchanged.\n"
+            f"\nThe retag step did not succeed, so `:deploy` was not moved and the box is "
+            "unchanged. Nothing to confirm.\n"
             f"  gh run view {run_id} --log-failed",
+            file=sys.stderr,
+        )
+        return 1
+    if outcome != MOVED:
+        print(
+            f"\nWhether `:deploy` moved is UNKNOWN: run {run_id} could not be read as a "
+            "completed run whose retag step either succeeded or did not. Not confirming, and "
+            "not calling it a failure. Find out which:\n"
+            f"  gh run view {run_id}\n"
+            f"  {_HAND_CHECK}",
             file=sys.stderr,
         )
         return 1

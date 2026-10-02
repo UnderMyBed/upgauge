@@ -65,8 +65,8 @@ def inline(value: object) -> str:
     read OUT of a parsed body -- a `status`, a `data.error`, a `build.warehouse`, a
     `cf-cache-status` header, a dispatch-supplied tag. Those are just as attacker-shaped as the
     body they came from, and a newline in one of them lands in the same two places a raw body
-    would: an unprefixed line on the runner's stdout, where Actions parses `::add-mask::` and
-    `::stop-commands::` in jobs holding `issues: write` and `packages: write`.
+    would: an unprefixed line on a runner's stdout, where Actions parses `::add-mask::` and
+    `::stop-commands::` in a job holding `issues: write`.
 
     So the collapse belongs where the message is BUILT, not only on the snippet.
 
@@ -81,16 +81,12 @@ def inline(value: object) -> str:
     "no reachable newline", when every one of them (`live_warehouse`, `live_sha`, `live_status`)
     is read straight out of a parsed body that an origin chose.
 
-    Pinned are the sites emitted UNPREFIXED, where a newline reaches line start: a parsed body's
-    `status`, `error`, `missing[]` and `build.warehouse` on `promote_check`'s per-attempt print;
-    a `cf-cache-status` header; a sitemap `<loc>` host; a dispatched tag. `exhausted_report`'s
-    fields are not, because its one caller prefixes EVERY line at both emissions -- `::error::`
-    on stdout, `- ` in the step summary -- so a newline there mints another annotation and
-    nothing more. No test can tell the collapse from its absence on that path, and writing one
-    that appeared to would be asserting a formatting property in a security test's clothing.
-    They are collapsed anyway, because the next caller to print that report unprefixed would
-    inherit the vector silently; `newest` is the same shape. Said plainly rather than claimed
-    away.
+    Pinned are the sites emitted UNPREFIXED on a runner, where a newline reaches line start: a
+    `cf-cache-status` header; a sitemap `<loc>` host; a dispatched tag (`promote_check
+    --validate`). `exhausted_report`'s fields are not: its one caller is `make promote`, which
+    prints the report to the operator's terminal, where no workflow-command parser runs. They
+    are collapsed anyway, because a report that ever reached a runner's stdout would inherit the
+    vector silently; `newest` is the same shape. Said plainly rather than claimed away.
     """
     return " ".join(str(value).split())
 
@@ -149,12 +145,12 @@ def health_cause(report: dict) -> str:
 def snippet(body: str, limit: int = SNIPPET_CHARS) -> str:
     """The first `limit` characters of `body`, whitespace-collapsed, truncation MARKED.
 
-    Collapsed because the value is rendered as one markdown list item and one `::error::`
-    annotation, neither of which survives an embedded newline -- and because a newline inside
-    edge-controlled evidence would put attacker-chosen bytes at the START of a line on the
-    runner's stdout, where Actions parses `::add-mask::` and `::stop-commands::`, in jobs
-    holding `packages: write`. The collapse is what makes that unreachable, so it is a security
-    property, not formatting. Marked because a snippet that
+    Collapsed because the value is rendered inside one markdown list item or one line of a
+    terminal message, neither of which survives an embedded newline -- and because a newline
+    inside edge-controlled evidence would put attacker-chosen bytes at the START of a line on a
+    runner's stdout (`live_check`), where Actions parses `::add-mask::` and `::stop-commands::`
+    in a job holding `issues: write`. The collapse is what makes that unreachable, so it is a
+    security property, not formatting. Marked because a snippet that
     silently ends mid-tag is indistinguishable from a body that really ended there -- the
     operator is being shown evidence, and evidence that quietly omits its own truncation is
     worse than no evidence.
