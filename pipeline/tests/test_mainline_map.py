@@ -12,9 +12,16 @@ from __future__ import annotations
 import pytest
 
 from pipeline.mainline_map import (
+    BasisError,
+    MapEntry,
     OverlapError,
+    ParentChildError,
+    UnsourcedContractError,
+    check_bases,
+    check_contract_sources,
     check_map_is_total,
     check_no_overlaps,
+    check_parent_child_disjoint,
     load_mainline_map,
 )
 
@@ -115,13 +122,6 @@ def test_shared_regionals_are_absent_from_the_map_entirely(mapping):
     assert mapped.isdisjoint({SKYWEST, REPUBLIC, MESA})
 
 
-def test_a_mainline_is_never_its_own_subsidiary(mapping):
-    parents = {e.parent_airline_id for e in mapping.entries}
-    assert not any(e.airline_id in parents for e in mapping.entries), (
-        "a parent is mapped as a child"
-    )
-
-
 # ------------------------------------------------------- structural checks
 
 
@@ -185,3 +185,56 @@ def test_every_entry_is_keyed_on_airline_id_not_letter_code(mapping):
     for entry in mapping.entries:
         assert isinstance(entry.airline_id, int)
         assert isinstance(entry.parent_airline_id, int)
+
+
+# ------------------------------------------------------- basis and source (#11)
+
+
+def test_every_shipped_row_declares_a_known_basis(mapping):
+    assert {e.basis for e in mapping.entries} <= {"owned", "contract"}
+
+
+def test_an_unknown_basis_is_refused_by_the_basis_check():
+    entries = [MapEntry(99, 1, "2015-01", basis="partnership", source="https://x")]
+    with pytest.raises(BasisError, match="99"):
+        check_bases(entries)
+
+
+def test_a_contract_row_without_a_source_is_refused_by_the_source_check():
+    entries = [MapEntry(99, 1, "2015-01", basis="contract", source="")]
+    with pytest.raises(UnsourcedContractError, match="99"):
+        check_contract_sources(entries)
+
+
+def test_an_owned_row_without_a_source_is_admitted():
+    check_contract_sources([MapEntry(99, 1, "2015-01", basis="owned", source="")])
+
+
+def test_a_parent_that_is_a_child_in_the_same_month_is_refused_by_the_date_aware_check():
+    """2 is 1's parent from 2015-01, and 3's child from 2018-01: in 2018-01 the rollup of 1
+    would depend on evaluation order."""
+    entries = [
+        MapEntry(1, 2, "2015-01", None, basis="contract", source="https://x"),
+        MapEntry(2, 3, "2018-01", None),
+    ]
+    with pytest.raises(ParentChildError, match="2"):
+        check_parent_child_disjoint(entries)
+
+
+def test_a_parent_that_is_a_child_only_in_other_months_is_admitted():
+    """The Empire -> Hawaiian (2015-01..2021-02) and Hawaiian -> Alaska (2024-09..) shape.
+    A set-membership check refuses this; only a date-aware one admits it."""
+    entries = [
+        MapEntry(20263, 19690, "2015-01", "2021-02", basis="contract", source="https://x"),
+        MapEntry(19690, 19930, "2024-09", None),
+    ]
+    check_parent_child_disjoint(entries)
+
+
+def test_the_parent_child_boundary_is_exclusive_at_effective_to():
+    """Child range ends (exclusive) exactly where the parent range starts: no shared month."""
+    entries = [
+        MapEntry(1, 2, "2015-01", "2018-01", basis="contract", source="https://x"),
+        MapEntry(2, 3, "2018-01", None),
+    ]
+    check_parent_child_disjoint(entries)

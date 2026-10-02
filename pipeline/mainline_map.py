@@ -27,6 +27,21 @@ class OverlapError(InvariantError):
     """A carrier had two parents for the same month — unresolvable, so it's a failure."""
 
 
+BASES = frozenset({"owned", "contract"})
+
+
+class BasisError(InvariantError):
+    """A row's basis is not one of BASES -- the rollup's meaning would be unstated."""
+
+
+class UnsourcedContractError(InvariantError):
+    """A contract row with no source: attribution T-100 cannot itself support, uncited."""
+
+
+class ParentChildError(InvariantError):
+    """An airline is a parent in a month it is also a child -- order-dependent rollup."""
+
+
 @dataclass(frozen=True)
 class MapEntry:
     airline_id: int
@@ -36,6 +51,8 @@ class MapEntry:
     carrier_code: str = ""
     parent_code: str = ""
     note: str = ""
+    basis: str = "owned"
+    source: str = ""
 
     def covers(self, year_month: str) -> bool:
         """Inclusive at `effective_from`, EXCLUSIVE at `effective_to` -- matching the SQL
@@ -53,7 +70,7 @@ class MainlineMap:
     def parent_for(self, airline_id: int, year_month: str) -> int | None:
         """The parent this carrier rolled up to in that month, or None.
 
-        None means "not a wholly-owned subsidiary then" — which covers independents, shared
+        None means the carrier did not roll up that month — which covers independents, shared
         regionals, and subsidiaries before their acquisition. All of them stay at the
         operating-carrier grain, which is the default view anyway.
         """
@@ -79,11 +96,31 @@ def load_mainline_map(path: Path | None = None) -> MainlineMap:
                     carrier_code=row["carrier_code"].strip(),
                     parent_code=row["parent_code"].strip(),
                     note=row.get("note", "").strip(),
+                    basis=row["basis"].strip(),
+                    source=row["source"].strip(),
                 )
             )
-    check_no_overlaps(entries)
+    check_bases(entries)
+    check_contract_sources(entries)
     check_map_is_total(entries)
     return MainlineMap(entries=tuple(entries))
+
+
+def check_bases(entries: Iterable[MapEntry]) -> None:
+    """Raise if a row's basis is not `owned` or `contract`."""
+    for e in entries:
+        if e.basis not in BASES:
+            raise BasisError(
+                f"airline_id {e.airline_id}: basis {e.basis!r} is not one of {sorted(BASES)}"
+            )
+
+
+def check_contract_sources(entries: Iterable[MapEntry]) -> None:
+    """Raise if a contract row carries no source. Ownership is a matter of public record;
+    exclusivity under contract is a sourced judgement, so it never ships uncited."""
+    for e in entries:
+        if e.basis == "contract" and not e.source:
+            raise UnsourcedContractError(f"airline_id {e.airline_id}: contract row has no source")
 
 
 def check_no_overlaps(entries: Iterable[MapEntry]) -> None:
@@ -118,11 +155,25 @@ def check_map_is_total(entries: Sequence[MapEntry]) -> None:
     which would make the rollup depend on evaluation order.
     """
     check_no_overlaps(entries)
-    parents = {e.parent_airline_id for e in entries}
-    children = {e.airline_id for e in entries}
-    both = parents & children
-    if both:
-        raise OverlapError(
-            f"airline_id(s) {sorted(both)} appear as both parent and child — "
-            "the rollup would depend on evaluation order"
-        )
+    check_parent_child_disjoint(entries)
+
+
+def check_parent_child_disjoint(entries: Sequence[MapEntry]) -> None:
+    """Raise if an airline is a parent in any month in which it is also a child.
+
+    Time-aware on purpose: Hawaiian is Empire's parent 2015-01..2021-02 and Alaska's child
+    from 2024-09. The two never share a month, and the single-level SQL join resolves each
+    month correctly. Same inclusive/exclusive semantics as `covers()`.
+    """
+    for child in entries:
+        for parented in entries:
+            if parented.parent_airline_id != child.airline_id:
+                continue
+            if child.effective_from < (parented.effective_to or _OPEN_ENDED) and (
+                parented.effective_from < (child.effective_to or _OPEN_ENDED)
+            ):
+                raise ParentChildError(
+                    f"airline_id {child.airline_id} is a parent and a child in the same month "
+                    f"({max(child.effective_from, parented.effective_from)}) -- the rollup "
+                    "would depend on evaluation order"
+                )

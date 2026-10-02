@@ -16,14 +16,15 @@
 #   - ONLY wholly-owned subsidiaries. Never shared regionals (SkyWest/Republic/Mesa) or
 #     serially-exclusive contract carriers (Air Wisconsin/ExpressJet) — a rollup of those
 #     fabricates attribution T-100 cannot support.
+#   - basis is owned or contract. source is a URL; required on contract rows.
 #   - United owns no subsidiary operators and therefore has no rows here. That is not an
 #     omission; it is why group-vs-group comparison is apples-to-oranges.
 #
-airline_id,carrier_code,parent_airline_id,parent_code,effective_from,effective_to,note
-20363,9E,19790,DL,2015-01,,Endeavor — Delta-owned since 2013 (pre-window)
-20398,MQ,19805,AA,2015-01,,Envoy — AAG-owned throughout window
-20397,OH,19805,AA,2015-01,,PSA — AAG-owned throughout window
-20427,PT,19805,AA,2015-01,,Piedmont — AAG-owned throughout window
-19687,QX,19930,AS,2015-01,,Horizon — Air Group-owned throughout window
-21171,VX,19930,AS,2016-12,2018-04,Virgin America — acquisition closed Dec 2016; SOC Jan 2018; brand retired Apr 2018
-19690,HA,19930,AS,2024-09,,Hawaiian — AAG acquired Hawaiian Holdings Sept 2024; SOC Oct 2025
+airline_id,carrier_code,parent_airline_id,parent_code,effective_from,effective_to,note,basis,source
+20363,9E,19790,DL,2015-01,,Endeavor — Delta-owned since 2013 (pre-window),owned,
+20398,MQ,19805,AA,2015-01,,Envoy — AAG-owned throughout window,owned,
+20397,OH,19805,AA,2015-01,,PSA — AAG-owned throughout window,owned,
+20427,PT,19805,AA,2015-01,,Piedmont — AAG-owned throughout window,owned,
+19687,QX,19930,AS,2015-01,,Horizon — Air Group-owned throughout window,owned,
+21171,VX,19930,AS,2016-12,2018-04,Virgin America — acquisition closed Dec 2016; SOC Jan 2018; brand retired Apr 2018,owned,
+19690,HA,19930,AS,2024-09,,Hawaiian — AAG acquired Hawaiian Holdings Sept 2024; SOC Oct 2025,owned,

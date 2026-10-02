@@ -56,8 +56,9 @@ def build_aircraft_type_dim(zip_path: Path, out_dir: Path) -> Path:
 def build_mainline_map(out_dir: Path, csv_path: Path | None = None) -> Path:
     """Materialize the checked-in rollup map.
 
-    `load_mainline_map` validates it (no overlapping ranges, no parent mapped as a child)
-    and raises if it is incoherent, so an invalid map can never reach the warehouse.
+    `load_mainline_map` validates it (no overlapping ranges, no airline a parent and a child in
+    the same month) and raises if it is incoherent, so an invalid map can never reach the
+    warehouse.
 
     Open-ended ranges stay NULL rather than a sentinel — a `9999-12` in stored data would
     eventually leak into the UI.
@@ -79,6 +80,8 @@ def build_mainline_map(out_dir: Path, csv_path: Path | None = None) -> Path:
             e.effective_from,
             e.effective_to,
             e.note,
+            e.basis,
+            e.source,
         )
         for e in mapping.entries
     ]
@@ -88,10 +91,11 @@ def build_mainline_map(out_dir: Path, csv_path: Path | None = None) -> Path:
         CREATE TABLE m (
             airline_id INTEGER, carrier_code VARCHAR,
             parent_airline_id INTEGER, parent_code VARCHAR,
-            effective_from VARCHAR, effective_to VARCHAR, note VARCHAR
+            effective_from VARCHAR, effective_to VARCHAR, note VARCHAR,
+            basis VARCHAR, source VARCHAR
         )
         """
     )
-    con.executemany("INSERT INTO m VALUES (?, ?, ?, ?, ?, ?, ?)", rows)
+    con.executemany("INSERT INTO m VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
     con.execute(f"COPY (SELECT * FROM m ORDER BY airline_id) TO '{target}' (FORMAT PARQUET)")
     return target

@@ -257,6 +257,12 @@ def test_map_carries_date_ranges(mapping):
     assert one(mapping, "SELECT count(*) FROM map_mainline_group WHERE effective_from IS NULL") == 0
 
 
+def test_map_carries_basis_and_source(mapping):
+    cols = [r[0] for r in mapping.execute("DESCRIBE map_mainline_group").fetchall()]
+    assert cols[-2:] == ["basis", "source"]
+    assert one(mapping, "SELECT count(*) FROM map_mainline_group WHERE basis IS NULL") == 0
+
+
 def test_hawaiian_range_starts_september_2024(mapping):
     assert (
         one(mapping, "SELECT effective_from FROM map_mainline_group WHERE airline_id = 19690")
