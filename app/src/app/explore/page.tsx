@@ -413,6 +413,14 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
               these totals, never clamped. <span className="deriv">Load factor</span> and{" "}
               <span className="deriv">gauge</span> are computed at query time from summed
               passengers, seats and performed departures -- never averaged.
+              {query.grouping === "mainline" ? (
+                <>
+                  {" "}
+                  <strong>Mainline</strong> counts a regional under its parent in the months it
+                  was wholly owned by it or flew only for it. Regionals flying for several at
+                  once (SkyWest, Republic) stay as themselves.
+                </>
+              ) : null}
               {mainlineRollupFiltered ? (
                 <>
                   {" "}

@@ -622,3 +622,23 @@ describe("/explore discloses a mainline rollup filtered on the operating carrier
     }
   });
 });
+
+// What "Mainline" means is not guessable once contract carriers roll up for some months and not
+// others, so the mainline view states it. Two fixtures, one per side of the gate: keyed on
+// nothing it would leak onto every operating view.
+describe("/explore says what the mainline grouping includes", () => {
+  const MAINLINE = qs({ ...OK, g: "ml", n: "25" });
+  const OPERATING = qs({ ...OK, n: "25" });
+
+  it("states the definition on a mainline view", async () => {
+    const { container } = render(await ExploreView({ rawQuery: MAINLINE }));
+    expect(container.querySelector(".foot")!.textContent).toContain("flew only for it");
+  });
+
+  it("does not state it on an operating view that rendered its foot", async () => {
+    const { container } = render(await ExploreView({ rawQuery: OPERATING }));
+    const foot = container.querySelector(".foot")!.textContent;
+    expect(foot).toContain("quarantined row");
+    expect(foot).not.toContain("flew only for it");
+  });
+});

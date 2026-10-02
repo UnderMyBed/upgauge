@@ -691,6 +691,13 @@ BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&
 check_not "explore: no rollup disclosure on a filtered operating view" "$BODY" 'rolled-up row'
 check     "explore: ...and that operating view really rendered its foot" "$BODY" 'quarantined row'
 
+# What "Mainline" includes, stated on the mainline view only. The operating body is the one the D4
+# block already proved renders its foot.
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=ml")
+check     "explore: the mainline view says what mainline includes" "$BODY" 'flew only for it'
+BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&f=op_airline_id:19790&s=-seats&n=25&g=op")
+check_not "explore: ...and the operating view does not" "$BODY" 'flew only for it'
+
 # 5. The caching header is the cost control, so it is a test, not a hope.
 HDRS=$(curl -s -o /dev/null -D - --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=5&g=op")
 check "explore: sets the project Cache-Control" "$HDRS" "$HTML_CACHE_EXPECTED"
