@@ -31,9 +31,10 @@ airline_id,carrier_code,parent_airline_id,parent_code,effective_from,effective_t
 20398,MQ,19805,AA,2015-01,,Envoy — AAG-owned throughout window,owned,
 20397,OH,19805,AA,2015-01,,PSA — AAG-owned throughout window,owned,
 20427,PT,19805,AA,2015-01,,Piedmont — AAG-owned throughout window,owned,
+20355,US,19805,AA,2015-01,2016-01,US Airways — American Airlines Group-owned from 2013-12-09; merged into American 2015-12-30; last filing 2015-06,owned,https://www.sec.gov/Archives/edgar/data/0000006201/000119312516474605/d78287d10k.htm
 19687,QX,19930,AS,2015-01,,Horizon — Air Group-owned throughout window,owned,
 21171,VX,19930,AS,2016-12,2018-04,Virgin America — acquisition closed Dec 2016; SOC Jan 2018; brand retired Apr 2018,owned,
-19690,HA,19930,AS,2024-09,,Hawaiian — AAG acquired Hawaiian Holdings Sept 2024; SOC Oct 2025,owned,
+19690,HA,19930,AS,2024-09,,Hawaiian — Alaska Air Group acquired Hawaiian Holdings Sept 2024; SOC Oct 2025,owned,
 20445,C5,19977,UA,2015-01,,CommutAir — United Express only; United holds 40% since 2016,contract,https://www.commuteair.com/about/
 20046,ZW,19805,AA,2015-01,2017-09,Air Wisconsin — US Airways/American only until United flying began 2017-09,contract,https://www.otcmarkets.com/filing/html?id=14268350&guid=lhsqUKABeEnGwyh
 20046,ZW,19977,UA,2018-03,2023-03,Air Wisconsin — United only after American ended Feb 2018; second American contract began 2023-03,contract,https://www.sec.gov/Archives/edgar/data/899394/000119312523088392/d443202d10k.htm

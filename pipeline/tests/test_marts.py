@@ -359,7 +359,7 @@ def test_fct_segment_month_view_sets_hive_partitioning_for_pruning(tmp_path):
 # commit may be written there: the map is a TABLE in `upgauge.duckdb`, read from the CSV.
 
 MAINLINE_CSV = Path(__file__).parents[1] / "reference" / "mainline_group.csv"
-MAINLINE_ROWS = 16
+MAINLINE_ROWS = 17
 
 
 def _map_db(tmp_path, stale_parquet: bool = False):

@@ -191,6 +191,27 @@ def test_hawaiian_rolls_up_from_2024_09_and_not_2024_08(con):
     assert 19690 not in after, "HA should have rolled into AS from 2024-09"
 
 
+def test_us_airways_rolls_up_to_american_from_the_window_start(con):
+    """US Airways filed 2015-01..2015-06 as a wholly-owned AAG subsidiary. Pins the PARENT, not
+    just the absence: American's mainline row must equal American's own seats plus every carrier
+    that rolls up to it that month, US Airways included."""
+    mainline = _carrier_total(con, 20355, "2015-01", "mainline")
+    operating = _carrier_total(con, 20355, "2015-01", "operating")
+    assert 20355 not in mainline, "US should be folded into AA in 2015-01"
+    rolled = [
+        r[0]
+        for r in con.execute(
+            "SELECT airline_id FROM map_mainline_group WHERE parent_airline_id = 19805"
+            " AND effective_from <= '2015-01'"
+            " AND (effective_to IS NULL OR effective_to > '2015-01')"
+        ).fetchall()
+    ]
+    assert 20355 in rolled
+    assert mainline[19805] == pytest.approx(
+        operating[19805] + sum(operating.get(a, 0) for a in rolled)
+    )
+
+
 def test_commutair_rolls_up_to_united_from_the_window_start(con):
     got = _carrier_total(con, 20445, "2015-01", "mainline")
     assert 20445 not in got, "C5 flew only for United; it should be folded into UA"

@@ -40,9 +40,10 @@ joins on it by month.
 | American | Envoy (MQ) | owned | window start | present | AAG-owned throughout |
 | American | PSA (OH) | owned | window start | present | AAG-owned throughout |
 | American | Piedmont (PT) | owned | window start | present | AAG-owned throughout |
+| American | US Airways (US) | owned | window start | 2016-01 | American Airlines Group-owned from 2013-12-09; merged into American 2015-12-30 (AAG 10-K FY2015). Last filing under US is 2015-06 |
 | Alaska | Horizon (QX) | owned | window start | present | Air Group-owned throughout |
 | **Alaska** | **Virgin America (VX)** | owned | **2016-12** | **2018-04** | Acquisition closed Dec 2016; SOC Jan 2018; brand retired Apr 2018; last filing under VX is 2018-03 |
-| **Alaska** | **Hawaiian (HA)** | owned | **2024-09** | **present** | AAG acquired Hawaiian Holdings Sept 2024; SOC Oct 2025; `HA` flight numbers retire ~Apr 2026 |
+| **Alaska** | **Hawaiian (HA)** | owned | **2024-09** | **present** | Alaska Air Group acquired Hawaiian Holdings Sept 2024; SOC Oct 2025; `HA` flight numbers retire ~Apr 2026 |
 
 Contract rows, each with the passengers it moves (passenger configs, non-quarantined,
 2015-01..2026-06) and the evidence for its boundary months. The `source` column of
@@ -157,7 +158,9 @@ down, Endeavor CRJ seats up" is *still fully visible*.
    means AS+QX in 2015, AS+QX+VX in 2017, and AS+QX+HA from late 2024. Every parent whose
    group changes, with the first month each change takes effect:
    - Alaska: VX joins 2016-12 and leaves 2018-04; HA joins 2024-09.
-   - American: Air Wisconsin leaves 2017-09, returns 2023-07, and leaves again 2025-04.
+   - American: Air Wisconsin leaves 2017-09, returns 2023-07, and leaves again 2025-04. US
+     Airways is in the group from the window start; when its flying moved into American's own
+     filings after 2015-06 the group total shows no step, because both sides are in it.
    - Hawaiian: Empire leaves 2021-02. From 2024-09 Hawaiian itself rolls up to Alaska.
    - United: 2018-03, 2019-01, 2019-02, 2020-05, 2020-10, 2021-01, 2023-03, 2023-05 and
      2025-12 (Air Wisconsin, Trans States, ExpressJet, GoJet and Mesa entering or leaving).
