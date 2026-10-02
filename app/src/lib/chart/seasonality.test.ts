@@ -99,6 +99,33 @@ describe("heatmapGrid", () => {
     expect(g.lowest).toEqual({ month: "2016-04", seats: 150 });
   });
 
+  // Mutant: range computed over kind === "value" cells only (understated excluded).
+  it("includes an understated month at the extreme of the range", () => {
+    const g = heatmapGrid([
+      row("2016-01", "A", 100),
+      row("2016-02", "A", 200),
+      row("2016-03", "A", 900),
+      row("2016-03", "B", null),
+    ])!;
+    expect(cell(g, "2016-03").kind).toBe("understated");
+    expect(g.max).toBe(900);
+    expect(g.highest).toEqual({ month: "2016-03", seats: 900 });
+    expect(cell(g, "2016-03").bin).toBe(5);
+  });
+
+  // Mutants: `>` -> `>=` in the highest reduce; `<` -> `<=` in the lowest reduce.
+  it("breaks a tie toward the earlier month for both highest and lowest", () => {
+    const g = heatmapGrid([
+      row("2016-01", "A", 500),
+      row("2016-02", "A", 100),
+      row("2016-03", "A", 300),
+      row("2016-04", "A", 100),
+      row("2016-05", "A", 500),
+    ])!;
+    expect(g.highest.month).toBe("2016-01");
+    expect(g.lowest.month).toBe("2016-02");
+  });
+
   // Mutant: swapped counters. Each count has a distinct value.
   it("counts each kind from its own months", () => {
     const g = heatmapGrid([
