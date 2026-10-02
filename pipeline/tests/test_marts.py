@@ -348,3 +348,182 @@ def test_fct_segment_month_view_sets_hive_partitioning_for_pruning(tmp_path):
     # against this DuckDB version before writing this assertion.
     assert "hive_partitioning" in sql
     assert "CAST('t' AS BOOLEAN)" in sql
+
+
+# --------------------------------------------------------------- map_mainline_group
+#
+# The map ships with the code, like the marts. CI and the image restore `data/parquet` from the
+# release asset and then run only `make build`, so a map read from `dims/` is whatever the asset
+# was packed with -- warehouse-2026.06 carries the 7 pre-#11 rows and no basis/source columns.
+# And the CI cache stores `data/parquet` under a tag-only key, so nothing derived from this
+# commit may be written there: the map is a TABLE in `upgauge.duckdb`, read from the CSV.
+
+MAINLINE_CSV = Path(__file__).parents[1] / "reference" / "mainline_group.csv"
+MAINLINE_ROWS = 16
+
+
+def _map_db(tmp_path, stale_parquet: bool = False):
+    """A database built over a fixture warehouse whose `dims/` has NO map parquet -- or, with
+    `stale_parquet`, the asset's shape: 7 rows and 7 columns, no basis/source."""
+    parquet = _warehouse(tmp_path)
+    shadow = parquet / "dims" / "map_mainline_group.parquet"
+    shadow.unlink(missing_ok=True)
+    if stale_parquet:
+        from pipeline.normalize import _writer_connection
+
+        w = _writer_connection()
+        w.execute(
+            f"""COPY (SELECT * FROM (VALUES
+                (20363, '9E', 19790, 'DL', '2015-01', NULL, 'stale'),
+                (20398, 'MQ', 19805, 'AA', '2015-01', NULL, 'stale'),
+                (20397, 'OH', 19805, 'AA', '2015-01', NULL, 'stale'),
+                (20427, 'PT', 19805, 'AA', '2015-01', NULL, 'stale'),
+                (19687, 'QX', 19930, 'AS', '2015-01', NULL, 'stale'),
+                (21171, 'VX', 19930, 'AS', '2016-12', '2018-04', 'stale'),
+                (19690, 'HA', 19930, 'AS', '2024-09', NULL, 'stale')
+            ) t(airline_id, carrier_code, parent_airline_id, parent_code,
+                effective_from, effective_to, note)) TO '{shadow}' (FORMAT PARQUET)"""
+        )
+        w.close()
+    db = tmp_path / "u.duckdb"
+    build_database(parquet, db)
+    return duckdb.connect(str(db))
+
+
+def test_map_is_built_from_the_csv_when_the_parquet_tree_has_none(tmp_path):
+    """Catches the map still being sourced from the asset's `dims/`: with no parquet copy
+    there, a view over it cannot even build."""
+    con = _map_db(tmp_path)
+    assert con.execute("SELECT count(*) FROM map_mainline_group").fetchone()[0] == MAINLINE_ROWS
+
+
+def test_a_stale_asset_copy_of_the_map_does_not_win(tmp_path):
+    """The CI shape: the restored asset still carries the pre-#11 7-row, 7-column parquet.
+    The database must hold the CSV's rows and columns regardless."""
+    con = _map_db(tmp_path, stale_parquet=True)
+    assert con.execute("SELECT count(*) FROM map_mainline_group").fetchone()[0] == MAINLINE_ROWS
+    cols = [r[0] for r in con.execute("DESCRIBE map_mainline_group").fetchall()]
+    assert cols[-2:] == ["basis", "source"]
+    assert (
+        con.execute("SELECT count(*) FROM map_mainline_group WHERE note = 'stale'").fetchone()[0]
+        == 0
+    )
+    kind = con.execute(
+        "SELECT table_type FROM information_schema.tables WHERE table_name = 'map_mainline_group'"
+    ).fetchone()[0]
+    assert kind == "BASE TABLE"
+
+
+def test_map_columns_are_typed_explicitly_and_open_ranges_are_null(tmp_path):
+    """read_csv's sniffer would turn `2015-01` into a DATE and could read a blank
+    `effective_to` as ''. The join tests `effective_to IS NULL`, so '' would silently end every
+    open range, and a 9999-12 sentinel would leak into the UI."""
+    con = _map_db(tmp_path)
+    types = {r[0]: r[1] for r in con.execute("DESCRIBE map_mainline_group").fetchall()}
+    assert types == {
+        "airline_id": "INTEGER",
+        "carrier_code": "VARCHAR",
+        "parent_airline_id": "INTEGER",
+        "parent_code": "VARCHAR",
+        "effective_from": "VARCHAR",
+        "effective_to": "VARCHAR",
+        "note": "VARCHAR",
+        "basis": "VARCHAR",
+        "source": "VARCHAR",
+    }
+    c5 = con.execute(
+        "SELECT effective_from, effective_to FROM map_mainline_group WHERE airline_id = 20445"
+    ).fetchall()
+    assert c5 == [("2015-01", None)]
+    assert (
+        con.execute(
+            "SELECT count(*) FROM map_mainline_group WHERE effective_to = '' OR basis = ''"
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        con.execute(
+            "SELECT count(*) FROM map_mainline_group WHERE effective_to IS NULL"
+        ).fetchone()[0]
+        > 0
+    )
+
+
+def test_hawaiian_range_starts_september_2024(tmp_path):
+    con = _map_db(tmp_path)
+    assert con.execute(
+        "SELECT effective_from FROM map_mainline_group WHERE airline_id = 19690"
+    ).fetchall() == [("2024-09",)]
+
+
+def test_shared_regionals_are_absent_from_the_map(tmp_path):
+    """SkyWest and Republic. Never rolled up, at any date. (Mesa has a row only for its
+    United-only months, 2023-05..2025-11.)"""
+    con = _map_db(tmp_path)
+    ids = {r[0] for r in con.execute("SELECT airline_id FROM map_mainline_group").fetchall()}
+    assert ids.isdisjoint({20304, 20452})
+
+
+def test_the_table_is_exactly_what_the_loader_validated(tmp_path):
+    """Two parsers read one file: `load_mainline_map` validates it, DuckDB's read_csv
+    materializes it. Any place they disagree -- read_csv truncates an unquoted field at a `#`
+    (comment='#'), the loader strips whitespace -- the table holds a row nobody validated."""
+    from pipeline.mainline_map import load_mainline_map
+
+    con = _map_db(tmp_path)
+    table = con.execute(
+        "SELECT airline_id, carrier_code, parent_airline_id, parent_code, effective_from,"
+        " effective_to, note, basis, source FROM map_mainline_group"
+    ).fetchall()
+    loaded = [
+        (
+            e.airline_id,
+            e.carrier_code,
+            e.parent_airline_id,
+            e.parent_code,
+            e.effective_from,
+            e.effective_to,
+            e.note or None,
+            e.basis,
+            e.source or None,
+        )
+        for e in load_mainline_map().entries
+    ]
+    assert sorted(table, key=repr) == sorted(loaded, key=repr)
+
+
+def test_an_invalid_map_fails_the_build(tmp_path):
+    """`make build` is the only step CI and the image run after the restore, so it is where the
+    map must be validated: an unsourced contract row would otherwise ship uncited."""
+    from pipeline.mainline_map import UnsourcedContractError
+
+    ref = tmp_path / "reference"
+    ref.mkdir()
+    lines = MAINLINE_CSV.read_text().splitlines(keepends=True)
+    em = next(i for i, ln in enumerate(lines) if ln.startswith("20263,"))
+    lines[em] = lines[em].rsplit(",", 1)[0] + ",\n"
+    (ref / "mainline_group.csv").write_text("".join(lines))
+
+    # A real warehouse, so that without the validation this build would SUCCEED -- over a
+    # missing parquet tree it fails anyway, and the test could not tell the two apart.
+    parquet = _warehouse(tmp_path)
+    db = tmp_path / "u.duckdb"
+    with pytest.raises(UnsourcedContractError, match="20263"):
+        build_database(parquet, db, reference_dir=ref)
+    assert not db.exists()
+
+
+def test_make_build_writes_nothing_under_the_parquet_tree(tmp_path):
+    """`data/parquet` is cached under a key naming only the warehouse tag, so a byte in it
+    derived from this commit is stored under a name promising the asset's."""
+    parquet = _warehouse(tmp_path)
+
+    def snapshot():
+        return {
+            str(p.relative_to(parquet)): (p.stat().st_mtime_ns, p.stat().st_size)
+            for p in parquet.rglob("*")
+        }
+
+    before = snapshot()
+    build_database(parquet, tmp_path / "u.duckdb")
+    assert snapshot() == before

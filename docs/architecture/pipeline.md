@@ -94,8 +94,9 @@ invariant from assumption is how you get a green suite that is confidently wrong
 ## The warehouse catalog
 
 `upgauge.duckdb` is a **hybrid**: facts and dims are views over the Parquet tree, and
-`mart_route_health` is the only materialized table. Views keep the byte-identical Parquet gate
-covering everything derived-free, and the mart materializes because trailing-12 windowing over
+`mart_route_health` is the only materialized table derived from it. `map_mainline_group` is the
+other table, and it is not derived from the Parquet at all (§ The mainline map table). Views
+keep the byte-identical Parquet gate covering everything derived-free, and the mart materializes because trailing-12 windowing over
 the full window is the one genuinely expensive thing in the layer.
 
 Scope is `fct_route_month`, `dim_city_market`, and `mart_route_health`. **There is no
@@ -122,15 +123,34 @@ directions for that reason as well as because it is an identity key, not a ranki
 
 ### The views
 
-`sql/02_marts/010_fct_segment_month.sql` and the five `02x_dim_*.sql` /
-`024_map_mainline_group.sql` files turn the Parquet tree into `make build`'s six database
-objects — `fct_segment_month`, `dim_airport`, `dim_city_market`, `dim_carrier`,
-`dim_aircraft_type`, `map_mainline_group`. All six are plain `SELECT * FROM read_parquet(...)`
-views, nothing materialized: the fact view adds `hive_partitioning = true`, and every dim view
-is a single-file read. No derived measure column
+`sql/02_marts/010_fct_segment_month.sql` and the four `02x_dim_*.sql` files turn the Parquet
+tree into five database objects — `fct_segment_month`, `dim_airport`, `dim_city_market`,
+`dim_carrier`, `dim_aircraft_type`. All five are plain `SELECT * FROM read_parquet(...)` views,
+nothing materialized: the fact view adds `hive_partitioning = true`, and every dim view is a
+single-file read. No derived measure column
 (`load_factor`/`asm`/`rpm`/`avg_gauge`/`completion_factor`) exists on `fct_segment_month`, and
 quarantined rows are retained with their flag rather than dropped — the view is the fact
 table, so this is the last point at which dropping them would be reversible.
+
+### The mainline map table
+
+**`map_mainline_group` is a TABLE that `make build` reads from the checked-in
+`pipeline/reference/mainline_group.csv`, never from `data/parquet`.** It is a function of the
+commit, not of BTS, so it ships with the code exactly as the marts do: CI and the image restore
+`data/parquet` from the release asset and run only `make build`, so a map read from there is
+whatever the asset was packed with, and the asset republishes only when BTS advances a month.
+It cannot be regenerated INTO `data/parquet` either: the CI cache stores that tree under a key
+naming only the warehouse tag (§ Toolchain, the `actions/cache` paragraph).
+
+- `build_database` runs `load_mainline_map()` first, so an invalid map (basis, source, overlap,
+  dated parent/child) fails `make build` before any database is written.
+- `024_map_mainline_group.sql` types every column explicitly — the sniffer infers `BIGINT` ids —
+  and a blank field reads as NULL, so an open range is `effective_to IS NULL`, never `''`.
+- `comment = '#'` truncates an UNQUOTED field at a `#`, so a URL with a fragment must be quoted.
+  `test_marts.py` holds the table equal, row for row, to what the loader validated.
+- The warehouse writes no `dims/map_mainline_group.parquet`, and `build_all` deletes any it
+  finds: `warehouse.yml` builds in place over the previous asset's tree, so a leftover copy would
+  ride every future asset (the freshness check below does not count it as staleness).
 
 **`year` is a content column AND a Hive partition key — `hive_partitioning = true` is for
 pruning, not schema.** `normalize_t100_segment.sql` already casts `raw.YEAR` into the Parquet
@@ -204,8 +224,8 @@ deploy.
 `make verify` runs three checks in sequence and fails if any fails:
 
 1. **Parquet reproducibility:** `build_all` twice into throwaway temp
-   dirs from identical raw inputs, sha256 every artifact. **17 artifacts on the full
-   2015–2026 window** — 12 fact-year partitions + 5 dims. The dims count is fixed; **the
+   dirs from identical raw inputs, sha256 every artifact. **16 artifacts on the full
+   2015–2026 window** — 12 fact-year partitions + 4 dims. The dims count is fixed; **the
    fact-year partition count grows with `data/raw/`'s window**, so this number moves when a
    year is fetched and is not a constant to assert against.
 2. **Parquet freshness:** the two throwaway builds above only prove
@@ -216,14 +236,15 @@ deploy.
    database gate's object *count* doesn't change when a fact-year partition goes stale,
    because it counts objects, not files, so without this check that staleness is
    invisible to `make verify` and only shows up later as `DATA AS OF` silently failing to
-   advance.
+   advance. A name in `build.py`'s `RETIRED_ARTIFACTS` present only on disk is not staleness:
+   a fresh build deletes it, and exactly those names are skipped — any other extra is named.
 3. **Database:** `pipeline.marts.verify_database` builds `upgauge.duckdb` twice
    from the same Parquet and, for every catalog object, exports it through a
    `COPY (SELECT * FROM <object>) TO ... (FORMAT PARQUET)` on a connection with
    `SET threads TO 1` — the same writer setting that makes the Parquet writer byte-stable —
-   then sha256s that export. **10 objects:** the 6 views over Parquet (`fct_segment_month`,
-   `dim_airport`, `dim_city_market`, `dim_carrier`, `dim_aircraft_type`,
-   `map_mainline_group`), the two derived views/tables (`fct_route_month`,
+   then sha256s that export. **10 objects:** the 5 views over Parquet (`fct_segment_month`,
+   `dim_airport`, `dim_city_market`, `dim_carrier`, `dim_aircraft_type`), the
+   `map_mainline_group` table read from the checked-in CSV, the two derived views/tables (`fct_route_month`,
    `mart_route_health`), and the two Explorer allowlist views (`meta_pivot_dimensions`,
    `meta_pivot_measures`). **This count tracks `sql/02_marts/`, not the data window.**
 
@@ -254,9 +275,9 @@ Real run, full 2015–2026 warehouse:
 
 ```
 $ make warehouse && make verify
-parquet: 17 artifacts byte-identical across two builds
+parquet: 16 artifacts byte-identical across two builds
 parquet: comparing data/parquet (on disk) against a fresh build from data/raw
-parquet: data/parquet matches a fresh build from data/raw (17 artifacts)
+parquet: data/parquet matches a fresh build from data/raw (16 artifacts)
 database: 10 objects identical across two builds
 ```
 
@@ -583,7 +604,8 @@ before any gate, so a job cannot be added that skips it. The release asset carri
 `upgauge.duckdb` frozen at publish time, and `warehouse.yml` republishes only when BTS advances a
 month — so a mart tested straight out of the asset is whatever `sql/02_marts/` looked like on
 publish day, not what this commit says. `mart_route_health` and the other nine objects are a pure
-function of `data/parquet` plus `sql/02_marts/` (`pipeline/marts.py`'s `build_database` reads the
+function of `data/parquet` plus `sql/02_marts/` and the checked-in
+`pipeline/reference/mainline_group.csv` (`pipeline/marts.py`'s `build_database` reads the
 existing database not at all), which is what makes rebuilding them cheap: ~1 s against the full
 2015–2026 window, against an asset that keeps carrying the Parquet. The image does the same thing
 in its `warehouse` builder stage (`hosting.md` § The Dockerfile), so CI and the container agree

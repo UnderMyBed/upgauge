@@ -73,7 +73,8 @@ GROUPINGS = frozenset({"operating", "mainline"})
 #: The one dimension whose SELECT/GROUP BY expression changes when grouping == "mainline".
 #: coalesce(...) falls back to the operating carrier for anyone absent from
 #: map_mainline_group (independents, shared regionals, subsidiaries before their acquisition
-#: month) -- which is every carrier by default, since the map is wholly-owned-only.
+#: month, contract carriers outside their exclusive months) -- which is every carrier by
+#: default, since the map holds only owned and exclusive-contract rows.
 _MAINLINE_CARRIER_EXPR = "coalesce(m.parent_airline_id, f.op_airline_id)"
 
 

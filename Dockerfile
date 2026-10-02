@@ -60,7 +60,8 @@ RUN test ! -e data/raw || { echo "FAIL: data/raw is in the warehouse asset"; exi
 
 # ---- and then REBUILD the marts from THIS COMMIT's sql/, because they are not the asset's to
 # carry. `mart_route_health` and the other nine objects are a pure function of data/parquet plus
-# sql/02_marts/ (pipeline/marts.py's build_database reads the existing upgauge.duckdb not at all
+# sql/02_marts/ and pipeline/reference/mainline_group.csv, which `map_mainline_group` is a TABLE
+# read from (pipeline/marts.py's build_database reads the existing upgauge.duckdb not at all
 # -- it builds a staging file and renames over it), and sql/ ships with the code while the asset
 # republishes only when BTS advances a month. Baked, a mart change could not reach production
 # until then: measured, sql/'s mart SQL plus one new column raised `BinderException: Referenced

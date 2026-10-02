@@ -19,8 +19,15 @@ from pathlib import Path
 
 import duckdb
 
+from pipeline.mainline_map import DEFAULT_MAP_PATH, load_mainline_map
+
 MARTS_DIR = Path(__file__).parents[1] / "sql" / "02_marts"
 PARQUET_ROOT_TOKEN = "{{PARQUET_ROOT}}"
+#: Where the checked-in reference CSVs live. ABSOLUTE, unlike PARQUET_ROOT, and deliberately:
+#: it is read only at build time into a TABLE, so no path survives into the database -- and it
+#: must be the very file `load_mainline_map` validated, whatever the CWD.
+REFERENCE_ROOT_TOKEN = "{{REFERENCE_ROOT}}"
+REFERENCE_DIR = DEFAULT_MAP_PATH.parent
 MATERIALIZATIONS = frozenset({"view", "table"})
 
 _DIRECTIVE = re.compile(r"^--\s*(upgauge|object)\s*:\s*(\S+)\s*$")  # note: no MULTILINE
@@ -82,8 +89,19 @@ def mart_files(marts_dir: Path = MARTS_DIR) -> list[MartFile]:
     return [parse_mart_file(p) for p in sorted(Path(marts_dir).glob("*.sql"))]
 
 
-def build_database(parquet_dir: Path, db_path: Path, marts_dir: Path = MARTS_DIR) -> list[str]:
+def build_database(
+    parquet_dir: Path,
+    db_path: Path,
+    marts_dir: Path = MARTS_DIR,
+    reference_dir: Path = REFERENCE_DIR,
+) -> list[str]:
     """Build upgauge.duckdb. Returns the object names created, in order.
+
+    `map_mainline_group` is materialized from `reference_dir/mainline_group.csv`, not from
+    `parquet_dir`: CI and the image restore `data/parquet` from the release asset and run only
+    this, so a map read from there is whatever the asset was packed with. The CSV is validated
+    first (bases, sources, overlaps, dated parent/child) and an invalid map fails the build
+    before any database is written.
 
     `parquet_dir` is substituted verbatim and deliberately NOT resolved: DuckDB resolves
     relative paths against the process CWD, so a relative root works in CI and in Docker
@@ -95,6 +113,8 @@ def build_database(parquet_dir: Path, db_path: Path, marts_dir: Path = MARTS_DIR
     deleted the working one. In M6 that is the monthly cron clobbering a good database with
     a partial one while the site keeps serving.
     """
+    load_mainline_map(Path(reference_dir) / DEFAULT_MAP_PATH.name)
+
     db_path = Path(db_path)
     staging = db_path.with_name(db_path.name + ".incoming")
     for p in (staging, Path(str(staging) + ".wal")):
@@ -106,7 +126,9 @@ def build_database(parquet_dir: Path, db_path: Path, marts_dir: Path = MARTS_DIR
     created: list[str] = []
     try:
         for mart in mart_files(marts_dir):
-            body = mart.body.replace(PARQUET_ROOT_TOKEN, str(parquet_dir))
+            body = mart.body.replace(PARQUET_ROOT_TOKEN, str(parquet_dir)).replace(
+                REFERENCE_ROOT_TOKEN, str(reference_dir)
+            )
             kind = "VIEW" if mart.materialization == "view" else "TABLE"
             try:
                 con.execute(f"CREATE OR REPLACE {kind} {mart.object_name} AS {body}")

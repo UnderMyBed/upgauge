@@ -169,6 +169,12 @@ def test_mart_route_health_still_has_no_time_grain(con):
 
 def test_only_marts_are_materialized_as_tables():
     """Facts and dims must stay views, or M1's byte-identical Parquet gate stops covering
-    them and the reproducibility story quietly shrinks."""
-    tables = [m.object_name for m in mart_files() if m.materialization == "table"]
-    assert tables == ["mart_route_health"], tables
+    them and the reproducibility story quietly shrinks.
+
+    `map_mainline_group` is the one other table, and the reason does not apply to it: it is
+    read from the checked-in CSV, never from the Parquet tree, so the Parquet gate never covered
+    it -- it is a TABLE precisely so the release asset cannot supply it. Pinned to that: a table
+    reading `{{PARQUET_ROOT}}` is a BTS-derived fact or dim that has left the Parquet gate."""
+    tables = {m.object_name: m for m in mart_files() if m.materialization == "table"}
+    assert sorted(tables) == ["map_mainline_group", "mart_route_health"], sorted(tables)
+    assert "{{PARQUET_ROOT}}" not in tables["map_mainline_group"].body

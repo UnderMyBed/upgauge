@@ -1,12 +1,13 @@
 """The marts ship with the code, and this file is what keeps them there.
 
 `mart_route_health` and the other nine database objects are a pure function of `data/parquet`
-plus `sql/02_marts/` -- `pipeline.marts.build_database` reads the existing `upgauge.duckdb` not
-at all. But the published release asset carries a COPY of that database, frozen at publish time,
-and `warehouse.yml` republishes only when BTS advances a month. So for as long as the asset's
-copy was what CI restored and what the container served, a change to `sql/02_marts/` could not
-reach either: measured, `sql/`'s mart SQL plus one new column raised `BinderException:
-Referenced column "t12_months_flown" not found in FROM clause!` against `warehouse-2026.05`.
+plus `sql/02_marts/` and `pipeline/reference/mainline_group.csv` -- `pipeline.marts.build_database`
+reads the existing `upgauge.duckdb` not at all. But the published release asset carries a COPY
+of that database, frozen at publish time, and `warehouse.yml` republishes only when BTS advances
+a month. So for as long as the asset's copy was what CI restored and what the container served,
+a change to `sql/02_marts/` could not reach either: measured, `sql/`'s mart SQL plus one new
+column raised `BinderException: Referenced column "t12_months_flown" not found in FROM clause!`
+against `warehouse-2026.05`.
 
 Two rebuilds close that -- one in `.github/actions/setup` (every CI job) and one in the
 Dockerfile's `warehouse` BUILDER stage (the image). Both are invisible when removed: CI stays

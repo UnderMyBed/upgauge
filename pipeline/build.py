@@ -19,7 +19,6 @@ from pipeline.dims import (
     build_airport_dim,
     build_carrier_dim,
     build_city_market_dim,
-    build_mainline_map,
 )
 from pipeline.fetch import T100D_SEGMENT_US, Table, latest_raw
 from pipeline.lookups import AIRCRAFT_TYPES, CARRIER_DECODE, MASTER_COORDINATE
@@ -27,6 +26,11 @@ from pipeline.normalize import NormalizeError, discover_raw_years, normalize_yea
 
 FACTS_SUBDIR = "t100_segment"
 DIMS_SUBDIR = "dims"
+#: Artifacts the warehouse once wrote and now must not, keyed as `_digest_tree` keys them
+#: (relative to the out dir). `build_all` deletes them; the freshness check does not count
+#: them as staleness. The map is materialized by `make build` from the checked-in CSV, but
+#: warehouse.yml builds IN PLACE over the previous asset's tree, so an asset can still carry one.
+RETIRED_ARTIFACTS: frozenset[str] = frozenset({f"{DIMS_SUBDIR}/map_mainline_group.parquet"})
 
 
 def _require(raw_dir: Path, table: Table) -> Path:
@@ -45,7 +49,7 @@ def _require(raw_dir: Path, table: Table) -> Path:
 
 
 def build_all(raw_dir: Path, out_dir: Path) -> list[Path]:
-    """Normalize every cached fact year and build all five dimensions.
+    """Normalize every cached fact year and build all four BTS-derived dimensions.
 
     Returns the artifacts written. Raises if anything required is missing.
     """
@@ -76,7 +80,8 @@ def build_all(raw_dir: Path, out_dir: Path) -> list[Path]:
     written.append(build_city_market_dim(sources["airport"], dims))
     written.append(build_carrier_dim(sources["carrier"], dims))
     written.append(build_aircraft_type_dim(sources["aircraft_type"], dims))
-    written.append(build_mainline_map(dims))
+    for name in RETIRED_ARTIFACTS:
+        (out_dir / name).unlink(missing_ok=True)
     return written
 
 
@@ -96,6 +101,20 @@ def _digest_tree(root: Path) -> dict[str, str]:
         str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
         for p in sorted(Path(root).rglob("*.parquet"))
     }
+
+
+def stale_against_fresh(fresh: dict[str, str], on_disk: dict[str, str]) -> list[str]:
+    """Names at which an on-disk tree differs from a fresh build: missing, extra, or changed.
+
+    A RETIRED artifact present only on disk is not staleness -- a fresh build deletes it, and
+    the restored asset it came from predates the retirement. Exactly those names; any other
+    extra file is still named.
+    """
+    on_disk = {k: v for k, v in on_disk.items() if k not in RETIRED_ARTIFACTS or k in fresh}
+    return sorted(
+        set(fresh) ^ set(on_disk)
+        | {name for name in set(fresh) & set(on_disk) if fresh[name] != on_disk[name]}
+    )
 
 
 def verify_reproducible(raw_dir: Path, work_dir: Path | None = None) -> ReproducibilityReport:
@@ -171,10 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         fresh = _digest_tree(work_dir / "build-a")
         on_disk = _digest_tree(args.out_dir)
-        stale = sorted(
-            set(fresh) ^ set(on_disk)
-            | {name for name in set(fresh) & set(on_disk) if fresh[name] != on_disk[name]}
-        )
+        stale = stale_against_fresh(fresh, on_disk)
         if stale:
             log.error(
                 "NOT reproducible — %d Parquet artifact(s) at %s differ from a fresh build of %s:",
@@ -189,7 +205,7 @@ def main(argv: list[str] | None = None) -> int:
             "parquet: %s matches a fresh build from %s (%d artifacts)",
             args.out_dir,
             args.raw_dir,
-            len(on_disk),
+            len(fresh),
         )
 
         # Short-circuit on purpose: the database gate's marts are views/tables built FROM

@@ -21,7 +21,7 @@
 -- pivot_segment.sql / pivot_route.sql always renders `op_airline_id IN (...)` against the
 -- RAW column on the fact table -- pivot.py's filter loop never looks at `grouping` at all.
 -- So filtering a mainline-grouped pivot to a parent airline_id (e.g. Alaska, 19930) EXCLUDES
--- the rows contributed by its wholly-owned subsidiaries (Virgin America, Hawaiian), even
+-- the rows contributed by its subsidiaries and contract carriers (Horizon, Virgin America), even
 -- though those rows appear, correctly rolled up, in the unfiltered mainline row for 19930.
 -- Measured on 2017-01: the mainline row for op_airline_id=19930 shows 3,842,350 seats;
 -- the same query plus a filter of op_airline_id:19930 returns only 2,336,210 -- Horizon and

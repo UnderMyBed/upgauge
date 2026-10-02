@@ -48,11 +48,18 @@ dim_city_market       city_market_id, name
                       -- nondeterministic pick would drift between builds and break the
                       -- byte-identical Parquet gate.
 
-map_mainline_group    airline_id, parent_airline_id, effective_from, effective_to
-                      -- DATE-RANGED. Wholly-owned subsidiaries ONLY.
+map_mainline_group    airline_id, parent_airline_id, effective_from, effective_to,
+                      basis, source
+                      -- DATE-RANGED. basis = owned (wholly-owned subsidiary) or
+                      -- contract (exclusive to one parent in those months; source
+                      -- required). Never shared regionals. A TABLE built by
+                      -- `make build` from the checked-in CSV; source is NULL
+                      -- on owned rows, as an open effective_to is.
 
 mart_route_health     one row per (op_airline_id, route_key_low, route_key_high)
-                      UNDIRECTED, and the only materialized TABLE in the database.
+                      UNDIRECTED, and the only materialized TABLE derived from the
+                      Parquet tree (map_mainline_group, the other table, is read
+                      from the checked-in CSV).
                       Global trailing-12 / prior-12 windows, a RATE floor of 30 performed
                       departures per month FLOWN (t12_months_flown, never months present),
                       NULL (not huge-positive) deltas when the prior window is empty.
@@ -124,7 +131,7 @@ Nothing to do with mainline rollup. **Ours is `mainline_group`; theirs is preser
 | `dim_city_market` | Master Coordinate (same zip — no extra fetch) | 288 |
 | `dim_carrier` | Carrier Decode | 304 |
 | `dim_aircraft_type` | AircraftTypes | 300 |
-| `map_mainline_group` | `pipeline/reference/mainline_group.csv` (checked in) | — |
+| `map_mainline_group` | `pipeline/reference/mainline_group.csv` (checked in) — a TABLE `make build` reads into the database, never a Parquet file in the asset | — |
 
 All three live in **DB 595 (Aviation Support Tables)**, which needs a *different subject
 param* from T-100. Getting it wrong does not error — BTS answers 200 with its homepage. The
@@ -386,8 +393,9 @@ GROUP BY coalesce(m.parent_airline_id, f.op_airline_id)
 
 `>= effective_from` and `< effective_to`. Hawaiian must roll up from 2024-09 and **not** from
 2024-08; Virgin America from 2016-12 and not 2016-11. Both boundaries get a real-data test.
-Shared regionals (`OO`, `YX`, `YV`) cannot leak in because the map contains only wholly-owned
-carriers — structural, not a filter. See [carrier-model.md](carrier-model.md).
+Shared regionals (`OO`, `YX`) cannot leak in because the map contains only wholly-owned
+carriers and exclusive contract carriers in their single-partner months — structural, not a
+filter. See [carrier-model.md](carrier-model.md).
 
 > 🔴 **Derived measures are computed from summed numerators and denominators — never
 > averaged.**

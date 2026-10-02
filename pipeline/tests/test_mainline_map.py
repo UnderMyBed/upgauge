@@ -1,4 +1,4 @@
-"""The date-ranged wholly-owned rollup.
+"""The date-ranged rollup: wholly-owned subsidiaries and exclusive contract carriers.
 
 An earlier draft of the spec assumed ownership held for the whole window and a flat
 carrier→parent map would do. It does not: Alaska acquired Virgin America in 2016 and
@@ -12,9 +12,16 @@ from __future__ import annotations
 import pytest
 
 from pipeline.mainline_map import (
+    BasisError,
+    MapEntry,
     OverlapError,
+    ParentChildError,
+    UnsourcedContractError,
+    check_bases,
+    check_contract_sources,
     check_map_is_total,
     check_no_overlaps,
+    check_parent_child_disjoint,
     load_mainline_map,
 )
 
@@ -24,6 +31,8 @@ AA, ENVOY, PSA, PIEDMONT = 19805, 20398, 20397, 20427
 AS, HORIZON, HAWAIIAN, VIRGIN_AMERICA = 19930, 19687, 19690, 21171
 UA = 19977
 SKYWEST, REPUBLIC, MESA = 20304, 20452, 20378
+COMMUTAIR, AIR_WISCONSIN, GOJET, EXPRESSJET = 20445, 20046, 20500, 20366
+TRANS_STATES, EMPIRE, COMPASS = 20237, 20263, 21167
 
 
 @pytest.fixture
@@ -98,11 +107,11 @@ def test_wholly_owned_subsidiaries_roll_up_for_the_whole_window(mapping, subsidi
 
 
 def test_united_gets_no_rollup(mapping):
-    """United owns no subsidiary operators. This is why group-vs-group is apples-to-oranges."""
+    """United is a parent, never a child."""
     assert mapping.parent_for(UA, "2020-06") is None
 
 
-@pytest.mark.parametrize("shared", [SKYWEST, REPUBLIC, MESA])
+@pytest.mark.parametrize("shared", [SKYWEST, REPUBLIC])
 @pytest.mark.parametrize("month", ["2015-01", "2020-06", "2026-01"])
 def test_shared_regionals_are_never_rolled_up(mapping, shared, month):
     """They fly for several mainlines on the same day. No date range can fix that."""
@@ -112,14 +121,68 @@ def test_shared_regionals_are_never_rolled_up(mapping, shared, month):
 def test_shared_regionals_are_absent_from_the_map_entirely(mapping):
     """Not merely unmapped — they must not appear, so a stray parent can't be added."""
     mapped = {e.airline_id for e in mapping.entries}
-    assert mapped.isdisjoint({SKYWEST, REPUBLIC, MESA})
+    assert mapped.isdisjoint({SKYWEST, REPUBLIC})
 
 
-def test_a_mainline_is_never_its_own_subsidiary(mapping):
-    parents = {e.parent_airline_id for e in mapping.entries}
-    assert not any(e.airline_id in parents for e in mapping.entries), (
-        "a parent is mapped as a child"
-    )
+@pytest.mark.parametrize("month", ["2015-01", "2020-06", "2023-04", "2025-12", "2026-01"])
+def test_mesa_does_not_roll_up_while_shared_or_unsourced(mapping, month):
+    """American Eagle and United Express concurrently until 2023-04; post-merger
+    (2025-11-25) flying unsourced."""
+    assert mapping.parent_for(MESA, month) is None
+
+
+# ------------------------------------------------------- exclusive contract carriers
+
+
+@pytest.mark.parametrize(
+    ("carrier", "month", "parent"),
+    [
+        (COMMUTAIR, "2015-01", UA),
+        (COMMUTAIR, "2026-06", UA),
+        (AIR_WISCONSIN, "2017-08", AA),
+        (AIR_WISCONSIN, "2018-03", UA),
+        (AIR_WISCONSIN, "2023-02", UA),
+        (AIR_WISCONSIN, "2023-07", AA),
+        (AIR_WISCONSIN, "2025-03", AA),
+        (MESA, "2023-05", UA),
+        (MESA, "2025-11", UA),
+        (GOJET, "2021-01", UA),
+        (EXPRESSJET, "2019-02", UA),
+        (EXPRESSJET, "2020-09", UA),
+        (TRANS_STATES, "2019-01", UA),
+        (TRANS_STATES, "2020-04", UA),
+        (EMPIRE, "2015-01", HAWAIIAN),
+        (EMPIRE, "2021-01", HAWAIIAN),
+    ],
+)
+def test_contract_carriers_roll_up_inside_their_exclusive_months(mapping, carrier, month, parent):
+    assert mapping.parent_for(carrier, month) == parent
+
+
+@pytest.mark.parametrize(
+    ("carrier", "month"),
+    [
+        (AIR_WISCONSIN, "2017-09"),  # AA + UA concurrently
+        (AIR_WISCONSIN, "2018-02"),
+        (AIR_WISCONSIN, "2023-03"),  # UA + second AA contract
+        (AIR_WISCONSIN, "2023-06"),
+        (AIR_WISCONSIN, "2025-04"),  # 3 days AA, then own brand
+        (GOJET, "2020-12"),  # Delta exit dated only by Wikipedia
+        (EXPRESSJET, "2019-01"),  # AA flying ended this month
+        (EXPRESSJET, "2020-10"),
+        (TRANS_STATES, "2018-12"),
+        (EMPIRE, "2021-02"),
+        (COMPASS, "2015-01"),  # sourced, uncorroborated by hub data; excluded
+    ],
+)
+def test_transition_and_excluded_months_stay_at_the_operating_carrier(mapping, carrier, month):
+    assert mapping.parent_for(carrier, month) is None
+
+
+def test_every_contract_row_cites_a_url(mapping):
+    for e in mapping.entries:
+        if e.basis == "contract":
+            assert e.source.startswith("https://"), e
 
 
 # ------------------------------------------------------- structural checks
@@ -185,3 +248,99 @@ def test_every_entry_is_keyed_on_airline_id_not_letter_code(mapping):
     for entry in mapping.entries:
         assert isinstance(entry.airline_id, int)
         assert isinstance(entry.parent_airline_id, int)
+
+
+# ------------------------------------------------------- basis and source (#11)
+
+
+def test_every_shipped_row_declares_a_known_basis(mapping):
+    assert {e.basis for e in mapping.entries} <= {"owned", "contract"}
+
+
+def test_an_unknown_basis_is_refused_by_the_basis_check():
+    entries = [MapEntry(99, 1, "2015-01", basis="partnership", source="https://x")]
+    with pytest.raises(BasisError, match="99"):
+        check_bases(entries)
+
+
+def test_a_contract_row_without_a_source_is_refused_by_the_source_check():
+    entries = [MapEntry(99, 1, "2015-01", basis="contract", source="")]
+    with pytest.raises(UnsourcedContractError, match="99"):
+        check_contract_sources(entries)
+
+
+def test_an_owned_row_without_a_source_is_admitted():
+    check_contract_sources([MapEntry(99, 1, "2015-01", basis="owned", source="")])
+
+
+def test_a_parent_that_is_a_child_in_the_same_month_is_refused_by_the_date_aware_check():
+    """2 is 1's parent from 2015-01, and 3's child from 2018-01: in 2018-01 the rollup of 1
+    would depend on evaluation order."""
+    entries = [
+        MapEntry(1, 2, "2015-01", None, basis="contract", source="https://x"),
+        MapEntry(2, 3, "2018-01", None),
+    ]
+    with pytest.raises(ParentChildError, match=r"airline_id 2 "):
+        check_parent_child_disjoint(entries)
+
+
+def test_a_parent_that_is_a_child_only_in_other_months_is_admitted():
+    """The Empire -> Hawaiian (2015-01..2021-02) and Hawaiian -> Alaska (2024-09..) shape.
+    A set-membership check refuses this; only a date-aware one admits it."""
+    entries = [
+        MapEntry(20263, 19690, "2015-01", "2021-02", basis="contract", source="https://x"),
+        MapEntry(19690, 19930, "2024-09", None),
+    ]
+    check_parent_child_disjoint(entries)
+
+
+def test_the_parent_child_boundary_is_exclusive_at_effective_to():
+    """Child range ends (exclusive) exactly where the parent range starts: no shared month."""
+    entries = [
+        MapEntry(1, 2, "2015-01", "2018-01", basis="contract", source="https://x"),
+        MapEntry(2, 3, "2018-01", None),
+    ]
+    check_parent_child_disjoint(entries)
+
+
+def test_the_parent_child_boundary_is_exclusive_at_the_childs_effective_from_too():
+    """Mirror of the above: the parent-role range (airline 2 as parent of 1) starts exactly
+    where 2's own child range ends (exclusive): no shared month."""
+    entries = [
+        MapEntry(1, 2, "2018-01", None, basis="contract", source="https://x"),
+        MapEntry(2, 3, "2015-01", "2018-01"),
+    ]
+    check_parent_child_disjoint(entries)
+
+
+# ------------------------------------------- the loader calls its checks (call sites)
+
+_HEADER = (
+    "airline_id,carrier_code,parent_airline_id,parent_code,"
+    "effective_from,effective_to,note,basis,source\n"
+)
+
+
+def _load(tmp_path, *rows):
+    path = tmp_path / "map.csv"
+    path.write_text(_HEADER + "".join(r + "\n" for r in rows), encoding="utf-8")
+    return load_mainline_map(path)
+
+
+def test_the_loader_refuses_an_unknown_basis(tmp_path):
+    with pytest.raises(BasisError, match="99"):
+        _load(tmp_path, "99,XX,1,PP,2015-01,,n,partnership,https://x")
+
+
+def test_the_loader_refuses_an_unsourced_contract_row(tmp_path):
+    with pytest.raises(UnsourcedContractError, match="99"):
+        _load(tmp_path, "99,XX,1,PP,2015-01,,n,contract,")
+
+
+def test_the_loader_refuses_a_same_month_parent_and_child(tmp_path):
+    with pytest.raises(ParentChildError, match=r"airline_id 2 "):
+        _load(
+            tmp_path,
+            "1,AA,2,BB,2015-01,,n,contract,https://x",
+            "2,BB,3,CC,2018-01,,n,owned,",
+        )

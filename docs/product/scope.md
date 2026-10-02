@@ -3,8 +3,8 @@
 ## Out of scope for v0
 
 DB1B / fares · On-time performance · International · Form 41 / profitability · **Full
-mainline attribution for shared & serially-exclusive contract regionals** (the wholly-owned
-rollup *is* in v0 — see [carrier-model](../data/carrier-model.md)) · User accounts · Alerts ·
+mainline attribution for shared regionals** (the wholly-owned and exclusive-contract rollup
+*is* in v0 — see [carrier-model](../data/carrier-model.md)) · User accounts · Alerts ·
 Email digests · Anything predictive beyond the trailing-window heuristic.
 
 These are v1+. **Do not let them leak into the skateboard.**

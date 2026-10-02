@@ -191,19 +191,50 @@ def test_hawaiian_rolls_up_from_2024_09_and_not_2024_08(con):
     assert 19690 not in after, "HA should have rolled into AS from 2024-09"
 
 
+def test_commutair_rolls_up_to_united_from_the_window_start(con):
+    got = _carrier_total(con, 20445, "2015-01", "mainline")
+    assert 20445 not in got, "C5 flew only for United; it should be folded into UA"
+    assert 19977 in got
+
+
+def test_air_wisconsin_transition_months_stay_air_wisconsin(con):
+    """2017-09..2018-02 it flew for American AND United. Those months must not roll up;
+    2018-03 is United. Real ZW traffic exists on both sides of 2018-03."""
+    gap = _carrier_total(con, 20046, "2018-02", "mainline")
+    after = _carrier_total(con, 20046, "2018-03", "mainline")
+    assert 20046 in gap, "a transition month rolled up -- the gap between ZW's rows is gone"
+    assert 20046 not in after, "ZW should be folded into UA from 2018-03"
+
+
+def test_air_wisconsin_american_range_is_exclusive_at_2017_09(con):
+    """effective_to = '2017-09' is EXCLUSIVE: 2017-08 is American, 2017-09 is ZW itself."""
+    last_in = _carrier_total(con, 20046, "2017-08", "mainline")
+    first_out = _carrier_total(con, 20046, "2017-09", "mainline")
+    assert 20046 not in last_in, "2017-08 is inside ZW's American range"
+    assert 20046 in first_out, "2017-09 is on the exclusive thru month"
+
+
+def test_mesa_rolls_up_from_2023_05_and_not_2023_04(con):
+    before = _carrier_total(con, 20378, "2023-04", "mainline")
+    after = _carrier_total(con, 20378, "2023-05", "mainline")
+    assert 20378 in before, "Mesa still flew American Eagle in 2023-04"
+    assert 20378 not in after, "Mesa should be folded into UA from 2023-05"
+
+
 def test_shared_regionals_never_roll_up(con):
-    """SkyWest flies for several mainlines on the same day. No date range fixes that, so it
-    must not appear in the map at all."""
+    """SkyWest and Republic fly for several mainlines on the same day. No date range fixes
+    that, so they must not appear in the map at all. (Mesa appears only for its sourced
+    United-only months, 2023-05..2025-11.)"""
     mapped = {r[0] for r in con.execute("SELECT carrier_code FROM map_mainline_group").fetchall()}
-    assert not mapped & {"OO", "YX", "YV"}
+    assert not mapped & {"OO", "YX"}
 
 
 def test_mainline_filter_does_not_coalesce_like_the_dimension_does(con):
     """Pins a KNOWN, DELIBERATELY UNCHANGED gap (see pivot_mainline_join.sql's header):
     under grouping='mainline', the op_airline_id dimension is coalesced to the parent
     airline_id, but a filter on op_airline_id is not -- it still matches the raw column, so
-    filtering a mainline-grouped pivot to a parent excludes the rows its wholly-owned
-    subsidiaries contribute to that same, already-rolled-up row. Measured on 2017-01: the
+    filtering a mainline-grouped pivot to a parent excludes the rows its subsidiaries and
+    contract carriers contribute to that same, already-rolled-up row. Measured on 2017-01: the
     unfiltered mainline row for 19930 (Alaska) is 3,842,350 seats; filtered to
     op_airline_id:19930 it drops to 2,336,210 -- Horizon and Virgin America are folded into
     the row but excluded by the filter. This is a regression pin, not an endorsement --
