@@ -22,12 +22,11 @@ on:
   # every hour regardless of the site is worse than none: it trains its reader to ignore it,
   # which is the exact failure this workflow was built to prevent.
   #
-  # `workflow_dispatch` is kept so a human on a residential connection can still run this, and so
-  # #96's replacement can be tested against it.
+  # `workflow_dispatch` is kept so a human on a residential connection can still run this.
   #
-  # RE-ENABLE only once a vantage point exists that Bot Fight Mode does not challenge -- #96
-  # holds the finding, the blocked-check inventory and three designs. Nothing enforces this;
-  # the site is unwatched on a schedule until then.
+  # RE-ENABLE only once a vantage point exists that Bot Fight Mode does not challenge. None is
+  # planned: #96 (closed, not planned) holds the finding, the blocked-check inventory and three
+  # designs. The site is unwatched on a schedule by decision.
   #
   # schedule:
   #   - cron: "23 * * * *"

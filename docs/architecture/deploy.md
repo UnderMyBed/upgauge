@@ -194,7 +194,8 @@ on network identity (IP, CIDR, ASN), so it selects a *machine*, never a path: al
 GitHub-hosted runners would mean allow-listing AS8075, all of Azure, zone-wide. `Allow` also
 bypasses rate limiting and WAF Managed Rules for that source. Unverified on this zone, and the
 product is soft-deprecated — Cloudflare advises replacing `Allow` with `Skip`, which for Bot Fight
-Mode does nothing. #96 holds the design that would use it.
+Mode does nothing. #96 records the designs that would use it; none is planned, and the site is
+unwatched on a schedule by decision.
 
 **That toggle is dashboard state, and nothing here can assert it.** `/zones/{id}/bot_management`
 refuses this token, and Bot Fight Mode is not a zone setting (`settings/bot_fight_mode` →
