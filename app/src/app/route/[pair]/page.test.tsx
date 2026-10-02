@@ -264,7 +264,7 @@ describe("/route/<pair> aircraft-mix chart", () => {
     const { container } = render(
       await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }),
     );
-    const svg = container.querySelector(".chart svg[role='img']");
+    const svg = container.querySelector(".chart:not(.heatmap) svg[role='img']");
     const table = container.querySelector("table");
     expect(svg).not.toBeNull();
     expect(table).not.toBeNull();
@@ -342,7 +342,7 @@ describe("/route/<pair> aircraft-mix chart", () => {
     const { container } = render(
       await RoutePage({ params: Promise.resolve({ pair: "ATL-CAK" }) }),
     );
-    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(container.querySelector(".chart:not(.heatmap) svg[role='img']")).not.toBeNull();
     expect(screen.getByText(/no scheduled service/i)).toBeDefined();
   });
 
@@ -611,7 +611,7 @@ describe("/route/<pair>: the legend rail follows the CHART, not the rows (#123)"
     const { container } = render(await RoutePage({ params: Promise.resolve({ pair: "JFK-LAX" }) }));
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).toContain("Fleet shading");
-    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(container.querySelector(".chart:not(.heatmap) svg[role='img']")).not.toBeNull();
   });
 });
 
@@ -635,5 +635,24 @@ describe("/route/<pair>: the seats-by-month heatmap", () => {
     // value (the grid replaced by its can't-be-stated note) fails here too.
     const label = heatmap!.querySelector("svg[role='img']")?.getAttribute("aria-label") ?? "";
     expect(label.startsWith("Seats by month, ")).toBe(true);
+  });
+
+  it("spans exactly the window the mix chart above it states", async () => {
+    // The two charts are one set of rows, so their windows are one window. ATL-CAK, not JFK-LAX:
+    // it stopped filing in 2022-06, so its window is neither the full-window default nor
+    // `DATA AS OF`, and a span computed from anything but the filed months cannot match it.
+    const { container } = render(
+      await RoutePage({ params: Promise.resolve({ pair: "ATL-CAK" }) }),
+    );
+    const windowOf = (sel: string) =>
+      container
+        .querySelector(sel)
+        ?.getAttribute("aria-label")
+        ?.match(/(\d{4}-\d{2}) to (\d{4}-\d{2})/)
+        ?.slice(1, 3);
+    const mixWindow = windowOf(".chart:not(.heatmap) svg[role='img']");
+    expect(mixWindow).toBeDefined();
+    expect(mixWindow![1]).not.toBe(await dataAsOf());
+    expect(windowOf(".chart.heatmap svg[role='img']")).toEqual(mixWindow);
   });
 });

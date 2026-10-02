@@ -99,11 +99,17 @@ export function heatmapKeyNotes(g: HeatGrid): string[] {
   return notes;
 }
 
+/** An extreme read from an understated cell is a floor, not a figure: it carries the same
+ * ", understated" its cell title does, or the label states a total the grid itself refuses to. */
+function extreme(g: HeatGrid, e: { month: string; seats: number }): string {
+  const kind = g.years.flatMap((y) => y.cells).find((c) => c.month === e.month)?.kind;
+  return `${e.month} ${formatSeats(e.seats)} seats${kind === "understated" ? ", understated" : ""}`;
+}
+
 export function heatmapLabel(g: HeatGrid): string {
   const parts = [
     `Seats by month, ${g.first} to ${g.last}.`,
-    `Highest ${g.highest.month} ${formatSeats(g.highest.seats)} seats, lowest ${g.lowest.month} ` +
-      `${formatSeats(g.lowest.seats)} seats.`,
+    `Highest ${extreme(g, g.highest)}, lowest ${extreme(g, g.lowest)}.`,
   ];
   if (g.counts.unfiled) parts.push(`${plural(g.counts.unfiled, "month")} with no filings.`);
   if (g.counts.unknown)

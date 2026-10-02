@@ -417,13 +417,14 @@ segment-grain pivot (`year_month` × `aircraft_type`, seats + departures) throug
 property to preserve: a chart that needs its own query has escaped the pivot contract that
 `/explore` and every entity page share.
 
-Observable Plot under the hood. These are encoding rules, not library configuration.
+The aircraft-mix chart is Observable Plot; the seats-by-month heatmap is hand-built server SVG.
+These are encoding rules, not library configuration.
 
 **Axis numerics obey the same rule as every other numeric here: monospaced and
-tabular-figure.** Plot's root style hardcodes `font-family: system-ui, sans-serif`, and
-`font-variant-numeric` alone does not override it. The trap is shipping with the y ticks ("1.2M"), the
+tabular-figure.** On the Plot chart this takes an explicit style: Plot's root style hardcodes
+`font-family: system-ui, sans-serif`, and `font-variant-numeric` alone does not override it. The trap is shipping with the y ticks ("1.2M"), the
 year ticks and the annotation's year in the sans face while every other numeric on the page was
-Plex Mono. Every chart passes `style: { fontFamily: "var(--font-mono)", fontVariantNumeric:
+Plex Mono. Every Plot chart passes `style: { fontFamily: "var(--font-mono)", fontVariantNumeric:
 "tabular-nums" }`; the token, not a literal family, so `globals.css` stays the single source
 the way it already is for the `--g*` ramp. The mockups do this with a dedicated `.axl` class.
 
@@ -525,6 +526,10 @@ two orders coincide lets a single sort pass.
 cannot show, because the stack runs left to right through every month and a July is never
 beside the July before it. Absolute seats on one scale per chart; no per-year index.
 
+**Hand-built server SVG, not Plot.** A fixed grid of token fills and hairlines needs no scales,
+so there is none; its year and month labels take `.hlab`, which sets the mono face and tabular
+figures that the Plot chart has to pass in as a style.
+
 **It adds no query.** It is drawn from the rows the aircraft-mix chart above it receives, and a
 month's seats are the sum of that month's **stateable** bands — exactly the height the stack
 draws there — so the cell and the stack cannot disagree. On `/aircraft` the rows are by carrier;
@@ -578,7 +583,9 @@ cannot be stated: the fetch behind this chart hit its row limit."* and there is 
 **Accessibility.** The SVG is `role="img"` with one `aria-label`: the span, the highest and
 lowest month with their seats, and each non-zero count — `Seats by month, <first> to <last>.
 Highest <month> <seats> seats, lowest <month> <seats> seats. <N> months with no filings. <N>
-months filed but wholly quarantined. <N> months understated.`, zero counts omitted. Every
+months filed but wholly quarantined. <N> months understated.`, zero counts omitted. An extreme
+whose month is understated reads `<month> <seats> seats, understated` — the same qualifier as
+its cell title, because its figure is a floor, not a total. Every
 drawn cell carries a `<title>` (`2016-12 · 1,234,567 seats`, `… seats, understated`,
 `filed, wholly quarantined`, `no filings`), so the value under the pointer is readable without
 the legend. Labels and key are server-rendered markup: visible with JS off.

@@ -245,7 +245,7 @@ describe("/carrier/<code> aircraft-mix chart", () => {
   it("draws the chart above the table, over the FULL window", async () => {
     const asOf = await dataAsOf();
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
-    const svg = container.querySelector(".chart svg[role='img']");
+    const svg = container.querySelector(".chart:not(.heatmap) svg[role='img']");
     const table = container.querySelector("table");
     expect(svg).not.toBeNull();
     expect(table).not.toBeNull();
@@ -292,7 +292,7 @@ describe("/carrier/<code> with nothing in the trailing 12 months", () => {
     // interpolating across a gap (M4c, Finding 1).
     const asOf = await dataAsOf();
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "VX" }) }));
-    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(container.querySelector(".chart:not(.heatmap) svg[role='img']")).not.toBeNull();
     const line = container.querySelector(".window")?.textContent ?? "";
     const chartHalf = line.slice(line.indexOf("chart:"));
     expect(chartHalf).toContain("2015-01 → 2018-03");
@@ -1038,7 +1038,7 @@ describe("/carrier/<code>: the legend rail follows the CHART, not the rows (#123
     const { container } = render(await CarrierPage({ params: Promise.resolve({ code: "DL" }) }));
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).toContain("Fleet shading");
-    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(container.querySelector(".chart:not(.heatmap) svg[role='img']")).not.toBeNull();
   });
 });
 

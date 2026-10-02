@@ -162,6 +162,22 @@ describe("heatmapLabel", () => {
     );
   });
 
+  // Mutant: drop the ", understated" qualifier from an extreme. The lowest month here is
+  // understated (one stateable band plus a NULL one), so its 50 is a floor, not a total; the
+  // highest is a complete month and must stay unqualified.
+  it("marks an understated extreme as understated, and only that one", () => {
+    const g = heatmapGrid([
+      row("2016-01", "A", 50),
+      row("2016-01", "B", null),
+      row("2016-02", "A", 300),
+      row("2016-03", "A", 200),
+    ])!;
+    expect(heatmapLabel(g)).toBe(
+      "Seats by month, 2016-01 to 2016-03. Highest 2016-02 300 seats, lowest 2016-01 50 seats, " +
+        "understated. 1 month understated.",
+    );
+  });
+
   it("omits zero counts and pluralises", () => {
     const g = heatmapGrid([
       row("2016-01", "A", 1234567),

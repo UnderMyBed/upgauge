@@ -157,10 +157,10 @@ describe("/aircraft/<slug>", () => {
     // the degenerate version -- the title names the dimension, and the type stack would render
     // "Seats by aircraft type" with one band.
     const { container } = render(await page("B737-8"));
-    expect(container.querySelector(".chart .ctitle")?.textContent).toBe(
+    expect(container.querySelector(".chart:not(.heatmap) .ctitle")?.textContent).toBe(
       "Seats by operating carrier",
     );
-    const svg = container.querySelector(".chart svg[role='img']");
+    const svg = container.querySelector(".chart:not(.heatmap) svg[role='img']");
     const table = container.querySelector("table");
     expect(svg).not.toBeNull();
     expect(svg!.compareDocumentPosition(table!) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
@@ -345,7 +345,7 @@ describe("/aircraft/<slug> for a type that has stopped flying", () => {
   // the same shape as /route's ATL-CAK, and on this page it is the retirement story itself.
   it("still draws the history when the trailing-12 table is empty", async () => {
     const { container } = render(await page("MD-80"));
-    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(container.querySelector(".chart:not(.heatmap) svg[role='img']")).not.toBeNull();
     // Scoped to the empty state: the chart's own key also says "N months with no filings" for
     // this type (it filed 68 of the 100 months it spans), so an unscoped text match finds two
     // nodes and throws -- and would have been satisfied by the chart alone, which is the
@@ -738,7 +738,7 @@ describe("/aircraft/<name>: the legend rail follows the CHART, not the rows (#12
     const { container } = render(await AircraftPage({ params: Promise.resolve({ name: "B737-8" }) }));
     const rail = container.querySelector("aside.legend")!;
     expect(rail.textContent).toContain("Fleet shading");
-    expect(container.querySelector(".chart svg[role='img']")).not.toBeNull();
+    expect(container.querySelector(".chart:not(.heatmap) svg[role='img']")).not.toBeNull();
   });
 });
 

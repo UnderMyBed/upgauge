@@ -1133,10 +1133,11 @@ check_re "chart: the band BREAKS at them, drawn as two paths (HNL-LAS)" "$(count
 # The seats-by-month heatmap (#7) under the mix chart, in the served bytes. `aria-label="` is
 # the HTML attribute form; the flight payload carries it as `"aria-label":"`, so this needle
 # matches the rendered markup only. HNL-LAS is the gap route, so its label must also carry the
-# unfiled count -- the heatmap's own statement of the six-month hole the chart above breaks at.
+# unfiled count -- the heatmap's own statement of the six-month hole the chart above breaks at,
+# pinned to the SAME figure the mix chart's check above pins, so the two cannot disagree.
 check    "route: renders the seats-by-month heatmap" "$BODY" 'aria-label="Seats by month, '
 check_re "route: the heatmap's label states the unfiled months (HNL-LAS)" "$BODY" \
-  'aria-label="Seats by month, [^"]* [1-9][0-9]* months? with no filings\.'
+  'aria-label="Seats by month, [^"]* 6 months with no filings\.'
 
 # The OTHER branch of the window line, in the served bytes. ATL-CAK filed 67 months, 2015-01 ->
 # 2022-06, and nothing since; the chart is fetched over the full window but can only draw to
@@ -1325,6 +1326,13 @@ check     "airport?y=nonsense: malformed input is the same named error, not a 50
 # it) and, per the M4d comment two sections up, the per-row sparkline in DataTable. Anchoring on
 # this map's own pixel size is what makes the check a claim about the MAP rather than
 # about any other SVG this page happens to also render.
+#
+# The seats-by-month heatmap (#7) matches that bare `<svg role="img"` too: it mounts under the
+# mix chart on every entity page and its SVG opens with the same two bytes-identical attributes.
+# So each page's "the chart SVG is in the served HTML" check is satisfied by EITHER chart alone.
+# What identifies the MIX chart is the `<path fill="var(--gN)" d=` needles beside it: the heatmap
+# fills `<rect>`s, never a `<path>` with geometry. The heatmap's own presence is its
+# `aria-label="Seats by month, ` needle.
 #
 # THE viewBox IS NO LONGER ONE CONSTANT, and that is #123's whole point: the canvas is cropped
 # to the panels a network reaches, so a conterminous page reads `0 12 960 532` while an
