@@ -632,13 +632,13 @@ describe("/explore says what the mainline grouping includes", () => {
 
   it("states the definition on a mainline view", async () => {
     const { container } = render(await ExploreView({ rawQuery: MAINLINE }));
-    expect(container.querySelector(".foot")!.textContent).toContain("flew only for it");
+    expect(container.querySelector(".foot")!.textContent).toContain("flew only for that parent");
   });
 
   it("does not state it on an operating view that rendered its foot", async () => {
     const { container } = render(await ExploreView({ rawQuery: OPERATING }));
     const foot = container.querySelector(".foot")!.textContent;
     expect(foot).toContain("quarantined row");
-    expect(foot).not.toContain("flew only for it");
+    expect(foot).not.toContain("flew only for that parent");
   });
 });

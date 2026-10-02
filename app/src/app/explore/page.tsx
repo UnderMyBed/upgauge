@@ -416,9 +416,9 @@ export async function ExploreView({ rawQuery }: { rawQuery: string }) {
               {query.grouping === "mainline" ? (
                 <>
                   {" "}
-                  <strong>Mainline</strong> counts a regional under its parent in the months it
-                  was wholly owned by it or flew only for it. Regionals flying for several at
-                  once (SkyWest, Republic) stay as themselves.
+                  <strong>Mainline</strong> counts a carrier under its parent in the months the
+                  parent wholly owned it or it flew only for that parent. Regionals flying for
+                  several mainlines at once (SkyWest, Republic) stay as themselves.
                 </>
               ) : null}
               {mainlineRollupFiltered ? (
