@@ -151,8 +151,9 @@ def check_map_is_total(entries: Sequence[MapEntry]) -> None:
     """Raise if the map is internally incoherent.
 
     Totality here means: every (airline_id, month) resolves to exactly one parent or to
-    itself. Overlaps are the way that breaks, plus a parent appearing as somebody's child,
-    which would make the rollup depend on evaluation order.
+    itself. Overlaps are the way that breaks, plus an airline that is a parent in a
+    month in which it is also a child (date-aware, see `check_parent_child_disjoint`), which
+    would make the rollup depend on evaluation order.
     """
     check_no_overlaps(entries)
     check_parent_child_disjoint(entries)

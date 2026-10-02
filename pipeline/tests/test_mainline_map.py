@@ -217,7 +217,7 @@ def test_a_parent_that_is_a_child_in_the_same_month_is_refused_by_the_date_aware
         MapEntry(1, 2, "2015-01", None, basis="contract", source="https://x"),
         MapEntry(2, 3, "2018-01", None),
     ]
-    with pytest.raises(ParentChildError, match="2"):
+    with pytest.raises(ParentChildError, match=r"airline_id 2 "):
         check_parent_child_disjoint(entries)
 
 
@@ -238,3 +238,46 @@ def test_the_parent_child_boundary_is_exclusive_at_effective_to():
         MapEntry(2, 3, "2018-01", None),
     ]
     check_parent_child_disjoint(entries)
+
+
+def test_the_parent_child_boundary_is_exclusive_at_the_childs_effective_from_too():
+    """Mirror of the above: the parent-role range (airline 2 as parent of 1) starts exactly
+    where 2's own child range ends (exclusive): no shared month."""
+    entries = [
+        MapEntry(1, 2, "2018-01", None, basis="contract", source="https://x"),
+        MapEntry(2, 3, "2015-01", "2018-01"),
+    ]
+    check_parent_child_disjoint(entries)
+
+
+# ------------------------------------------- the loader calls its checks (call sites)
+
+_HEADER = (
+    "airline_id,carrier_code,parent_airline_id,parent_code,"
+    "effective_from,effective_to,note,basis,source\n"
+)
+
+
+def _load(tmp_path, *rows):
+    path = tmp_path / "map.csv"
+    path.write_text(_HEADER + "".join(r + "\n" for r in rows), encoding="utf-8")
+    return load_mainline_map(path)
+
+
+def test_the_loader_refuses_an_unknown_basis(tmp_path):
+    with pytest.raises(BasisError, match="99"):
+        _load(tmp_path, "99,XX,1,PP,2015-01,,n,partnership,https://x")
+
+
+def test_the_loader_refuses_an_unsourced_contract_row(tmp_path):
+    with pytest.raises(UnsourcedContractError, match="99"):
+        _load(tmp_path, "99,XX,1,PP,2015-01,,n,contract,")
+
+
+def test_the_loader_refuses_a_same_month_parent_and_child(tmp_path):
+    with pytest.raises(ParentChildError, match=r"airline_id 2 "):
+        _load(
+            tmp_path,
+            "1,AA,2,BB,2015-01,,n,contract,https://x",
+            "2,BB,3,CC,2018-01,,n,owned,",
+        )
