@@ -159,17 +159,23 @@ down, Endeavor CRJ seats up" is *still fully visible*.
    group changes, with the first month each change takes effect:
    - Alaska: VX joins 2016-12 and leaves 2018-04; HA joins 2024-09.
    - American: Air Wisconsin leaves 2017-09, returns 2023-07, and leaves again 2025-04. US
-     Airways is in the group from the window start; when its flying moved into American's own
-     filings after 2015-06 the group total shows no step, because both sides are in it.
+     Airways is in the group from the window start and leaves at 2016-01, when AAG's ownership
+     ends; its flying moved into American's own filings after 2015-06, so 2016-01 is a
+     composition step with no capacity step.
    - Hawaiian: Empire leaves 2021-02. From 2024-09 Hawaiian itself rolls up to Alaska.
    - United: 2018-03, 2019-01, 2019-02, 2020-05, 2020-10, 2021-01, 2023-03, 2023-05 and
      2025-12 (Air Wisconsin, Trans States, ExpressJet, GoJet and Mesa entering or leaving).
    - Delta: none; DL + 9E throughout.
 
    Air Wisconsin moves American → United → American. Group capacity steps at each
-   boundary, and **that step is an ownership or contract event, not organic growth.**
-   Annotate the boundary on any grouped series that crosses it. An unannotated step change
-   here is the single most misleading chart this product can draw.
+   boundary, and **that step is an ownership or contract event, not organic growth.** An
+   unmarked step change here is the single most misleading chart this product can draw, so
+   `/explore`'s mainline view grouped by carrier marks every row whose time bucket holds a
+   step (`Δ`, with each step in its accessible label) and lists every crossed step in its
+   foot. The steps are derived from `map_mainline_group` by
+   `sql/03_queries/mainline_steps.sql`, never hand-kept. A step at the window's first month is
+   not crossed: the whole window sits on one side of it. The bucket is the row's month, year,
+   or quarter-of-year, or the whole window when the view has no time dimension.
 
 Default view is **operating carrier**; `mainline_group` is an opt-in toggle.
 

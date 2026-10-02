@@ -10,7 +10,12 @@ import { render, screen } from "@testing-library/react";
 // itself can validate.
 vi.mock("@/lib/db", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db")>();
-  return { ...actual, runPivot: vi.fn(actual.runPivot) };
+  return {
+    ...actual,
+    runPivot: vi.fn(actual.runPivot),
+    // Real implementation, wrapped only so the operating-view case can assert it was never called.
+    mainlineSteps: vi.fn(actual.mainlineSteps),
+  };
 });
 
 // Same partial-mock idiom, same reason: wraps the REAL exploreHref so every other test in this
@@ -25,7 +30,7 @@ vi.mock("@/lib/pivot/builder", async (importOriginal) => {
 
 import { ExploreView } from "@/app/explore/page";
 import { recoveryHref, recoveryQuery } from "@/lib/pivot/recovery";
-import { dataAsOf, loadAllowlist, runPivot } from "@/lib/db";
+import { dataAsOf, loadAllowlist, mainlineSteps, runPivot } from "@/lib/db";
 import { resolveAirportCode } from "@/app/airport/[code]/resolveAirport";
 import { trailing12From } from "@/lib/entityFacts";
 import { exploreHref } from "@/lib/pivot/builder";
@@ -640,5 +645,53 @@ describe("/explore says what the mainline grouping includes", () => {
     const foot = container.querySelector(".foot")!.textContent;
     expect(foot).toContain("quarantined row");
     expect(foot).not.toContain("flew only for that parent");
+  });
+});
+
+// #203: the mainline view grouped by carrier marks the row whose month holds a composition step
+// and lists every crossed step in its foot. Window 2016-06..2017-06, filtered to Alaska so the
+// table is one row per month: VX joins at 2016-12, mid-series, not at an edge. This spelling is
+// canonical -- `encode(decodeRequest(...))` returns it byte-for-byte and `canonicalize` calls it
+// clean -- so smoke.sh's identical STEPS_Q is served as a 200, never a 307.
+const AS_STEPS = {
+  v: "1",
+  k: "seg",
+  d: "year_month,op_airline_id",
+  m: "seats",
+  t: "2016-06:2017-06",
+  f: "op_airline_id:19930",
+  s: "-seats",
+  n: "25",
+  g: "ml",
+};
+
+describe("/explore marks mainline composition steps", () => {
+  it("marks the 2016-12 Alaska row and only it", async () => {
+    const { container } = render(await ExploreView({ rawQuery: qs(AS_STEPS) }));
+    const marks = [...container.querySelectorAll(".step-mark")];
+    expect(marks.map((m) => m.getAttribute("aria-label"))).toEqual([
+      "Group composition changes: VX joins 2016-12",
+    ]);
+    expect(marks[0].closest("tr")?.textContent).toContain("2016-12");
+  });
+
+  // The subject is named by its resolved CODE: "AS: VX joins", never "19930: VX joins".
+  it("lists the crossed step in the foot", async () => {
+    const { container } = render(await ExploreView({ rawQuery: qs(AS_STEPS) }));
+    const foot = container.querySelector(".foot");
+    expect(foot?.innerHTML).toContain("<strong>Composition</strong>");
+    expect(foot?.textContent).toContain(
+      "Composition changes in this window: AS: VX joins 2016-12.",
+    );
+  });
+
+  it("never queries steps on the operating view", async () => {
+    vi.mocked(mainlineSteps).mockClear();
+    const { container } = render(await ExploreView({ rawQuery: qs({ ...AS_STEPS, g: "op" }) }));
+    expect(mainlineSteps).not.toHaveBeenCalled();
+    expect(container.querySelector(".step-mark")).toBeNull();
+    // Not vacuous: the operating fixture rendered the same 13 monthly rows and its foot.
+    expect(container.querySelectorAll("tbody tr").length).toBe(13);
+    expect(container.querySelector(".foot")!.textContent).not.toContain("Composition");
   });
 });
