@@ -680,10 +680,11 @@ BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=year_month&m=seats&t=2
 check     "explore: a filter chip resolves its id to a code" "$BODY" 'Carrier = DL'
 
 # D4, gated on BOTH operands, and the three bodies are the check: keyed on the grouping alone the
-# disclosure fires on the second, keyed on the filter alone it fires on the third.
+# disclosure fires on the second, keyed on the filter alone it fires on the third. The positive
+# needle carries the emitted `<strong>` markup so the RSC flight payload alone cannot satisfy it.
 BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&f=op_airline_id:19790&s=-seats&n=25&g=ml")
 check     "explore: discloses a mainline rollup filtered on the operating carrier" \
-  "$BODY" 'rolled-up row can show more seats'
+  "$BODY" '<strong>operating</strong> carrier, so a rolled-up row counts only the flying'
 BODY=$(curl -s --max-time 15 "${BASE}/explore?v=1&k=seg&d=op_airline_id&m=seats&t=2025-05:2026-04&s=-seats&n=25&g=ml")
 check_not "explore: no rollup disclosure on an unfiltered mainline view" "$BODY" 'rolled-up row'
 check     "explore: ...and that mainline view really rendered its foot" "$BODY" 'quarantined row'

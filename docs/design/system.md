@@ -1220,8 +1220,11 @@ the app emits CSV or Parquet, and the permalink is the only export this product 
 
 > **Open, and now disclosed.** Under `grouping="mainline"` a carrier filter still targets the raw
 > `op_airline_id` — `sql/03_queries/pivot_mainline_join.sql` renders `{{FILTERS}}` against
-> `f.op_airline_id` while `g=ml` rewrites only the SELECT and GROUP BY — so a rolled-up row can
-> show more seats than the filter selected. The behaviour is kept, pinned by the
+> `f.op_airline_id` while `g=ml` rewrites only the SELECT and GROUP BY — so a rolled-up row counts
+> only the flying of the filtered carriers, under the parent's label, never its whole group (Alaska
+> 2017-01: 3,842,350 seats unfiltered, 2,336,210 filtered to Alaska alone — the measurement in that
+> file's header). Filtered to a regional alone, the row still reads as the parent and holds only
+> the regional's seats. The behaviour is kept, pinned by the
 > `mainline_grouped_with_filter_on_carrier` golden, and **stated on the page**: when the mainline
 > rollup and an `op_airline_id` filter are both active, the result foot says so.
 >
