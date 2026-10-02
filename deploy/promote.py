@@ -24,7 +24,7 @@ WHAT IT REFUSES TO GUESS
         ever been promoted from, so silence there is an answer this tool has not earned.
         That is `promote_check.py`'s blind-poll rule (its module docstring has the incident:
         30 attempts served a challenge page, and an unconditional ROLL BACK NOW emitted
-        against a healthy deploy) applied to the operator's terminal instead of a runner's.
+        against a healthy deploy) applied to the picker as well as to the confirmation.
 
     `:deploy` IS ITS OWN VERSION IN THIS REGISTRY, not a co-tag on the build it points at --
     `imagetools create` wraps the source manifest in a new index, which `deploy.md` warns
@@ -35,7 +35,13 @@ WHAT IT REFUSES TO GUESS
 
     What the box is RUNNING therefore cannot come from the registry at all. It comes from
     `/api/health`, which is also why a `degraded` box is called out above the prompt: that
-    is a thing to know before picking, not after `promote.yml` spends its 300s budget on it.
+    is a thing to know before picking, not after the confirmation spends its 300s budget on it.
+
+WHO DECIDES WHAT
+    `promote.yml` re-tags `:deploy` and nothing else, so its exit code answers "did the retag
+    go through". Whether the deploy is SERVING is decided here, from this machine, through
+    `promote_check.assess` -- a GitHub runner cannot answer that, because Bot Fight Mode serves
+    it a challenge page.
 
 The pure/impure split mirrors `promote_check.py`, for the same reason: the deciding half is
 where the bugs are, and it is the half a test can reach.
@@ -59,7 +65,6 @@ sys.path.insert(0, str(Path(__file__).parents[1] / ".github" / "scripts"))
 
 from promote_check import (  # noqa: E402
     _HAND_CHECK,
-    DEGRADED,
     MATCHED,
     UNREADABLE,
     assess,
@@ -79,14 +84,32 @@ HEALTH_URL = "https://upgauge.shipman.dev/api/health"
 _RUN_LOOKUP_ATTEMPTS = 15
 _RUN_LOOKUP_INTERVAL = 2
 
+#: Reading the finished run's recorded state, retried for the same reason `find_run` is: one
+#: failed `gh` call is one observation, not "the run cannot be read". 5 x 2s.
+_RUN_VIEW_ATTEMPTS = 5
+_RUN_VIEW_INTERVAL = 2
+
+#: `promote.yml`'s retag step, by its exact `name:`. Whether `:deploy` moved is read off THIS
+#: step's conclusion, so a rename that is not mirrored here would send every red run to
+#: "unknown" -- `test_promote_confirm.py` pins it against the workflow file.
+RETAG_STEP = "Point :deploy at the requested digest"
+
+#: `retag_outcome` values.
+MOVED = "moved"
+NOT_MOVED = "not-moved"
+UNKNOWN = "unknown"
+
 #: Local clock vs GitHub's. The run is matched by "created after we dispatched", so any skew
 #: toward a fast local clock would discard the real run and report it missing.
 _CLOCK_SKEW = timedelta(seconds=60)
 
-#: The confirmation poll, run from the operator's machine after the workflow ends. The workflow
-#: has already given the box up to 300s, and retag-to-serving measures ~55s (deploy.md), so this
-#: budget covers a workflow that ended early rather than a slow box: 12 x 10s.
-_CONFIRM_ATTEMPTS = 12
+#: The confirmation poll, run from the operator's machine once the retag has gone through, and
+#: the only thing that detects a bad promote: 30 x 10s = 300s. Retag-to-serving is measured end
+#: to end in `docs/architecture/deploy.md` (Promote, Roll back) and sits far inside this; it is
+#: not restated here. Its parts are committed config: `deploy/upgauge-deploy.timer`'s
+#: `OnUnitActiveSec=30s` (a retag can wait up to ~30s for the next tick to notice it), then
+#: `docker compose up -d --wait` gating on the HEALTHCHECK's `start_period=20s` / `interval=30s`.
+_CONFIRM_ATTEMPTS = 30
 _CONFIRM_INTERVAL = 10
 
 _UNKNOWN_TS = datetime.min.replace(tzinfo=UTC)
@@ -382,6 +405,53 @@ def find_run(dispatched_at: datetime) -> int | None:
     return None
 
 
+def read_run(run_id: int) -> dict | None:
+    """The run's recorded `status`, `conclusion` and `jobs`, or None if `gh` cannot say."""
+    for attempt in range(_RUN_VIEW_ATTEMPTS):
+        if attempt:
+            time.sleep(_RUN_VIEW_INTERVAL)
+        done = _run(["gh", "run", "view", str(run_id), "--json", "status,conclusion,jobs"])
+        if done.returncode != 0:
+            continue
+        try:
+            run = json.loads(done.stdout)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(run, dict):
+            return run
+    return None
+
+
+def retag_outcome(run: dict | None) -> str:
+    """Whether `:deploy` moved, read off the run's RECORDED state -- never `gh run watch`'s exit
+    code, which is also non-zero when the watch itself fails (a dropped connection, an
+    interrupted terminal) on a run that retagged fine.
+
+      MOVED     -- the run completed with conclusion `success`.
+      NOT_MOVED -- the run completed and the retag step did not succeed: it failed, was skipped
+                   because an earlier step failed, or was cancelled.
+      UNKNOWN   -- everything else: the run cannot be read, has not completed, the retag step is
+                   not in it, or the retag step succeeded and the run is red anyway. Each of
+                   those is consistent with `:deploy` having moved, so none may be reported as
+                   either answer.
+    """
+    if not isinstance(run, dict) or run.get("status") != "completed":
+        return UNKNOWN
+    if run.get("conclusion") == "success":
+        return MOVED
+    steps = [
+        step
+        for job in run.get("jobs") or []
+        if isinstance(job, dict)
+        for step in job.get("steps") or []
+        if isinstance(step, dict) and step.get("name") == RETAG_STEP
+    ]
+    conclusions = {step.get("conclusion") for step in steps}
+    if steps and all(isinstance(c, str) and c and c != "success" for c in conclusions):
+        return NOT_MOVED
+    return UNKNOWN
+
+
 def confirm(
     tag: str,
     fetch: Callable[[], tuple[str, int]] | None = None,
@@ -391,37 +461,29 @@ def confirm(
 ) -> tuple[int, str]:
     """`(exit code, message)` for a promote, decided from what THIS machine reads (#209).
 
-    `promote.yml` polls from a GitHub runner, which Bot Fight Mode answers with a challenge
-    page, so its exit code says nothing about the box. The verdict is `promote_check.assess`'s,
-    never a second copy of its rules: only the promoted build under `ok` exits 0 (#79), and a
-    box this machine cannot read either is reported as blind -- not evidence either way.
+    The verdict is `promote_check.assess`'s, never a second copy of its rules: only the promoted
+    build under `ok` exits 0 (#79). Anything else polls on -- a degraded box included, because
+    promoting is how a degraded box gets fixed -- and once the budget is spent the message is
+    `exhausted_report`'s, the one owner of what each outcome may claim and which remedy it earns.
     """
     fetch = fetch or fetch_health
     sleep = sleep or time.sleep
     verdict = None
+    # The last attempt that READ a build. One challenge page or dropped connection on the final
+    # attempt must not decide a verdict about all of them: 29 reads of the wrong build earn the
+    # unconditional rollback, and reporting only the last, blind sample would downgrade that to
+    # the conditional hand-check path.
+    last_read = None
     for attempt in range(attempts):
         if attempt:
             sleep(interval)
         verdict = assess(tag, *fetch())
         if verdict.outcome == MATCHED:
             return 0, f"Confirmed from this machine: {verdict.reason}."
+        if verdict.outcome != UNREADABLE:
+            last_read = verdict
     assert verdict is not None
-    if verdict.outcome == UNREADABLE:
-        return 1, (
-            f"Could not read the box from this machine either: {verdict.reason}\n"
-            "That is NOT evidence the deploy failed, nor that it succeeded. Check by hand:\n"
-            f"  {_HAND_CHECK}\n"
-            "Only the promoted build under `ok` is a deploy."
-        )
-    if verdict.outcome == DEGRADED:
-        return 1, (
-            f"{verdict.reason}.\nThe box took the image and cannot serve with it. "
-            "ROLL BACK to a tag that serves: make promote TAG=<previous known-good tag>"
-        )
-    return 1, (
-        f"The box is not serving the promoted build: {verdict.reason}.\n"
-        f"Re-dispatch a tag that serves: make promote TAG=<tag>"
-    )
+    return 1, (last_read or verdict).exhausted_report(attempts)
 
 
 def dispatch(tag: str) -> int:
@@ -443,11 +505,30 @@ def dispatch(tag: str) -> int:
         )
         return 1
 
-    print(f"Watching run {run_id} -- it polls /api/health for up to 300s.\n")
-    workflow_rc = subprocess.run(["gh", "run", "watch", str(run_id), "--exit-status"]).returncode
-    # The workflow's poll runs from a runner Cloudflare may challenge, so its exit code decides
-    # nothing. This machine's read does, in both directions.
-    print(f"\nThe workflow exited {workflow_rc}. Confirming from this machine ...")
+    print(f"Watching run {run_id} -- it re-tags :deploy.\n")
+    # The watch is for the operator's eyes; its exit code decides nothing. The run's RECORDED
+    # state decides the RETAG (see `retag_outcome`), and this machine decides the DEPLOY.
+    subprocess.run(["gh", "run", "watch", str(run_id), "--exit-status"])
+    outcome = retag_outcome(read_run(run_id))
+    if outcome == NOT_MOVED:
+        print(
+            f"\nThe retag step did not succeed, so `:deploy` was not moved and the box is "
+            "unchanged. Nothing to confirm.\n"
+            f"  gh run view {run_id} --log-failed",
+            file=sys.stderr,
+        )
+        return 1
+    if outcome != MOVED:
+        print(
+            f"\nWhether `:deploy` moved is UNKNOWN: run {run_id} could not be read as a "
+            "completed run whose retag step either succeeded or did not. Not confirming, and "
+            "not calling it a failure. Find out which:\n"
+            f"  gh run view {run_id}\n"
+            f"  {_HAND_CHECK}",
+            file=sys.stderr,
+        )
+        return 1
+    print("\nThe retag went through. Confirming the deploy from this machine ...")
     code, message = confirm(tag)
     print(message, file=sys.stderr if code else sys.stdout)
     return code

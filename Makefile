@@ -358,7 +358,7 @@ portability: image  ## Prove the WORKDIR/data contract by breaking it three ways
 # stdlib only, so `mise exec -- python` rather than `uv run` -- this must work in a clone
 # that has never run `make install`, which is the state an operator rolling back at 3am is in.
 # TAG= skips the picker for exactly that case.
-promote:  ## Promote a built image to :deploy (picker; TAG=... to skip it). Dispatches promote.yml and watches it
+promote:  ## Promote a built image to :deploy (picker; TAG=... to skip it). Dispatches promote.yml to retag, then confirms the deploy from this machine
 	$(MISE) python deploy/promote.py $(TAG)
 
 provision:  ## Create or re-assert the Hetzner box from deploy/cloud-init.yaml (creds: deploy/.env, see .env.example)
