@@ -14,7 +14,7 @@ runs:
   using: composite
   steps:
     # Versions come from mise.toml. Nothing here may hardcode a python/node/uv version.
-    - uses: jdx/mise-action@v4
+    - uses: jdx/mise-action@v5
       with:
         install: true
         cache: true
