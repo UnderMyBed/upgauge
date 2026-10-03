@@ -43,7 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
         with:
           install: true
           cache: true
@@ -319,7 +319,7 @@ jobs:
       # No `uv sync`: bump_pin.py is stdlib-only (plus gha.py beside it), so this needs an
       # interpreter and nothing else. mise rather than the runner's python3 keeps it on the same
       # 3.12.12 the tests pinned it against. Same shape as freshness.yml.
-      - uses: jdx/mise-action@v4
+      - uses: jdx/mise-action@v5
         with:
           install: true
           cache: true
